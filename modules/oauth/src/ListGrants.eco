@@ -1,0 +1,47 @@
+namespace nexus::oauth;
+
+/**
+ * The clients the signed in user allowed, for an account page: the grant
+ * id, the client's name, when it was allowed and last used.
+ */
+#[nexus::through: ["nexus::auth::Authenticate"]]
+public class ListGrants : nexus::Action
+{
+    private OAuthStore $store;
+
+    public constructor(OAuthStore $store)
+    {
+        $this->store = $store;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<json::Value, nexus::Problem>
+    {
+        nexus::auth::Identity $me = guard $payload->state<nexus::auth::Identity>() else ($p) {
+            return .error($p);
+        };
+        array<Grant> $mine = guard $this->store->grants($me->subject) else ($p) {
+            return .error($p);
+        };
+        json::Value $items = json::arr();
+        foreach ($mine as const &$g) {
+            Client? $found = guard $this->store->client($g->client) else ($p) {
+                return .error($p);
+            };
+            string $name = 'a client no longer registered';
+            if ($found != null) {
+                Client $known = guard $found;
+                $name = $known->name;
+            }
+            json::Value $o = json::object();
+            $o['id'] = json::str($g->id);
+            $o['client'] = json::str($g->client);
+            $o['name'] = json::str($name);
+            $o['created_at'] = json::int($g->createdAt->unix_secs());
+            $o['used_at'] = json::int($g->usedAt->unix_secs());
+            $items[] = $o;
+        }
+        json::Value $out = json::object();
+        $out['items'] = $items;
+        return .ok($out);
+    }
+}

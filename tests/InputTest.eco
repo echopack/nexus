@@ -1,0 +1,241 @@
+/**
+ * Reading and checking input fields, the runtime of generated decoders:
+ * readers, rules, nesting, and messages in more than one language.
+ */
+
+use nexus::{Fields, Query, Problem, FieldError, Check, Messages};
+use ecotest::expect;
+
+function inputDoc(const string& $text) : json::Value
+{
+    json::Value $doc = guard json::parse($text);
+    return $doc;
+}
+
+function codes(const Check& $v) : string
+{
+    array<string> $out = [];
+    foreach ($v->errors() as const &$e) {
+        $out[] = "{$e->field}:{$e->code}";
+    }
+    return str::join($out, ' ');
+}
+
+test json_fields_with_types_and_rules
+{
+    Fields $f = Fields(json: inputDoc('{"title":"Hi","views":12,"tags":["a","b"],"draft":true}'));
+    Check $v = $f->check;
+    $v->at('title', 'string', '');
+    string $title = expect($f->string('title', required: true))->some();
+    $v->minLength($title, 3);
+    $v->at('views', 'integer', '');
+    int64 $views = expect($f->int64('views', required: true))->some();
+    $v->max($views, 10);
+    array<string> $tags = expect($f->strings('tags', required: false))->some();
+    expect($tags)->size(2);
+    expect($f->bool('draft', required: false))->some(true);
+    $v->at('missing', 'string', '');
+    expect($f->string('missing', required: true))->none();
+    status<Problem> $s = $f->done();
+    expect($s)->fails();
+    expect(codes($v))->is('title:min views:max missing:required');
+    array<FieldError> $errors = $s->failure()->fields();
+    expect($errors[0]->message)->is('The title field must be at least 3 characters.');
+    expect($errors[0]->params->get('min'))->is('3');
+    expect($errors[1]->message)->is('The views field must not be greater than 10.');
+    expect(json::dump($errors[0]->json()))
+        ->is('{"field":"title","code":"min","message":"The title field must be at least 3 characters.","params":{"min":"3"}}');
+}
+
+test json_type_mismatch_names_the_type
+{
+    Fields $f = Fields(json: inputDoc('{"views":"twelve","when":"yesterday"}'));
+    expect($f->int64('views', required: true))->none();
+    expect($f->date('when', required: true))->none();
+    array<FieldError> $e = $f->check->errors();
+    expect($e[0]->code)->is('type');
+    expect($e[0]->kind)->is('integer');
+    expect($e[0]->message)->is('The views field must be a whole number.');
+    expect($e[1]->kind)->is('date');
+}
+
+test labels_and_readable_names
+{
+    Fields $f = Fields(json: json::object());
+    $f->check->at('email', 'string', 'e-mail address');
+    expect($f->string('email', required: true))->none();
+    expect($f->string('passwordConfirmation', required: true))->none();
+    array<FieldError> $e = $f->check->errors();
+    expect($e[0]->message)->is('The e-mail address field is required.');
+    expect($e[1]->message)->is('The password confirmation field is required.');
+}
+
+test form_fields_parse_text
+{
+    Fields $f = Fields(pairs: Query(parse: 'page=3&on=on&tag=x&tag=y&email=a%40b.ch&day=2026-10-28'));
+    expect($f->uint32('page', required: true))->some(3);
+    expect($f->bool('on', required: false))->some(true);
+    array<string> $tags = expect($f->strings('tag', required: false))->some();
+    expect($tags)->size(2);
+    string $email = expect($f->string('email', required: true))->some();
+    $f->check->email($email);
+    calendar::Date $day = expect($f->date('day', required: true))->some();
+    expect($day->day)->is(28);
+    expect($f->done()->has_value())->yes(says: 'the fields check out');
+}
+
+test string_rules
+{
+    Check $v = Check();
+    $v->at('s', 'string', '');
+    $v->email('nope');
+    $v->email('x@y.ch');
+    $v->url('ftp://x');
+    $v->url('https://echoc.dev/a?b');
+    $v->uuid('123e4567-e89b-12d3-a456-426614174000');
+    $v->uuid('123e4567e89b12d3a456426614174000');
+    $v->alpha('Zürich');
+    $v->alpha('a1');
+    $v->alphaDash('a_b-c1');
+    $v->digits('0123');
+    $v->digits('12a');
+    array<string> $pre = ['https://', 'mailto:'];
+    $v->startsWith('http://x', $pre);
+    array<string> $allowed = ['draft', 'live'];
+    $v->oneOf('gone', $allowed);
+    $v->noneOf('live', $allowed);
+    $v->betweenLength('ab', 3, 5);
+    expect(codes($v))->is('s:email s:url s:uuid s:alpha s:digits s:startsWith s:oneOf s:noneOf s:between');
+    array<FieldError> $e = $v->errors();
+    expect($e[6]->message)->is('The s field must be one of: draft, live.');
+    expect($e[8]->message)->is('The s field must be between 3 and 5 characters.');
+}
+
+test number_list_and_cross_field_rules
+{
+    Check $v = Check();
+    $v->at('n', 'integer', '');
+    $v->between(12, 1, 10);
+    $v->multipleOf(7, 5);
+    $v->compare('gt', 3.0, 3.0, '3');
+    $v->at('price', 'number', '');
+    $v->multipleOf(0.3, 0.1);
+    $v->at('tags', 'list', '');
+    array<string> $twice = ['a', 'b', 'a'];
+    $v->distinct($twice);
+    $v->maxCount(3, 2);
+    $v->at('password', 'string', '');
+    $v->confirmed(false);
+    $v->at('end', 'date', '');
+    calendar::Date $a = expect(calendar::Date::parse('2026-01-01'))->ok();
+    calendar::Date $b = expect(calendar::Date::parse('2026-02-01'))->ok();
+    $v->date('after', $a, $b, '2026-02-01');
+    $v->date('before', $a, $b, '2026-02-01');
+    expect(codes($v))->is('n:between n:multipleOf n:gt tags:distinct tags:max password:confirmed end:after');
+    expect($v->errors()[4]->message)->is('The tags field must not have more than 2 items.');
+}
+
+test normalisers
+{
+    expect(Check::trim('  a b '))->is('a b');
+    expect(Check::squish("  a \t\n b  c "))->is('a b c');
+    expect(Check::lower('ÄB') == 'äb' || Check::lower('ÄB') == 'Äb')->yes(says: "'ÄB' lowers to 'äb', or to 'Äb' where only ASCII folds");
+    expect(Check::blank('  '))->yes(says: 'only spaces count as blank');
+}
+
+test rule_classes_fail_in_their_own_words
+{
+    Check $v = Check();
+    $v->input = 'blog::Registration';
+    $v->at('email', 'string', 'e-mail address');
+    map<string, string> $params = ['domain' => 'example.com'];
+    $v->fail('unique', 'The {label} at {domain} is taken.', params: $params);
+    $v->fail(field: 'ends', 'after', 'The end comes after the start.');
+    array<FieldError> $e = $v->errors();
+    expect($e[0]->message)->is('The e-mail address at example.com is taken.');
+    expect($e[0]->input)->is('blog::Registration');
+    expect($e[0]->name)->is('email');
+    expect($e[1]->field)->is('ends');
+}
+
+test nested_json_objects_and_lists
+{
+    Fields $f = Fields(json: inputDoc('{"shipping":{"city":""},"lines":[{"qty":2},{"qty":"x"},{"sku":"a"}],"bad":[1]}'));
+    Fields $ship = expect($f->object('shipping', required: true))->some();
+    $ship->check->at('city', 'string', '');
+    string $city = expect($ship->string('city', required: true))->some();
+    $ship->check->notBlank($city);
+    array<Fields> $lines = expect($f->objects('lines', required: true))->some();
+    expect($lines)->size(3);
+    foreach ($lines as $line) {
+        $line->int64('qty', required: true);
+    }
+    expect($f->objects('bad', required: true))->none();
+    expect(codes($f->check))->is('shipping.city:notBlank lines.1.qty:type lines.2.qty:required bad.0:type');
+}
+
+test nested_form_keys
+{
+    Fields $f = Fields(pairs: Query(parse: 'shipping%5Bcity%5D=Bern&lines%5B1%5D%5Bqty%5D=3&lines%5B0%5D%5Bqty%5D=2&tags%5B%5D=a&tags%5B%5D=b'));
+    expect($f->has('shipping'))->yes(says: 'the bracketed keys nest under shipping');
+    expect($f->has('lines'))->yes(says: 'the bracketed keys nest under lines');
+    Fields $ship = expect($f->object('shipping', required: true))->some();
+    expect($ship->string('city', required: true))->some('Bern');
+    array<Fields> $lines = expect($f->objects('lines', required: true))->some();
+    expect($lines)->size(2);
+    expect($lines[0]->int64('qty', required: true))->some(2);
+    expect($lines[1]->int64('qty', required: true))->some(3);
+    expect($lines[1]->check->prefix)->is('lines.1');
+    array<string> $tags = expect($f->strings('tags', required: true))->some();
+    expect(str::join($tags, ','))->is('a,b');
+    expect($f->done()->has_value())->yes(says: 'the fields check out');
+}
+
+test null_counts_as_missing
+{
+    Fields $f = Fields(json: inputDoc('{"body":null}'));
+    expect($f->has('body'))->no(says: 'a null body counts as missing');
+    expect($f->string('body', required: false))->none();
+    expect($f->done()->has_value())->yes(says: 'the fields check out');
+}
+
+function german() : Messages
+{
+    Messages $m = Messages();
+    $m->add('de', inputDoc('{"rule":{"min":{"string":"{label} muss mindestens {min} Zeichen lang sein."},"required":"{label} fehlt."},"label":{"title":"Der Titel","blog::Registration":{"email":"Die E-Mail-Adresse"}}}'));
+    $m->put('en', 'blog::Registration.email.required', 'Tell us your {label}.');
+    return $m;
+}
+
+test messages_pick_a_locale
+{
+    Messages $m = german();
+    expect($m->pick('de-CH, en;q=0.5'))->is('de');
+    expect($m->pick('fr, de;q=0.8'))->is('de');
+    expect($m->pick('en;q=0.4, de;q=0.9'))->is('de');
+    expect($m->pick('fr-FR'))->is('en');
+    expect($m->pick(''))->is('en');
+    expect(str::join($m->chain('de-CH'), ','))->is('de-ch,de,en');
+}
+
+test messages_translate_with_labels_and_overrides
+{
+    Messages $m = german();
+    Check $v = Check();
+    $v->input = 'blog::Registration';
+    $v->at('title', 'string', '');
+    $v->minLength('ab', 3);
+    $v->at('email', 'string', 'e-mail address');
+    $v->rule('required');
+    $v->at('name', 'string', '');
+    $v->rule('email');
+    array<FieldError> $e = $v->errors();
+    expect($m->translate($e[0], 'de')->message)->is('Der Titel muss mindestens 3 Zeichen lang sein.');
+    expect($m->translate($e[1], 'de')->message)->is('Die E-Mail-Adresse fehlt.');
+    // no German message for email: the English one stays
+    expect($m->translate($e[2], 'de')->message)->is('The name field must be a valid email address.');
+    // the English override for one field
+    expect($m->translate($e[1], 'en')->message)->is('Tell us your e-mail address.');
+    Problem $p = $m->translate(Problem::invalid($e), 'de');
+    expect($p->fields()[0]->message)->is('Der Titel muss mindestens 3 Zeichen lang sein.');
+}

@@ -1,0 +1,117 @@
+namespace nexus;
+
+/**
+ * What `nexus gen` wrote for the program, keyed by type: how each action
+ * runs, how each `nexus::Cli` class becomes a command, and the names of
+ * the types that conform to a nexus interface. It holds no routes and no
+ * command names; the extensions give those when they wire the app.
+ */
+#[atomic]
+public class Generated
+{
+    internal map<type_id, Dispatcher> $actions = map<type_id, Dispatcher>();
+    internal map<type_id, CommandMaker> $commands = map<type_id, CommandMaker>();
+    internal map<type_id, string> $names = map<type_id, string>();
+
+    /**
+     * Every module's table.
+     */
+    public static function of(const array<GeneratedTable>& $tables) : Generated
+    {
+        Generated $g = Generated();
+        foreach ($tables as const &$t) {
+            function<void(Generated)> $fill = $t->call;
+            $fill($g);
+        }
+        return $g;
+    }
+
+    /**
+     * Registers how action `A` runs.
+     */
+    public function action<A>(const string& $name, array<PathParam> $params, function<Response(Payload&)> $dispatch) : void
+    {
+        $this->actions[type_id<A>()] = Dispatcher($name, $params, $dispatch);
+        $this->names[type_id<A>()] = $name;
+    }
+
+    /**
+     * Registers the middleware action `A` names in `#[nexus::through]`;
+     * after `action<A>`.
+     */
+    public function through<A>(array<MiddlewareRef> $refs) : void
+    {
+        type_id $id = type_id<A>();
+        if (!$this->actions->has($id)) {
+            return;
+        }
+        Dispatcher $d = $this->actions->get($id);
+        $d->through = $refs;
+        $this->actions[$id] = $d;
+    }
+
+    /**
+     * Registers how `nexus::Cli` class `C` becomes a command.
+     */
+    public function command<C>(const string& $name, function<Command(const string&)> $make) : void
+    {
+        $this->commands[type_id<C>()] = CommandMaker($name, $make);
+        $this->names[type_id<C>()] = $name;
+    }
+
+    /**
+     * Registers the qualified name of `T`, for logs, `routes` and errors.
+     */
+    public function name<T>(const string& $name) : void
+    {
+        $this->names[type_id<T>()] = $name;
+    }
+
+    /**
+     * How action `A` runs, or null when `nexus gen` wrote nothing for it.
+     */
+    public const function dispatcher<A>() : Dispatcher?
+    {
+        type_id $id = type_id<A>();
+        if (!$this->actions->has($id)) {
+            return null;
+        }
+        return $this->actions->get($id);
+    }
+
+    /**
+     * How `C` becomes a command, or null when it is no generated one.
+     */
+    public const function command<C>() : CommandMaker?
+    {
+        type_id $id = type_id<C>();
+        if (!$this->commands->has($id)) {
+            return null;
+        }
+        return $this->commands->get($id);
+    }
+
+    /**
+     * The qualified name of `T`, or `$otherwise` when no table names it.
+     */
+    public const function nameOf<T>(const string& $otherwise) : string
+    {
+        type_id $id = type_id<T>();
+        if (!$this->names->has($id)) {
+            return $otherwise;
+        }
+        return $this->names->get($id);
+    }
+
+    /**
+     * The names of every action `nexus gen` wrote a dispatcher for.
+     */
+    public const function actionNames() : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->actions as $id => const &$d) {
+            $out[] = $d->action;
+        }
+        return $out;
+    }
+}

@@ -1,0 +1,42 @@
+namespace nexus::auth::carbon;
+
+/**
+ * `auth_tokens` and `auth_sessions`. Add it to the app's migrations with
+ * `nexus::auth::carbon::Carbon::migrations()`.
+ */
+#[carbon::migration: '20261102000000_create_auth_tables']
+public class CreateAuthTables : carbon::Migration
+{
+    public function up(carbon::Migrating $m) : status<carbon::Error>
+    {
+        guard $m->create(carbon::ddl::Table('auth_tokens')
+            ->string('id', 12)
+            ->string('hash', 64)
+            ->string('subject', 190)
+            ->string('name', 190)
+            ->string('scopes', 1000)
+            ->datetime('created_at')
+            ->datetime('expires_at', $nullable: true)
+            ->index(['subject'])
+            ->primary(['id'])) else ($e) {
+            return .error($e);
+        };
+        return $m->create(carbon::ddl::Table('auth_sessions')
+            ->string('id', 32)
+            ->string('subject', 190)
+            ->string('scopes', 1000)
+            ->datetime('created_at')
+            ->datetime('expires_at')
+            ->index(['subject'])
+            ->index(['expires_at'])
+            ->primary(['id']));
+    }
+
+    public function down(carbon::Migrating $m) : status<carbon::Error>
+    {
+        guard $m->drop('auth_sessions') else ($e) {
+            return .error($e);
+        };
+        return $m->drop('auth_tokens');
+    }
+}

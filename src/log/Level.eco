@@ -1,0 +1,93 @@
+namespace nexus::log;
+
+/**
+ * How much a log entry matters. A logger drops entries below its minimum,
+ * and a build with `--define NEXUS_LOG_MAX_INFO` (or `_DEBUG`, `_WARN`,
+ * `_ERROR`) compiles the levels below the cap away.
+ */
+public enum Level : uint8
+{
+    /**
+     * Step by step detail, off unless asked for.
+     */
+    case trace = 0;
+
+    /**
+     * What a developer wants while working on the code.
+     */
+    case debug = 1;
+
+    /**
+     * What happened: a request served, a task done.
+     */
+    case info = 2;
+
+    /**
+     * Something went wrong and was handled.
+     */
+    case warn = 3;
+
+    /**
+     * Something went wrong and was not handled.
+     */
+    case error = 4;
+
+    public const function name() : string
+    {
+        return match ($this) {
+            .trace => 'trace',
+            .debug => 'debug',
+            .info => 'info',
+            .warn => 'warn',
+            .error => 'error',
+        };
+    }
+
+    /**
+     * The name in capitals, padded to five, the way the pretty format
+     * lines levels up.
+     */
+    public const function label() : string
+    {
+        return match ($this) {
+            .trace => 'TRACE',
+            .debug => 'DEBUG',
+            .info => 'INFO ',
+            .warn => 'WARN ',
+            .error => 'ERROR',
+        };
+    }
+
+    /**
+     * The lowest level this build still compiles, set by the
+     * `NEXUS_LOG_MAX_*` defines.
+     */
+    public static function cap() : Level
+    {
+        #[if: NEXUS_LOG_MAX_ERROR]
+        return .error;
+        #[elif: NEXUS_LOG_MAX_WARN]
+        return .warn;
+        #[elif: NEXUS_LOG_MAX_INFO]
+        return .info;
+        #[elif: NEXUS_LOG_MAX_DEBUG]
+        return .debug;
+        #[else]
+        return .trace;
+        #[end]
+    }
+
+    /**
+     * A level by name, any case; `warning` is `warn`.
+     */
+    public static function parse(const string& $name) : result<Level, ConfigError>
+    {
+        string $n = str::lower(str::trim($name));
+        if ($n == 'trace') { return .ok(.trace); }
+        if ($n == 'debug') { return .ok(.debug); }
+        if ($n == 'info') { return .ok(.info); }
+        if ($n == 'warn' || $n == 'warning') { return .ok(.warn); }
+        if ($n == 'error') { return .ok(.error); }
+        return .error(.level($name));
+    }
+}

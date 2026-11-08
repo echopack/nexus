@@ -1,0 +1,160 @@
+namespace nexus::crud;
+
+/**
+ * How one list endpoint reads the query string:
+ *
+ * - `page` (from 1) and `size` (up to `maxSize`) when `paging` is on;
+ * - `order=title` or `order=-created_at`, one of the keys made
+ *   `orderable`, `order` when the request names none;
+ * - `ids=4,8,15` when `ids` says how to match them;
+ * - `count=1` adds `total_count` (every row the scope sees) and
+ *   `filter_count` (the rows the request's filters leave) when `counting`
+ *   is on;
+ * - whatever else `filter` reads.
+ *
+ * ```echo
+ * nexus::crud::Listing<PostQuery> $o = nexus::crud::Listing<PostQuery>();
+ * $o->orderable('created_at', PostTable::$createdAt);
+ * $o->orderable('title', PostTable::$title);
+ * $o->order = '-created_at';
+ * $o->ids = function(array<int64> $ids) : hydrahon::Term<bool> {
+ *     return PostTable::$id in $ids;
+ * };
+ * return $this->crud->list($payload, $o);
+ * ```
+ */
+public struct Listing<Q>
+{
+    public bool $paging = true;
+    public uint64 $size = 20;
+    public uint64 $maxSize = 100;
+    public bool $counting = true;
+
+    /**
+     * The order when the request names none: a key made `orderable`, with
+     * a leading `-` for descending. Empty leaves the order to the query.
+     */
+    public string $order = '';
+
+    /**
+     * The condition matching `ids`; null refuses `ids`.
+     */
+    public function<hydrahon::Term<bool>(array<int64>)>? $ids = null;
+
+    /**
+     * Narrows the query by the request's own parameters; a problem answers
+     * the request instead.
+     */
+    public function<result<Q, nexus::Problem>(Q, const nexus::Request&)>? $filter = null;
+
+    internal map<string, hydrahon::Order> $orders = [];
+
+    public constructor()
+    {
+    }
+
+    /**
+     * Lets `order=$name` (and `-$name`) sort by `$column`.
+     */
+    public function orderable(const string& $name, hydrahon::Order $column) : void
+    {
+        $this->orders[$name] = $column;
+    }
+
+    /**
+     * The keys `order` accepts, sorted.
+     */
+    public const function orderables() : array<string>
+    {
+        array<string> $keys = $this->orders->keys();
+        $keys->sort();
+        return $keys;
+    }
+
+    /**
+     * The 0-based page and its size the request asks for.
+     */
+    public const function window(const nexus::Request& $req) : result<Window, nexus::Problem>
+    {
+        uint64 $page = 1;
+        string? $rawPage = $req->query->get('page');
+        if ($rawPage != null) {
+            string $p = guard $rawPage;
+            uint64 $n = guard str::uint($p) else {
+                return .error(nexus::Problem::field('page', 'integer', 'page must be a whole number from 1'));
+            };
+            if ($n == 0) {
+                return .error(nexus::Problem::field('page', 'integer', 'page must be a whole number from 1'));
+            }
+            $page = $n;
+        }
+        uint64 $size = $this->size;
+        string? $rawSize = $req->query->get('size');
+        if ($rawSize != null) {
+            string $s = guard $rawSize;
+            uint64 $n = guard str::uint($s) else {
+                return .error(nexus::Problem::field('size', 'integer', "size must be a whole number from 1 to {$this->maxSize}"));
+            };
+            if ($n == 0 || $n > $this->maxSize) {
+                return .error(nexus::Problem::field('size', 'range', "size must be a whole number from 1 to {$this->maxSize}"));
+            }
+            $size = $n;
+        }
+        return .ok(Window($page, $size));
+    }
+
+    /**
+     * The order the request asks for, or the default; null for none.
+     */
+    public const function sorting(const nexus::Request& $req) : result<Sorting?, nexus::Problem>
+    {
+        string $wanted = $req->query->get('order') ?? $this->order;
+        if ($wanted->empty()) {
+            Sorting? $none = null;
+            return .ok($none);
+        }
+        bool $desc = $wanted->starts('-');
+        string $key = $wanted;
+        if ($desc) {
+            $key = $wanted->sub(1, $wanted->size() - 1);
+        }
+        if (!$this->orders->has($key)) {
+            string $known = str::join($this->orderables(), ', ');
+            if ($known->empty()) {
+                return .error(nexus::Problem::field('order', 'unknown', 'this list cannot be ordered'));
+            }
+            return .error(nexus::Problem::field('order', 'unknown', "order by one of: {$known}"));
+        }
+        Sorting? $found = Sorting($this->orders->get($key), $desc);
+        return .ok($found);
+    }
+
+    /**
+     * The ids the request names with `ids=`, empty when it names none.
+     */
+    public const function wanted(const nexus::Request& $req) : result<array<int64>, nexus::Problem>
+    {
+        array<int64> $out = [];
+        string $raw = $req->query->get('ids') ?? '';
+        if ($raw->empty()) {
+            return .ok($out);
+        }
+        if ($this->ids == null) {
+            return .error(nexus::Problem::field('ids', 'unsupported', 'this list cannot be filtered by ids'));
+        }
+        foreach (str::split($raw, ',') as const &$part) {
+            string $t = string::from(str::trim($part));
+            if ($t->empty()) {
+                continue;
+            }
+            int64 $id = guard str::int($t) else {
+                return .error(nexus::Problem::field('ids', 'integer', 'ids must be whole numbers, comma separated'));
+            };
+            $out[] = $id;
+        }
+        if (($out->count() as uint64) > $this->maxSize) {
+            return .error(nexus::Problem::field('ids', 'range', "at most {$this->maxSize} ids"));
+        }
+        return .ok($out);
+    }
+}

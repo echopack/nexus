@@ -1,0 +1,162 @@
+namespace nexus::oauth;
+
+use std::thread;
+use std::time;
+
+/**
+ * Clients, codes and grants kept in the process: for tests and
+ * single-process apps. They are gone when it stops.
+ */
+#[atomic]
+public class MemoryOAuth : OAuthStore
+{
+    private thread::mutex<map<string, Client>> $clientsById;
+    private thread::mutex<map<string, Code>> $codes;
+    private thread::mutex<map<string, Grant>> $grantsById;
+
+    public constructor()
+    {
+        $this->clientsById = thread::mutex<map<string, Client>>(map<string, Client>());
+        $this->codes = thread::mutex<map<string, Code>>(map<string, Code>());
+        $this->grantsById = thread::mutex<map<string, Grant>>(map<string, Grant>());
+    }
+
+    public function client(const string& $id) : result<Client?, nexus::Problem>
+    {
+        thread::locked<map<string, Client>> $held = $this->clientsById->lock();
+        if (!$held->value->has($id)) {
+            return .ok(null);
+        }
+        return .ok($held->value->get($id));
+    }
+
+    public function register(const Client& $c) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Client>> $held = $this->clientsById->lock();
+        $held->value[$c->id] = $c;
+        return .ok;
+    }
+
+    public function touch(const string& $id, time::timestamp $at) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Client>> $held = $this->clientsById->lock();
+        if ($held->value->has($id)) {
+            Client $c = $held->value->get($id);
+            $c->usedAt = $at;
+            $held->value[$id] = $c;
+        }
+        return .ok;
+    }
+
+    public function clients() : result<uint64, nexus::Problem>
+    {
+        thread::locked<map<string, Client>> $held = $this->clientsById->lock();
+        return .ok($held->value->count() as uint64);
+    }
+
+    public function sweep(time::timestamp $before) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Client>> $held = $this->clientsById->lock();
+        array<string> $gone = [];
+        foreach ($held->value as $id => const &$c) {
+            if ($c->usedAt == null && $c->createdAt < $before) {
+                $gone[] = $id;
+            }
+        }
+        foreach ($gone as const &$id) {
+            $held->value->remove($id);
+        }
+        return .ok;
+    }
+
+    public function keep(const Code& $c) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Code>> $held = $this->codes->lock();
+        $held->value[$c->hash] = $c;
+        return .ok;
+    }
+
+    public function take(const string& $hash) : result<Code?, nexus::Problem>
+    {
+        thread::locked<map<string, Code>> $held = $this->codes->lock();
+        if (!$held->value->has($hash)) {
+            return .ok(null);
+        }
+        Code $c = $held->value->get($hash);
+        $held->value->remove($hash);
+        return .ok($c);
+    }
+
+    public function grant(const string& $id) : result<Grant?, nexus::Problem>
+    {
+        thread::locked<map<string, Grant>> $held = $this->grantsById->lock();
+        if (!$held->value->has($id)) {
+            return .ok(null);
+        }
+        return .ok($held->value->get($id));
+    }
+
+    public function open(const Grant& $g) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Grant>> $held = $this->grantsById->lock();
+        if ($held->value->has($g->id)) {
+            return .error(.conflict('a grant with this id exists'));
+        }
+        $held->value[$g->id] = $g;
+        return .ok;
+    }
+
+    public function rotate(const Grant& $g, const string& $was) : result<bool, nexus::Problem>
+    {
+        thread::locked<map<string, Grant>> $held = $this->grantsById->lock();
+        if (!$held->value->has($g->id) || $held->value->get($g->id)->refreshHash != $was) {
+            return .ok(false);
+        }
+        $held->value[$g->id] = $g;
+        return .ok(true);
+    }
+
+    public function drop(const string& $id) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Grant>> $held = $this->grantsById->lock();
+        $held->value->remove($id);
+        return .ok;
+    }
+
+    public function grants(const string& $subject) : result<array<Grant>, nexus::Problem>
+    {
+        thread::locked<map<string, Grant>> $held = $this->grantsById->lock();
+        array<Grant> $out = [];
+        foreach ($held->value as $id => const &$g) {
+            if ($g->subject == $subject) {
+                $out[] = $g;
+            }
+        }
+        return .ok($out);
+    }
+
+    public function prune(time::timestamp $now) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Code>> $codes = $this->codes->lock();
+        array<string> $stale = [];
+        foreach ($codes->value as $hash => const &$c) {
+            if ($c->expiresAt < $now) {
+                $stale[] = $hash;
+            }
+        }
+        foreach ($stale as const &$hash) {
+            $codes->value->remove($hash);
+        }
+        thread::locked<map<string, Grant>> $grants = $this->grantsById->lock();
+        array<string> $ended = [];
+        foreach ($grants->value as $id => const &$g) {
+            if ($g->refreshExpiresAt < $now) {
+                $ended[] = $id;
+            }
+        }
+        foreach ($ended as const &$id) {
+            $grants->value->remove($id);
+        }
+        return .ok;
+    }
+}

@@ -1,0 +1,80 @@
+namespace nexus::oauth;
+
+/**
+ * The two metadata documents clients discover the server by, and the
+ * origin they are written for.
+ */
+public struct Metadata
+{
+    /**
+     * The app's public origin: `OAUTH_ISSUER`, or the request's.
+     */
+    public static function issuer(const OAuthConfig& $config, const nexus::Request& $req) : string
+    {
+        if (!$config->issuer->empty()) {
+            string $configured = $config->issuer;
+            while ($configured->ends('/')) {
+                $configured = $configured->sub(0, $configured->size() - 1);
+            }
+            return $configured;
+        }
+        return $req->origin();
+    }
+
+    /**
+     * The protected resource, the MCP endpoint.
+     */
+    public static function resource(const OAuthConfig& $config, const nexus::Request& $req) : string
+    {
+        string $issuer = Metadata::issuer($config, $req);
+        return "{$issuer}/mcp";
+    }
+
+    /**
+     * Protected resource metadata (RFC 9728): where to get a token for
+     * the MCP endpoint.
+     */
+    public static function ofResource(const OAuthConfig& $config, const nexus::Request& $req) : json::Value
+    {
+        json::Value $o = json::object();
+        $o['resource'] = json::str(Metadata::resource($config, $req));
+        if (!$config->name->empty()) {
+            $o['resource_name'] = json::str($config->name);
+        }
+        $o['authorization_servers'] = Metadata::strings([Metadata::issuer($config, $req)]);
+        $o['bearer_methods_supported'] = Metadata::strings(['header']);
+        $o['scopes_supported'] = Metadata::strings([$config->scope]);
+        return $o;
+    }
+
+    /**
+     * Authorization server metadata (RFC 8414).
+     */
+    public static function ofServer(const OAuthConfig& $config, const nexus::Request& $req) : json::Value
+    {
+        string $issuer = Metadata::issuer($config, $req);
+        json::Value $o = json::object();
+        $o['issuer'] = json::str($issuer);
+        $o['authorization_endpoint'] = json::str("{$issuer}/oauth/authorize");
+        $o['token_endpoint'] = json::str("{$issuer}/oauth/token");
+        $o['registration_endpoint'] = json::str("{$issuer}/oauth/register");
+        $o['revocation_endpoint'] = json::str("{$issuer}/oauth/revoke");
+        $o['response_types_supported'] = Metadata::strings(['code']);
+        $o['grant_types_supported'] = Metadata::strings(['authorization_code', 'refresh_token']);
+        $o['code_challenge_methods_supported'] = Metadata::strings(['S256']);
+        $o['token_endpoint_auth_methods_supported'] = Metadata::strings(['none']);
+        $o['revocation_endpoint_auth_methods_supported'] = Metadata::strings(['none']);
+        $o['scopes_supported'] = Metadata::strings([$config->scope]);
+        $o['authorization_response_iss_parameter_supported'] = json::bool(true);
+        return $o;
+    }
+
+    public static function strings(const array<string>& $items) : json::Value
+    {
+        json::Value $list = json::arr();
+        foreach ($items as const &$s) {
+            $list[] = json::str($s);
+        }
+        return $list;
+    }
+}

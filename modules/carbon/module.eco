@@ -1,0 +1,34 @@
+/*
+ * nexus-carbon: a carbon database for a nexus app.
+ *
+ * The app says how its database opens, from the DATABASE_URL setting, and
+ * registers its repositories on it; the extension seals it, binds it, and
+ * gives every request a carbon::Session of its own, with a pooled
+ * connection that goes back when the request ends. Repositories come from
+ * the request's session; `migrate` and its siblings run the app's
+ * migrations from the app binary.
+ */
+
+#[module: "nexus-carbon"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "carbon databases for nexus apps: a session per request, migrations from the app binary"]
+
+#[depends: "../.."]
+#[depends: "../../../carbon"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../../carbon/fake"]
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

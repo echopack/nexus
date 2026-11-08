@@ -1,0 +1,39 @@
+/*
+ * nexus: the HTTP application framework for Echo.
+ *
+ * An app is a list of extensions. Each one wires the app by hand in one
+ * place: services into the container, actions onto routes
+ * (`$s->bindAction<ShowPost>(method: .get, path: '/v1/posts/{id}', ...)`),
+ * listeners onto events. `nexus gen` writes what only the types can
+ * tell: the code that runs each action from its `handle()` signature,
+ * the input decoders and the config loaders. The kernel finds the
+ * generated tables at compile time, keyed by type.
+ *
+ * The core knows no transport and no database: nexus-http serves it over
+ * libhttp, nexus-carbon hands each request a database session.
+ */
+
+#[module: "nexus"]
+#[version: "0.1.0"]
+#[epm::echoc: ">=0.14.0"]
+#[epm::license: "MIT"]
+#[epm::description: "The HTTP application framework for Echo"]
+
+#[depends: "../container"]
+#[depends: "../libjson"]
+#[depends: "../libcommand"]
+#[depends: "../libcrypto"]
+#[depends: "../libsignal"]
+#[depends: "../calendar"]
+
+#[sources: "src/**/*.eco"]
+
+// the developer tool: `nexus gen`, run by an app's before_build hook
+#[target: exe { name: "nexus", entry: "cli/main.eco", public: true }] {
+    #[sources: ["cli/main.eco", "cli/src/*.eco"]]
+}
+
+#[target: test] {
+    #[sources: ["tests/*.eco", "cli/src/*.eco", "cli/tests/*.eco"]]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

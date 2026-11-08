@@ -1,0 +1,97 @@
+namespace nexus::log;
+
+use std::thread;
+use std::time;
+
+/**
+ * Hands entries to a writer thread through a bounded queue, so the thread
+ * that logs never waits on a slow sink, the way spdlog's async logger
+ * does:
+ *
+ *     log::Async(log::Stream(.stdout, .json), $capacity: 8192, $overflow: .drop)
+ *
+ * With `.block` a full queue makes the logging thread wait; with `.drop`
+ * the entry is counted and dropped, and the writer logs
+ * `log dropped entries` with the count once it catches up. `flush` waits
+ * until the queue is empty. Entries still queued when the process exits
+ * without a flush are lost.
+ */
+#[atomic]
+public class Async : Sink
+{
+    public const usize $capacity;
+    public const Overflow $overflow;
+    private Sink $inner;
+    private Backlog $backlog;
+    private thread::sender<Entry> $tx;
+    private bool $running;
+
+    public constructor(Sink $inner, usize $capacity = 8192, Overflow $overflow = .block)
+    {
+        usize $cap = $capacity;
+        if ($cap == 0) {
+            $cap = 1;
+        }
+        $this->capacity = $cap;
+        $this->overflow = $overflow;
+        $this->inner = $inner;
+        Backlog $backlog = Backlog();
+        $this->backlog = $backlog;
+        thread::channel<Entry> $ch = thread::channel<Entry>($cap);
+        $this->tx = $ch->tx();
+        thread::receiver<Entry> $rx = $ch->rx();
+        Sink $sink = $inner;
+        // the writer runs until the last sender goes, which closes the queue
+        result<thread::handle, thread::error> $writer = thread::spawn(function[mv $rx, $sink, $backlog]() : void {
+            while (true) {
+                Entry $e = guard $rx->recv() else {
+                    break;
+                };
+                $sink->write($e);
+                $backlog->pending->sub(1);
+                uint64 $lost = $backlog->dropped->exchange(0);
+                if ($lost > 0) {
+                    Fields $f = ['dropped' => $lost];
+                    $sink->write(Entry(time::timestamp::now(), Level::warn, 'log dropped entries', null, $f));
+                }
+            }
+            $sink->flush();
+        });
+        $this->running = !$writer->failed();
+    }
+
+    public function write(const Entry& $e) : void
+    {
+        if (!$this->running) {
+            $this->inner->write($e);
+            return;
+        }
+        usize $before = $this->backlog->pending->add(1);
+        if ($this->overflow == Overflow::drop && $before >= $this->capacity) {
+            $this->backlog->pending->sub(1);
+            $this->backlog->dropped->add(1);
+            return;
+        }
+        $this->tx->send($e);
+    }
+
+    /**
+     * Waits until the writer has written every queued entry, then flushes
+     * the sink it writes to.
+     */
+    public function flush() : void
+    {
+        while ($this->running && $this->backlog->pending->load() > 0) {
+            time::sleep(.millis(1));
+        }
+        $this->inner->flush();
+    }
+
+    /**
+     * Entries dropped since the writer last reported them.
+     */
+    public function dropped() : uint64
+    {
+        return $this->backlog->dropped->load();
+    }
+}

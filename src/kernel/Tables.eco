@@ -1,0 +1,31 @@
+namespace nexus;
+
+/**
+ * The generated tables a kernel boots with: config loaders, what inputs
+ * bring (message overrides, rule classes) and how actions and commands
+ * run. `generated()` collects every module's; a test builds its own.
+ */
+public struct Tables
+{
+    public array<ConfigTable> $configs = [];
+    public array<InputTable> $inputs = [];
+    public array<GeneratedTable> $generated = [];
+
+    /**
+     * Every table `nexus gen` wrote for the modules of this program.
+     */
+    public static function generated() : Tables
+    {
+        Tables $t = Tables();
+        foreach (attr::of<ConfigTable>("nexus::configs") as const &$c) {
+            $t->configs[] = $c;
+        }
+        foreach (attr::of<InputTable>("nexus::inputs") as const &$i) {
+            $t->inputs[] = $i;
+        }
+        foreach (attr::of<GeneratedTable>("nexus::generated") as const &$g) {
+            $t->generated[] = $g;
+        }
+        return $t;
+    }
+}

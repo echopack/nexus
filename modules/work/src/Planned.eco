@@ -1,0 +1,10 @@
+namespace nexus::work;
+
+/**
+ * A scheduled task type with its parsed schedule.
+ */
+public struct Planned
+{
+    public Kind $kind;
+    public Schedule $schedule;
+}

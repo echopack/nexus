@@ -1,0 +1,13 @@
+/**
+ * `str::from` for nexus values, so `"{$url}"` works.
+ */
+
+namespace str;
+
+/**
+ * The URL as text, escaped.
+ */
+public function from(const nexus::Url& $url) : string
+{
+    return $url->text();
+}

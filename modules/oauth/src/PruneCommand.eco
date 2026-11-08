@@ -1,0 +1,32 @@
+namespace nexus::oauth;
+
+/**
+ * `oauth:prune`: drops the codes and grants that expired.
+ */
+public class PruneCommand : nexus::Command
+{
+    public function name() : string
+    {
+        return 'oauth:prune';
+    }
+
+    public function summary() : string
+    {
+        return 'drop expired OAuth codes and grants';
+    }
+
+    public function run(nexus::Kernel $k, const nexus::Invocation& $in) : int32
+    {
+        nexus::Payload $payload = $k->background('oauth:prune', nexus::Kernel::id());
+        $payload->door = nexus::Door::cli;
+        Grants $grants = $payload->get<Grants>();
+        status<nexus::Problem> $done = $grants->store->prune($grants->clock->now());
+        nexus::Kernel::finish($payload);
+        guard $done else ($p) {
+            return nexus::Console::report($in->out, $p, $in->mode);
+        };
+        command::CLIContext $out = $in->out;
+        $out->line('pruned expired OAuth codes and grants');
+        return 0;
+    }
+}

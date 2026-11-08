@@ -1,0 +1,10 @@
+namespace nexus;
+
+/**
+ * One decoded `name=value` pair of a query string or a form body.
+ */
+public struct QueryField
+{
+    public string $name;
+    public string $value;
+}

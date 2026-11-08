@@ -1,0 +1,46 @@
+namespace nexus::oauth;
+
+/**
+ * What the consent page shows, for the signed in user: which client asks,
+ * where it goes back to and the scope. The query string is the one
+ * `/oauth/authorize` received.
+ */
+#[nexus::through: ["nexus::auth::Authenticate"]]
+public class Pending : nexus::Action
+{
+    private OAuthStore $store;
+    private OAuthConfig $config;
+
+    public constructor(OAuthStore $store, OAuthConfig $config)
+    {
+        $this->store = $store;
+        $this->config = $config;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<json::Value, nexus::Problem>
+    {
+        string $issuer = Metadata::issuer($this->config, $payload->request);
+        Asked $asked = guard Asked::check($payload->request->queryString, $this->store, $issuer, $this->config) else ($d) {
+            return .error(Pending::problem($d));
+        };
+        json::Value $client = json::object();
+        $client['id'] = json::str($asked->client->id);
+        $client['name'] = json::str($asked->client->name);
+        json::Value $o = json::object();
+        $o['client'] = $client;
+        $o['redirect'] = json::str($asked->redirect->text);
+        $o['scope'] = json::str($asked->scope);
+        return .ok($o);
+    }
+
+    /**
+     * A denial as a problem, for the consent page to show.
+     */
+    public static function problem(const Denial& $d) : nexus::Problem
+    {
+        return match ($d) {
+            Denial::shown($p) => $p,
+            Denial::back($location) => nexus::Problem::badRequest('the request is not one this server grants'),
+        };
+    }
+}

@@ -1,0 +1,322 @@
+namespace nexus::rest;
+
+use std::time;
+
+/**
+ * The keys of one model on their way out: what the generated mapping
+ * wrote, open to the transformer's `transform()` before anything is
+ * written. Setting a key that is already there replaces it in place, a
+ * new key goes last, `remove` takes one out. Attributes are written
+ * first and includes last, whatever order they were set in.
+ *
+ * A key of a field the model marks `#[nexus::sensitive]` is refused
+ * unless it was revealed first, so a slip in a hook cannot leak it.
+ *
+ * ```echo
+ * public function transform(const User& $u, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
+ * {
+ *     $item->text('url', "/v1/users/{$u->id}");
+ *     UserContext $viewer = guard $ctx->find<UserContext>() else {
+ *         return;
+ *     };
+ *     if ($viewer->user->id == $u->id) {
+ *         $item->reveal('email');
+ *         $item->text('email', $u->email);
+ *     }
+ * }
+ * ```
+ */
+public struct Item
+{
+    private array<Slot> $slots = [];
+
+    /**
+     * The keys the request asked to include on this model.
+     */
+    private map<string, bool> $wanted = [];
+    private map<string, bool> $sensitive = [];
+    private map<string, bool> $revealed = [];
+
+    public constructor()
+    {
+    }
+
+    /**
+     * An item for the model `$o` is about to write, knowing what the
+     * request includes on it.
+     */
+    public static function of(const Out& $o) : Item
+    {
+        Item $item = Item();
+        $item->wanted = $o->wantedHere();
+        return $item;
+    }
+
+    // fields -----------------------------------------------------------------
+
+    /**
+     * A scalar XML writes into the start tag, `<post id="1">`; a plain key
+     * in JSON.
+     */
+    public function attribute(const string& $key, int64 $v) : void
+    {
+        string $k = $key;
+        $this->put($key, .attribute, function[$k, $v](Out& $o, const TransformerContext& $ctx) : void {
+            $o->attribute($k, $v);
+        });
+    }
+
+    public function attribute(const string& $key, const string& $v) : void
+    {
+        string $k = $key;
+        string $s = $v;
+        $this->put($key, .attribute, function[$k, $s](Out& $o, const TransformerContext& $ctx) : void {
+            $o->attribute($k, $s);
+        });
+    }
+
+    public function int(const string& $key, int64 $v) : void
+    {
+        string $k = $key;
+        $this->put($key, .value, function[$k, $v](Out& $o, const TransformerContext& $ctx) : void {
+            $o->int($k, $v);
+        });
+    }
+
+    public function float(const string& $key, float64 $v) : void
+    {
+        string $k = $key;
+        $this->put($key, .value, function[$k, $v](Out& $o, const TransformerContext& $ctx) : void {
+            $o->float($k, $v);
+        });
+    }
+
+    public function bool(const string& $key, bool $v) : void
+    {
+        string $k = $key;
+        $this->put($key, .value, function[$k, $v](Out& $o, const TransformerContext& $ctx) : void {
+            $o->bool($k, $v);
+        });
+    }
+
+    public function text(const string& $key, const string& $v) : void
+    {
+        string $k = $key;
+        string $s = $v;
+        $this->put($key, .value, function[$k, $s](Out& $o, const TransformerContext& $ctx) : void {
+            $o->text($k, $s);
+        });
+    }
+
+    /**
+     * `$key` with no value: JSON null, an empty element in XML.
+     */
+    public function nil(const string& $key) : void
+    {
+        string $k = $key;
+        $this->put($key, .value, function[$k](Out& $o, const TransformerContext& $ctx) : void {
+            $o->nil($k);
+        });
+    }
+
+    /**
+     * An instant in UTC, `2026-10-13T14:06:00Z` unless `$stamp` says
+     * otherwise; null when there is none.
+     */
+    public function time(const string& $key, time::timestamp? $at, EchoPack::Rest::Stamp $stamp = EchoPack::Rest::Stamp::zulu) : void
+    {
+        string $k = $key;
+        $this->put($key, .value, function[$k, $at, $stamp](Out& $o, const TransformerContext& $ctx) : void {
+            $o->time($k, $at, $stamp);
+        });
+    }
+
+    /**
+     * A list of strings; XML names each element `$item`.
+     */
+    public function texts(const string& $key, const array<string>& $values, item: const string& $item = 'item') : void
+    {
+        string $k = $key;
+        array<string> $vs = $values;
+        string $name = $item;
+        $this->put($key, .value, function[$k, $vs, $name](Out& $o, const TransformerContext& $ctx) : void {
+            $o->texts($k, $vs, item: $name);
+        });
+    }
+
+    /**
+     * A list of integers; XML names each element `$item`.
+     */
+    public function ints(const string& $key, const array<int64>& $values, item: const string& $item = 'item') : void
+    {
+        string $k = $key;
+        array<int64> $vs = $values;
+        string $name = $item;
+        $this->put($key, .value, function[$k, $vs, $name](Out& $o, const TransformerContext& $ctx) : void {
+            $o->ints($k, $vs, item: $name);
+        });
+    }
+
+    /**
+     * A free-form libjson tree.
+     */
+    public function value(const string& $key, const json::Value& $v) : void
+    {
+        string $k = $key;
+        json::Value $copy = $v->clone();
+        $this->put($key, .value, function[$k, $copy](Out& $o, const TransformerContext& $ctx) : void {
+            $o->value($k, $copy);
+        });
+    }
+
+    // includes ---------------------------------------------------------------
+
+    /**
+     * Whether the request asked to include `$key` on this model.
+     */
+    public const function wants(const string& $key) : bool
+    {
+        return $this->wanted->has($key);
+    }
+
+    /**
+     * `$m` nested under `$key` by the network's transformer of `M`, null
+     * when there is none. Left out unless the request wants `$key`.
+     */
+    public function include<M>(const string& $key, M? $m) : void
+    {
+        string $k = $key;
+        if (!$this->wants($key)) {
+            return;
+        }
+        $this->put($key, .include, function[$k, $m](Out& $o, const TransformerContext& $ctx) : void {
+            $ctx->transformInto<M>($o, $k, $m);
+        });
+    }
+
+    /**
+     * `$ms` nested under `$key` as a list by the network's transformer of
+     * `M`. Left out unless the request wants `$key`.
+     */
+    public function includeCollection<M>(const string& $key, const array<M>& $ms) : void
+    {
+        string $k = $key;
+        if (!$this->wants($key)) {
+            return;
+        }
+        array<M> $all = $ms;
+        $this->put($key, .include, function[$k, $all](Out& $o, const TransformerContext& $ctx) : void {
+            $ctx->transformCollectionInto<M>($o, $k, $all);
+        });
+    }
+
+    /**
+     * `$m` nested under `$key` wrapped, `$meta`'s keys next to its
+     * `data`. Left out unless the request wants `$key`.
+     */
+    public function includeReference<M>(const string& $key, M? $m, const Meta& $meta) : void
+    {
+        string $k = $key;
+        if (!$this->wants($key)) {
+            return;
+        }
+        Meta $with = $meta;
+        $this->put($key, .include, function[$k, $m, $with](Out& $o, const TransformerContext& $ctx) : void {
+            $ctx->transformReferenceInto<M>($o, $k, $m, $with);
+        });
+    }
+
+    // editing ----------------------------------------------------------------
+
+    /**
+     * Whether `$key` is set.
+     */
+    public const function has(const string& $key) : bool
+    {
+        foreach ($this->slots as const &$s) {
+            if ($s->key == $key) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Takes `$key` out; nothing when it is not set.
+     */
+    public function remove(const string& $key) : void
+    {
+        array<Slot> $kept = [];
+        foreach ($this->slots as const &$s) {
+            if ($s->key != $key) {
+                $kept[] = $s;
+            }
+        }
+        $this->slots = mv $kept;
+    }
+
+    /**
+     * The keys set, in the order they were first set.
+     */
+    public const function keys() : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->slots as const &$s) {
+            $out[] = $s->key;
+        }
+        return $out;
+    }
+
+    // sensitive keys ---------------------------------------------------------
+
+    /**
+     * Allows writing the sensitive key `$key` on this item.
+     */
+    public function reveal(const string& $key) : void
+    {
+        $this->revealed[$key] = true;
+    }
+
+    /**
+     * Marks `$keys` sensitive: writing one stops the program unless it
+     * was revealed. The generated mapping calls this with every
+     * `#[nexus::sensitive]` field of the model.
+     */
+    public function protect(const array<string>& $keys) : void
+    {
+        foreach ($keys as const &$k) {
+            $this->sensitive[$k] = true;
+        }
+    }
+
+    // writing ----------------------------------------------------------------
+
+    /**
+     * Writes every key into `$o`: attributes, values, then includes.
+     */
+    public function flush(Out& $o, const TransformerContext& $ctx) : void
+    {
+        foreach ([Place::attribute, Place::value, Place::include] as $place) {
+            foreach ($this->slots as const &$s) {
+                if ($s->place == $place) {
+                    $s->write($o, $ctx);
+                }
+            }
+        }
+    }
+
+    private function put(const string& $key, Place $place, function<void(Out&, const TransformerContext&)> $write) : void
+    {
+        if ($this->sensitive->has($key) && !$this->revealed->has($key)) {
+            die("nexus::rest::Item: '{$key}' is sensitive; reveal('{$key}') before writing it");
+        }
+        foreach ($this->slots as &$s) {
+            if ($s->key == $key) {
+                $s->place = $place;
+                $s->write = $write;
+                return;
+            }
+        }
+        $this->slots[] = Slot($key: $key, $place: $place, $write: $write);
+    }
+}

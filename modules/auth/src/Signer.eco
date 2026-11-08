@@ -1,0 +1,39 @@
+namespace nexus::auth;
+
+/**
+ * The client side of a signed session: the id and secret the login
+ * answered with, signing each request. For tests, tools and clients
+ * written in Echo.
+ *
+ * ```echo
+ * nexus::auth::Signer $s = nexus::auth::Signer($id, $secret);
+ * string $auth = $s->header('POST', '/v1/posts', $now, $body);
+ * ```
+ */
+public struct Signer
+{
+    public string $id;
+    public string $secret;
+
+    /**
+     * The `Authorization` value for a request.
+     */
+    public const function header(const string& $method, const string& $target, int64 $time, const string& $body) : string
+    {
+        string $sig = Signature::sign($this->secret, Signature::text($method, $target, $time, $body));
+        string $scheme = SignedHeader::SCHEME;
+        return "{$scheme}id={$this->id},ts={$time},sig={$sig}";
+    }
+
+    /**
+     * The `X-AccessToken` value for a request, in compat mode.
+     */
+    public const function accessToken(const string& $method, const string& $target, int64 $time) : string
+    {
+        json::Value $o = json::object();
+        $o['token'] = json::str($this->id);
+        $o['timestamp'] = json::int($time);
+        $o['signature'] = json::str(Signature::sign($this->secret, Signature::compat($method, $target, $time)));
+        return crypto::base64(json::dump($o));
+    }
+}

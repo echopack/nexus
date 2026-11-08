@@ -1,0 +1,20 @@
+namespace blog;
+
+/**
+ * Lets only admins through: a 403 for any other user. It reads the
+ * `Caller` that `RequireUser` left, so it comes after it.
+ */
+#[atomic]
+public class RequireAdmin : nexus::Middleware
+{
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        Caller $me = guard $payload->state<Caller>() else ($p) {
+            return $payload->fail($p);
+        };
+        if ($me->user->role != Role::admin) {
+            return $payload->fail(nexus::Problem::forbidden('this needs an admin'));
+        }
+        return $next->run($payload);
+    }
+}

@@ -1,0 +1,180 @@
+/**
+ * nexus-carbon on carbon's fake source: a session per request, the boot
+ * failing on a database that does not open, the problems of carbon errors
+ * and the migrate commands.
+ */
+
+use nexus::testing::{TestApp, TestResponse};
+use container::{Builder, Container};
+use ecotest::expect;
+
+/**
+ * Runs one statement on the request's session, so the session opens its
+ * connection.
+ */
+class CPing : nexus::Action
+{
+    public function handle(nexus::Payload& $payload) : nexus::Response
+    {
+        carbon::Session $s = $payload->get<carbon::Session>();
+        guard $s->connection()->run('SELECT 1') else ($e) {
+            return $payload->fail(nexus::carbon::Problems::of($e));
+        };
+        return nexus::Response(text: 'pong');
+    }
+}
+
+class CApp : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'capp';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<CPing>(scope: function() : CPing {
+            return CPing();
+        });
+        carbonTestRoutes($s);
+        return .ok;
+    }
+}
+
+/**
+ * What the opener saw, for the test to read.
+ */
+class CSeen
+{
+    public string $url = '';
+}
+
+function carbonTestRoutes(nexus::Services& $s) : void
+{
+    array<nexus::Method> $m = [nexus::Method::get];
+    array<nexus::MiddlewareRef> $w = [];
+    function<nexus::Response(nexus::Payload&)> $d = function(nexus::Payload& $payload) : nexus::Response {
+        CPing $a = $payload->get<CPing>();
+        return $a->handle($payload);
+    };
+    function<bool(Container)> $b = function(Container $services) : bool {
+        return $services->has<CPing>();
+    };
+    $s->route(nexus::Route($m, '/ping', 'CPing', $d, $b, $w));
+}
+
+function cDriver() : carbon::fake::Driver<hydrahon::Mysql>
+{
+    carbon::fake::Driver<hydrahon::Mysql> $d = carbon::fake::Driver<hydrahon::Mysql>();
+    $d->written(0);
+    return $d;
+}
+
+function cOn(carbon::fake::Source<hydrahon::Mysql> $source) : nexus::carbon::Extension
+{
+    return nexus::carbon::Extension(function[$source](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+        return .ok(carbon::DB($source));
+    });
+}
+
+test every_request_has_a_session_of_its_own
+{
+    carbon::fake::Driver<hydrahon::Mysql> $a = cDriver();
+    carbon::fake::Driver<hydrahon::Mysql> $b = cDriver();
+    carbon::fake::Source<hydrahon::Mysql> $source = carbon::fake::Source<hydrahon::Mysql>([$a, $b]);
+    array<nexus::Extension> $exts = [cOn($source), CApp()];
+    TestApp $app = TestApp::boot($exts);
+    $app->client()->get('/ping')->assertStatus(200);
+    $app->client()->get('/ping')->assertStatus(200);
+    // one connection per request
+    expect($source->opened())->is(2);
+    expect($a->last())->is('SELECT 1');
+    expect($b->last())->is('SELECT 1');
+}
+
+test the_database_is_sealed_and_bound
+{
+    carbon::fake::Source<hydrahon::Mysql> $source = carbon::fake::Source<hydrahon::Mysql>([cDriver()]);
+    array<nexus::Extension> $exts = [cOn($source), CApp()];
+    TestApp $app = TestApp::boot($exts);
+    carbon::DB $db = $app->kernel->services->get<carbon::DB>();
+    expect($db->sealed())->yes(says: 'the bound database is sealed');
+}
+
+test the_url_comes_from_the_environment
+{
+    CSeen $seen = CSeen();
+    nexus::carbon::Extension $ext = nexus::carbon::Extension(function[$seen](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+        $seen->url = $cfg->url;
+        return .ok(carbon::DB(carbon::fake::Source<hydrahon::Mysql>([cDriver()])));
+    });
+    array<nexus::Extension> $exts = [$ext, CApp()];
+    map<string, string> $vars = ['DATABASE_URL' => 'mysql://app@db/blog'];
+    TestApp::boot($exts, $vars);
+    expect($seen->url)->is('mysql://app@db/blog');
+}
+
+test a_database_that_does_not_open_stops_the_boot
+{
+    nexus::carbon::Extension $ext = nexus::carbon::Extension(function(nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+        return .error(.invalid('no such host'));
+    });
+    array<nexus::Extension> $exts = [$ext, CApp()];
+    map<string, string> $vars = [];
+    result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
+    nexus::BootError $e = expect($r)->fails();
+    string $all = str::join($e->lines(), "\n");
+    expect($all)->has('nexus-carbon')->has('no such host');
+}
+
+test carbon_errors_become_problems
+{
+    expect(nexus::carbon::Problems::of(carbon::Error::missing)->status())->is(404);
+    expect(nexus::carbon::Problems::of(carbon::Error::stale)->status())->is(409);
+    expect(nexus::carbon::Problems::of(carbon::Error::refused(carbon::Refusal('posts remain')))->status())->is(409);
+    carbon::Failure $dup = carbon::Failure($fault: carbon::Fault::duplicate, $message: 'Duplicate entry');
+    expect(nexus::carbon::Problems::of(carbon::Error::driver($dup))->status())->is(409);
+    carbon::Failure $gone = carbon::Failure($fault: carbon::Fault::connection, $message: 'gone away');
+    expect(nexus::carbon::Problems::of(carbon::Error::driver($gone))->status())->is(503);
+    carbon::Failure $other = carbon::Failure($message: 'syntax');
+    nexus::Problem $p = nexus::carbon::Problems::of(carbon::Error::driver($other));
+    expect($p->status())->is(500);
+    // prod hides the cause
+    expect($p->detail(nexus::Mode::prod))->lacks('syntax');
+}
+
+test the_migrate_commands_are_offered
+{
+    carbon::fake::Source<hydrahon::Mysql> $source = carbon::fake::Source<hydrahon::Mysql>([cDriver()]);
+    nexus::Commands $added = nexus::Commands(nexus::Generated());
+    cOn($source)->commands($added);
+    array<nexus::Command> $cmds = $added->all();
+    array<string> $names = [];
+    foreach ($cmds as $c) {
+        $names[] = $c->name();
+    }
+    expect(str::join($names, ' '))->is('migrate migrate:status migrate:down migrate:reset');
+    expect($cmds[0]->options()[0]->name)->is('to');
+    expect($cmds[2]->options()[0]->flag())->yes(says: 'the first option of migrate:down is a flag');
+}
+
+test undoing_in_prod_wants_force
+{
+    carbon::fake::Driver<hydrahon::Mysql> $d = cDriver();
+    carbon::fake::Source<hydrahon::Mysql> $source = carbon::fake::Source<hydrahon::Mysql>([$d]);
+    array<nexus::Extension> $exts = [cOn($source), CApp()];
+    array<string> $argv = ['app', 'migrate:reset', '--mode', 'prod', '--env-file', 'no-such.env'];
+    expect(nexus::Console::run($exts, $argv))->is(1);
+    // refused before touching the database
+    expect($source->opened())->is(0);
+}
+
+test the_status_report_lists_every_migration
+{
+    carbon::migrate::Report $r = carbon::migrate::Report();
+    $r->applied[] = carbon::migrate::Applied('20260101_users', 1, hydrahon::DateTime(2026, 1, 1, 0, 0, 0));
+    $r->pending[] = '20260201_posts';
+    string $text = nexus::carbon::MigrateCommand::report($r);
+    expect($text)->is("ran      20260101_users  (batch 1)\npending  20260201_posts");
+    expect(nexus::carbon::MigrateCommand::report(carbon::migrate::Report()))->is('no migrations');
+}

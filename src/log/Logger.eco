@@ -1,0 +1,208 @@
+namespace nexus;
+
+use std::time;
+use nexus::log;
+
+/**
+ * The structured logger. Shared by every thread. `with` gives a child that
+ * stamps extra fields on every entry, the way each request's logger
+ * carries its request id; `span` gives a timed child that logs when it
+ * closes.
+ *
+ *     $log->info('post created', ['post' => $post->id, 'user' => $u->id]);
+ *
+ * The kernel binds the root logger in the container and the request's
+ * logger in each request's, so a service takes a `Logger` like any other
+ * dependency. Code that has neither reaches `Logger::process()`.
+ *
+ * A build with `--define NEXUS_LOG_MAX_INFO` (or `_DEBUG`, `_WARN`,
+ * `_ERROR`) compiles the levels below the cap to nothing. Their arguments
+ * are still built, so guard expensive fields with `enabled`:
+ *
+ *     if ($log->enabled(.debug)) { $log->debug('plan', ['sql' => $q->render()]); }
+ */
+#[atomic]
+public class Logger
+{
+    private array<log::Sink> $sinks;
+    private log::Level $min;
+
+    /**
+     * What this logger stamps on its entries; null for a root logger.
+     */
+    public const log::Context? $context;
+
+    public constructor(array<log::Sink> $sinks, log::Level $min)
+    {
+        $this->sinks = $sinks;
+        $this->min = $min;
+        $this->context = null;
+    }
+
+    internal constructor(array<log::Sink> $sinks, log::Level $min, context: log::Context $context)
+    {
+        $this->sinks = $sinks;
+        $this->min = $min;
+        $this->context = $context;
+    }
+
+    /**
+     * A logger that writes nowhere.
+     */
+    public static function silent() : Logger
+    {
+        array<log::Sink> $none = [];
+        return Logger($none, .error);
+    }
+
+    /**
+     * The logger of the process, for code that has no payload and no
+     * container to ask. `Kernel::boot` installs the root logger; before
+     * that it is pretty lines on stderr from info up.
+     */
+    public static function process() : Logger
+    {
+        Logger? $installed = log::Installed::$logger;
+        if ($installed != null) {
+            Logger $l = guard $installed;
+            return $l;
+        }
+        array<log::Sink> $sinks = [log::Stream(.stderr, .pretty)];
+        return Logger($sinks, .info);
+    }
+
+    /**
+     * Makes `$log` the process logger. Call it once, before other threads
+     * start.
+     */
+    public static function install(Logger $log) : void
+    {
+        log::Installed::$logger = $log;
+    }
+
+    /**
+     * The lowest level this logger writes.
+     */
+    public const function level() : log::Level
+    {
+        return $this->min;
+    }
+
+    /**
+     * Whether an entry at `$level` would be written anywhere.
+     */
+    public const function enabled(log::Level $level) : bool
+    {
+        return $level->value() >= $this->min->value()
+            && $level->value() >= log::Level::cap()->value()
+            && !$this->sinks->empty();
+    }
+
+    /**
+     * A child sharing the sinks that adds `$fields` to every entry.
+     */
+    public function with(log::Fields $fields) : Logger
+    {
+        log::Context $c = log::Context($this->context, $fields);
+        return Logger($this->sinks, $this->min, context: $c);
+    }
+
+    /**
+     * Opens span `$name`. Its logger stamps the span and `$fields` on
+     * every entry; when the span goes out of scope it logs `<name> closed`
+     * with the time it was open, at `$close`.
+     */
+    public function span(const string& $name, log::Fields $fields = [], log::Level $close = .info) : log::Span
+    {
+        string $id = Logger::spanId();
+        log::Context $c = log::Context($this->context, $fields, span: $name, id: $id);
+        Logger $inner = Logger($this->sinks, $this->min, context: $c);
+        return log::Span($inner, $name, $id, $close);
+    }
+
+    public function write(log::Level $level, const string& $message, log::Fields $fields = []) : void
+    {
+        if (!$this->enabled($level)) {
+            return;
+        }
+        log::Entry $e = log::Entry(time::timestamp::now(), $level, $message, $this->context, $fields);
+        foreach ($this->sinks as $s) {
+            $s->write($e);
+        }
+    }
+
+    public function trace(const string& $message, log::Fields $fields = []) : void
+    {
+        #[if: NEXUS_LOG_MAX_ERROR]
+        #[elif: NEXUS_LOG_MAX_WARN]
+        #[elif: NEXUS_LOG_MAX_INFO]
+        #[elif: NEXUS_LOG_MAX_DEBUG]
+        #[else]
+        $this->write(.trace, $message, $fields);
+        #[end]
+    }
+
+    public function debug(const string& $message, log::Fields $fields = []) : void
+    {
+        #[if: NEXUS_LOG_MAX_ERROR]
+        #[elif: NEXUS_LOG_MAX_WARN]
+        #[elif: NEXUS_LOG_MAX_INFO]
+        #[else]
+        $this->write(.debug, $message, $fields);
+        #[end]
+    }
+
+    public function info(const string& $message, log::Fields $fields = []) : void
+    {
+        #[if: NEXUS_LOG_MAX_ERROR]
+        #[elif: NEXUS_LOG_MAX_WARN]
+        #[else]
+        $this->write(.info, $message, $fields);
+        #[end]
+    }
+
+    public function warn(const string& $message, log::Fields $fields = []) : void
+    {
+        #[if: NEXUS_LOG_MAX_ERROR]
+        #[else]
+        $this->write(.warn, $message, $fields);
+        #[end]
+    }
+
+    public function error(const string& $message, log::Fields $fields = []) : void
+    {
+        $this->write(.error, $message, $fields);
+    }
+
+    /**
+     * Writes a typed record. `R` needs a `nexus::log::record(const R&)`,
+     * which `nexus gen` writes for a struct tagged `#[nexus::log]`:
+     *
+     *     $log->emit<LoginThrottled>($account, 11, $wait);
+     */
+    public function emit<R>(construct R $record) : void
+    {
+        log::Record $r = log::record($record);
+        $this->write($r->level, $r->message, $r->fields);
+    }
+
+    /**
+     * Writes out what every sink still holds. The console flushes before
+     * the process exits.
+     */
+    public function flush() : void
+    {
+        foreach ($this->sinks as $s) {
+            $s->flush();
+        }
+    }
+
+    // 16 hex characters, random per span
+    private static function spanId() : string
+    {
+        string $bytes = guard crypto::random(8) else {
+            return str::from(time::timestamp::now()->unix_nanos());
+        };
+        return crypto::hex($bytes);
+    }
+}

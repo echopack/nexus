@@ -1,0 +1,94 @@
+namespace nexus::oauth;
+
+/**
+ * An authorization request (`/oauth/authorize?...`), checked: a registered
+ * client, one of its redirects, PKCE with S256, the one scope this server
+ * grants and, when the client names it, this server's MCP endpoint as the
+ * resource.
+ */
+public struct Asked
+{
+    public Client $client;
+    public RedirectUri $redirect;
+    public string $state;
+    public string $challenge;
+    public string $scope;
+
+    /**
+     * `redirect_uri` was in the request, not filled in from the only one
+     * registered.
+     */
+    public bool $named;
+
+    /**
+     * The query string checked, as `/oauth/approve` gets it back.
+     */
+    public string $query;
+
+    public static function check(const string& $query, OAuthStore $store, const string& $issuer, const OAuthConfig& $config) : result<Asked, Denial>
+    {
+        nexus::Query $q = nexus::Query(parse: $query);
+        string $clientId = $q->get('client_id') ?? '';
+        Client? $found = guard $store->client($clientId) else ($p) {
+            return .error(.shown($p));
+        };
+        Client $client = guard $found else {
+            return .error(.shown(.badRequest('this app is not registered here; remove it and connect it again')));
+        };
+        RedirectUri $redirect = guard $client->redirect($q->get('redirect_uri') ?? '') else {
+            return .error(.shown(.badRequest("{$client->name} asked to return to an address it did not register")));
+        };
+        string $state = $q->get('state') ?? '';
+        if (($q->get('response_type') ?? '') != 'code') {
+            return .error(.back(Asked::refusal($redirect, 'unsupported_response_type', 'response_type must be code', $state, $issuer)));
+        }
+        string $challenge = $q->get('code_challenge') ?? '';
+        if ($challenge->size() < 43 || ($q->get('code_challenge_method') ?? '') != 'S256') {
+            return .error(.back(Asked::refusal($redirect, 'invalid_request', 'use PKCE with S256', $state, $issuer)));
+        }
+        string $scope = $q->get('scope') ?? '';
+        if ($scope->empty()) {
+            $scope = $config->scope;
+        }
+        foreach (str::split($scope, ' ') as $part) {
+            string $word = string::from($part);
+            if (!$word->empty() && $word != $config->scope) {
+                return .error(.back(Asked::refusal($redirect, 'invalid_scope', "this server grants {$config->scope} only", $state, $issuer)));
+            }
+        }
+        string $resource = $q->get('resource') ?? '';
+        if (!$resource->empty() && $resource != "{$issuer}/mcp" && $resource != "{$issuer}/mcp/") {
+            return .error(.back(Asked::refusal($redirect, 'invalid_target', "this server is {$issuer}/mcp", $state, $issuer)));
+        }
+        return .ok(Asked($client: $client, $redirect: $redirect, $state: $state, $challenge: $challenge, $scope: $config->scope,
+            $named: !($q->get('redirect_uri') ?? '')->empty(), $query: $query));
+    }
+
+    /**
+     * Where the browser goes back to with `$name=$value` (a code or an
+     * error), plus the state and the issuer (RFC 9207).
+     */
+    public const function back(const string& $name, const string& $value, const string& $issuer) : string
+    {
+        nexus::Query $params = nexus::Query();
+        $params->add($name, $value);
+        return Asked::returning($this->redirect, $params, $this->state, $issuer);
+    }
+
+    internal static function refusal(const RedirectUri& $redirect, const string& $code, const string& $why, const string& $state, const string& $issuer) : string
+    {
+        nexus::Query $params = nexus::Query();
+        $params->add('error', $code);
+        $params->add('error_description', $why);
+        return Asked::returning($redirect, $params, $state, $issuer);
+    }
+
+    internal static function returning(const RedirectUri& $redirect, nexus::Query $params, const string& $state, const string& $issuer) : string
+    {
+        if (!$state->empty()) {
+            $params->add('state', $state);
+        }
+        $params->add('iss', $issuer);
+        return $redirect->with($params);
+    }
+}

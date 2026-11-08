@@ -1,0 +1,409 @@
+/**
+ * An app wired through nexus::App, with generated tables written
+ * the way `nexus gen` writes them: routes and links, an action offered as
+ * a tool under a renamed argument, tasks bound with their queue and
+ * schedule, and the boot errors when a helper's module is missing.
+ */
+
+use nexus::testing::{TestApp, TestResponse};
+use container::Container;
+use ecotest::expect;
+
+const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+
+/**
+ * Shows an item, with a link to itself.
+ */
+class AShow : nexus::Action
+{
+    private nexus::Router $router;
+
+    public constructor(nexus::Router $router)
+    {
+        $this->router = $router;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id) : nexus::Response
+    {
+        json::Value $o = json::object();
+        $o['id'] = json::int($id);
+        $o['self'] = json::str($this->router->url<AShow>(['id' => "{$id}"])->text());
+        $o['by'] = json::str($payload->door->name());
+        return nexus::Response(json: $o);
+    }
+}
+
+/**
+ * Counts what one request did, bound per request.
+ */
+class ACounter
+{
+    public int32 $hits = 0;
+
+    public constructor()
+    {
+    }
+}
+
+struct APrune : nexus::work::Task
+{
+    public int64 $days = 30;
+
+    public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
+    {
+        return .ok;
+    }
+}
+
+struct ASend : nexus::work::Task
+{
+    public int64 $user;
+
+    public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
+    {
+        return .ok;
+    }
+}
+
+// what nexus gen writes for this module's types
+struct AShowDispatch
+{
+    public static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $id = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        AShow $action = $payload->get<AShow>();
+        return $action->handle($payload, $id);
+    }
+
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        int64? $v = $args->int64('id', required: true);
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $id = guard $v;
+        AShow $action = $payload->get<AShow>();
+        return $action->handle($payload, $id);
+    }
+
+    public static function offer() : nexus::mcp::Offer
+    {
+        function<nexus::Response(nexus::Payload&, nexus::Fields&)> $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return AShowDispatch::call($payload, $args);
+        };
+        string $text = '{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"],"additionalProperties":false}';
+        json::Value $schema = nexus::mcp::Schema::of($text);
+        string $about = 'Shows an item.';
+        return nexus::mcp::Offer('AShow', $schema, $about, $call);
+    }
+}
+
+#[nexus::generated: "nexus-app-tests"]
+function appGenerated(nexus::Generated $g) : void
+{
+    array<nexus::PathParam> $params = [nexus::PathParam('id', 'integer', false)];
+    $g->action<AShow>('AShow', $params, function(nexus::Payload& $payload) : nexus::Response {
+        return AShowDispatch::dispatch($payload);
+    });
+    $g->name<APrune>('APrune');
+    $g->name<ASend>('ASend');
+}
+
+#[nexus::mcp::tools: "nexus-app-tests"]
+function appOffers(nexus::mcp::Offers $o) : void
+{
+    $o->add<AShow>(AShowDispatch::offer());
+}
+
+#[nexus::tasks: "nexus-app-tests"]
+function appTasks(nexus::work::Codecs $k) : void
+{
+    function<status<nexus::work::Failure>(nexus::Payload&, const string&)> $run = function(nexus::Payload& $payload, const string& $data) : status<nexus::work::Failure> {
+        return .ok;
+    };
+    $k->add<APrune>(nexus::work::Codec('APrune', $run, '{"days":30}'));
+    $k->add<ASend>(nexus::work::Codec('ASend', $run, ''));
+}
+
+/**
+ * Shared for the whole app.
+ */
+class AClock
+{
+    public int32 $ticks = 0;
+
+    public constructor()
+    {
+    }
+}
+
+struct AHappened
+{
+    public int32 $n;
+}
+
+struct AAlsoHappened
+{
+    public int32 $n;
+}
+
+/**
+ * Counts the events it heard, one listener on two events.
+ */
+class ANoter
+{
+    public static int32 $heard = 0;
+
+    public static function handle(nexus::Payload& $payload, const AHappened& $e) : status<nexus::Problem>
+    {
+        ANoter::$heard = ANoter::$heard + $e->n;
+        return .ok;
+    }
+
+    public static function handle(nexus::Payload& $payload, const AAlsoHappened& $e) : status<nexus::Problem>
+    {
+        ANoter::$heard = ANoter::$heard + $e->n;
+        return .ok;
+    }
+}
+
+/**
+ * Marks the answer, to see which routes it wraps.
+ */
+class AStamp : nexus::Middleware
+{
+    public constructor()
+    {
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        nexus::Response $res = $next->run($payload);
+        $res->header('X-Stamp', 'yes');
+        return $res;
+    }
+}
+
+/**
+ * The app's own around every request.
+ */
+class AEvery : nexus::Middleware
+{
+    public constructor()
+    {
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        nexus::Response $res = $next->run($payload);
+        $res->header('X-Every', 'yes');
+        return $res;
+    }
+}
+
+/**
+ * The items part of the app, wired as a provider.
+ */
+class ItemsProvider : nexus::Provider
+{
+    public function register(nexus::App $app) : void
+    {
+        $app->bind<ACounter>(scoped: () => ACounter());
+        $app->bind<AStamp>(scoped: () => AStamp());
+        $app->bind<AClock>(shared: () => AClock());
+        $app->bindAction<AShow>((Container $c) => AShow($c->get<nexus::Router>()))
+            ->route([.get], '/items/{id}')
+            ->middleware<AStamp>()
+            ->route([.get, .post], '/things/{id}')
+            ->tool('show_item', title: 'Show an item', readOnly: true, map: ['item' => 'id']);
+    }
+}
+
+class AApp : nexus::Extension
+{
+    public bool $scheduleSend = false;
+    public bool $noMethods = false;
+
+    public function name() : string
+    {
+        return 'app-test';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::App $app = nexus::App($s);
+        $app->register(ItemsProvider());
+        if ($this->noMethods) {
+            array<nexus::Method> $none = [];
+            $app->action<AShow>()->route($none, '/nowhere/{id}');
+        }
+        $app->bindTask<APrune>()->cron('0 3 * * *');
+        if ($this->scheduleSend) {
+            $app->bindTask<ASend>()->every('1h');
+        } else {
+            $app->bindTask<ASend>()->queue('mail')->tries(5);
+        }
+        $app->bindListener<ANoter>()->on<AHappened>()->on<AAlsoHappened>();
+        $app->bind<AEvery>(scoped: () => AEvery());
+        $app->middleware<AEvery>();
+        return .ok;
+    }
+}
+
+function aBoot(AApp $app, bool $mcp) : result<TestApp, nexus::BootError>
+{
+    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::work::Extension()];
+    if ($mcp) {
+        $exts[] = nexus::mcp::Extension();
+    }
+    $exts[] = $app;
+    return TestApp::attempt($exts, $vars);
+}
+
+function aApp() : TestApp
+{
+    TestApp $app = guard aBoot(AApp(), true);
+    return $app;
+}
+
+function aFirst(const nexus::BootError& $e) : string
+{
+    array<string> $lines = $e->lines();
+    return $lines[0];
+}
+
+test actions_answer_on_their_route_and_link_to_themselves
+{
+    TestApp $app = aApp();
+    TestResponse $res = $app->client()->get('/items/7');
+    $res->assertStatus(200);
+    $res->assertJson(['id'], 7);
+    $res->assertJson(['self'], '/items/7');
+    $app->client()->get('/items/x')->assertStatus(404);
+    nexus::Router $router = $app->kernel->router;
+    expect($router->url<AShow>(['id' => '9'])->text())->is('/items/9');
+    bool $constrained = false;
+    foreach ($router->routes() as const &$r) {
+        if ($r->path == '/items/{id:integer}') {
+            $constrained = true;
+        }
+    }
+    expect($constrained)->yes(says: 'a route is constrained at /items/{id:integer}');
+}
+
+test an_action_is_a_tool_under_a_renamed_argument
+{
+    TestApp $app = aApp();
+    nexus::mcp::Tools $tools = $app->kernel->services->get<nexus::mcp::Tools>();
+    nexus::mcp::ToolSpec $t = expect($tools->find('show_item'))->some();
+    json::Value $entry = $t->entry();
+    expect(json::dump($entry))->is('{"name":"show_item","title":"Show an item","description":"Shows an item.","inputSchema":{"type":"object","properties":{"item":{"type":"integer"}},"required":["item"],"additionalProperties":false},"annotations":{"title":"Show an item","readOnlyHint":true}}');
+
+    nexus::Payload $payload = $app->kernel->background('tool', 'test');
+    $payload->door = nexus::Door::mcp;
+    json::Value $args = json::object();
+    $args['item'] = json::int(9);
+    nexus::Fields $fields = nexus::Fields(json: $t->unmap($args));
+    function<nexus::Response(nexus::Payload&, nexus::Fields&)> $call = $t->call;
+    nexus::Response $res = $call($payload, $fields);
+    nexus::Kernel::finish($payload);
+    expect($res->status)->is(200);
+    expect($res->body)->has('"id":9')->has('"by":"mcp"');
+}
+
+test a_scoped_binding_is_one_per_request
+{
+    TestApp $app = aApp();
+    Container $first = $app->kernel->services->child();
+    ACounter $counter = $first->get<ACounter>();
+    $counter->hits++;
+    expect($first->get<ACounter>()->hits)->is(1);
+    Container $second = $app->kernel->services->child();
+    expect($second->get<ACounter>()->hits)->is(0);
+}
+
+test a_shared_binding_is_one_for_the_whole_app
+{
+    TestApp $app = aApp();
+    AClock $clock = $app->kernel->services->child()->get<AClock>();
+    $clock->ticks++;
+    expect($app->kernel->services->child()->get<AClock>()->ticks)->is(1);
+}
+
+test an_action_answers_on_every_route_it_is_given
+{
+    TestApp $app = aApp();
+    TestResponse $res = $app->client()->get('/things/3');
+    $res->assertStatus(200);
+    $res->assertJson(['id'], 3);
+    $app->client()->post('/things/4', json: json::object())->assertStatus(200);
+}
+
+test middleware_wraps_every_route_of_the_action
+{
+    TestApp $app = aApp();
+    $app->client()->get('/items/1')->assertHeader('X-Stamp', 'yes');
+    $app->client()->get('/things/1')->assertHeader('X-Stamp', 'yes');
+}
+
+test the_apps_middleware_wraps_every_request
+{
+    TestApp $app = aApp();
+    $app->client()->get('/items/1')->assertHeader('X-Every', 'yes');
+    TestResponse $missing = $app->client()->get('/nowhere');
+    $missing->assertStatus(404);
+    $missing->assertHeader('X-Every', 'yes');
+}
+
+test a_route_without_methods_stops_the_boot
+{
+    AApp $app = AApp();
+    $app->noMethods = true;
+    result<TestApp, nexus::BootError> $r = aBoot($app, true);
+    nexus::BootError $e = expect($r)->fails();
+    expect(aFirst($e))->has('is routed at /nowhere/{id} without a method');
+}
+
+test a_listener_runs_on_every_event_it_is_put_on
+{
+    TestApp $app = aApp();
+    nexus::Payload $payload = $app->kernel->background('event', 'test');
+    guard nexus::Events::emit<AHappened>($payload, AHappened($n: 2));
+    guard nexus::Events::emit<AAlsoHappened>($payload, AAlsoHappened($n: 3));
+    nexus::Kernel::finish($payload);
+    expect(ANoter::$heard)->is(5);
+}
+
+test tasks_are_bound_with_their_queue_and_schedule
+{
+    TestApp $app = aApp();
+    nexus::work::Work $w = $app->kernel->services->get<nexus::work::Work>();
+    nexus::work::Kind $send = expect($w->kinds->of<ASend>())->some();
+    expect($send->name)->is('ASend');
+    expect($send->queue)->is('mail');
+    expect($send->tries)->is(5);
+    nexus::work::Kind $prune = expect($w->kinds->of<APrune>())->some();
+    expect($prune->cron)->is('0 3 * * *');
+    expect($prune->data)->is('{"days":30}');
+    expect($w->planned)->size(1);
+    expect($w->queues)->size(2);
+}
+
+test a_scheduled_task_needs_every_default
+{
+    AApp $app = AApp();
+    $app->scheduleSend = true;
+    result<TestApp, nexus::BootError> $r = aBoot($app, true);
+    nexus::BootError $e = expect($r)->fails();
+    expect(aFirst($e))->has('ASend is scheduled, so every field needs a default');
+}
+
+test a_tool_without_nexus_mcp_stops_the_boot
+{
+    result<TestApp, nexus::BootError> $r = aBoot(AApp(), false);
+    nexus::BootError $e = expect($r)->fails();
+    expect(aFirst($e))->has('tool show_item: list nexus::mcp::Extension() before the extension that offers it');
+}

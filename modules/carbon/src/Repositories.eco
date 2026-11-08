@@ -1,0 +1,30 @@
+namespace nexus::carbon;
+
+use container::Container;
+
+/**
+ * Repositories in the container, built from the request's session.
+ */
+public struct Repositories
+{
+    /**
+     * Binds repository `R` per request, from that request's
+     * `carbon::Session`: what an action's constructor asks for. `R` must
+     * be registered on the database, which `Carbon::check` makes sure of
+     * at boot.
+     *
+     * ```echo
+     * nexus::carbon::Repositories::bind<PostRepository>($s);
+     * ```
+     */
+    public static function bind<R>(nexus::Services& $s) : void
+    {
+        $s->bind<R>(scope: function(Container $c) : R {
+            carbon::Session $session = $c->get<carbon::Session>();
+            R $repo = guard $session->repo<R>() else ($e) {
+                die("nexus-carbon: a repository bound in the container is not registered on the database: {$e}");
+            };
+            return $repo;
+        });
+    }
+}

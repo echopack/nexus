@@ -1,0 +1,61 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * Where tasks wait. Every change to a claimed task names the attempt it
+ * claimed, so a worker whose lease ran out (and whose task another worker
+ * claimed) changes nothing.
+ */
+public interface Queue
+{
+    /**
+     * Stores a new task. False when one with the same non-empty key is
+     * already stored, done or not, so it was not stored again.
+     */
+    function push(const StoredTask& $task) : result<bool, nexus::Problem>;
+
+    /**
+     * Takes the task on one of `$queues` that has been due longest and that
+     * no worker holds: its attempts go up by one and it is held until
+     * `$until`. Null when none is due.
+     */
+    function claim(const array<string>& $queues, time::timestamp $now, time::timestamp $until) : result<StoredTask?, nexus::Problem>;
+
+    /**
+     * A claimed task finished: deleted, or kept as done when it has a key.
+     */
+    function done(const StoredTask& $task, time::timestamp $now) : status<nexus::Problem>;
+
+    /**
+     * A claimed task is due again at `$at`.
+     */
+    function retry(const StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>;
+
+    /**
+     * A claimed task gave up: kept with the failed ones.
+     */
+    function fail(const StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>;
+
+    /**
+     * The failed tasks, the latest failure first, at most `$limit`.
+     */
+    function failed(uint64 $limit) : result<array<StoredTask>, nexus::Problem>;
+
+    /**
+     * Makes failed task `$id` due at `$now` with its tries fresh. False when
+     * no failed task has that id.
+     */
+    function again(const string& $id, time::timestamp $now) : result<bool, nexus::Problem>;
+
+    /**
+     * Deletes the done tasks that finished before `$before`; answers how
+     * many.
+     */
+    function prune(time::timestamp $before) : result<uint64, nexus::Problem>;
+
+    /**
+     * How many tasks wait to run (neither done nor failed).
+     */
+    function waiting() : result<uint64, nexus::Problem>;
+}

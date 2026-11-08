@@ -1,0 +1,21 @@
+namespace blog;
+
+/**
+ * A post as the API shows it: what `Post` exposes (`PostMapping`, its
+ * author when the request includes `author`), and the link to itself.
+ */
+#[atomic]
+public class PostTransformer : nexus::rest::Transformer<Post>, PostMapping
+{
+    private nexus::Router $router;
+
+    public constructor(nexus::Router $router)
+    {
+        $this->router = $router;
+    }
+
+    public function transform(const Post& $p, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
+    {
+        $item->text('url', $this->router->url<ShowPost>(['id' => "{$p->id}"])->text());
+    }
+}

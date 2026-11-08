@@ -1,0 +1,77 @@
+/**
+ * The transport-independent request and response values.
+ */
+
+use nexus::{Method, Headers, Query, Percent, Request, Response};
+use ecotest::expect;
+
+test method_parses_and_prints
+{
+    Method $m = expect(Method::parse('post'))->some();
+    expect($m == Method::post)->yes(says: "'post' parses as Method::post");
+    expect($m->verb())->is('POST');
+    expect(Method::parse('BREW'))->none();
+    expect(Method::patch->carriesBody())->yes(says: 'PATCH carries a body');
+    expect(Method::get->carriesBody())->no(says: 'GET carries no body');
+}
+
+test headers_are_case_insensitive
+{
+    Headers $h = Headers();
+    $h->add('Content-Type', 'text/plain');
+    $h->add('set-cookie', 'a=1');
+    $h->add('Set-Cookie', 'b=2');
+    expect($h->get('content-type'))->some('text/plain');
+    expect($h->all('SET-COOKIE'))->size(2);
+    $h->set('Content-Type', 'application/json');
+    expect($h->get('Content-Type'))->some('application/json');
+    expect($h->remove('set-cookie'))->is(2);
+    expect($h->count())->is(1);
+}
+
+test query_decodes_pairs
+{
+    Query $q = Query(parse: 'a=1&tag=x&tag=y+z&enc=%41%2fb&flag&=empty');
+    expect($q->get('a'))->some('1');
+    expect($q->all('tag'))->size(2);
+    string $second = $q->all('tag')[1];
+    expect($second)->is('y z');
+    expect($q->get('enc'))->some('A/b');
+    expect($q->get('flag'))->some('');
+    expect($q->encode())->is('a=1&tag=x&tag=y%20z&enc=A%2Fb&flag=&=empty');
+}
+
+test percent_refuses_broken_escapes
+{
+    expect(Percent::decode('%4'))->none();
+    expect(Percent::decode('%zz'))->none();
+    expect(Percent::decode('a+b'))->some('a+b');
+    expect(Percent::decode('a+b', plus: true))->some('a b');
+}
+
+test request_splits_target
+{
+    Request $r = Request(Method::get, '/v1/posts/42?include=author');
+    expect($r->path)->is('/v1/posts/42');
+    expect($r->queryString)->is('include=author');
+    expect($r->query->get('include'))->some('author');
+    Request $p = Request(Method::post, '/v1/posts', body: '{}', type: 'application/json; charset=utf-8');
+    expect($p->contentType())->is('application/json');
+}
+
+test response_constructors
+{
+    Response $t = Response(text: 'hi');
+    expect($t->status)->is(200);
+    string $ct = expect($t->header('Content-Type'))->some();
+    expect($ct)->starts('text/plain');
+    Response $r = Response(redirect: '/login');
+    expect($r->status)->is(302);
+    Response $n = Response::noContent();
+    expect($n->status)->is(204);
+    json::Value $doc = json::object();
+    $doc['ok'] = true;
+    Response $j = Response(json: $doc, status: 201);
+    expect($j->status)->is(201);
+    expect($j->body)->is('{"ok":true}');
+}

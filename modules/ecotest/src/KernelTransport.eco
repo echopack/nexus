@@ -1,0 +1,169 @@
+namespace nexus::testing;
+
+use ecotest::http::{Header, Request, Response, Transport, TransportError, Verb};
+
+/**
+ * Delivers requests to a nexus kernel in process: `Api(transport: KernelTransport($app->kernel))`.
+ * The URL's path and query become the request target; scheme, host and fragment are dropped. It
+ * keeps the `ecotest::http::Transport` contract, so the kernel sees the `Host`, `Accept` and
+ * `Content-Length` a socket client would add, and a HEAD comes back without a body.
+ */
+public class KernelTransport : Transport
+{
+    /**
+     * The kernel requests go to.
+     */
+    public nexus::Kernel $kernel;
+
+    public constructor(nexus::Kernel $kernel)
+    {
+        $this->kernel = $kernel;
+    }
+
+    /**
+     * Hands `$request` to the kernel and converts what it answers.
+     */
+    public function send(const Request& $request) : result<Response, TransportError>
+    {
+        string $target = KernelTransport::target($request->url);
+        $in = nexus::Request(KernelTransport::method($request->verb), $target);
+        $in->body = $request->body;
+
+        foreach ($request->headers as const &$h) {
+            $in->headers->add($h->name, $h->value);
+        }
+
+        // what a socket client adds when the request has none of its own
+        if ($in->headers->get('Host') == null) {
+            $in->headers->add('Host', KernelTransport::host($request->url));
+        }
+        if ($in->headers->get('Accept') == null) {
+            $in->headers->add('Accept', '*/*');
+        }
+        if ($in->headers->get('Content-Length') == null && KernelTransport::sized($request)) {
+            usize $length = $request->body->size();
+            $in->headers->add('Content-Length', "{$length}");
+        }
+
+        $started = std::time::instant::now();
+        $got = $this->kernel->handle(mv $in);
+
+        $out = Response($got->status as int64);
+        $out->ms = $started->elapsed()->as_millis();
+        if ($request->verb != Verb::head) {
+            $out->body = $got->body;
+        }
+
+        foreach ($got->headers->items as const &$h) {
+            $out->headers[] = Header($h->name, $h->value);
+        }
+
+        return .ok(mv $out);
+    }
+
+    /**
+     * The request target of `$url`: its path and query, `/` when it has no path. A fragment is
+     * dropped. `://` marks a scheme only before the first `/` or `?`, so a target such as
+     * `/login?next=https://...` is kept as it is.
+     */
+    internal static function target(const string& $url) : string
+    {
+        string $rest = $url;
+        usize $hash = $rest->find('#');
+        if ($hash < $rest->size()) {
+            $rest = string($rest->sub(0, $hash));
+        }
+
+        if ($rest->empty()) {
+            return '/';
+        }
+        if ($rest->starts('/')) {
+            return $rest;
+        }
+
+        usize $end = KernelTransport::pathStart($rest, 0);
+        usize $scheme = $rest->find('://');
+        if ($scheme < $end) {
+            usize $at = KernelTransport::pathStart($rest, $scheme + 3);
+            if ($at >= $rest->size()) {
+                return '/';
+            }
+            string $tail = string($rest->sub($at, $rest->size() - $at));
+            if ($tail->starts('?')) {
+                return "/{$tail}";
+            }
+            return $tail;
+        }
+
+        return "/{$rest}";
+    }
+
+    /**
+     * The host and port of an absolute `$url`, or `localhost` when it names none.
+     */
+    internal static function host(const string& $url) : string
+    {
+        usize $scheme = $url->find('://');
+        if ($scheme >= KernelTransport::pathStart($url, 0)) {
+            return 'localhost';
+        }
+        usize $from = $scheme + 3;
+        usize $at = KernelTransport::pathStart($url, $from);
+        usize $hash = $url->find('#', $from);
+        if ($hash < $at) {
+            $at = $hash;
+        }
+        if ($at == $from) {
+            return 'localhost';
+        }
+        return $url->sub($from, $at - $from);
+    }
+
+    /**
+     * Where the first `/` or `?` at or after `$from` is, or the size of `$url` when there is none.
+     */
+    private static function pathStart(const string& $url, usize $from) : usize
+    {
+        usize $i = $from;
+        while ($i < $url->size()) {
+            uint8 $b = $url->byte($i);
+            if ($b == 47 || $b == 63) {
+                return $i;
+            }
+            $i++;
+        }
+        return $url->size();
+    }
+
+    /**
+     * Whether a socket client would send a Content-Length for `$request`: it has a body, or its
+     * method always carries one.
+     */
+    private static function sized(const Request& $request) : bool
+    {
+        if (!$request->body->empty()) {
+            return true;
+        }
+        return match ($request->verb) {
+            .post => true,
+            .put => true,
+            .patch => true,
+            else => false,
+        };
+    }
+
+    /**
+     * nexus's spelling of `$verb`.
+     */
+    private static function method(Verb $verb) : nexus::Method
+    {
+        return match ($verb) {
+            .get => .get,
+            .head => .head,
+            .post => .post,
+            .put => .put,
+            .patch => .patch,
+            .delete => .delete,
+        };
+    }
+}

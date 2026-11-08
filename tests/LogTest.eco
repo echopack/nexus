@@ -1,0 +1,372 @@
+/**
+ * Structured logging: fields from literals, context chains, spans, the
+ * three formats, typed records, and the memory, file and async sinks.
+ */
+
+use std::time;
+use std::thread;
+use nexus::{Logger, Console, Mode, Env};
+use nexus::log::{Level, Sink, Memory, Entry, Fields, Value, Context, Format, Stamp, Span, Rotate, Overflow, Async, File, ConfigError};
+use ecotest::{expect, TempDir};
+
+function at(int64 $millis) : time::timestamp
+{
+    return time::timestamp::from_unix_millis($millis);
+}
+
+function memoryLog(Memory $mem, Level $min) : Logger
+{
+    array<Sink> $sinks = [$mem];
+    return Logger($sinks, $min);
+}
+
+// an entry in span `import` (id abc) below a `with` adding the tenant
+function spanned() : Entry
+{
+    Context $root = Context(null, ['tenant' => 7]);
+    Context $span = Context($root, ['file' => 'a.csv'], span: 'import', id: 'abc');
+    Fields $own = ['n' => 5];
+    return Entry(at(1234), Level::info, 'rows read', $span, $own);
+}
+
+test a_literal_fills_fields_in_order_and_a_repeated_key_replaces
+{
+    int64 $id = 42;
+    usize $count = 3;
+    Fields $f = ['post' => $id, 'title' => 'hi', 'ok' => true, 'ms' => 1.5, 'n' => $count, 'post' => 43];
+    expect($f->count())->is(5 as usize);
+    expect($f->items[0]->key)->is('post');
+    expect($f->get('post')?->text())->some('43');
+    expect($f->get('n')?->text())->some('3');
+    expect($f->get('ok')?->text())->some('true');
+    expect($f->get('missing') == null)->yes(says: 'an absent key has no value');
+}
+
+test a_null_string_or_integer_leaves_its_key_out
+{
+    string? $none = null;
+    int64? $nothing = null;
+    string? $some = 'x';
+    Fields $f = ['a' => $none, 'b' => $nothing, 'c' => $some];
+    expect($f->count())->is(1 as usize);
+    expect($f->items[0]->key)->is('c');
+}
+
+test a_child_adds_fields_and_the_nearer_value_wins
+{
+    Memory $mem = Memory();
+    Logger $root = memoryLog($mem, .info);
+    Logger $req = $root->with(['req' => 'abc', 'who' => 'root']);
+    Logger $deeper = $req->with(['who' => 'child']);
+    int64 $id = 42;
+    $deeper->info('post created', ['post' => $id]);
+    $root->info('plain');
+    array<Entry> $all = $mem->entries();
+    expect($all)->size(2);
+    Fields $f = $all[0]->all();
+    expect($f->count())->is(3 as usize);
+    expect($f->get('req')?->text())->some('abc');
+    expect($f->get('who')?->text())->some('child');
+    expect($f->get('post')?->text())->some('42');
+    expect($all[1]->all()->empty())->yes(says: 'the root stamps nothing');
+}
+
+test entries_below_the_minimum_are_dropped
+{
+    Memory $mem = Memory();
+    Logger $log = memoryLog($mem, .warn);
+    $log->trace('t');
+    $log->debug('d');
+    $log->info('i');
+    $log->warn('w');
+    $log->error('e');
+    expect($mem->entries())->size(2);
+    expect($mem->saw(Level::warn, 'w'))->yes(says: 'warn passes a warn minimum');
+    expect($mem->saw(Level::info, 'w'))->no(says: 'saw compares the level too');
+    expect($log->enabled(.info))->no(says: 'info is below warn');
+    expect($log->level() == Level::warn)->yes(says: 'the minimum is kept');
+    expect(Logger::silent()->enabled(.error))->no(says: 'a silent logger is off even for errors');
+}
+
+test memory_finds_and_forgets
+{
+    Memory $mem = Memory();
+    Logger $log = memoryLog($mem, .trace);
+    $log->trace('first', ['k' => 'v']);
+    Entry $e = guard $mem->find('first') else {
+        expect(false)->yes(says: 'the entry is found');
+        return;
+    };
+    expect($e->level == Level::trace)->yes(says: 'the level is kept');
+    $mem->clear();
+    expect($mem->entries())->size(0);
+    expect($mem->saw('first'))->no(says: 'cleared');
+}
+
+test pretty_prints_spans_the_way_tracing_does
+{
+    string $line = Format::pretty->render(spanned(), false);
+    expect($line)->is('00:00:01.234 INFO  import{file=a.csv}: rows read tenant=7 n=5');
+}
+
+test pretty_colours_only_when_asked
+{
+    string $line = Format::pretty->render(spanned(), true);
+    expect($line)->has('[32mINFO ');
+    expect($line)->has('rows read');
+}
+
+test logfmt_quotes_what_needs_it
+{
+    string $line = Format::logfmt->render(spanned(), false);
+    expect($line)->is('t=1970-01-01T00:00:01.234Z level=info msg="rows read" span=import span_id=abc tenant=7 file=a.csv n=5');
+    Fields $f = ['say' => 'a "b"', 'eq' => 'x=y', 'empty' => ''];
+    string $odd = Format::logfmt->render(Entry(at(0), Level::warn, 'ok', null, $f), false);
+    expect($odd)->has(' msg=ok say="a \"b\"" eq="x=y" empty=""');
+}
+
+test json_is_one_object_with_typed_values
+{
+    string $line = Format::json->render(spanned(), false);
+    expect($line)->is('{"t":"1970-01-01T00:00:01.234Z","lvl":"info","msg":"rows read","span":"import","span_id":"abc","tenant":7,"file":"a.csv","n":5}');
+    json::Value $doc = guard json::parse($line);
+    expect($doc['n']->asInt())->some(5);
+
+    array<string> $names = ['x'];
+    json::Value $tags = json::Value::from($names);
+    Fields $f = ['text' => "two\nlines \"q\"", 'f' => 0.5, 'ok' => false, 'tags' => $tags, 'd' => time::duration::millis(1500)];
+    string $odd = Format::json->render(Entry(at(0), Level::error, 'odd', null, $f), false);
+    json::Value $back = guard json::parse($odd);
+    expect($back['text']->asStr())->some("two\nlines \"q\"");
+    expect($back['f']->asFloat())->some(0.5);
+    expect($back['ok']->asBool())->some(false);
+    expect($back['tags']->at(0)?->asStr())->some('x');
+    expect($back['d']->asStr())->some('1.5s');
+}
+
+test a_span_closes_with_its_time_and_nests_by_id
+{
+    Memory $mem = Memory();
+    Logger $log = memoryLog($mem, .debug);
+    string $outerId = '';
+    {
+        Span $outer = $log->span('import', ['file' => 'a.csv']);
+        $outerId = $outer->id;
+        $outer->log->info('rows read', ['n' => 5]);
+        {
+            Span $inner = $outer->log->span('row', $close: .debug);
+            $inner->log->debug('parsed');
+        }
+    }
+    array<Entry> $all = $mem->entries();
+    expect($all)->size(4);
+    expect($all[0]->span())->is('import');
+    expect($all[0]->spanId())->is($outerId);
+    expect($all[0]->parentId())->is('');
+    expect($all[1]->message)->is('parsed');
+    expect($all[1]->span())->is('row');
+    expect($all[1]->parentId())->is($outerId);
+    expect($all[2]->message)->is('row closed');
+    expect($all[2]->level == Level::debug)->yes(says: 'the inner span closes at the level it asked for');
+    expect($all[3]->message)->is('import closed');
+    expect($all[3]->level == Level::info)->yes(says: 'a span closes at info by default');
+    expect($all[3]->fields->get('ms') != null)->yes(says: 'the close carries the time');
+    expect($all[3]->all()->get('file')?->text())->some('a.csv');
+    expect($outerId->size())->is(16 as usize);
+}
+
+test a_typed_record_is_written_through_its_record_overload
+{
+    Memory $mem = Memory();
+    Logger $log = memoryLog($mem, .info);
+    $log->emit<nexus::log::LoginThrottled>('bob', 11);
+    $log->emit<nexus::log::Record>(Level::error, 'by hand', ['x' => 1]);
+    Entry $e = guard $mem->find('login throttled') else {
+        expect(false)->yes(says: 'the record is written');
+        return;
+    };
+    expect($e->level == Level::warn)->yes(says: 'at the record level');
+    expect($e->fields->get('account')?->text())->some('bob');
+    expect($e->fields->get('attempts')?->text())->some('11');
+    expect($mem->saw(Level::error, 'by hand'))->yes(says: 'a Record is its own record');
+}
+
+test the_process_logger_is_the_installed_one
+{
+    expect(Logger::process()->enabled(.info))->yes(says: 'a default writes info');
+    Memory $mem = Memory();
+    Logger::install(memoryLog($mem, .debug));
+    Logger::process()->debug('from anywhere');
+    thread::handle $h = guard thread::spawn(function() : void {
+        Logger::process()->info('from a thread');
+    });
+    $h->join();
+    expect($mem->saw('from anywhere'))->yes(says: 'the installed logger writes');
+    expect($mem->saw('from a thread'))->yes(says: 'other threads see it');
+    Logger::install(Logger::silent());
+}
+
+test async_blocks_and_loses_nothing_across_threads
+{
+    Memory $mem = Memory();
+    Async $queue = Async($mem, 16, .block);
+    array<Sink> $sinks = [$queue];
+    Logger $log = Logger($sinks, .info);
+    array<thread::handle> $workers = [];
+    int32 $w = 0;
+    while ($w < 8) {
+        Logger $mine = $log->with(['worker' => $w]);
+        thread::handle $h = guard thread::spawn(function[$mine]() : void {
+            int32 $i = 0;
+            while ($i < 200) {
+                $mine->info('tick', ['i' => $i]);
+                $i++;
+            }
+        });
+        $workers[] = $h;
+        $w++;
+    }
+    foreach ($workers as &$h) {
+        $h->join();
+    }
+    $log->flush();
+    expect($mem->entries())->size(1600);
+}
+
+// a sink slow enough to fill a small queue
+#[atomic]
+class Slow : Sink
+{
+    public Memory $mem = Memory();
+
+    public function write(const Entry& $e) : void
+    {
+        time::sleep(.millis(2));
+        $this->mem->write($e);
+    }
+}
+
+test async_drop_counts_what_it_drops
+{
+    Slow $slow = Slow();
+    Async $queue = Async($slow, 2, .drop);
+    array<Sink> $sinks = [$queue];
+    Logger $log = Logger($sinks, .info);
+    int32 $i = 0;
+    while ($i < 50) {
+        $log->info('tick');
+        $i++;
+    }
+    $log->flush();
+    // the writer reports drops after the entry it is writing; one more entry
+    // gives it the chance to report the last ones
+    $log->info('tick');
+    $log->flush();
+    uint64 $written = 0;
+    uint64 $dropped = 0;
+    foreach ($slow->mem->entries() as const &$e) {
+        if ($e->message == 'tick') {
+            $written++;
+        } else {
+            Value $n = guard $e->fields->get('dropped');
+            int64 $d = guard str::int($n->text());
+            $dropped = $dropped + ($d as uint64);
+        }
+    }
+    expect($dropped > 0)->yes(says: 'a two entry queue drops some of fifty');
+    expect($written + $dropped + $queue->dropped())->is(51 as uint64);
+}
+
+test a_file_rotates_by_size_and_keeps_its_count
+{
+    TempDir $dir = TempDir();
+    File $f = guard File::open($dir->file('app.log'), .logfmt, .size(150), 2);
+    array<Sink> $sinks = [$f];
+    Logger $log = Logger($sinks, .info);
+    int32 $i = 0;
+    while ($i < 12) {
+        $log->info('a line that takes some room', ['i' => $i]);
+        $i++;
+    }
+    $log->flush();
+    bool $current = guard std::fs::exists($dir->file('app.log'));
+    bool $first = guard std::fs::exists($dir->file('app.1.log'));
+    bool $second = guard std::fs::exists($dir->file('app.2.log'));
+    bool $third = guard std::fs::exists($dir->file('app.3.log'));
+    expect($current)->yes(says: 'the current file');
+    expect($first)->yes(says: 'the newest old one');
+    expect($second)->yes(says: 'kept up to two');
+    expect($third)->no(says: 'nothing past keep');
+    string $now = guard std::fs::readfile($dir->file('app.log'));
+    expect($now)->has('i=11');
+    expect($now->size() <= 150)->yes(says: 'no file grows past the size');
+}
+
+test a_daily_file_turns_over_at_the_first_entry_of_a_new_day
+{
+    TempDir $dir = TempDir();
+    File $f = guard File::open($dir->file('day.log'), .json, .daily, 3);
+    Fields $none = [];
+    int64 $day = 86400000;
+    $f->write(Entry(at(20000 * $day + 5), Level::info, 'monday', null, $none));
+    $f->write(Entry(at(20000 * $day + 9), Level::info, 'monday again', null, $none));
+    $f->write(Entry(at(20001 * $day + 1), Level::info, 'tuesday', null, $none));
+    $f->flush();
+    string $old = guard std::fs::readfile($dir->file('day.1.log'));
+    string $now = guard std::fs::readfile($dir->file('day.log'));
+    expect($old)->has('monday again');
+    expect($now)->has('tuesday');
+    expect($now->contains('monday'))->no(says: 'the new day starts empty');
+}
+
+test a_file_that_cannot_open_is_an_error
+{
+    TempDir $dir = TempDir();
+    result<File, nexus::log::FileError> $r = File::open($dir->file('missing/dir/app.log'), .json);
+    expect($r)->fails();
+}
+
+test settings_parse_and_name_what_is_wrong
+{
+    expect(Level::parse('WARNING')->or(.trace) == Level::warn)->yes(says: 'warning is warn');
+    expect(Format::parse('logfmt')->or(.json) == Format::logfmt)->yes(says: 'a format by name');
+    expect(Overflow::parse('drop')->or(.block) == Overflow::drop)->yes(says: 'an overflow by name');
+    Rotate $r = Rotate::parse('64mb')->or(.never);
+    expect(match ($r) { .size($b) => $b == 67108864, else => false })->yes(says: '64mb is 64 MiB');
+    Rotate $daily = Rotate::parse('daily')->or(.never);
+    expect(match ($daily) { .daily => true, else => false })->yes(says: 'daily');
+    expect(Rotate::parse('lots'))->fails();
+    expect(Level::parse('loud'))->fails();
+    Level $never = guard Level::parse('loud') else ($e) {
+        expect($e->message())->has("not 'loud'");
+        return;
+    };
+    expect(false)->yes(says: 'loud is not a level');
+}
+
+test the_console_builds_its_logger_from_the_environment
+{
+    TempDir $dir = TempDir();
+    map<string, string> $vars = ['NEXUS_LOG' => 'debug', 'NEXUS_LOG_FILE' => $dir->file('app.log'), 'NEXUS_LOG_FORMAT' => 'logfmt', 'NEXUS_LOG_ASYNC' => '64'];
+    Logger $log = guard Console::logFor(Mode::testing, Env(fixed: $vars));
+    $log->debug('to the file', ['k' => 'v']);
+    $log->flush();
+    string $text = guard std::fs::readfile($dir->file('app.log'));
+    expect($text)->has('msg="to the file" k=v');
+
+    map<string, string> $bad = ['NEXUS_LOG' => 'loud'];
+    expect(Console::logFor(Mode::dev, Env(fixed: $bad)))->fails();
+    map<string, string> $keep = ['NEXUS_LOG_FILE' => $dir->file('k.log'), 'NEXUS_LOG_KEEP' => 'zero'];
+    expect(Console::logFor(Mode::dev, Env(fixed: $keep)))->fails();
+    map<string, string> $none = [];
+    Logger $quiet = guard Console::logFor(Mode::testing, Env(fixed: $none));
+    expect($quiet->enabled(.error))->no(says: 'testing logs nowhere by default');
+}
+
+test stamps_are_rfc3339_and_a_clock
+{
+    expect(Stamp::rfc3339(at(0)))->starts('1970-01-01T00:00:00');
+    expect(Stamp::clock(at(3723004)))->is('01:02:03.004');
+    expect(Stamp::day(at(86400000 * 2 + 1)))->is(2 as int64);
+    expect(Stamp::day(at(-1)))->is(-1 as int64);
+}

@@ -1,0 +1,44 @@
+namespace nexusgen;
+
+use std::io;
+
+/**
+ * A digest of everything the generated file depends on: every `.eco` file
+ * of the module (outside build, vendor and hidden directories) and the
+ * compiler used. Equal stamps mean the decls pass can be skipped.
+ */
+public struct Stamp
+{
+    public static function of(const string& $root, const string& $echoc) : string
+    {
+        crypto::Sha256 $h = crypto::Sha256();
+        $h->update($echoc);
+        $h->update('nexus-gen 1');
+        array<string> $files = [];
+        Stamp::walk($root, $files);
+        $files->sort();
+        foreach ($files as const &$path) {
+            $h->update($path);
+            $h->update(std::fs::readfile($path)->or(''));
+        }
+        return crypto::hex($h->finish());
+    }
+
+    internal static function walk(const string& $dir, array<string>& $out) : void
+    {
+        std::fs::dir $d = guard std::fs::opendir($dir) else {
+            return;
+        };
+        foreach ($d as const &$e) {
+            string $name = $e->name();
+            if ($name->starts('.') || $name == 'ecobuild' || $name == 'vendor') {
+                continue;
+            }
+            if ($e->is_directory()) {
+                Stamp::walk($e->path()->string(), $out);
+            } else if ($name->ends('.eco')) {
+                $out[] = $e->path()->string();
+            }
+        }
+    }
+}

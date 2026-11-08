@@ -1,0 +1,16 @@
+namespace nexus::log;
+
+/**
+ * Why a log file could not be opened.
+ */
+public enum FileError
+{
+    case open(string $path, string $why);
+
+    public const function message() : string
+    {
+        return match ($this) {
+            .open($p, $why) => "cannot open log file {$p}: {$why}",
+        };
+    }
+}

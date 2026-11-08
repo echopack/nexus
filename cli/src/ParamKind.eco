@@ -1,0 +1,15 @@
+namespace nexusgen;
+
+/**
+ * Where a `handle()` parameter's value comes from.
+ */
+public enum ParamKind : uint8
+{
+    case path = 1;
+    case query = 2;
+    case body = 3;
+    case queryInput = 4;
+    case payload = 6;
+    case request = 7;
+    case input = 8;
+}

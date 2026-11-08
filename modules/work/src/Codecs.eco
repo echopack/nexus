@@ -1,0 +1,31 @@
+namespace nexus::work;
+
+/**
+ * Every `Codec` of the program, keyed by task type; filled from the tables
+ * `nexus gen` writes when the app boots.
+ */
+#[atomic]
+public class Codecs
+{
+    internal map<type_id, Codec> $byType = map<type_id, Codec>();
+
+    /**
+     * Registers how task `T` runs.
+     */
+    public function add<T>(Codec $c) : void
+    {
+        $this->byType[type_id<T>()] = $c;
+    }
+
+    /**
+     * How task `T` runs, or null when `nexus gen` wrote nothing for it.
+     */
+    public const function find<T>() : Codec?
+    {
+        type_id $id = type_id<T>();
+        if (!$this->byType->has($id)) {
+            return null;
+        }
+        return $this->byType->get($id);
+    }
+}

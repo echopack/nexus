@@ -1,0 +1,138 @@
+namespace nexus::oauth;
+
+/**
+ * A redirect URI a client registered. HTTPS anywhere, plain HTTP only to
+ * this machine (a desktop app's loopback listener), or an app's own
+ * scheme. A loopback URI matches on any port, since the listener picks
+ * one when it starts (RFC 8252, section 7.3).
+ */
+public struct RedirectUri
+{
+    public const string $text;
+    public const bool $loopback;
+
+    /**
+     * The URI without its port, what a loopback URI is compared by.
+     */
+    public const string $portless;
+
+    public static function parse(const string& $raw) : result<RedirectUri, string>
+    {
+        usize $colon = $raw->find(':');
+        if ($raw->empty() || $raw->size() > 2000 || $colon == $raw->size() || $colon == 0) {
+            return .error("'{$raw}' is not an absolute URI");
+        }
+        if ($raw->find('#') < $raw->size()) {
+            return .error("{$raw} has a fragment");
+        }
+        foreach (0 .. $raw->size() as $i) {
+            uint8 $b = $raw->byte($i);
+            if ($b <= 32 || $b == 127) {
+                return .error('a redirect URI has no spaces or control characters');
+            }
+        }
+        string $scheme = str::lower($raw->sub(0, $colon)->clone());
+        // RFC 3986: a letter, then letters, digits, `+`, `-` and `.`; this
+        // keeps out `//host/x:y` and look-alike letters, which browsers
+        // would resolve against the consent page instead
+        foreach (0 .. $scheme->size() as $i) {
+            uint8 $b = $scheme->byte($i);
+            bool $letter = $b >= 97 && $b <= 122;
+            if (!$letter && ($i == 0 || !(($b >= 48 && $b <= 57) || $b == 43 || $b == 45 || $b == 46))) {
+                return .error("'{$raw}' has no valid scheme");
+            }
+        }
+        if ($scheme == 'javascript' || $scheme == 'data' || $scheme == 'file' || $scheme == 'vbscript' || $scheme == 'about' || $scheme == 'blob') {
+            return .error("{$scheme}: is not a redirect");
+        }
+        if ($scheme == 'https') {
+            if (!$raw->sub($colon, $raw->size() - $colon)->clone()->starts('://') || $raw->size() <= $colon + 3) {
+                return .error("{$raw} has no host");
+            }
+            return .ok(RedirectUri($text: $raw, $loopback: false, $portless: $raw));
+        }
+        if ($scheme != 'http') {
+            // an app's own scheme, `cursor://...` or `com.example.app:/cb`
+            return .ok(RedirectUri($text: $raw, $loopback: false, $portless: $raw));
+        }
+        string $rest = $raw->sub($colon, $raw->size() - $colon)->clone();
+        if (!$rest->starts('://')) {
+            return .error("{$raw} has no host");
+        }
+        usize $start = $colon + 3;
+        usize $end = $raw->size();
+        usize $slash = $raw->find('/', $start);
+        usize $question = $raw->find('?', $start);
+        if ($slash < $end) {
+            $end = $slash;
+        }
+        if ($question < $end) {
+            $end = $question;
+        }
+        string $authority = str::lower($raw->sub($start, $end - $start)->clone());
+        // userinfo or a backslash would let `localhost:1@evil.com` pass as this machine
+        if ($authority->find('@') < $authority->size() || $authority->find('\\') < $authority->size()) {
+            return .error("{$raw} has a broken host");
+        }
+        string $host = $authority;
+        usize $port = $authority->size();
+        if ($authority->starts('[')) {
+            usize $close = $authority->find(']');
+            if ($close == $authority->size()) {
+                return .error("{$raw} has a broken host");
+            }
+            $host = $authority->sub(0, $close + 1)->clone();
+            if ($close + 1 < $authority->size()) {
+                $port = $close + 1;
+            }
+        } else {
+            $port = $authority->find(':');
+            $host = $authority->sub(0, $port)->clone();
+        }
+        if ($host != 'localhost' && $host != '127.0.0.1' && $host != '[::1]') {
+            return .error("plain http is only for this machine (localhost, 127.0.0.1), not {$host}");
+        }
+        if ($port < $authority->size()) {
+            if ($authority->byte($port) != 58 || $port + 1 == $authority->size()) {
+                return .error("{$raw} has a broken port");
+            }
+            foreach ($port + 1 .. $authority->size() as $i) {
+                uint8 $b = $authority->byte($i);
+                if ($b < 48 || $b > 57) {
+                    return .error("{$raw} has a broken port");
+                }
+            }
+        }
+        string $portless = "http://{$host}";
+        $portless->append($raw->sub($end, $raw->size() - $end)->clone());
+        return .ok(RedirectUri($text: $raw, $loopback: true, $portless: $portless));
+    }
+
+    /**
+     * Whether a redirect the client asks for is this registered one.
+     */
+    public const function matches(const RedirectUri& $asked) : bool
+    {
+        if ($this->loopback && $asked->loopback) {
+            return $this->portless == $asked->portless;
+        }
+        return $this->text == $asked->text;
+    }
+
+    /**
+     * This URI with `$params` added, escaped, after a `?` or an `&`. The
+     * URI stays the text the client registered, since an app's own scheme
+     * (`com.example.app:/cb`) is no `nexus::Url`.
+     */
+    public const function with(const nexus::Query& $params) : string
+    {
+        string $out = $this->text;
+        if ($out->find('?') < $out->size()) {
+            $out->append('&');
+        } else {
+            $out->append('?');
+        }
+        $out->append($params->encode());
+        return $out;
+    }
+}

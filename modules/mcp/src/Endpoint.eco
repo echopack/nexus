@@ -1,0 +1,146 @@
+namespace nexus::mcp;
+
+/**
+ * The MCP endpoint: one JSON-RPC message per POST, one JSON answer. It
+ * speaks `initialize`, `ping`, `tools/list` and `tools/call`; a
+ * notification gets a bare 202.
+ *
+ * Every message needs a signed in caller, read by nexus-auth's guards on
+ * the MCP door (so a credential good for MCP only works here). Without
+ * one the answer is a 401 whose `WWW-Authenticate` names the OAuth
+ * metadata, which is how a client finds the sign in.
+ */
+public class Endpoint : nexus::Action
+{
+    private Tools $tools;
+    private McpConfig $config;
+    private nexus::auth::Guards $guards;
+
+    public constructor(Tools $tools, McpConfig $config, nexus::auth::Guards $guards)
+    {
+        $this->tools = $tools;
+        $this->config = $config;
+        $this->guards = $guards;
+    }
+
+    public function handle(nexus::Payload& $payload) : nexus::Response
+    {
+        string $asked = $payload->request->header('MCP-Protocol-Version') ?? '';
+        if (!$asked->empty() && Protocol::parse($asked) == null) {
+            return Answer::error(json::nil(), .invalidRequest("unsupported MCP-Protocol-Version {$asked}"), 400);
+        }
+        // a page on another site can post text/plain without asking first; JSON it cannot
+        if ($payload->request->contentType() != 'application/json') {
+            return Answer::error(json::nil(), .invalidRequest('send the JSON-RPC message as Content-Type: application/json'), 415);
+        }
+        $payload->door = nexus::Door::mcp;
+        nexus::auth::Identity? $who = guard $this->guards->identify($payload) else ($p) {
+            return $this->challenge($payload, $p);
+        };
+        if ($who == null) {
+            nexus::Problem $none = nexus::Problem::unauthorized('this needs a signed in caller');
+            return $this->challenge($payload, $none);
+        }
+        Call $call = guard Call::parse($payload->request->body) else ($e) {
+            return Answer::error(json::nil(), $e);
+        };
+        if ($call->silent) {
+            return nexus::Response(202);
+        }
+        if ($call->method == 'initialize') {
+            return Answer::result($call->id, $this->initialize($call->params));
+        }
+        if ($call->method == 'ping') {
+            return Answer::result($call->id, json::object());
+        }
+        if ($call->method == 'tools/list') {
+            return Answer::result($call->id, $this->tools->listing());
+        }
+        if ($call->method == 'tools/call') {
+            return $this->call($payload, $call);
+        }
+        return Answer::error($call->id, .methodNotFound($call->method));
+    }
+
+    internal function initialize(const json::Value& $params) : json::Value
+    {
+        Protocol $version = Protocol::parse(Call::text($params, 'protocolVersion')) ?? Protocol::latest();
+        json::Value $tools = json::object();
+        $tools['listChanged'] = json::bool(false);
+        json::Value $capabilities = json::object();
+        $capabilities['tools'] = $tools;
+        json::Value $info = json::object();
+        $info['name'] = json::str($this->config->name);
+        if (!$this->config->title->empty()) {
+            $info['title'] = json::str($this->config->title);
+        }
+        $info['version'] = json::str($this->config->version);
+        json::Value $o = json::object();
+        $o['protocolVersion'] = json::str($version->name());
+        $o['capabilities'] = $capabilities;
+        $o['serverInfo'] = $info;
+        if (!$this->config->instructions->empty()) {
+            $o['instructions'] = json::str($this->config->instructions);
+        }
+        return $o;
+    }
+
+    /**
+     * Runs the tool the call names on this request's payload, through the
+     * middleware its class names. Arguments the tool does not take, what a
+     * middleware refuses and what its input decoder refuses come back as a
+     * tool error the model can correct.
+     */
+    internal function call(nexus::Payload& $payload, const Call& $call) : nexus::Response
+    {
+        string $name = Call::text($call->params, 'name');
+        ToolSpec $spec = guard $this->tools->find($name) else {
+            return Answer::error($call->id, .invalidParams("no tool {$name}; see tools/list"));
+        };
+        json::Value $args = json::object();
+        json::Value? $given = $call->params->get('arguments');
+        if ($given != null) {
+            json::Value $g = guard $given;
+            if (!$g->isObject() && !$g->isNull()) {
+                return Answer::error($call->id, .invalidParams('arguments is an object'));
+            }
+            if ($g->isObject()) {
+                $args = $g;
+            }
+        }
+        foreach (($args->asObject() ?? ordered_map<string, json::Value>()) as $key => const &$value) {
+            if (!$spec->takes($key)) {
+                nexus::Response $refused = $payload->fail(nexus::Problem::field($key, 'unknown', "{$name} takes no {$key}"));
+                return Answer::result($call->id, Answer::tool($refused));
+            }
+        }
+        $payload->action = $spec->owner;
+        nexus::Fields $fields = nexus::Fields(json: $spec->unmap($args));
+        function<nexus::Response(nexus::Payload&, nexus::Fields&)> $run = $spec->call;
+        if ($spec->through->empty()) {
+            return Answer::result($call->id, Answer::tool($run($payload, $fields)));
+        }
+        array<nexus::Middleware> $links = nexus::MiddlewareRef::make($spec->through, $payload->services);
+        nexus::Next $next = nexus::Next(nexus::Chain($links, function[$run, $fields](nexus::Payload& $p) : nexus::Response {
+            return $run($p, $fields);
+        }));
+        return Answer::result($call->id, Answer::tool($next->run($payload)));
+    }
+
+    /**
+     * No usable credential: the problem, with a pointer to the OAuth
+     * metadata when it is a 401.
+     */
+    internal function challenge(nexus::Payload& $payload, const nexus::Problem& $p) : nexus::Response
+    {
+        nexus::Response $res = $payload->fail($p);
+        if ($res->status == 401) {
+            string $origin = $this->config->origin;
+            if ($origin->empty()) {
+                $origin = $payload->request->origin();
+            }
+            $res->header('WWW-Authenticate', "Bearer resource_metadata=\"{$origin}/.well-known/oauth-protected-resource/mcp\"");
+        }
+        return $res;
+    }
+}

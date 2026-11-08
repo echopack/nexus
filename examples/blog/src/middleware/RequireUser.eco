@@ -1,0 +1,39 @@
+namespace blog;
+
+/**
+ * Lets only signed in users through and leaves them for the action as a
+ * `Caller`: a 401 for anybody else, and for a credential whose account is
+ * gone.
+ */
+public class RequireUser : nexus::Middleware
+{
+    private nexus::auth::Guards $guards;
+    private UserRepository $users;
+
+    public constructor(nexus::auth::Guards $guards, UserRepository $users)
+    {
+        $this->guards = $guards;
+        $this->users = $users;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        nexus::auth::Identity? $found = guard $this->guards->identify($payload) else ($p) {
+            return $payload->fail($p);
+        };
+        nexus::auth::Identity $id = guard $found else {
+            return $payload->fail(nexus::Problem::unauthorized('this needs a signed in caller'));
+        };
+        int64 $key = guard $id->number() else {
+            return $payload->fail(nexus::Problem::unauthorized('the credential names nobody'));
+        };
+        User? $loaded = guard $this->users->find()->get($key) else ($e) {
+            return $payload->fail(nexus::carbon::Problems::of($e));
+        };
+        User $user = guard $loaded else {
+            return $payload->fail(nexus::Problem::unauthorized('the account is gone'));
+        };
+        $payload->put<Caller>(Caller($id, $user));
+        return $next->run($payload);
+    }
+}

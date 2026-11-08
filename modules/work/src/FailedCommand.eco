@@ -1,0 +1,44 @@
+namespace nexus::work;
+
+use std::io;
+
+/**
+ * `work:failed`: lists the tasks that gave up, the latest first.
+ */
+public class FailedCommand : nexus::Command
+{
+    public function name() : string
+    {
+        return 'work:failed';
+    }
+
+    public function summary() : string
+    {
+        return 'list the tasks that gave up';
+    }
+
+    public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
+    {
+        nexus::Payload $payload = $kernel->background('work:failed', nexus::Kernel::id());
+        Queue $q = $payload->get<Queue>();
+        array<StoredTask> $failed = guard $q->failed(100) else ($p) {
+            io::eprintln("work:failed: {$p->detail(nexus::Mode::dev)}");
+            nexus::Kernel::finish($payload);
+            return 1;
+        };
+        nexus::Kernel::finish($payload);
+        if ($failed->empty()) {
+            io::println('no failed tasks');
+            return 0;
+        }
+        foreach ($failed as const &$j) {
+            string $when = '';
+            if ($j->failedAt != null) {
+                std::time::timestamp $at = guard $j->failedAt;
+                $when = Stamp::text($at);
+            }
+            io::println("{$j->id}  {$j->name}  {$when}  after {$j->attempts} tries: {$j->error}");
+        }
+        return 0;
+    }
+}

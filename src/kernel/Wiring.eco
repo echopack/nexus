@@ -1,0 +1,39 @@
+namespace nexus;
+
+/**
+ * One route an extension asked for, while the app is wired: the action's
+ * type, the path as written and the route the kernel adds once every
+ * extension has had its say.
+ */
+internal class Wiring
+{
+    internal type_id $action;
+    internal string $source;
+    internal Route $route;
+
+    /**
+     * The middleware the action names in `#[nexus::through]`, inside the
+     * route's own.
+     */
+    internal array<MiddlewareRef> $through = [];
+
+    internal constructor(type_id $action, const string& $source, Route $route)
+    {
+        $this->action = $action;
+        $this->source = $source;
+        $this->route = $route;
+    }
+
+    /**
+     * The route as the kernel adds it: its own middleware, then the
+     * action's.
+     */
+    internal const function built() : Route
+    {
+        Route $r = $this->route;
+        foreach ($this->through as const &$ref) {
+            $r->middleware[] = $ref;
+        }
+        return $r;
+    }
+}

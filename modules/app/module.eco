@@ -1,0 +1,46 @@
+/*
+ * nexus-app: nexus::App, the app's wiring, with a helper for every door,
+ * and nexus::Provider for wiring one part of the app at a time.
+ *
+ * The core's nexus::Services knows the container, actions and listeners;
+ * the transformers, repositories, MCP tools and tasks live in their own
+ * modules, so their helpers do too. This module puts them all on one
+ * object for the app's `services()`:
+ *
+ *   nexus::App $app = nexus::App($s, $this->providers());
+ *   $app->bindTransformer<User, UserTransformer>();
+ *   $app->bindRepository<PostRepository>();
+ *   $app->bind<PostService>(scoped: (Container $c) => PostService($c->get<PostRepository>()));
+ *   $app->bindAction<ShowPost>(...)->route([.get], '/v1/posts/{id}')->tool('show_post');
+ *   $app->bindTool<CreatePostTool>(...)->offer('create_post');
+ *   $app->bindTask<SendWelcome>()->queue('mail')->tries(5);
+ *   $app->bindListener<WelcomeNewUser>()->on<UserRegistered>();
+ *
+ * and a provider's commands, which the command line reads before boot:
+ *
+ *   nexus::App::commands($cmds, $this->providers());
+ *
+ * A library that only needs the core wires itself with nexus::Services.
+ */
+
+#[module: "nexus-app"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "nexus::App and providers for wiring a nexus app: services, routes, transformers, repositories, MCP tools, tasks"]
+
+#[depends: "../.."]
+#[depends: "../rest"]
+#[depends: "../carbon"]
+#[depends: "../mcp"]
+#[depends: "../auth"]
+#[depends: "../work"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+
+#[sources: "src/*.eco"]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

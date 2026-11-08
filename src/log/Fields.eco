@@ -1,0 +1,98 @@
+namespace nexus::log;
+
+use std::time;
+
+/**
+ * The key/value pairs of an entry, in the order they were added. A key
+ * that comes again replaces its value in place. A map literal of plain
+ * values fills it, so a call reads like a map:
+ *
+ *     $log->info('post created', ['post' => $post->id, 'ms' => 1.5]);
+ *
+ * A null string or integer leaves its key out.
+ */
+public struct Fields
+{
+    /**
+     * Read freely; add through `put` or `[k] =`, which keep keys unique.
+     */
+    public array<Field> $items = [];
+
+    public const function count() : usize
+    {
+        return $this->items->count();
+    }
+
+    public const function empty() : bool
+    {
+        return $this->items->empty();
+    }
+
+    /**
+     * The value under `$key`, or null when there is none.
+     */
+    public const function get(const string& $key) : Value?
+    {
+        foreach ($this->items as const &$f) {
+            if ($f->key == $key) {
+                return $f->value;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Adds `$key`, or replaces its value where it already is.
+     */
+    public function put(const string& $key, Value $value) : void
+    {
+        usize $i = 0;
+        while ($i < $this->items->count()) {
+            if ($this->items[$i]->key == $key) {
+                $this->items[$i]->value = $value;
+                return;
+            }
+            $i = $i + 1;
+        }
+        $this->items[] = Field($key, $value);
+    }
+
+    /**
+     * Adds every field of `$other`, its values winning.
+     */
+    public function merge(const Fields& $other) : void
+    {
+        foreach ($other->items as const &$f) {
+            $this->put($f->key, $f->value);
+        }
+    }
+}
+
+operator (Fields& $f)[string $k] = (Value $v) : void { $f->put($k, $v); }
+operator (Fields& $f)[string $k] = (string $v) : void { $f->put($k, .str($v)); }
+operator (Fields& $f)[string $k] = (int32 $v) : void { $f->put($k, .int($v as int64)); }
+operator (Fields& $f)[string $k] = (int64 $v) : void { $f->put($k, .int($v)); }
+operator (Fields& $f)[string $k] = (uint32 $v) : void { $f->put($k, .uint($v as uint64)); }
+operator (Fields& $f)[string $k] = (uint64 $v) : void { $f->put($k, .uint($v)); }
+operator (Fields& $f)[string $k] = (usize $v) : void { $f->put($k, .uint($v as uint64)); }
+operator (Fields& $f)[string $k] = (float64 $v) : void { $f->put($k, .float($v)); }
+operator (Fields& $f)[string $k] = (bool $v) : void { $f->put($k, .bool($v)); }
+operator (Fields& $f)[string $k] = (time::duration $v) : void { $f->put($k, .duration($v)); }
+operator (Fields& $f)[string $k] = (time::timestamp $v) : void { $f->put($k, .time($v)); }
+operator (Fields& $f)[string $k] = (const json::Value& $v) : void { $f->put($k, .raw(json::dump($v->clone()))); }
+
+operator (Fields& $f)[string $k] = (string? $v) : void
+{
+    if ($v != null) {
+        string $s = guard $v;
+        $f->put($k, .str($s));
+    }
+}
+
+operator (Fields& $f)[string $k] = (int64? $v) : void
+{
+    if ($v != null) {
+        int64 $n = guard $v;
+        $f->put($k, .int($n));
+    }
+}

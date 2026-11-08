@@ -1,0 +1,12 @@
+namespace nexus;
+
+/**
+ * One module's generated config loader, found by the kernel with
+ * `attr::of<ConfigTable>("nexus::configs")`. It reads every
+ * `#[nexus::config]` struct from the env and binds it into the container.
+ */
+public struct ConfigTable
+{
+    public string $module;
+    public function<status<BootError>(Env, container::Builder&)> $call;
+}

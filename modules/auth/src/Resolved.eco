@@ -1,0 +1,10 @@
+namespace nexus::auth;
+
+/**
+ * What the guards found for this request, kept in the payload's container so
+ * they run once however often middleware asks: anonymous too.
+ */
+public struct Resolved
+{
+    public Identity? $identity = null;
+}

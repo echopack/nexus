@@ -1,0 +1,50 @@
+namespace nexus::log;
+
+/**
+ * When a `File` sink starts a fresh file. The full one moves to
+ * `app.1.log`, the one before to `app.2.log`, up to the sink's `keep`.
+ */
+public enum Rotate
+{
+    case never;
+
+    /**
+     * At the first entry of a new UTC day.
+     */
+    case daily;
+
+    /**
+     * Before an entry would grow the file past `$bytes`.
+     */
+    case size(uint64 $bytes);
+
+    /**
+     * `never`, `daily`, or a size: a number of bytes with an optional
+     * `kb`, `mb` or `gb` (powers of 1024).
+     */
+    public static function parse(const string& $text) : result<Rotate, ConfigError>
+    {
+        string $t = str::lower(str::trim($text));
+        if ($t == 'never') { return .ok(.never); }
+        if ($t == 'daily') { return .ok(.daily); }
+        uint64 $unit = 1;
+        string $digits = $t;
+        if ($t->ends('kb')) {
+            $unit = 1024;
+            $digits = str::trim($t->sub(0, $t->size() - 2));
+        } else if ($t->ends('mb')) {
+            $unit = 1048576;
+            $digits = str::trim($t->sub(0, $t->size() - 2));
+        } else if ($t->ends('gb')) {
+            $unit = 1073741824;
+            $digits = str::trim($t->sub(0, $t->size() - 2));
+        }
+        int64 $n = guard str::int($digits) else {
+            return .error(.rotate($text));
+        };
+        if ($n <= 0) {
+            return .error(.rotate($text));
+        }
+        return .ok(.size(($n as uint64) * $unit));
+    }
+}

@@ -1,0 +1,70 @@
+namespace nexus::auth::carbon;
+
+/**
+ * Bearer tokens in `auth_tokens`, through a request's carbon session.
+ */
+public class CarbonTokens : nexus::auth::TokenStore
+{
+    internal carbon::Session $session;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->session = $session;
+    }
+
+    public function find(const string& $id) : result<nexus::auth::StoredToken?, nexus::Problem>
+    {
+        AuthTokenRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        AuthToken? $found = guard $repo->find()->get($id) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        if ($found == null) {
+            return .ok(null);
+        }
+        AuthToken $t = guard $found;
+        return .ok($t->stored());
+    }
+
+    public function create(const nexus::auth::StoredToken& $token) : status<nexus::Problem>
+    {
+        AuthTokenRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        guard $repo->create(AuthToken::of($token)) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok;
+    }
+
+    public function remove(const string& $id) : status<nexus::Problem>
+    {
+        AuthTokenRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        guard $repo->find()->where(AuthTokenTable::$id == $id)->purge() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok;
+    }
+
+    public function removeAll(const string& $subject) : status<nexus::Problem>
+    {
+        AuthTokenRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        guard $repo->find()->where(AuthTokenTable::$subject == $subject)->purge() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok;
+    }
+
+    internal function repo() : result<AuthTokenRepository, nexus::Problem>
+    {
+        AuthTokenRepository $repo = guard $this->session->repo<AuthTokenRepository>() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($repo);
+    }
+}

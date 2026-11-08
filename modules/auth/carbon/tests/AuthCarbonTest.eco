@@ -1,0 +1,148 @@
+/**
+ * nexus-auth's stores in a carbon database, on carbon's fake driver: each
+ * test queues what the database answers and reads back what was sent.
+ */
+
+use nexus::auth::{Identity, Guards, Tokens, Sessions, Issued, Opened};
+use nexus::auth::carbon::{AuthToken, AuthTokenTable, AuthSession, AuthSessionTable, PruneCommand};
+use nexus::testing::TestApp;
+use carbon::fake;
+use hydrahon::Mysql;
+use std::time;
+use ecotest::expect;
+
+const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+const START = 1700000000;
+
+class Rig
+{
+    public fake::Driver<Mysql> $fake;
+    public calendar::ManualClock $clock;
+    public TestApp $app;
+
+    public constructor(bool $register)
+    {
+        fake::Driver<Mysql> $driver = fake::Driver<Mysql>();
+        calendar::ManualClock $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        $this->fake = $driver;
+        $this->clock = $clock;
+        nexus::carbon::Extension $db = nexus::carbon::Extension(function[$driver, $clock, $register](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+            carbon::DB $made = carbon::DB($driver, clock: $clock);
+            if ($register) {
+                guard nexus::auth::carbon::Tables::wire($made) else ($e) {
+                    return .error($e);
+                };
+            }
+            return .ok($made);
+        });
+        array<nexus::Extension> $exts = [$db, nexus::auth::Extension('t', stores: .provided, clock: $clock, cost: crypto::PasswordCost(8, 1)), nexus::auth::carbon::Extension()];
+        map<string, string> $vars = ['AUTH_KEY' => KEY, 'AUTH_SESSIONS' => '2h'];
+        $this->app = TestApp::boot($exts, $vars);
+    }
+
+    public function payload(nexus::Request $req) : nexus::Payload
+    {
+        return nexus::Payload($request: $req, $services: $this->app->kernel->services->child(), $mode: nexus::Mode::testing, $log: nexus::Log([], nexus::Level::info));
+    }
+
+    public function get() : nexus::Payload
+    {
+        return $this->payload(nexus::Request(nexus::Method::get, '/'));
+    }
+
+    public function with(const string& $name, const string& $value) : nexus::Payload
+    {
+        nexus::Request $req = nexus::Request(nexus::Method::get, '/');
+        $req->headers->set($name, $value);
+        return $this->payload($req);
+    }
+}
+
+function subject(nexus::Payload& $payload) : string
+{
+    Identity? $found = guard $payload->get<Guards>()->identify($payload) else ($p) {
+        return "{$p->status()}";
+    };
+    Identity $id = guard $found else {
+        return '401';
+    };
+    return "{$id->via}:{$id->subject}";
+}
+
+test issuing_a_token_inserts_its_hash
+{
+    Rig $r = Rig(true);
+    $r->fake->written();
+    nexus::Payload $payload = $r->get();
+    Issued $t = guard $payload->get<Tokens>()->issue('7', 'laptop');
+    expect($r->fake->last())->starts('INSERT INTO `auth_tokens`');
+    expect($r->fake->count())->is(1);
+    expect($r->fake->last())->lacks($t->token);
+}
+
+test a_token_is_found_by_its_id
+{
+    Rig $r = Rig(true);
+    $r->fake->written();
+    Issued $t = guard $r->get()->get<Tokens>()->issue('7');
+    $r->fake->rows([AuthTokenTable()->row(AuthToken::of($t->stored))]);
+    expect(subject($r->with('Authorization', "Bearer {$t->token}")))->is('bearer:7');
+    expect($r->fake->last())->has('FROM `auth_tokens` WHERE `auth_tokens`.`id` = ?');
+    $r->fake->rows([]);
+    expect(subject($r->with('Authorization', "Bearer {$t->token}")))->is('401');
+}
+
+test revoking_deletes_the_row
+{
+    Rig $r = Rig(true);
+    $r->fake->written()->written();
+    nexus::Payload $payload = $r->get();
+    guard $payload->get<Tokens>()->revoke('abcdefabcdef');
+    expect($r->fake->last())->is('DELETE FROM `auth_tokens` WHERE `auth_tokens`.`id` = ?');
+    guard $payload->get<Tokens>()->revokeAll('7');
+    expect($r->fake->last())->is('DELETE FROM `auth_tokens` WHERE `auth_tokens`.`subject` = ?');
+}
+
+test a_signed_session_is_stored_and_slides
+{
+    Rig $r = Rig(true);
+    $r->fake->written();
+    Opened $o = guard $r->get()->get<Sessions>()->open('7');
+    expect($r->fake->last())->starts('INSERT INTO `auth_sessions`');
+    expect($r->fake->last())->lacks($o->secret);
+    $r->clock->advance(time::duration::mins(30));
+    $r->fake->rows([AuthSessionTable()->row(AuthSession::of($o->stored))])->written();
+    string $auth = $o->signer()->header('GET', '/', $r->clock->now()->unix_secs(), '');
+    expect(subject($r->with('Authorization', $auth)))->is('signed:7');
+    expect($r->fake->last())->starts('UPDATE `auth_sessions` SET `expires_at` = ?');
+    // a forged signature never reaches the database
+    usize $before = $r->fake->count();
+    nexus::auth::Signer $forged = nexus::auth::Signer($o->stored->id, 'guess');
+    expect(subject($r->with('Authorization', $forged->header('GET', '/', $r->clock->now()->unix_secs(), ''))))->is('401');
+    expect($r->fake->count())->is($before);
+}
+
+test prune_deletes_what_expired
+{
+    Rig $r = Rig(true);
+    $r->fake->written(3)->written(1);
+    carbon::DB $db = $r->app->kernel->services->get<carbon::DB>();
+    uint64 $tokens = expect(PruneCommand::tokens($db))->ok();
+    expect($tokens)->is(3);
+    expect($r->fake->last())->is('DELETE FROM `auth_tokens` WHERE `auth_tokens`.`expires_at` < ?');
+    uint64 $sessions = expect(PruneCommand::sessions($db))->ok();
+    expect($sessions)->is(1);
+    expect($r->fake->last())->is('DELETE FROM `auth_sessions` WHERE `auth_sessions`.`expires_at` < ?');
+}
+
+test boot_wants_the_repositories_registered
+{
+    fake::Driver<Mysql> $driver = fake::Driver<Mysql>();
+    nexus::carbon::Extension $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+        return .ok(carbon::DB($driver));
+    });
+    array<nexus::Extension> $exts = [$db, nexus::auth::Extension('t', stores: .provided, cost: crypto::PasswordCost(8, 1)), nexus::auth::carbon::Extension()];
+    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    nexus::BootError $e = expect(TestApp::attempt($exts, $vars))->fails();
+    expect(str::join($e->lines(), ';'))->has('Tables::wire');
+}

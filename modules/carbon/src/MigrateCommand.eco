@@ -1,0 +1,118 @@
+namespace nexus::carbon;
+
+use std::io;
+
+/**
+ * `migrate`, `migrate:status`, `migrate:down` and `migrate:reset`: the
+ * app's migrations run by a `carbon::Migrator` on the app's database. In
+ * prod, undoing anything wants `--force`.
+ */
+public class MigrateCommand : nexus::Command
+{
+    internal MigrateVerb $verb;
+    internal array<carbon::migrate::Step> $steps;
+    internal carbon::ddl::Grammar $grammar;
+
+    public constructor(MigrateVerb $verb, array<carbon::migrate::Step> $steps, carbon::ddl::Grammar $grammar)
+    {
+        $this->verb = $verb;
+        $this->steps = $steps;
+        $this->grammar = $grammar;
+    }
+
+    public function name() : string
+    {
+        return $this->verb->command();
+    }
+
+    public function summary() : string
+    {
+        return $this->verb->summary();
+    }
+
+    public function options() : array<nexus::CommandOption>
+    {
+        array<nexus::CommandOption> $out = [];
+        if ($this->verb == MigrateVerb::up) {
+            $out[] = nexus::CommandOption(value: 'to', '<id>', 'stop after this migration');
+        }
+        if ($this->verb->destructive()) {
+            $out[] = nexus::CommandOption(flag: 'force', 'undo even in prod');
+        }
+        return $out;
+    }
+
+    public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
+    {
+        if ($this->verb->destructive() && $in->mode == nexus::Mode::prod && !$in->flag('force')) {
+            io::eprintln("{$this->verb->command()}: this undoes schema changes in prod; add --force");
+            return 1;
+        }
+        carbon::DB $db = $kernel->services->get<carbon::DB>();
+        carbon::Migrator $m = carbon::Migrator($db, $this->steps, $this->grammar);
+        if ($this->verb == MigrateVerb::status) {
+            carbon::migrate::Report $report = guard $m->status() else ($e) {
+                return MigrateCommand::failed('migrate:status', $e);
+            };
+            io::println(MigrateCommand::report($report));
+            return 0;
+        }
+        array<string> $ids = [];
+        string $done = 'migrated';
+        if ($this->verb == MigrateVerb::up) {
+            array<string> $ran = guard $m->up(to: $in->value('to')) else ($e) {
+                return MigrateCommand::failed('migrate', $e);
+            };
+            $ids = $ran;
+        } else if ($this->verb == MigrateVerb::down) {
+            array<string> $undone = guard $m->down() else ($e) {
+                return MigrateCommand::failed('migrate:down', $e);
+            };
+            $ids = $undone;
+            $done = 'undone';
+        } else {
+            array<string> $all = guard $m->reset() else ($e) {
+                return MigrateCommand::failed('migrate:reset', $e);
+            };
+            $ids = $all;
+            $done = 'undone';
+        }
+        if ($ids->empty()) {
+            io::println('nothing to do');
+            return 0;
+        }
+        foreach ($ids as const &$id) {
+            io::println("{$done}  {$id}");
+        }
+        return 0;
+    }
+
+    /**
+     * What `migrate:status` prints: one line per migration, applied ones
+     * with their batch, then the pending ones, then the ones the ledger
+     * has and the app does not.
+     */
+    public static function report(const carbon::migrate::Report& $r) : string
+    {
+        array<string> $lines = [];
+        foreach ($r->applied as const &$a) {
+            $lines[] = "ran      {$a->id}  (batch {$a->batch})";
+        }
+        foreach ($r->pending as const &$id) {
+            $lines[] = "pending  {$id}";
+        }
+        foreach ($r->unknown as const &$id) {
+            $lines[] = "unknown  {$id}  (in the ledger, not in the app)";
+        }
+        if ($lines->empty()) {
+            return 'no migrations';
+        }
+        return str::join($lines, "\n");
+    }
+
+    internal static function failed(const string& $command, const carbon::Error& $e) : int32
+    {
+        io::eprintln("{$command}: {$e}");
+        return 1;
+    }
+}

@@ -1,0 +1,78 @@
+namespace nexus;
+
+/**
+ * What a `Command` was run with: the values of its options, the flags and
+ * lists given, the positional words, the mode the kernel booted in, and
+ * where to print (libcommand's terminal output; a buffer in tests).
+ */
+public struct Invocation
+{
+    public Mode $mode;
+    public map<string, string> $values = [];
+    public map<string, bool> $flags = [];
+    public map<string, bool> $given = [];
+    public map<string, array<string>> $lists = [];
+    public array<string> $positionals = [];
+    public command::CLIContext $out;
+
+    public constructor(Mode $mode)
+    {
+        $this->mode = $mode;
+        $this->out = command::CLIContext::plain();
+    }
+
+    /**
+     * The value of option `$name`, its fallback when not given.
+     */
+    public const function value(const string& $name) : string
+    {
+        if (!$this->values->has($name)) {
+            return '';
+        }
+        return $this->values->get($name);
+    }
+
+    /**
+     * Whether option `$name` was stated, rather than left to its fallback.
+     */
+    public const function stated(const string& $name) : bool
+    {
+        if (!$this->given->has($name)) {
+            return false;
+        }
+        return $this->given->get($name);
+    }
+
+    /**
+     * Whether flag `$name` was given.
+     */
+    public const function flag(const string& $name) : bool
+    {
+        if (!$this->flags->has($name)) {
+            return false;
+        }
+        return $this->flags->get($name);
+    }
+
+    /**
+     * Every value of list option `$name`, in the order given.
+     */
+    public const function list(const string& $name) : array<string>
+    {
+        if (!$this->lists->has($name)) {
+            return array<string>();
+        }
+        return $this->lists->get($name);
+    }
+
+    /**
+     * The positional word at `$index`, or null when fewer were given.
+     */
+    public const function positional(usize $index) : string?
+    {
+        if ($index >= $this->positionals->count()) {
+            return null;
+        }
+        return $this->positionals[$index];
+    }
+}

@@ -1,0 +1,206 @@
+/**
+ * Middleware an action names in `#[nexus::through]`, the app's own around
+ * every request, and the state middleware leaves for `state<T>()`.
+ */
+
+use nexus::{Kernel, Tables, Extension, Services, Generated, GeneratedTable, PathParam, Request, Response, Method, Mode, Logger, Env, Payload, Problem, Reply, Route, ConfigTable, Middleware, MiddlewareRef, Next, BootError};
+use container::Container;
+use ecotest::expect;
+
+function thMark(Response& $r, const string& $what) : void
+{
+    string $was = $r->header('X-Order') ?? '';
+    $r->header('X-Order', "{$was}{$what};");
+}
+
+struct ThSeen
+{
+    public string $who;
+}
+
+/**
+ * Puts who is asking, from a header; 401 without one.
+ */
+class ThRequireWho : Middleware
+{
+    public function handle(Payload& $payload, Next $next) : Response
+    {
+        string $who = guard $payload->request->header('X-Who') else {
+            return $payload->fail(Problem::unauthorized('say who'));
+        };
+        $payload->put<ThSeen>(ThSeen($who));
+        Response $r = $next->run($payload);
+        thMark($r, 'who');
+        return $r;
+    }
+}
+
+#[atomic]
+class ThRoute : Middleware
+{
+    public function handle(Payload& $payload, Next $next) : Response
+    {
+        Response $r = $next->run($payload);
+        thMark($r, 'route');
+        return $r;
+    }
+}
+
+/**
+ * The app's own, per request.
+ */
+class ThTiming : Middleware
+{
+    public function handle(Payload& $payload, Next $next) : Response
+    {
+        Response $r = $next->run($payload);
+        thMark($r, 'app');
+        return $r;
+    }
+}
+
+class ThGreet : nexus::Action
+{
+    public function handle(Payload& $payload) : result<string, Problem>
+    {
+        ThSeen $seen = guard $payload->state<ThSeen>() else ($p) {
+            return .error($p);
+        };
+        return .ok("hello {$seen->who}");
+    }
+}
+
+/**
+ * Reads the state but names no middleware that puts it.
+ */
+class ThForgot : nexus::Action
+{
+    public function handle(Payload& $payload) : result<string, Problem>
+    {
+        ThSeen $seen = guard $payload->state<ThSeen>() else ($p) {
+            return .error($p);
+        };
+        return .ok($seen->who);
+    }
+}
+
+class ThApp : Extension
+{
+    public bool $bindWho = true;
+
+    public function name() : string
+    {
+        return 'thapp';
+    }
+
+    public function services(Services& $s) : status<BootError>
+    {
+        if ($this->bindWho) {
+            $s->bind<ThRequireWho>(scope: () => ThRequireWho());
+        }
+        $s->bind<ThRoute>(once: () => ThRoute());
+        $s->bind<ThTiming>(scope: () => ThTiming());
+        $s->bindAction<ThGreet>(method: .get, path: '/greet', (Container $c) => ThGreet())
+            ->middleware<ThRoute>();
+        $s->bindAction<ThForgot>(method: .get, path: '/forgot', (Container $c) => ThForgot());
+        $s->middleware<ThTiming>();
+        return .ok;
+    }
+}
+
+function thGenerated() : array<GeneratedTable>
+{
+    array<GeneratedTable> $tables = [];
+    $tables[] = GeneratedTable('tests', function(Generated $g) : void {
+        array<PathParam> $none = [];
+        $g->action<ThGreet>('ThGreet', $none, function(Payload& $payload) : Response {
+            ThGreet $action = $payload->get<ThGreet>();
+            return Reply::of($payload, $action->handle($payload));
+        });
+        $g->through<ThGreet>([MiddlewareRef::of<ThRequireWho>('ThRequireWho')]);
+        $g->action<ThForgot>('ThForgot', $none, function(Payload& $payload) : Response {
+            ThForgot $action = $payload->get<ThForgot>();
+            return Reply::of($payload, $action->handle($payload));
+        });
+        $g->name<ThRoute>('ThRoute');
+        $g->name<ThTiming>('ThTiming');
+    });
+    return $tables;
+}
+
+function thBoot(ThApp $app, nexus::log::Memory $sink) : result<Kernel, BootError>
+{
+    array<Extension> $exts = [$app];
+    array<nexus::log::Sink> $sinks = [$sink];
+    array<ConfigTable> $configs = [];
+    map<string, string> $vars = map<string, string>();
+    Tables $tables = Tables($configs: $configs, $generated: thGenerated());
+    return Kernel::boot($exts, Mode::testing, Logger($sinks, .debug), Env(fixed: $vars), tables: $tables);
+}
+
+test through_middleware_puts_state_the_action_reads
+{
+    Kernel $k = guard thBoot(ThApp(), nexus::log::Memory());
+    Request $req = Request(Method::get, '/greet');
+    $req->headers->set('X-Who', 'ada');
+    Response $r = $k->handle($req);
+    expect($r->status)->is(200);
+    expect($r->body)->is('hello ada');
+}
+
+test through_middleware_runs_inside_the_routes_and_the_apps
+{
+    Kernel $k = guard thBoot(ThApp(), nexus::log::Memory());
+    Request $req = Request(Method::get, '/greet');
+    $req->headers->set('X-Who', 'ada');
+    Response $r = $k->handle($req);
+    // innermost adds first on the way out
+    expect($r->header('X-Order'))->some('who;route;app;');
+}
+
+test through_middleware_answers_before_the_action
+{
+    Kernel $k = guard thBoot(ThApp(), nexus::log::Memory());
+    Response $r = $k->handle(Request(Method::get, '/greet'));
+    expect($r->status)->is(401);
+}
+
+test the_apps_middleware_wraps_every_request
+{
+    Kernel $k = guard thBoot(ThApp(), nexus::log::Memory());
+    Response $missing = $k->handle(Request(Method::get, '/nowhere'));
+    expect($missing->status)->is(404);
+    expect($missing->header('X-Order'))->some('app;');
+}
+
+test state_nobody_put_is_a_logged_500
+{
+    nexus::log::Memory $sink = nexus::log::Memory();
+    Kernel $k = guard thBoot(ThApp(), $sink);
+    Response $r = $k->handle(Request(Method::get, '/forgot'));
+    expect($r->status)->is(500);
+    expect($sink->saw('request failed'))->yes(says: 'the failure is logged');
+    expect($r->body)->has('ThForgot reads state no middleware put in its payload');
+}
+
+test routes_list_the_through_middleware_after_the_routes_own
+{
+    Kernel $k = guard thBoot(ThApp(), nexus::log::Memory());
+    foreach ($k->router->routes() as const &$route) {
+        if ($route->action == 'ThGreet') {
+            expect($route->middleware)->size(2);
+            expect($route->middleware[0]->name)->is('ThRoute');
+            expect($route->middleware[1]->name)->is('ThRequireWho');
+        }
+    }
+}
+
+test unbound_through_middleware_fails_boot
+{
+    ThApp $app = ThApp();
+    $app->bindWho = false;
+    result<Kernel, BootError> $r = thBoot($app, nexus::log::Memory());
+    BootError $e = expect($r)->fails();
+    array<string> $lines = $e->lines();
+    expect($lines[0])->has('ThGreet goes through ThRequireWho, which is not bound');
+}

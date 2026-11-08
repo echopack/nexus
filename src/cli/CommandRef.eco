@@ -1,0 +1,30 @@
+namespace nexus;
+
+/**
+ * The command class `bindCommand` just bound, for what the command line
+ * calls it:
+ *
+ * ```echo
+ * $cmds->bindCommand<ShowPostCommand>((Container $c) => ShowPostCommand($c->get<PostService>()))
+ *     ->name('posts:show');
+ * ```
+ */
+public class CommandRef<C>
+{
+    internal Commands $commands;
+
+    internal constructor(Commands $commands)
+    {
+        $this->commands = $commands;
+    }
+
+    /**
+     * Offers the command as `$name`: lowercase letters, digits, `-` and
+     * `:`, like `posts:show`. Call it again for a second name.
+     */
+    public function name(const string& $name) : CommandRef<C>
+    {
+        $this->commands->made<C>($name);
+        return $this;
+    }
+}

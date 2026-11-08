@@ -1,0 +1,399 @@
+namespace nexus::rest;
+
+use std::time;
+
+/**
+ * What an answer is written into: keys and values in order, in
+ * whichever format the request accepts, JSON unless it prefers XML. It
+ * also knows the includes the request asked for, relative to the model
+ * being written, and how deep the answer already nests. Transformers do
+ * not write it directly: each model goes through an `Item`, which
+ * `flush`es into the out.
+ */
+public struct Out
+{
+    public EchoPack::Rest::Format $format;
+    public EchoPack::Rest::Includes $includes;
+
+    /**
+     * How many models deep an answer may nest. Loaded data can form a
+     * cycle (a user whose posts carry the user again); past the limit a
+     * nested model is left out instead of recursing forever.
+     */
+    public usize $limit = 8;
+
+    /**
+     * The app's transformers, what `TransformerContext::transformInto`
+     * finds the transformer of a nested model in; null when none are
+     * registered.
+     */
+    public TransformerNetwork? $network = null;
+
+    private EchoPack::Rest::JsonDriver $json;
+    private EchoPack::Rest::XmlDriver $xml;
+
+    /**
+     * The include path of every level entered, outermost first:
+     * `comments`, then `comments.author`.
+     */
+    private array<string> $path = [];
+
+    public constructor(EchoPack::Rest::Format $format, EchoPack::Rest::Includes $includes)
+    {
+        $this->format = $format;
+        $this->includes = mv $includes;
+        $this->json = EchoPack::Rest::JsonDriver();
+        $this->xml = EchoPack::Rest::XmlDriver($indent: false, $declaration: true);
+    }
+
+    /**
+     * An out in the format the request accepts, with the app's
+     * transformer network.
+     */
+    public static function of(nexus::Payload& $payload, EchoPack::Rest::Includes $includes) : Out
+    {
+        EchoPack::Rest::Format $f = EchoPack::Rest::Format::negotiate($payload->request->header('Accept') ?? '');
+        Out $o = Out($f, mv $includes);
+        $o->network = $payload->find<TransformerNetwork>();
+        return $o;
+    }
+
+    /**
+     * The transformer of model `M` in the network. No network, or no
+     * transformer for `M`, stops the program.
+     */
+    public const function transformer<M>() : Transformer<M>
+    {
+        TransformerNetwork $net = guard $this->network else {
+            die('nexus::rest::Out: no transformer network; register transformers with nexus::rest::Transformers::add');
+        };
+        return $net->get<M>();
+    }
+
+    // fields -----------------------------------------------------------------
+
+    /**
+     * A scalar XML writes into the start tag, `<post id="1">`; a plain key
+     * in JSON. Write attributes before anything else of the model.
+     */
+    public function attribute(const string& $key, int64 $v) : void
+    {
+        $this->driverAttribute($key);
+        $this->driverInt($v);
+    }
+
+    public function attribute(const string& $key, const string& $v) : void
+    {
+        $this->driverAttribute($key);
+        $this->driverStr($v);
+    }
+
+    public function int(const string& $key, int64 $v) : void
+    {
+        $this->key($key);
+        $this->driverInt($v);
+    }
+
+    public function float(const string& $key, float64 $v) : void
+    {
+        $this->key($key);
+        $this->driverFloat($v);
+    }
+
+    public function bool(const string& $key, bool $v) : void
+    {
+        $this->key($key);
+        $this->driverBool($v);
+    }
+
+    public function text(const string& $key, const string& $v) : void
+    {
+        $this->key($key);
+        $this->driverStr($v);
+    }
+
+    /**
+     * `$key` with no value: JSON null, an empty element in XML.
+     */
+    public function nil(const string& $key) : void
+    {
+        $this->key($key);
+        $this->driverNil();
+    }
+
+    /**
+     * An instant in UTC, `2026-10-13T14:06:00Z` unless `$stamp` says
+     * otherwise; null when there is none.
+     */
+    public function time(const string& $key, time::timestamp? $at, EchoPack::Rest::Stamp $stamp = EchoPack::Rest::Stamp::zulu) : void
+    {
+        $this->key($key);
+        time::timestamp $t = guard $at else {
+            $this->driverNil();
+            return;
+        };
+        $this->driverStr($stamp->render($t));
+    }
+
+    /**
+     * A list of strings; XML names each element `$item`.
+     */
+    public function texts(const string& $key, const array<string>& $values, item: const string& $item = 'item') : void
+    {
+        $this->key($key);
+        $this->list($item);
+        foreach ($values as const &$v) {
+            $this->driverStr($v);
+        }
+        $this->close();
+    }
+
+    /**
+     * A list of integers; XML names each element `$item`.
+     */
+    public function ints(const string& $key, const array<int64>& $values, item: const string& $item = 'item') : void
+    {
+        $this->key($key);
+        $this->list($item);
+        foreach ($values as $v) {
+            $this->driverInt($v);
+        }
+        $this->close();
+    }
+
+    /**
+     * A free-form libjson tree.
+     */
+    public function value(const string& $key, const json::Value& $v) : void
+    {
+        $this->key($key);
+        $this->driverValue($v);
+    }
+
+    // includes ---------------------------------------------------------------
+
+    /**
+     * Whether the request asked for `$key` on the model being written:
+     * `author` at the top, `author.stats` inside the author.
+     */
+    public const function wants(const string& $key) : bool
+    {
+        if ($this->path->empty()) {
+            return $this->includes->has($key);
+        }
+        return $this->includes->has("{$this->path[$this->path->count() - 1]}.{$key}");
+    }
+
+    /**
+     * Every key the request asked to include on the model being written,
+     * for an `Item` to answer `wants` without the out.
+     */
+    public const function wantedHere() : map<string, bool>
+    {
+        map<string, bool> $out = [];
+        if ($this->includes->empty()) {
+            return $out;
+        }
+        string $prefix = '';
+        if (!$this->path->empty()) {
+            $prefix = "{$this->path[$this->path->count() - 1]}.";
+        }
+        usize $from = $prefix->size();
+        foreach ($this->includes->paths() as const &$path) {
+            if ($path->size() <= $from || ($from > 0 && $path->sub(0, $from) != $prefix)) {
+                continue;
+            }
+            string $rest = $path->sub($from, $path->size() - $from);
+            if (!$rest->contains('.')) {
+                $out[$rest] = true;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * How many models deep the writing is.
+     */
+    public const function depth() : usize
+    {
+        return $this->path->count();
+    }
+
+    /**
+     * Steps into the field `$key`, false when that would nest deeper than
+     * `limit`. A transformer's `transformInto` and
+     * `transformCollectionInto` do this around every nested model.
+     */
+    public function enter(const string& $key) : bool
+    {
+        if ($this->path->count() >= $this->limit) {
+            return false;
+        }
+        if ($this->path->empty()) {
+            $this->path->push($key);
+        } else {
+            $this->path->push("{$this->path[$this->path->count() - 1]}.{$key}");
+        }
+        return true;
+    }
+
+    /**
+     * Steps back out of the last `enter` that answered true.
+     */
+    public function leave() : void
+    {
+        $this->path->pop();
+    }
+
+    // structure --------------------------------------------------------------
+
+    /**
+     * Starts an entity. XML names it by its key, else by the list's item
+     * name, else by `$name`.
+     */
+    public function open(const string& $name) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->open($name);
+        } else {
+            $this->json->open($name);
+        }
+    }
+
+    /**
+     * Starts a list; an empty `$item` lets each entity name itself.
+     */
+    public function list(const string& $item) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->list($item);
+        } else {
+            $this->json->list($item);
+        }
+    }
+
+    /**
+     * Ends the innermost entity or list.
+     */
+    public function close() : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->close();
+        } else {
+            $this->json->close();
+        }
+    }
+
+    /**
+     * The next value belongs to `$key`.
+     */
+    public function key(const string& $key) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->key($key);
+        } else {
+            $this->json->key($key);
+        }
+    }
+
+    /**
+     * Opens the envelope: the root, `$meta`'s keys, then `data`.
+     */
+    public function begin(const Meta& $meta) : void
+    {
+        $this->open('response');
+        $this->meta($meta);
+        $this->key('data');
+    }
+
+    /**
+     * `$meta`'s keys and values, in order, into the entity open.
+     */
+    public function meta(const Meta& $meta) : void
+    {
+        foreach ($meta->keys as $key => const &$v) {
+            $this->key($key);
+            $this->driverValue($v);
+        }
+    }
+
+    /**
+     * Closes the envelope and answers with it, its content type set.
+     */
+    public function end() : nexus::Response
+    {
+        $this->close();
+        string $body = '';
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $body = $this->xml->take();
+        } else {
+            $body = json::dump($this->json->take());
+        }
+        return nexus::Response(200, $body, type: $this->format->contentType());
+    }
+
+    // the driver, by format --------------------------------------------------
+
+    private function driverAttribute(const string& $key) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->attribute($key);
+        } else {
+            $this->json->attribute($key);
+        }
+    }
+
+    private function driverNil() : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->nil();
+        } else {
+            $this->json->nil();
+        }
+    }
+
+    private function driverBool(bool $v) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->bool($v);
+        } else {
+            $this->json->bool($v);
+        }
+    }
+
+    private function driverInt(int64 $v) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->int($v);
+        } else {
+            $this->json->int($v);
+        }
+    }
+
+    private function driverFloat(float64 $v) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->float($v);
+        } else {
+            $this->json->float($v);
+        }
+    }
+
+    private function driverStr(const string& $v) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->str($v);
+        } else {
+            $this->json->str($v);
+        }
+    }
+
+    private function driverValue(const json::Value& $v) : void
+    {
+        if ($this->format == EchoPack::Rest::Format::xml) {
+            $this->xml->value($v);
+        } else {
+            $this->json->value($v);
+        }
+    }
+}

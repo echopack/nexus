@@ -1,0 +1,124 @@
+namespace nexus;
+
+use container::{Builder, Container};
+
+/**
+ * The commands an extension adds to the app binary, in `commands()`:
+ * hand-written `nexus::Command`s, and `nexus::Cli` classes under the name
+ * the app gives them, with the class bound like an action.
+ *
+ * ```echo
+ * public function commands(nexus::Commands& $cmds) : void
+ * {
+ *     $cmds->bindCommand<ShowPostCommand>((Container $c) => ShowPostCommand($c->get<PostService>()))
+ *         ->name('posts:show');
+ *     $cmds->add(SetPassword());
+ * }
+ * ```
+ *
+ * The command line reads these before the app boots, so `commands()`
+ * only records; the bindings land in the container when it does.
+ */
+public class Commands
+{
+    /**
+     * What `nexus gen` wrote for the program.
+     */
+    public Generated $generated;
+
+    internal array<Command> $list = [];
+    internal array<function<void(Builder&)>> $bindings = [];
+    internal array<string> $problems = [];
+
+    public constructor(Generated $generated)
+    {
+        $this->generated = $generated;
+    }
+
+    /**
+     * Adds a hand-written command.
+     */
+    public function add(Command $cmd) : void
+    {
+        $this->list[] = $cmd;
+    }
+
+    /**
+     * Binds `nexus::Cli` class `C` once per run, built by `$make` from the
+     * container; `->name()` says what the command line calls it.
+     */
+    public function bindCommand<C>(function<C(Container)> $make) : CommandRef<C>
+    {
+        $this->bindings[] = function[$make](Builder& $b) : void {
+            $b->bind<C>(scope: $make);
+        };
+        return CommandRef<C>($this);
+    }
+
+    /**
+     * Binds `nexus::Cli` class `C` once per run, built by `$make`, which
+     * needs nothing from the container.
+     */
+    public function bindCommand<C>(function<C()> $make) : CommandRef<C>
+    {
+        $this->bindings[] = function[$make](Builder& $b) : void {
+            $b->bind<C>(scope: $make);
+        };
+        return CommandRef<C>($this);
+    }
+
+    /**
+     * Every command added, in order.
+     */
+    public const function all() : array<Command>
+    {
+        return $this->list;
+    }
+
+    /**
+     * Why a command could not be added, one line each.
+     */
+    public const function problems() : array<string>
+    {
+        return $this->problems;
+    }
+
+    internal function made<C>(const string& $name) : void
+    {
+        if (!Commands::named($name)) {
+            $this->problems[] = "command name '{$name}' must be lowercase letters, digits, - and :, like posts:show";
+            return;
+        }
+        CommandMaker $maker = guard $this->generated->command<C>() else {
+            $this->problems[] = "command {$name}: nexus gen wrote nothing for its class; is it a class conforming to nexus::Cli, and did nexus gen run?";
+            return;
+        };
+        function<Command(const string&)> $make = $maker->make;
+        $this->list[] = $make($name);
+    }
+
+    /**
+     * Binds the classes of the generated commands.
+     */
+    internal const function bindInto(Builder& $b) : void
+    {
+        foreach ($this->bindings as const &$bind) {
+            function<void(Builder&)> $run = $bind;
+            $run($b);
+        }
+    }
+
+    internal static function named(const string& $name) : bool
+    {
+        if ($name->empty() || $name->starts(':') || $name->starts('-')) {
+            return false;
+        }
+        foreach (0 .. $name->size() as $i) {
+            uint8 $c = $name->byte($i);
+            if (!(($c >= 97 && $c <= 122) || ($c >= 48 && $c <= 57) || $c == 45 || $c == 58)) {
+                return false;
+            }
+        }
+        return true;
+    }
+}

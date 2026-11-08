@@ -1,0 +1,100 @@
+namespace nexus::auth;
+
+use container::{Builder, Container};
+use std::time;
+
+/**
+ * Bearer tokens and signed sessions for the app. Binds `Guards` (signed,
+ * then bearer, then the app's own), the `Authenticate` middleware,
+ * `Tokens` and `Sessions` per request on the stores, `Passwords` and
+ * `Logins`. `AUTH_KEY` must be set: signed session secrets are derived
+ * from it.
+ *
+ * ```echo
+ * nexus::Kernel::main([
+ *     nexus::http::Extension(),
+ *     nexus::auth::Extension('blog'),
+ *     blog::App(),
+ * ]);
+ * ```
+ *
+ * `$prefix` starts every token (`blog_3f9a1c2e5d7b_...`). With
+ * `stores: .provided` another extension binds `TokenStore` and
+ * `SessionStore`; `compat: true` also accepts `X-AccessToken` signatures.
+ */
+public class Extension : nexus::Extension
+{
+    public string $prefix;
+    public Stores $stores;
+    public bool $compat;
+    public calendar::Clock $clock;
+    public crypto::PasswordCost $cost;
+    public array<Guard> $guards;
+
+    /**
+     * How far a signed request's time may be from the server's.
+     */
+    public time::duration $window;
+
+    public constructor(
+        const string& $prefix,
+        stores: Stores $stores = Stores::memory,
+        compat: bool $compat = false,
+        clock: calendar::Clock $clock = calendar::SystemClock(),
+        cost: crypto::PasswordCost $cost = crypto::PasswordCost::standard(),
+        guards: array<Guard> $guards = array<Guard>()
+    )
+    {
+        $this->prefix = $prefix;
+        $this->stores = $stores;
+        $this->compat = $compat;
+        $this->clock = $clock;
+        $this->cost = $cost;
+        $this->guards = $guards;
+        $this->window = time::duration::mins(5);
+    }
+
+    public function name() : string
+    {
+        return 'nexus-auth';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        AuthConfig $config = $s->get<AuthConfig>();
+        if (!Secrets::prefix($this->prefix)) {
+            return .error(.extension('nexus-auth', "the token prefix '{$this->prefix}' must be 1 to 16 lowercase letters and digits"));
+        }
+        if ($config->key->size() < 32) {
+            return .error(.extension('nexus-auth', 'AUTH_KEY must be set, at least 32 characters: signed session secrets are derived from it'));
+        }
+        if ($this->stores == Stores::memory) {
+            $s->bind<MemoryTokens>(put: MemoryTokens());
+            $s->bind<MemorySessions>(put: MemorySessions());
+            $s->alias<TokenStore, MemoryTokens>();
+            $s->alias<SessionStore, MemorySessions>();
+        }
+        array<Guard> $all = [];
+        $all[] = SignedGuard($this->compat);
+        $all[] = BearerGuard();
+        foreach ($this->guards as $g) {
+            $all[] = $g;
+        }
+        Guards $guards = Guards($all);
+        $s->bind<Guards>(put: $guards);
+        $s->bind<Authenticate>(put: Authenticate($guards));
+        Passwords $passwords = Passwords($this->cost);
+        $s->bind<Passwords>(put: $passwords);
+        $s->bind<Logins>(put: Logins($passwords, $this->clock));
+        string $prefix = $this->prefix;
+        calendar::Clock $clock = $this->clock;
+        time::duration $window = $this->window;
+        $s->bind<Tokens>(scope: function[$prefix, $config, $clock](Container $c) : Tokens {
+            return Tokens($c->get<TokenStore>(), $prefix, $config->tokens, $clock);
+        });
+        $s->bind<Sessions>(scope: function[$config, $clock, $window](Container $c) : Sessions {
+            return Sessions($c->get<SessionStore>(), $config->key, $config->sessions, $window, $clock);
+        });
+        return .ok;
+    }
+}

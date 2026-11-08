@@ -1,0 +1,92 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * Why a task did not finish, and what the worker does about it. A task's
+ * `handle()` answers `status<Failure>`.
+ *
+ * ```echo
+ * public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
+ * {
+ *     User? $found = guard $users->find()->get($this->user) else ($e) {
+ *         return .error(.retry("the users table: {$e}"));
+ *     };
+ *     User $u = guard $found else {
+ *         return .error(.giveUp('the user is gone'));
+ *     };
+ *     ...
+ * }
+ * ```
+ */
+public enum Failure
+{
+    /**
+     * Try again, backing off: 10 seconds after the first try, four times
+     * longer after each one after it, at most an hour.
+     */
+    case retry(string $why);
+
+    /**
+     * Try again once `$after` has passed.
+     */
+    case later(time::duration $after, string $why);
+
+    /**
+     * Do not try again: the task is kept with the failed ones, where
+     * `work:retry` can send it back.
+     */
+    case giveUp(string $why);
+
+    /**
+     * What went wrong, for the log and the failed list.
+     */
+    public const function why() : string
+    {
+        return match ($this) {
+            Failure::retry($why) => $why,
+            Failure::later($after, $why) => $why,
+            Failure::giveUp($why) => $why,
+        };
+    }
+
+    /**
+     * The failure a problem implies: one that is the server's fault or a
+     * dependency's (5xx) retries, a 429 waits its Retry-After, anything
+     * else (a 404, a 422) gives up, since trying again changes nothing.
+     */
+    public static function of(const nexus::Problem& $p) : Failure
+    {
+        string $why = $p->detail(nexus::Mode::dev);
+        int64? $wait = match ($p) {
+            nexus::Problem::tooMany($after) => $after,
+            else => null,
+        };
+        if ($wait != null) {
+            int64 $secs = guard $wait;
+            return .later(time::duration::secs($secs), $why);
+        }
+        if ($p->status() >= 500) {
+            return .retry($why);
+        }
+        return .giveUp($why);
+    }
+
+    /**
+     * How long a `retry` waits after try number `$attempt` (1 is the
+     * first).
+     */
+    public static function backoff(int64 $attempt) : time::duration
+    {
+        int64 $secs = 10;
+        int64 $n = 1;
+        while ($n < $attempt && $secs < 3600) {
+            $secs = $secs * 4;
+            $n = $n + 1;
+        }
+        if ($secs > 3600) {
+            $secs = 3600;
+        }
+        return time::duration::secs($secs);
+    }
+}

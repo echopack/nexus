@@ -1,0 +1,20 @@
+namespace nexus;
+
+/**
+ * A yes/no shared between threads.
+ */
+#[atomic]
+public class Flag
+{
+    private atomic<int32> $value = atomic<int32>(0);
+
+    public function raise() : void
+    {
+        $this->value->store(1);
+    }
+
+    public const function raised() : bool
+    {
+        return $this->value->load() != 0;
+    }
+}

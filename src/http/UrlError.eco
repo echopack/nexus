@@ -1,0 +1,30 @@
+namespace nexus;
+
+/**
+ * Why a text is not a URL.
+ */
+public enum UrlError
+{
+    case empty;
+    case character(string $raw);
+    case form(string $raw);
+    case scheme(string $raw);
+    case host(string $raw);
+    case userinfo(string $raw);
+    case port(string $raw);
+    case escape(string $raw);
+
+    public const function message() : string
+    {
+        return match ($this) {
+            UrlError::empty => 'a URL cannot be empty',
+            UrlError::character($raw) => "'{$raw}' has a space or a control character",
+            UrlError::form($raw) => "'{$raw}' is neither an absolute URL nor a path starting with /",
+            UrlError::scheme($raw) => "'{$raw}' has no valid scheme",
+            UrlError::host($raw) => "'{$raw}' has a broken host",
+            UrlError::userinfo($raw) => "'{$raw}' has user info before its host",
+            UrlError::port($raw) => "'{$raw}' has a broken port",
+            UrlError::escape($raw) => "'{$raw}' has a broken escape",
+        };
+    }
+}

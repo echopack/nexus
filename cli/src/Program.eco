@@ -1,0 +1,1033 @@
+namespace nexusgen;
+
+/**
+ * Everything `nexus gen` writes code for, read from one module's decls:
+ * actions, inputs, configs, tasks, commands and MCP tools, found by what
+ * they conform to, the models a mapping writes, plus every problem found
+ * on the way. Where they
+ * answer is no business of the generator; the app says that where it is
+ * wired.
+ */
+public struct Program
+{
+    public string $module = '';
+    public array<ActionDecl> $actions = [];
+    public array<TypeDecl> $inputs = [];
+    public array<TypeDecl> $configs = [];
+    public array<TaskDecl> $tasks = [];
+    public array<CommandDecl> $commands = [];
+
+    /**
+     * The classes conforming to `nexus::mcp::Tool`; actions that can be
+     * offered as tools stay with the actions.
+     */
+    public array<ActionDecl> $tools = [];
+
+    /**
+     * The models and structs with `#[nexus::expose]` fields, one mapping
+     * interface per shape each.
+     */
+    public array<MappedDecl> $mapped = [];
+
+    /**
+     * The other types of the module that conform to a nexus interface
+     * (middleware, listeners, transformers...), by qualified name: the
+     * generated table names them for logs and `routes`.
+     */
+    public array<string> $named = [];
+
+    /**
+     * Whether the program has nexus-mcp, so actions can be offered as
+     * tools.
+     */
+    public bool $mcp = false;
+    public array<string> $problems = [];
+
+    /**
+     * Every class of the program conforming to nexus::rest::Transformer,
+     * by qualified name: what `#[nexus::answers]` may name.
+     */
+    internal map<string, bool> $transformers = [];
+
+    /**
+     * Every class of the program conforming to nexus::Middleware, by
+     * qualified name: what `#[nexus::through]` may name.
+     */
+    internal map<string, bool> $middleware = [];
+
+    /**
+     * Every `#[nexus::input]` of the program, every backed enum, and every
+     * class conforming to `nexus::Rule<T>` with its `T`: what input fields
+     * may hold and what `check:` may name.
+     */
+    internal map<string, bool> $known = [];
+    internal array<EnumDecl> $enums = [];
+    internal map<string, string> $ruleTypes = [];
+
+    public static function read(const json::Value& $decls) : Program
+    {
+        return Program::read($decls, $decls);
+    }
+
+    /**
+     * Reads the module in `$decls`, with `$all` (the whole program) telling
+     * which classes are transformers.
+     */
+    public static function read(const json::Value& $decls, const json::Value& $all) : Program
+    {
+        Program $p = Program();
+        foreach (Json::items($all, 'modules') as const &$mod) {
+            foreach (Json::items($mod, 'declarations') as const &$d) {
+                string $kind = Json::text($d, 'kind');
+                string $q = Json::text($d, 'qualified');
+                if ($kind == 'class' && Program::conforms($d, 'nexus::rest::Transformer')) {
+                    $p->transformers[$q] = true;
+                }
+                if ($kind == 'class' && Program::conforms($d, 'nexus::Middleware')) {
+                    $p->middleware[$q] = true;
+                }
+                if ($kind == 'struct' && Json::has($d, 'input')) {
+                    $p->known[$q] = true;
+                }
+                if ($kind == 'enum') {
+                    $p->readEnum($d);
+                }
+                if ($kind == 'class') {
+                    foreach (Json::items($d, 'conforms') as const &$c) {
+                        if (Types::name($c) == 'nexus::Rule') {
+                            $p->ruleTypes[$q] = Types::render(Types::argument($c));
+                        }
+                    }
+                }
+                if ($kind == 'interface' && $q == 'nexus::mcp::Tool') {
+                    $p->mcp = true;
+                }
+            }
+        }
+        array<json::Value> $modules = Json::items($decls, 'modules');
+        if ($modules->empty()) {
+            $p->problems[] = 'the decls output names no module';
+            return $p;
+        }
+        json::Value $m = $modules[0]->clone();
+        $p->module = Json::text($m, 'name');
+        array<json::Value> $decls_ = Json::items($m, 'declarations');
+        foreach ($decls_ as const &$d) {
+            if (Json::has($d, 'input')) {
+                $p->readInput($d);
+            }
+            if (Json::has($d, 'config')) {
+                $p->readConfig($d);
+            }
+            if (Program::conforms($d, 'nexus::work::Task')) {
+                $p->readTask($d);
+            }
+        }
+        foreach ($decls_ as const &$d) {
+            string $kind = Json::text($d, 'kind');
+            if (($kind == 'class' || $kind == 'struct') && Exposures::marked($d)) {
+                Exposures::read($p, $d);
+            }
+        }
+        foreach ($decls_ as const &$d) {
+            string $kind = Json::text($d, 'kind');
+            if ($kind == 'type alias' && Program::nameable($d)) {
+                $p->named[] = Json::text($d, 'qualified');
+                continue;
+            }
+            if ($kind != 'class' && $kind != 'struct') {
+                continue;
+            }
+            if (Program::conforms($d, 'nexus::Action')) {
+                $p->readAction($d);
+            } else if (Program::conforms($d, 'nexus::mcp::Tool')) {
+                $p->readTool($d);
+            } else if (Program::conforms($d, 'nexus::Cli')) {
+                $p->readCommand($d);
+            } else if (Program::nameable($d)) {
+                $p->named[] = Json::text($d, 'qualified');
+            }
+        }
+        return $p;
+    }
+
+    /**
+     * Whether the generated table should name `$d`: any non-generic class,
+     * struct or type alias the module can reach, so logs, `routes` and a
+     * failed resolve at boot can say which type they mean.
+     */
+    internal static function nameable(const json::Value& $d) : bool
+    {
+        return Json::items($d, 'generics')->empty() && Json::text($d, 'visibility') != 'private';
+    }
+
+    internal function where(const json::Value& $d) : string
+    {
+        string $file = Json::text($d, 'file');
+        int64 $line = Json::int($d, 'line');
+        return "{$file}:{$line}";
+    }
+
+    /**
+     * A problem at field `$f` of declaration `$d`: its own line when decls
+     * gives one.
+     */
+    internal function failAt(const json::Value& $d, const json::Value& $f, const string& $message) : void
+    {
+        int64 $line = Json::int($f, 'line');
+        if ($line <= 0) {
+            $this->fail($d, $message);
+            return;
+        }
+        string $file = Json::text($d, 'file');
+        $this->problems[] = "{$file}:{$line}: {$message}";
+    }
+
+    internal function fail(const json::Value& $d, const string& $message) : void
+    {
+        string $at = $this->where($d);
+        $this->problems[] = "{$at}: {$message}";
+    }
+
+    internal function readAction(const json::Value& $d) : void
+    {
+        string $q = Json::text($d, 'qualified');
+        if (Json::text($d, 'kind') != 'class') {
+            $this->fail($d, "{$q} conforms to nexus::Action but is not a class");
+            return;
+        }
+        if (!Json::items($d, 'generics')->empty()) {
+            $this->fail($d, "{$q} is a generic action; nexus gen runs actions of one concrete type");
+            return;
+        }
+        ActionDecl $a = ActionDecl($q, Json::text($d, 'file'), Json::int($d, 'line'));
+        json::Value? $handle = null;
+        foreach (Json::items($d, 'methods') as const &$meth) {
+            if (Json::text($meth, 'name') == 'handle' && Json::text($meth, 'kind') == 'method') {
+                json::Value $found = $meth->clone();
+                $handle = $found;
+            }
+        }
+        if ($handle == null) {
+            $this->fail($d, "{$q} is an action but has no handle() method");
+            return;
+        }
+        json::Value $h = guard $handle;
+        if (Json::text($h, 'visibility') != 'public') {
+            $this->fail($d, "{$q}::handle() must be public");
+        }
+        $a->returns = Json::field($h, 'return');
+        $a->returnText = Types::render($a->returns);
+        if (!$this->readAnswers($d, $a) || !$this->readThrough($d, $a)) {
+            return;
+        }
+        foreach (Json::items($h, 'params') as const &$raw) {
+            Param $param = guard $this->classify($d, $raw) else {
+                return;
+            };
+            $a->params[] = $param;
+        }
+        if ($this->mcp && $this->offerable($a)) {
+            $a->offered = true;
+            $a->tool = ToolMeta($description: Names::prose(Json::text($d, 'doc')));
+        }
+        $this->actions[] = $a;
+    }
+
+    /**
+     * `#[nexus::answers: { response: "blog::PostTransformer" }]` (or `collection:`):
+     * the transformer an action answering with a `nexus::Response` builds
+     * it with, what the API description reads its shape from. False after
+     * a problem.
+     */
+    internal function readAnswers(const json::Value& $d, ActionDecl& $a) : bool
+    {
+        json::Value? $found = Json::tool($d, 'answers');
+        if ($found == null) {
+            return true;
+        }
+        json::Value $tool = guard $found;
+        string $usage = '#[nexus::answers] takes { response: "x::SomeTransformer" } or { collection: "x::SomeTransformer" }';
+        array<Entry> $entries = Json::record(Json::value($tool));
+        if ($entries->count() != 1) {
+            $this->fail($d, $usage);
+            return false;
+        }
+        string $as = $entries[0]->key;
+        string $named = Json::string($entries[0]->value);
+        if (($as != 'response' && $as != 'collection') || $named->empty()) {
+            $this->fail($d, $usage);
+            return false;
+        }
+        if (!$this->transformers->has($named)) {
+            $this->fail($d, "#[nexus::answers] names {$named}, which is not a class conforming to nexus::rest::Transformer");
+            return false;
+        }
+        $a->answers = $named;
+        $a->answersAs = $as;
+        return true;
+    }
+
+    /**
+     * `#[nexus::through: ["blog::RequireUser", ...]]` (or one name): the
+     * middleware the action goes through on every route and as a tool,
+     * outermost first. False after a problem.
+     */
+    internal function readThrough(const json::Value& $d, ActionDecl& $a) : bool
+    {
+        json::Value? $found = Json::tool($d, 'through');
+        if ($found == null) {
+            return true;
+        }
+        json::Value $tool = guard $found;
+        json::Value $value = Json::value($tool);
+        string $usage = '#[nexus::through] takes a middleware class, "x::SomeMiddleware", or a list of them';
+        array<string> $named = [];
+        string $kind = Json::text($value, 'kind');
+        if ($kind == 'string') {
+            $named[] = Json::string($value);
+        } else if ($kind == 'list') {
+            foreach (Json::items($value, 'items') as const &$item) {
+                if (Json::text($item, 'kind') != 'string') {
+                    $this->fail($d, $usage);
+                    return false;
+                }
+                $named[] = Json::string($item);
+            }
+        } else {
+            $this->fail($d, $usage);
+            return false;
+        }
+        if ($named->empty()) {
+            $this->fail($d, $usage);
+            return false;
+        }
+        map<string, bool> $seen = [];
+        foreach ($named as const &$m) {
+            if (!$this->middleware->has($m)) {
+                $this->fail($d, "#[nexus::through] names {$m}, which is not a class conforming to nexus::Middleware");
+                return false;
+            }
+            if ($seen->has($m)) {
+                $this->fail($d, "#[nexus::through] names {$m} twice");
+                return false;
+            }
+            $seen[$m] = true;
+            $a->through[] = $m;
+        }
+        return true;
+    }
+
+    /**
+     * What one `handle()` parameter is: the payload or the request, a
+     * body or query input, or a path parameter (any loose string or
+     * integer). Anything else, such as the signed in user, the action
+     * reads from the payload itself.
+     */
+    internal function classify(const json::Value& $d, const json::Value& $raw) : Param?
+    {
+        string $name = Json::text($raw, 'name');
+        json::Value $type = Json::field($raw, 'type');
+        string $text = Types::render($type);
+        bool $hasDefault = Json::flag($raw, 'default');
+        string $defaultText = Json::text($raw, 'default_value');
+        string $named = Types::name($type);
+        Param $p = Param($name, ParamKind::query, $type, $text, $hasDefault, $defaultText);
+
+        // a borrow of the payload or the request is handed the dispatch's own
+        if (Json::text($type, 'kind') == 'ptr' && Json::flag($type, 'borrow')) {
+            string $to = Types::name(Json::field($type, 'to'));
+            if ($to == 'nexus::Payload') {
+                $p->kind = ParamKind::payload;
+                return $p;
+            }
+            if ($to == 'nexus::Request') {
+                $p->kind = ParamKind::request;
+                return $p;
+            }
+            $this->fail($d, "handle() parameter ${$name} is a reference; only nexus::Payload& and nexus::Request& are handed in by reference");
+            return null;
+        }
+        if ($named == 'nexus::Payload') {
+            $p->kind = ParamKind::payload;
+            return $p;
+        }
+        if ($named == 'nexus::Request') {
+            $p->kind = ParamKind::request;
+            return $p;
+        }
+        if ($named == 'nexus::Body' || $named == 'nexus::QueryOf') {
+            json::Value $arg = Types::argument($type);
+            string $input = Types::name($arg);
+            if (!$this->knowsInput($input)) {
+                $this->fail($d, "{$named}<{$input}> needs #[nexus::input] on {$input}");
+                return null;
+            }
+            $p->input = $input;
+            if ($named == 'nexus::Body') {
+                $p->kind = ParamKind::body;
+            } else {
+                $p->kind = ParamKind::queryInput;
+            }
+            return $p;
+        }
+        string $reader = Types::reader($type);
+        if ($reader == 'string' || $reader == 'int32' || $reader == 'int64' || $reader == 'uint32' || $reader == 'uint64') {
+            $p->kind = ParamKind::path;
+            $p->optionalSegment = Types::optional($type) || $hasDefault;
+            return $p;
+        }
+        if (!$reader->empty() && $reader != 'json' && $reader != 'duration') {
+            $this->fail($d, "handle() parameter ${$name} is {$text}; a loose parameter comes from the path, which holds a string or an integer, and a query comes in a nexus::QueryOf<T>");
+            return null;
+        }
+        if ($named->empty()) {
+            $this->fail($d, "handle() parameter ${$name} of type {$text} is not something nexus can provide");
+            return null;
+        }
+        $this->fail($d, "handle() parameter ${$name} of type {$text} is not something nexus can provide; let a middleware the action names in #[nexus::through] put it in the payload, and read it with $payload->state<{$text}>()");
+        return null;
+    }
+
+    internal function knowsInput(const string& $qualified) : bool
+    {
+        foreach ($this->inputs as const &$i) {
+            if ($i->qualified == $qualified) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    internal function readInput(const json::Value& $d) : void
+    {
+        string $q = Json::text($d, 'qualified');
+        if (Json::text($d, 'kind') != 'struct') {
+            $this->fail($d, "#[nexus::input] goes on a struct; {$q} is not one");
+            return;
+        }
+        if (!Json::items($d, 'constructors')->empty()) {
+            $this->fail($d, "#[nexus::input] {$q} must keep its memberwise constructor; remove the handwritten one");
+            return;
+        }
+        TypeDecl $t = TypeDecl($q, Json::text($d, 'file'), Json::int($d, 'line'));
+        bool $refused = false;
+        foreach (Json::items($d, 'fields') as const &$f) {
+            if (Json::flag($f, 'static')) {
+                continue;
+            }
+            FieldDecl $field = guard $this->field($d, $f, '', '') else {
+                // keep going: every field that does not fit is reported in one run
+                $refused = true;
+                continue;
+            };
+            $t->fields[] = $field;
+        }
+        if ($refused) {
+            return;
+        }
+        json::Value? $whole = Json::tool($d, 'rule');
+        if ($whole != null) {
+            json::Value $wholeTool = guard $whole;
+            foreach (Json::record(Json::value($wholeTool)) as const &$e) {
+                if ($e->key != 'check') {
+                    $this->fail($d, "#[nexus::rule] on the input {$q} takes only 'check', a rule class over the whole input; '{$e->key}' goes on a field");
+                    return;
+                }
+                foreach (Program::names($e->value) as const &$n) {
+                    if (!$this->ruleFits($d, $d, $n, $q, "the input {$q}")) {
+                        return;
+                    }
+                    $t->checks[] = $n;
+                }
+            }
+        }
+        if (!$this->crossFits($d, $t)) {
+            return;
+        }
+        $this->inputs[] = $t;
+    }
+
+    internal function readTask(const json::Value& $d) : void
+    {
+        string $q = Json::text($d, 'qualified');
+        if (Json::text($d, 'kind') != 'struct') {
+            $this->fail($d, "a nexus::work::Task is a struct whose fields are its data; {$q} is not one");
+            return;
+        }
+        if (!Json::items($d, 'constructors')->empty()) {
+            $this->fail($d, "task {$q} must keep its memberwise constructor; remove the handwritten one");
+            return;
+        }
+        TaskDecl $j = TaskDecl($q, Json::text($d, 'file'), Json::int($d, 'line'));
+        foreach (Json::items($d, 'fields') as const &$f) {
+            if (Json::flag($f, 'static')) {
+                continue;
+            }
+            string $name = Json::text($f, 'name');
+            json::Value $type = Json::field($f, 'type');
+            string $text = Types::render($type);
+            if (Json::text($f, 'visibility') != 'public') {
+                $this->fail($d, "field ${$name} must be public so the generated code can fill it");
+                return;
+            }
+            string $reader = Types::reader($type);
+            if ($reader->empty() || $reader == 'json' || $reader == 'duration') {
+                $this->fail($d, "task field ${$name} has type {$text}; task data holds integers, float64, bool, strings, arrays of strings or int64, and their nullables");
+                return;
+            }
+            if (!Json::flag($f, 'default')) {
+                // a scheduled task is pushed as T(), so only one with every default can be
+                $j->defaults = false;
+            }
+            $j->fields[] = FieldDecl($name, $name, $type, $text, Json::flag($f, 'default'), Json::text($f, 'default_value'));
+        }
+        json::Value? $handle = null;
+        foreach (Json::items($d, 'methods') as const &$meth) {
+            if (Json::text($meth, 'name') == 'handle' && Json::text($meth, 'kind') == 'method') {
+                json::Value $found = $meth->clone();
+                $handle = $found;
+            }
+        }
+        string $wanted = "public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>";
+        json::Value $h = guard $handle else {
+            $this->fail($d, "{$q} is a task but has no handle(); write {$wanted}");
+            return;
+        };
+        array<json::Value> $params = Json::items($h, 'params');
+        bool $shaped = $params->count() == 1 && Json::text(Json::field($params[0], 'type'), 'kind') == 'ptr' && Types::name(Json::field(Json::field($params[0], 'type'), 'to')) == 'nexus::Payload';
+        if (!$shaped || Types::render(Json::field($h, 'return')) != 'status<nexus::work::Failure>' || Json::text($h, 'visibility') != 'public') {
+            $this->fail($d, "{$q}::handle() must be {$wanted}");
+            return;
+        }
+        $this->tasks[] = $j;
+    }
+
+    /**
+     * The `#[nexus::input]` struct named `$qualified`; check `knowsInput`
+     * first.
+     */
+    internal const function input(const string& $qualified) : TypeDecl
+    {
+        foreach ($this->inputs as const &$i) {
+            if ($i->qualified == $qualified) {
+                return $i;
+            }
+        }
+        return TypeDecl($qualified, '', 0);
+    }
+
+    internal static function conforms(const json::Value& $d, const string& $to) : bool
+    {
+        foreach (Json::items($d, 'conforms') as const &$c) {
+            if (Types::name($c) == $to) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    internal static function handleOf(const json::Value& $d) : json::Value?
+    {
+        foreach (Json::items($d, 'methods') as const &$meth) {
+            if (Json::text($meth, 'name') == 'handle' && Json::text($meth, 'kind') == 'method') {
+                json::Value $found = $meth->clone();
+                return $found;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether a `handle()` parameter is a borrow of `$type`.
+     */
+    internal static function borrows(const json::Value& $param, const string& $type) : bool
+    {
+        json::Value $t = Json::field($param, 'type');
+        return Json::text($t, 'kind') == 'ptr' && Json::flag($t, 'borrow') && Types::name(Json::field($t, 'to')) == $type;
+    }
+
+    internal function readCommand(const json::Value& $d) : void
+    {
+        string $q = Json::text($d, 'qualified');
+        string $wanted = 'public function handle(nexus::Payload& $payload, command::CLIContext& $out, TheInput $in) : status<nexus::Problem>';
+        if (Json::text($d, 'kind') != 'class' || !Json::items($d, 'generics')->empty()) {
+            $this->fail($d, "{$q} conforms to nexus::Cli but is not a plain class");
+            return;
+        }
+        json::Value $h = guard Program::handleOf($d) else {
+            $this->fail($d, "{$q} is a command but has no handle(); write {$wanted}");
+            return;
+        };
+        array<json::Value> $params = Json::items($h, 'params');
+        bool $shaped = ($params->count() == 2 || $params->count() == 3) && Program::borrows($params[0], 'nexus::Payload') && Program::borrows($params[1], 'command::CLIContext');
+        if (!$shaped || Types::render(Json::field($h, 'return')) != 'status<nexus::Problem>' || Json::text($h, 'visibility') != 'public') {
+            $this->fail($d, "{$q}::handle() must be {$wanted}; the input is optional");
+            return;
+        }
+        string $doc = Json::text($d, 'doc');
+        CommandDecl $cmd = CommandDecl($q, Json::text($d, 'file'), Json::int($d, 'line'), $summary: Names::summary($doc), $help: Names::prose($doc));
+        if ($params->count() == 3) {
+            string $input = Types::name(Json::field($params[2], 'type'));
+            if (!$this->knowsInput($input)) {
+                string $text = Types::render(Json::field($params[2], 'type'));
+                $this->fail($d, "{$q}::handle() takes its options as one #[nexus::input] struct, not {$text}");
+                return;
+            }
+            if (!$this->optionsFit($d, $this->input($input))) {
+                return;
+            }
+            $cmd->input = $input;
+        }
+        $this->commands[] = $cmd;
+    }
+
+    /**
+     * Whether every field of `$t` can be an option: no JSON, a flag that
+     * defaults to false, positionals that are single values with the
+     * required ones first.
+     */
+    internal function optionsFit(const json::Value& $d, const TypeDecl& $t) : bool
+    {
+        bool $optionalSeen = false;
+        foreach ($t->fields as const &$f) {
+            if ($f->shape == 'object' || $f->shape == 'objects') {
+                $this->fail($d, "option ${$f->name} of {$t->qualified} is a nested input, which a command line cannot give");
+                return false;
+            }
+            string $reader = $f->reader;
+            if ($reader == 'json') {
+                $this->fail($d, "option ${$f->name} of {$t->qualified} is JSON, which a command line cannot give");
+                return false;
+            }
+            if ($reader == 'bool' && $f->hasDefault && $f->defaultText != 'false') {
+                $this->fail($d, "option ${$f->name} of {$t->qualified} is a flag, so it defaults to false");
+                return false;
+            }
+            if (!$f->positional) {
+                continue;
+            }
+            if ($reader == 'bool' || $reader == 'strings' || $reader == 'ints') {
+                $this->fail($d, "positional ${$f->name} of {$t->qualified} must be one value, not {$f->typeText}");
+                return false;
+            }
+            bool $required = !$f->hasDefault && !Types::optional($f->type);
+            if ($required && $optionalSeen) {
+                $this->fail($d, "positional ${$f->name} of {$t->qualified} is required, so it goes before the optional ones");
+                return false;
+            }
+            if (!$required) {
+                $optionalSeen = true;
+            }
+        }
+        return true;
+    }
+
+    internal function readTool(const json::Value& $d) : void
+    {
+        string $q = Json::text($d, 'qualified');
+        string $wanted = 'public function handle(nexus::Payload& $payload, TheInput $in) : result<T, nexus::Problem>';
+        if (Json::text($d, 'kind') != 'class' || !Json::items($d, 'generics')->empty()) {
+            $this->fail($d, "{$q} conforms to nexus::mcp::Tool but is not a plain class");
+            return;
+        }
+        json::Value $h = guard Program::handleOf($d) else {
+            $this->fail($d, "{$q} is a tool but has no handle(); write {$wanted}");
+            return;
+        };
+        if (Json::text($h, 'visibility') != 'public') {
+            $this->fail($d, "{$q}::handle() must be public");
+            return;
+        }
+        ActionDecl $a = ActionDecl($q, Json::text($d, 'file'), Json::int($d, 'line'));
+        $a->returns = Json::field($h, 'return');
+        $a->returnText = Types::render($a->returns);
+        if (!$this->readAnswers($d, $a) || !$this->readThrough($d, $a)) {
+            return;
+        }
+        bool $hasInput = false;
+        foreach (Json::items($h, 'params') as const &$raw) {
+            string $name = Json::text($raw, 'name');
+            json::Value $type = Json::field($raw, 'type');
+            string $text = Types::render($type);
+            string $named = Types::name($type);
+            Param $p = Param($name, ParamKind::payload, $type, $text, false, '');
+            if (Program::borrows($raw, 'nexus::Payload')) {
+                $a->params[] = $p;
+                continue;
+            }
+            if (Json::text($type, 'kind') != 'named' || !$this->knowsInput($named)) {
+                $this->fail($d, "{$q}::handle() takes nexus::Payload& and one #[nexus::input] struct; ${$name} is {$text}");
+                return;
+            }
+            if ($hasInput) {
+                $this->fail($d, "{$q}::handle() takes its arguments as one #[nexus::input] struct, not two");
+                return;
+            }
+            $hasInput = true;
+            $p->kind = ParamKind::input;
+            $p->input = $named;
+            $a->params[] = $p;
+        }
+        $a->offered = true;
+        $a->tool = ToolMeta($description: Names::prose(Json::text($d, 'doc')));
+        $this->tools[] = $a;
+    }
+
+    /**
+     * Whether an action can be offered as a tool: its path parameters and
+     * the fields of its body or query input give distinct argument names.
+     * The app may rename arguments when it offers one, but nexus gen only
+     * writes the tool code for an action whose names do not clash.
+     */
+    internal function offerable(const ActionDecl& $a) : bool
+    {
+        map<string, bool> $seen = [];
+        foreach ($a->params as const &$p) {
+            array<string> $names = [];
+            if ($p->kind == ParamKind::path) {
+                $names[] = $p->name;
+            } else if ($p->kind == ParamKind::body || $p->kind == ParamKind::queryInput) {
+                foreach ($this->input($p->input)->fields as const &$f) {
+                    $names[] = $f->wire;
+                }
+            }
+            foreach ($names as const &$n) {
+                if ($seen->has($n)) {
+                    return false;
+                }
+                $seen[$n] = true;
+            }
+        }
+        return true;
+    }
+
+    internal function readConfig(const json::Value& $d) : void
+    {
+        string $q = Json::text($d, 'qualified');
+        if (Json::text($d, 'kind') != 'struct') {
+            $this->fail($d, "#[nexus::config] goes on a struct; {$q} is not one");
+            return;
+        }
+        if (!Json::items($d, 'constructors')->empty()) {
+            $this->fail($d, "#[nexus::config] {$q} must keep its memberwise constructor; remove the handwritten one");
+            return;
+        }
+        json::Value $tool = guard Json::tool($d, 'config');
+        string $section = Json::string(Json::value($tool));
+        if ($section->empty()) {
+            $this->fail($d, '#[nexus::config] needs a section name, like #[nexus::config: "db"]');
+            return;
+        }
+        TypeDecl $t = TypeDecl($q, Json::text($d, 'file'), Json::int($d, 'line'), $section);
+        foreach (Json::items($d, 'fields') as const &$f) {
+            if (Json::flag($f, 'static')) {
+                continue;
+            }
+            string $prefix = Names::screaming($section);
+            FieldDecl $field = guard $this->field($d, $f, $prefix, 'env') else {
+                return;
+            };
+            $t->fields[] = $field;
+        }
+        $this->configs[] = $t;
+    }
+
+    internal function field(const json::Value& $d, const json::Value& $f, const string& $envPrefix, const string& $wireTool) : FieldDecl?
+    {
+        string $name = Json::text($f, 'name');
+        json::Value $type = Json::field($f, 'type');
+        string $text = Types::render($type);
+        if (Json::text($f, 'visibility') != 'public') {
+            $this->fail($d, "field ${$name} must be public so the generated code can fill it");
+            return null;
+        }
+        string $reader = Types::reader($type);
+        bool $config = !$envPrefix->empty() || $wireTool == 'env';
+        if ($config && ($reader->empty() || $reader == 'strings' || $reader == 'ints' || $reader == 'json')) {
+            $this->failAt($d, $f, "field ${$name} has type {$text}, which nexus cannot read here");
+            return null;
+        }
+        string $wire = $name;
+        if ($config) {
+            string $upper = Names::screaming($name);
+            $wire = "{$envPrefix}_{$upper}";
+            json::Value? $env = Json::tool($f, 'env');
+            if ($env != null) {
+                json::Value $envTool = guard $env;
+                $wire = Json::string(Json::value($envTool));
+            }
+        } else {
+            json::Value? $n = Json::tool($f, 'name');
+            if ($n != null) {
+                json::Value $nameTool = guard $n;
+                $wire = Json::string(Json::value($nameTool));
+            }
+        }
+        FieldDecl $out = FieldDecl($name, $wire, $type, $text, Json::flag($f, 'default'), Json::text($f, 'default_value'));
+        $out->secret = Json::has($f, 'secret');
+        $out->doc = Names::prose(Json::text($f, 'doc'));
+        $out->positional = Json::has($f, 'positional');
+        if ($config) {
+            $out->reader = $reader;
+            return $out;
+        }
+        if (!$this->shape($out)) {
+            $this->failAt($d, $f, "field ${$name} has type {$text}, which nexus cannot read here");
+            return null;
+        }
+        json::Value? $label = Json::tool($f, 'label');
+        if ($label != null) {
+            json::Value $labelTool = guard $label;
+            $out->label = Json::string(Json::value($labelTool));
+            if ($out->label->empty()) {
+                $this->failAt($d, $f, "#[nexus::label] on ${$name} takes the field's name in words, like #[nexus::label: 'e-mail address']");
+                return null;
+            }
+        }
+        json::Value? $message = Json::tool($f, 'message');
+        if ($message != null) {
+            json::Value $messageTool = guard $message;
+            array<Entry> $given = Json::record(Json::value($messageTool));
+            foreach ($given as const &$e) {
+                if (Json::string($e->value)->empty()) {
+                    $this->failAt($d, $f, "#[nexus::message] on ${$name} maps a code to its English message, like #[nexus::message: { email: '...' }]");
+                    return null;
+                }
+            }
+            if ($given->empty()) {
+                $this->failAt($d, $f, "#[nexus::message] on ${$name} maps a code to its English message, like #[nexus::message: { email: '...' }]");
+                return null;
+            }
+            $out->messages = $given;
+        }
+        json::Value? $rule = Json::tool($f, 'rule');
+        if ($rule == null) {
+            return $out;
+        }
+        json::Value $ruleTool = guard $rule;
+        bool $nullable = Types::optional($type);
+        string $bare = Types::render(Types::bare($type));
+        foreach (Json::record(Json::value($ruleTool)) as const &$e) {
+            string $why = Rules::misfit($e->key, $e->value, $out->kind, $out->shape, false, $nullable);
+            if (!$why->empty()) {
+                $this->failAt($d, $f, "rule on ${$name}: {$why}");
+                return null;
+            }
+            if ($e->key == 'check') {
+                foreach (Program::names($e->value) as const &$n) {
+                    if (!$this->ruleFits($d, $f, $n, $bare, "field ${$name}")) {
+                        return null;
+                    }
+                    $out->checks[] = $n;
+                }
+            } else if ($e->key == 'each') {
+                string $itemKind = 'string';
+                string $itemType = 'string';
+                if ($out->reader == 'ints') {
+                    $itemKind = 'integer';
+                    $itemType = 'int64';
+                }
+                foreach (Json::record($e->value) as const &$inner) {
+                    string $whyItem = Rules::misfit($inner->key, $inner->value, $itemKind, 'scalar', true, false);
+                    if (!$whyItem->empty()) {
+                        $this->failAt($d, $f, "rule on each item of ${$name}: {$whyItem}");
+                        return null;
+                    }
+                    if ($inner->key == 'check') {
+                        foreach (Program::names($inner->value) as const &$n) {
+                            if (!$this->ruleFits($d, $f, $n, $itemType, "each item of ${$name}")) {
+                                return null;
+                            }
+                            $out->eachChecks[] = $n;
+                        }
+                    } else {
+                        $out->each[] = Rule($inner->key, $inner->value);
+                    }
+                }
+            } else {
+                $out->rules[] = Rule($e->key, $e->value);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Sorts an input field into how it is read: a scalar `Fields` reader,
+     * a date, an enum, a nested input or a list of them. False when nexus
+     * cannot read its type.
+     */
+    internal const function shape(FieldDecl& $f) : bool
+    {
+        json::Value $bare = Types::bare($f->type);
+        string $reader = Types::reader($f->type);
+        if (!$reader->empty() && $reader != 'duration') {
+            $f->reader = $reader;
+            $f->kind = Rules::kind($reader);
+            return true;
+        }
+        string $named = Types::name($bare);
+        if ($named == 'calendar::Date') {
+            $f->reader = 'date';
+            $f->kind = 'date';
+            return true;
+        }
+        if ($named == 'std::time::timestamp' || $named == 'time::timestamp') {
+            $f->reader = 'timestamp';
+            $f->kind = 'timestamp';
+            return true;
+        }
+        if ($this->enumNamed($named)) {
+            $f->shape = 'enum';
+            $f->kind = 'enum';
+            $f->item = $named;
+            $f->reader = 'int64';
+            if ($this->enumOf($named)->text) {
+                $f->reader = 'string';
+            }
+            return true;
+        }
+        if ($this->known->has($named)) {
+            $f->shape = 'object';
+            $f->kind = 'object';
+            $f->item = $named;
+            return true;
+        }
+        if (Json::text($bare, 'kind') != 'array') {
+            return false;
+        }
+        string $of = Types::name(Json::field($bare, 'of'));
+        if ($this->enumNamed($of)) {
+            $f->shape = 'enums';
+            $f->kind = 'list';
+            $f->item = $of;
+            $f->reader = 'ints';
+            if ($this->enumOf($of)->text) {
+                $f->reader = 'strings';
+            }
+            return true;
+        }
+        if ($this->known->has($of)) {
+            $f->shape = 'objects';
+            $f->kind = 'list';
+            $f->item = $of;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Whether `$name` is a rule class checking a `$type`, failing with why
+     * not.
+     */
+    internal function ruleFits(const json::Value& $d, const json::Value& $at, const string& $name, const string& $type, const string& $what) : bool
+    {
+        if (!$this->ruleTypes->has($name)) {
+            $this->failAt($d, $at, "check on {$what} names {$name}, which is not a class conforming to nexus::Rule<{$type}>");
+            return false;
+        }
+        string $checks = $this->ruleTypes->get($name);
+        if ($checks != $type) {
+            $this->failAt($d, $at, "check on {$what} names {$name}, a nexus::Rule<{$checks}>, but the value is a {$type}");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Whether every rule naming another field of `$t` names one that
+     * exists, with a type it can be compared with.
+     */
+    internal function crossFits(const json::Value& $d, const TypeDecl& $t) : bool
+    {
+        foreach ($t->fields as const &$f) {
+            foreach ($f->rules as const &$r) {
+                if (!Rules::crossing($r->key, $r->value)) {
+                    continue;
+                }
+                string $other = Json::string($r->value);
+                if ($r->key == 'confirmed') {
+                    $other = "{$f->name}Confirmation";
+                }
+                FieldDecl? $found = null;
+                foreach ($t->fields as const &$g) {
+                    if ($g->name == $other) {
+                        $found = $g;
+                    }
+                }
+                FieldDecl $sibling = guard $found else {
+                    $this->fail($d, "rule '{$r->key}' on ${$f->name} names ${$other}, which is not a field of {$t->qualified}");
+                    return false;
+                };
+                string $mine = Types::render(Types::bare($f->type));
+                string $theirs = Types::render(Types::bare($sibling->type));
+                bool $fits = true;
+                if ($r->key == 'confirmed' || $r->key == 'same' || $r->key == 'different') {
+                    $fits = $mine == $theirs;
+                } else if (Rules::comparing($r->key)) {
+                    $fits = $sibling->kind == 'integer' || $sibling->kind == 'number';
+                } else if (Rules::dating($r->key)) {
+                    $fits = $sibling->kind == $f->kind;
+                }
+                if (!$fits) {
+                    $this->fail($d, "rule '{$r->key}' on ${$f->name} ({$mine}) cannot compare with ${$other} ({$theirs})");
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    internal function readEnum(const json::Value& $d) : void
+    {
+        json::Value $backing = Json::field($d, 'backing');
+        string $bk = Json::text($backing, 'kind');
+        if ($bk != 'string' && $bk != 'prim') {
+            return;
+        }
+        EnumDecl $e = EnumDecl(Json::text($d, 'qualified'), $bk == 'string');
+        foreach (Json::items($d, 'cases') as const &$c) {
+            if (!Json::items($c, 'payload')->empty()) {
+                return;
+            }
+            $e->cases[] = EnumCase(Json::text($c, 'name'), Json::text($c, 'value'), Json::int($c, 'discriminant'));
+        }
+        $this->enums[] = $e;
+    }
+
+    internal const function enumNamed(const string& $q) : bool
+    {
+        foreach ($this->enums as const &$e) {
+            if ($e->qualified == $q) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The enum named `$q`; check `enumNamed` first.
+     */
+    internal const function enumOf(const string& $q) : EnumDecl
+    {
+        foreach ($this->enums as const &$e) {
+            if ($e->qualified == $q) {
+                return $e;
+            }
+        }
+        return EnumDecl($q, true);
+    }
+
+    /**
+     * A rule class name or a list of them.
+     */
+    internal static function names(const json::Value& $value) : array<string>
+    {
+        string $one = Json::string($value);
+        if (!$one->empty()) {
+            array<string> $single = [$one];
+            return $single;
+        }
+        return Json::strings($value);
+    }
+}

@@ -1,0 +1,10 @@
+namespace nexusgen;
+
+/**
+ * What nexus gen knows of a tool: the description its docblock gives,
+ * the default when the app offers it without one.
+ */
+public struct ToolMeta
+{
+    public string $description = '';
+}

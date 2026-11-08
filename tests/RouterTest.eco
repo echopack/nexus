@@ -1,0 +1,204 @@
+/**
+ * Patterns and the route table.
+ */
+
+use nexus::{Pattern, Router, Route, Method, Payload, Response, RouteError, Url};
+use ecotest::expect;
+
+struct LinkShow {}
+struct LinkFiles {}
+struct LinkArchive {}
+struct LinkHome {}
+
+function routerNoop() : function<Response(Payload&)>
+{
+    return function(Payload& $payload) : Response {
+        return Response(text: 'x');
+    };
+}
+
+function routerBound() : function<bool(container::Container)>
+{
+    return function(container::Container $c) : bool {
+        return true;
+    };
+}
+
+function routerRoute(array<Method> $methods, const string& $path, const string& $action) : Route
+{
+    return Route($methods, $path, $action, routerNoop(), routerBound());
+}
+
+function linkRoute<A>(const string& $path) : Route
+{
+    array<Method> $get = [Method::get];
+    Route $r = routerRoute($get, $path, 'Link');
+    $r->type = type_id<A>();
+    return $r;
+}
+
+test pattern_captures_and_constraints
+{
+    Pattern $p = guard Pattern::parse('/v1/posts/{id:number}/comments/{page?}');
+    map<string, string> $out = map<string, string>();
+    expect($p->matches('/v1/posts/42/comments', $out))->yes(says: 'the path without the optional page matches');
+    expect($out->get('id'))->is('42');
+    expect($out->has('page'))->no(says: 'a left-out optional segment captures nothing');
+    map<string, string> $two = map<string, string>();
+    expect($p->matches('/v1/posts/42/comments/3/', $two))->yes(says: 'the path with a page and a trailing slash matches');
+    expect($two->get('page'))->is('3');
+    map<string, string> $bad = map<string, string>();
+    expect($p->matches('/v1/posts/abc/comments', $bad))->no(says: 'a non-number id does not match');
+    expect($p->matches('/v1/posts/42/comments/3/4', $bad))->no(says: 'an extra segment does not match');
+}
+
+test pattern_rest_and_decoding
+{
+    Pattern $p = guard Pattern::parse('/files/{path*}');
+    map<string, string> $out = map<string, string>();
+    expect($p->matches('/files/a%20b/c.txt', $out))->yes(says: 'the rest segment takes several segments');
+    expect($out->get('path'))->is('a b/c.txt');
+    map<string, string> $empty = map<string, string>();
+    expect($p->matches('/files', $empty))->yes(says: 'the rest segment may be empty');
+    expect($empty->get('path'))->is('');
+}
+
+test pattern_refuses_bad_sources
+{
+    expect(Pattern::parse('posts'))->fails();
+    expect(Pattern::parse('/posts/{id'))->fails();
+    expect(Pattern::parse('/posts/{id:bogus}'))->fails();
+    expect(Pattern::parse('/a/{x}/{x}'))->fails();
+    expect(Pattern::parse('/a/{rest*}/b'))->fails();
+    expect(Pattern::parse('/a/x{y}'))->fails();
+}
+
+test router_prefers_literal_segments
+{
+    Router $r = Router();
+    array<Method> $get = [Method::get];
+    guard $r->add(routerRoute($get, '/posts/{id}', 'Show'));
+    guard $r->add(routerRoute($get, '/posts/new', 'New'));
+    guard $r->add(routerRoute($get, '/{path*}', 'Fallback'));
+    map<string, string> $params = map<string, string>();
+    array<Method> $allow = [];
+    Route $hit = expect($r->find(Method::get, '/posts/new', $params, $allow))->some();
+    expect($hit->action)->is('New');
+    Route $show = expect($r->find(Method::get, '/posts/7', $params, $allow))->some();
+    expect($show->action)->is('Show');
+    Route $fb = expect($r->find(Method::get, '/about/team', $params, $allow))->some();
+    expect($fb->action)->is('Fallback');
+}
+
+test router_reports_allowed_methods
+{
+    Router $r = Router();
+    array<Method> $get = [Method::get];
+    array<Method> $post = [Method::post];
+    guard $r->add(routerRoute($get, '/posts', 'List'));
+    guard $r->add(routerRoute($post, '/posts', 'Create'));
+    map<string, string> $params = map<string, string>();
+    array<Method> $allow = [];
+    expect($r->find(Method::delete, '/posts', $params, $allow))->none();
+    expect($allow)->size(4);
+    array<Method> $none = [];
+    expect($r->find(Method::get, '/nope', $params, $none))->none();
+    expect($none)->empty();
+    array<Method> $headAllow = [];
+    Route $head = expect($r->find(Method::head, '/posts', $params, $headAllow))->some();
+    expect($head->action)->is('List');
+}
+
+test router_refuses_duplicates
+{
+    Router $r = Router();
+    array<Method> $get = [Method::get];
+    guard $r->add(routerRoute($get, '/posts', 'A'));
+    status<RouteError> $again = $r->add(routerRoute($get, '/posts', 'B'));
+    expect($again)->fails();
+}
+
+test router_builds_links_by_action_type
+{
+    Router $r = Router();
+    guard $r->add(linkRoute<LinkShow>('/v1/posts/{id:integer}'));
+    guard $r->add(linkRoute<LinkShow>('/posts/{id}'));
+    guard $r->add(linkRoute<LinkFiles>('/files/{path*}'));
+    guard $r->add(linkRoute<LinkArchive>('/archive/{year}/{month?}'));
+    guard $r->add(linkRoute<LinkHome>('/'));
+    // the first route an action got is where its links go
+    expect($r->url<LinkShow>(['id' => '5'])->text())->is('/v1/posts/5');
+    // names the pattern lacks become query pairs, in name order
+    expect($r->url<LinkShow>(['page' => '2', 'id' => '5', 'include' => 'a b'])->text())->is('/v1/posts/5?include=a%20b&page=2');
+    expect($r->url<LinkFiles>(['path' => 'a b/c'])->text())->is('/files/a%20b/c');
+    expect($r->url<LinkFiles>()->text())->is('/files');
+    expect($r->url<LinkArchive>(['year' => '2026'])->text())->is('/archive/2026');
+    expect($r->url<LinkArchive>(['year' => '2026', 'month' => '11'])->text())->is('/archive/2026/11');
+    expect($r->url<LinkHome>()->text())->is('/');
+    expect($r->url<LinkHome>()->with('q', 'x')->text())->is('/?q=x');
+    expect($r->routed<LinkShow>())->yes(says: 'LinkShow is routed');
+    expect($r->routed<Route>())->no(says: 'no route was added for the Route type');
+}
+
+test router_builds_absolute_links_on_the_origin
+{
+    Router $r = Router();
+    guard $r->add(linkRoute<LinkShow>('/v1/posts/{id}'));
+    expect($r->origin())->none();
+    Url $base = guard Url::parse('https://example.com/api');
+    $r->origin($base);
+    expect($r->absoluteUrl<LinkShow>(['id' => '5'])->text())->is('https://example.com/api/v1/posts/5');
+    Url $client = guard Url::parse('http://localhost:8080');
+    expect($r->url<LinkShow>(['id' => '5'])->on($client)->text())->is('http://localhost:8080/v1/posts/5');
+}
+
+test hand_built_routes_are_not_linked
+{
+    Router $r = Router();
+    array<Method> $get = [Method::get];
+    guard $r->add(routerRoute($get, '/raw', 'Raw'));
+    expect($r->routed<Route>())->no(says: 'a hand-built route links no action type');
+    expect($r->count())->is(1);
+}
+
+// the deaths below cannot match their message yet, so each one calls only
+// what the passing link tests above already run, then the one bad link
+
+#[tests: expects death]
+test a_link_without_a_required_param_dies
+{
+    Router $r = Router();
+    guard $r->add(linkRoute<LinkShow>('/v1/posts/{id}'));
+    $r->url<LinkShow>();
+}
+
+#[tests: expects death]
+test a_link_its_constraint_refuses_dies
+{
+    Router $r = Router();
+    guard $r->add(linkRoute<LinkShow>('/v1/posts/{id:integer}'));
+    $r->url<LinkShow>(['id' => 'five']);
+}
+
+#[tests: expects death]
+test a_link_to_an_unrouted_action_dies
+{
+    Router $r = Router();
+    guard $r->add(linkRoute<LinkShow>('/v1/posts/{id}'));
+    $r->url<LinkFiles>();
+}
+
+#[tests: expects death]
+test an_absolute_link_without_an_origin_dies
+{
+    Router $r = Router();
+    guard $r->add(linkRoute<LinkShow>('/v1/posts/{id}'));
+    $r->absoluteUrl<LinkShow>(['id' => '5']);
+}
+
+#[tests: expects death]
+test a_relative_origin_dies
+{
+    Router $r = Router();
+    $r->origin(Url(path: '/api'));
+}

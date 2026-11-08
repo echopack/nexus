@@ -1,0 +1,85 @@
+namespace nexus::http;
+
+/**
+ * Cross-origin resource sharing. Answers preflight requests itself and adds
+ * the allow headers to every response for an allowed origin. Add it first
+ * in an extension's `middleware` hook:
+ *
+ *     array<string> $origins = ['https://app.example.com'];
+ *     $p->add(nexus::http::Cors($origins));
+ */
+#[atomic]
+public class Cors : nexus::Middleware
+{
+    private array<string> $origins;
+    public array<string> $methods = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'];
+    public array<string> $headers = ['Content-Type', 'Authorization', 'X-Request-Id'];
+    public array<string> $expose = ['X-Request-Id'];
+    public bool $credentials = false;
+    public int64 $maxAge = 600;
+
+    /**
+     * Allows `$origins` exactly; `*` allows any origin (and then never sends
+     * credentials).
+     */
+    public constructor(array<string> $origins)
+    {
+        $this->origins = $origins;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        string? $given = $payload->request->header('Origin');
+        if ($given == null) {
+            return $next->run($payload);
+        }
+        string $origin = guard $given;
+        if (!$this->allows($origin)) {
+            return $next->run($payload);
+        }
+        bool $preflight = $payload->request->method == nexus::Method::options && $payload->request->header('Access-Control-Request-Method') != null;
+        if ($preflight) {
+            nexus::Response $r = nexus::Response(204);
+            $this->stamp($r, $origin);
+            $r->header('Access-Control-Allow-Methods', str::join($this->methods, ', '));
+            $r->header('Access-Control-Allow-Headers', str::join($this->headers, ', '));
+            $r->header('Access-Control-Max-Age', str::from($this->maxAge));
+            return $r;
+        }
+        nexus::Response $r = $next->run($payload);
+        $this->stamp($r, $origin);
+        if (!$this->expose->empty()) {
+            $r->header('Access-Control-Expose-Headers', str::join($this->expose, ', '));
+        }
+        return $r;
+    }
+
+    public const function allows(const string& $origin) : bool
+    {
+        foreach ($this->origins as const &$o) {
+            if ($o == '*' || $o == $origin) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function stamp(nexus::Response& $r, const string& $origin) : void
+    {
+        bool $any = false;
+        foreach ($this->origins as const &$o) {
+            if ($o == '*') {
+                $any = true;
+            }
+        }
+        if ($any && !$this->credentials) {
+            $r->header('Access-Control-Allow-Origin', '*');
+        } else {
+            $r->header('Access-Control-Allow-Origin', $origin);
+            $r->headers->add('Vary', 'Origin');
+        }
+        if ($this->credentials && !$any) {
+            $r->header('Access-Control-Allow-Credentials', 'true');
+        }
+    }
+}

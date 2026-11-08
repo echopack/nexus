@@ -1,0 +1,39 @@
+namespace nexus::app;
+
+/**
+ * The MCP tool class `bindTool` just bound, for the name MCP offers it
+ * under:
+ *
+ * ```echo
+ * $app->bindTool<CreatePostTool>((Container $c) => CreatePostTool($c->get<PostService>()))
+ *     ->offer('create_post', title: 'Write a post');
+ * ```
+ */
+public class ToolRef<T>
+{
+    internal nexus::Services $services;
+
+    internal constructor(nexus::Services $services)
+    {
+        $this->services = $services;
+    }
+
+    /**
+     * Offers the tool as `$name`. The description defaults to `T`'s
+     * docblock; the arguments are its input's fields, named as the input
+     * names them.
+     */
+    public function offer(
+        const string& $name,
+        title: const string& $title = '',
+        description: const string& $description = '',
+        readOnly: bool? $readOnly = null,
+        destructive: bool? $destructive = null,
+        idempotent: bool? $idempotent = null,
+        openWorld: bool? $openWorld = null
+    ) : ToolRef<T>
+    {
+        nexus::mcp::Tools::offer<T>($this->services, name: $name, title: $title, description: $description, readOnly: $readOnly, destructive: $destructive, idempotent: $idempotent, openWorld: $openWorld);
+        return $this;
+    }
+}

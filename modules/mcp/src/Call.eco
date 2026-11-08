@@ -1,0 +1,78 @@
+namespace nexus::mcp;
+
+/**
+ * One incoming JSON-RPC message. A notification (no `id`) and a client's
+ * answer to a request of ours are `silent`: nothing goes back.
+ */
+public struct Call
+{
+    public json::Value $id;
+    public string $method;
+
+    /**
+     * Always an object, empty when the message had no params.
+     */
+    public json::Value $params;
+    public bool $silent;
+
+    public static function parse(const string& $text) : result<Call, RpcError>
+    {
+        json::Value $v = guard json::parse($text) else ($e) {
+            return .error(.parse($e->message()));
+        };
+        if (!$v->isObject()) {
+            return .error(.invalidRequest('a message is one JSON object; batches are not supported'));
+        }
+        if (Call::text($v, 'jsonrpc') != '2.0') {
+            return .error(.invalidRequest('jsonrpc must be "2.0"'));
+        }
+        json::Value $id = json::nil();
+        bool $silent = true;
+        json::Value? $given = $v->get('id');
+        if ($given != null) {
+            json::Value $g = guard $given;
+            if (!$g->isStr() && !$g->isInt()) {
+                return .error(.invalidRequest('id is a string or an integer'));
+            }
+            $id = $g;
+            $silent = false;
+        }
+        string $method = Call::text($v, 'method');
+        if ($method->empty()) {
+            if ($v->get('result') != null || $v->get('error') != null) {
+                return .ok(Call($id: $id, $method: '', $params: json::object(), $silent: true));
+            }
+            return .error(.invalidRequest('a message needs a method'));
+        }
+        return .ok(Call($id: $id, $method: $method, $params: Call::object($v, 'params'), $silent: $silent));
+    }
+
+    /**
+     * The string at `$key` of object `$v`, or empty.
+     */
+    public static function text(const json::Value& $v, const string& $key) : string
+    {
+        json::Value? $found = $v->get($key);
+        if ($found == null) {
+            return '';
+        }
+        json::Value $f = guard $found;
+        return $f->asStr() ?? '';
+    }
+
+    /**
+     * The object at `$key` of object `$v`, or an empty one.
+     */
+    public static function object(const json::Value& $v, const string& $key) : json::Value
+    {
+        json::Value? $found = $v->get($key);
+        if ($found == null) {
+            return json::object();
+        }
+        json::Value $f = guard $found;
+        if (!$f->isObject()) {
+            return json::object();
+        }
+        return $f;
+    }
+}

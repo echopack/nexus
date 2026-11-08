@@ -1,0 +1,66 @@
+namespace nexus::log;
+
+use std::time;
+
+/**
+ * The two ways a log writes a time: RFC 3339 in UTC with milliseconds
+ * for machines, the time of day for people.
+ */
+public struct Stamp
+{
+    /**
+     * `2026-11-09T12:00:01.123Z`.
+     */
+    public static function rfc3339(time::timestamp $at) : string
+    {
+        calendar::Zoned $z = calendar::Zoned($at, calendar::Zone::utc());
+        return $z->format(calendar::Format::rfc3339());
+    }
+
+    /**
+     * `12:00:01.123`, in UTC.
+     */
+    public static function clock(time::timestamp $at) : string
+    {
+        int64 $ms = $at->unix_millis();
+        int64 $day = $ms % 86400000;
+        if ($day < 0) {
+            $day = $day + 86400000;
+        }
+        string $out = Stamp::pad($day / 3600000, 2);
+        $out->push(58);
+        $out->append(Stamp::pad(($day / 60000) % 60, 2));
+        $out->push(58);
+        $out->append(Stamp::pad(($day / 1000) % 60, 2));
+        $out->push(46);
+        $out->append(Stamp::pad($day % 1000, 3));
+        return $out;
+    }
+
+    /**
+     * The UTC day since 1970 the time falls on, which is what daily
+     * rotation compares.
+     */
+    public static function day(time::timestamp $at) : int64
+    {
+        int64 $ms = $at->unix_millis();
+        int64 $d = $ms / 86400000;
+        if ($ms < 0 && $ms % 86400000 != 0) {
+            $d = $d - 1;
+        }
+        return $d;
+    }
+
+    private static function pad(int64 $n, usize $width) : string
+    {
+        string $digits = "{$n}";
+        string $out = '';
+        usize $i = $digits->size();
+        while ($i < $width) {
+            $out->push(48);
+            $i = $i + 1;
+        }
+        $out->append($digits);
+        return $out;
+    }
+}

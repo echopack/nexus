@@ -1,0 +1,15 @@
+namespace nexus::mcp;
+
+/**
+ * GET and DELETE on the MCP endpoint: this server keeps no session and
+ * opens no stream, so both are a 405.
+ */
+public class Refused : nexus::Action
+{
+    public function handle(nexus::Payload& $payload) : nexus::Response
+    {
+        nexus::Response $res = nexus::Response(text: "this MCP server is stateless: POST one JSON-RPC message to /mcp\n", status: 405);
+        $res->header('Allow', 'POST');
+        return $res;
+    }
+}

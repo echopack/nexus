@@ -1,0 +1,15 @@
+namespace nexus;
+
+/**
+ * The kind of one path pattern segment. The order is the routing rank:
+ * literal text beats a constrained parameter beats an open one beats an
+ * optional tail beats a catch-all.
+ */
+public enum SegmentKind : uint8
+{
+    case literal = 0;
+    case constrained = 1;
+    case param = 2;
+    case optional = 3;
+    case rest = 4;
+}

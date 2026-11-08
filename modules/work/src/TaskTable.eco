@@ -1,0 +1,11 @@
+namespace nexus::work;
+
+/**
+ * One module's generated task codecs, found by nexus-work with
+ * `attr::of<TaskTable>("nexus::tasks")`.
+ */
+public struct TaskTable
+{
+    public string $module;
+    public function<void(Codecs)> $call;
+}

@@ -1,0 +1,220 @@
+namespace nexus;
+
+/**
+ * A parsed path pattern: `/v1/posts/{id:number}`, `/files/{path*}`,
+ * `/archive/{year}/{month?}`. Literal segments match exactly, parameters
+ * match one decoded segment, a `?` parameter may be missing at the end and a
+ * `*` parameter takes the rest of the path.
+ */
+public struct Pattern
+{
+    public string $source;
+    public array<Segment> $segments = [];
+
+    /**
+     * Parses `$source`. Refuses a pattern that does not start with `/`, a
+     * broken brace, an unknown constraint, a repeated name, or a required
+     * segment after an optional or catch-all one.
+     */
+    public static function parse(const string& $source) : result<Pattern, RouteError>
+    {
+        if (!$source->starts('/')) {
+            return .error(.pattern($source, 'must start with /'));
+        }
+        Pattern $p = Pattern($source);
+        if ($source == '/') {
+            return .ok($p);
+        }
+        string $body = $source->sub(1, $source->size() - 1);
+        if ($body->ends('/')) {
+            $body = $body->sub(0, $body->size() - 1);
+        }
+        array<string> $parts = str::split($body, '/')->owned();
+        array<string> $names = [];
+        bool $tail = false;
+        foreach ($parts as const &$part) {
+            if ($part->empty()) {
+                return .error(.pattern($source, 'has an empty segment'));
+            }
+            if ($tail) {
+                return .error(.pattern($source, 'has a segment after an optional or catch-all one'));
+            }
+            if (!$part->starts('{')) {
+                if ($part->contains('{') || $part->contains('}')) {
+                    return .error(.pattern($source, 'mixes text and a parameter in one segment'));
+                }
+                string? $decoded = Percent::decode($part);
+                if ($decoded == null) {
+                    return .error(.pattern($source, 'has a broken escape'));
+                }
+                string $literal = guard $decoded;
+                $p->segments[] = Segment(SegmentKind::literal, $literal);
+                continue;
+            }
+            if (!$part->ends('}')) {
+                return .error(.pattern($source, "segment '{$part}' does not close its brace"));
+            }
+            string $inner = $part->sub(1, $part->size() - 2);
+            SegmentKind $kind = SegmentKind::param;
+            if ($inner->ends('*')) {
+                $kind = SegmentKind::rest;
+                $inner = $inner->sub(0, $inner->size() - 1);
+                $tail = true;
+            } else if ($inner->ends('?')) {
+                $kind = SegmentKind::optional;
+                $inner = $inner->sub(0, $inner->size() - 1);
+                $tail = true;
+            }
+            string $name = $inner;
+            Constraint $constraint = Constraint::any;
+            usize $colon = $inner->find(':');
+            if ($colon < $inner->size()) {
+                $name = $inner->sub(0, $colon);
+                string $cname = $inner->sub($colon + 1, $inner->size() - $colon - 1);
+                Constraint? $c = Constraint::parse($cname);
+                if ($c == null) {
+                    return .error(.pattern($source, "unknown constraint '{$cname}'"));
+                }
+                Constraint $picked = guard $c;
+                $constraint = $picked;
+                if ($kind == SegmentKind::param && $constraint != Constraint::any) {
+                    $kind = SegmentKind::constrained;
+                }
+            }
+            if (!Pattern::identifier($name)) {
+                return .error(.pattern($source, "parameter name '{$name}' is not an identifier"));
+            }
+            foreach ($names as const &$seen) {
+                if ($seen == $name) {
+                    return .error(.pattern($source, "parameter '{$name}' appears twice"));
+                }
+            }
+            $names[] = $name;
+            $p->segments[] = Segment($kind, $name, $constraint);
+        }
+        return .ok($p);
+    }
+
+    /**
+     * Matches `$path` (no query) and writes the captured parameters into
+     * `$out`. A trailing slash is ignored.
+     */
+    public const function matches(const string& $path, map<string, string>& $out) : bool
+    {
+        array<string> $parts = Pattern::split($path);
+        usize $n = $parts->count();
+        usize $i = 0;
+        foreach ($this->segments as const &$seg) {
+            if ($seg->kind == SegmentKind::rest) {
+                string $rest = '';
+                while ($i < $n) {
+                    if (!$rest->empty()) {
+                        $rest->push(47);
+                    }
+                    string? $d = Percent::decode($parts[$i]);
+                    if ($d == null) {
+                        return false;
+                    }
+                    string $piece = guard $d;
+                    $rest->append($piece);
+                    $i = $i + 1;
+                }
+                $out[$seg->text] = $rest;
+                return true;
+            }
+            if ($i >= $n) {
+                if ($seg->kind == SegmentKind::optional) {
+                    continue;
+                }
+                return false;
+            }
+            string? $decoded = Percent::decode($parts[$i]);
+            if ($decoded == null) {
+                return false;
+            }
+            string $value = guard $decoded;
+            if ($seg->kind == SegmentKind::literal) {
+                if ($value != $seg->text) {
+                    return false;
+                }
+            } else {
+                if (!$seg->constraint->admits($value)) {
+                    return false;
+                }
+                $out[$seg->text] = $value;
+            }
+            $i = $i + 1;
+        }
+        return $i == $n;
+    }
+
+    /**
+     * The parameter names, in order.
+     */
+    public const function names() : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->segments as const &$seg) {
+            if ($seg->kind != SegmentKind::literal) {
+                $out[] = $seg->text;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Whether this pattern should be tried before `$other`: compared segment
+     * by segment on the routing rank, the more specific one first.
+     */
+    public const function before(const Pattern& $other) : bool
+    {
+        usize $n = $this->segments->count();
+        usize $m = $other->segments->count();
+        usize $i = 0;
+        while ($i < $n && $i < $m) {
+            uint8 $a = $this->segments[$i]->kind->value();
+            uint8 $b = $other->segments[$i]->kind->value();
+            if ($a != $b) {
+                return $a < $b;
+            }
+            $i = $i + 1;
+        }
+        return false;
+    }
+
+    internal static function split(const string& $path) : array<string>
+    {
+        array<string> $none = [];
+        if ($path->empty() || $path == '/') {
+            return $none;
+        }
+        string $body = $path;
+        if ($body->starts('/')) {
+            $body = $body->sub(1, $body->size() - 1);
+        }
+        if ($body->ends('/')) {
+            $body = $body->sub(0, $body->size() - 1);
+        }
+        if ($body->empty()) {
+            return $none;
+        }
+        return str::split($body, '/')->owned();
+    }
+
+    internal static function identifier(const string& $name) : bool
+    {
+        if ($name->empty()) {
+            return false;
+        }
+        usize $i = 0;
+        while ($i < $name->size()) {
+            uint8 $c = $name->byte($i);
+            bool $ok = ($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122) || $c == 95 || ($i > 0 && $c >= 48 && $c <= 57);
+            if (!$ok) {
+                return false;
+            }
+            $i = $i + 1;
+        }
+        return true;
+    }
+}

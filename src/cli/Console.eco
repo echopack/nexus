@@ -1,0 +1,450 @@
+namespace nexus;
+
+use std::env;
+use std::io;
+use std::thread;
+use nexus::log;
+
+/**
+ * The app binary's command line: `serve`, `routes`, `doctor` and the
+ * commands of the extensions, with `--mode` and `--env-file` on each.
+ * `Kernel::main` hands the process here.
+ */
+public struct Console
+{
+    /**
+     * Parses `$argv`, runs the command and answers the exit code.
+     */
+    public static function run(const array<Extension>& $extensions, const array<string>& $argv) : int32
+    {
+        string $name = Console::program($argv);
+        command::Command $app = command::Command($name, '', 'a nexus app');
+        command::Subcommand $serve = $app->command('serve', 'answer requests until stopped', 'Boots the app and serves it through its transport. SIGINT or SIGTERM stops it cleanly.');
+        command::Subcommand $routes = $app->command('routes', 'list the route table', 'Boots the app and prints every route, most specific first.');
+        command::Subcommand $doctor = $app->command('doctor', 'check that the app boots', 'Reads the config, wires the container, checks every route and command has a binding and warns about actions no route reaches.');
+
+        command::Arg $mode = $app->arg('mode', '', '<dev|test|prod>', 'what the process is for');
+        $app->fallback($mode, string::from(env::var('NEXUS_MODE', 'dev')));
+        command::Arg $envFile = $app->arg('env-file', '', '<path>', 'a .env file to read');
+        $app->fallback($envFile, '.env');
+        command::Arg $listen = $app->arg('listen', '', '<host:port>', 'where to listen');
+        $app->fallback($listen, string::from(env::var('NEXUS_LISTEN', '127.0.0.1:8080')));
+        command::Arg $workers = $app->arg('workers', '', '<n>', 'worker threads, 0 for one per core');
+        $app->fallback($workers, '0');
+        array<command::Subcommand> $all = [$serve, $routes, $doctor];
+        foreach ($all as const &$sub) {
+            $app->accept($mode, $sub);
+            $app->accept($envFile, $sub);
+        }
+        command::Flag $noWork = $app->flag('no-work', '', 'run no task workers in this process');
+        command::Flag $noSchedule = $app->flag('no-schedule', '', 'push no scheduled tasks from this process');
+        $app->accept($listen, $serve);
+        $app->accept($workers, $serve);
+        $app->accept($noWork, $serve);
+        $app->accept($noSchedule, $serve);
+
+        // the commands of the extensions; an option two of them share is made once
+        Tables $tables = Tables::generated();
+        Commands $commands = Commands(Generated::of($tables->generated));
+        foreach ($extensions as $ext) {
+            $ext->commands($commands);
+        }
+        foreach ($commands->problems() as const &$p) {
+            io::eprintln("{$name}: {$p}");
+            return 1;
+        }
+        array<Command> $extra = $commands->all();
+        map<string, command::Arg> $values = [];
+        map<string, command::Arg> $lists = [];
+        map<string, command::Flag> $flags = [];
+        foreach ($extra as $cmd) {
+            command::Subcommand $sub = $app->command($cmd->name(), $cmd->summary(), $cmd->help());
+            $app->accept($mode, $sub);
+            $app->accept($envFile, $sub);
+            array<string> $words = [];
+            array<string> $wordHelp = [];
+            int32 $needed = 0;
+            foreach ($cmd->options() as const &$o) {
+                if ($o->kind == OptionKind::flag) {
+                    if (!$flags->has($o->name)) {
+                        $flags[$o->name] = $app->flag($o->name, '', $o->summary);
+                    }
+                    $app->accept($flags->get($o->name), $sub);
+                } else if ($o->kind == OptionKind::list) {
+                    if (!$lists->has($o->name)) {
+                        $lists[$o->name] = $app->repeat($o->name, '', $o->metavar, $o->summary);
+                    }
+                    $app->accept($lists->get($o->name), $sub);
+                } else if ($o->kind == OptionKind::positional) {
+                    $words[] = $o->metavar;
+                    $wordHelp[] = $o->summary;
+                    if ($o->required) {
+                        $needed = $needed + 1;
+                    }
+                } else {
+                    if (!$values->has($o->name)) {
+                        command::Arg $a = $app->arg($o->name, '', $o->metavar, $o->summary);
+                        $app->fallback($a, $o->fallback);
+                        $values[$o->name] = $a;
+                    }
+                    $app->accept($values->get($o->name), $sub);
+                }
+            }
+            if (!$words->empty()) {
+                $app->positional($sub, str::join($words, ' '), str::join($wordHelp, '; '), '', $needed, $words->count() as int32, '');
+            }
+        }
+
+        command::Outcome $r = $app->parse($argv);
+        if ($r->error != null) {
+            command::Error $e = $r->error ?? .noCommand;
+            command::CLIContext $err = .from($r->parsed, $app, .stderr);
+            $err->print(command::renderError($e, $app, $r->parsed, $err));
+            return 1;
+        }
+        command::Parsed $parsed = $r->parsed;
+        if ($parsed->wantsHelp) {
+            command::CLIContext $help = .from($parsed, $app, .stdout);
+            $help->print(command::renderHelp($app, $parsed, $help));
+            return 0;
+        }
+        if ($parsed->wantsVersion) {
+            io::println(command::renderVersion($app));
+            return 0;
+        }
+
+        Mode $m = guard Mode::parse($parsed->value($mode)) else {
+            io::eprintln("{$name}: --mode must be dev, test or prod");
+            return 1;
+        };
+        Env $environment = guard Env::load($parsed->value($envFile)) else ($e) {
+            io::eprintln("{$name}: {$e->message()}");
+            return 1;
+        };
+        Logger $log = guard Console::logFor($m, $environment) else ($e) {
+            io::eprintln("{$name}: {$e->message()}");
+            return 1;
+        };
+        Logger::install($log);
+        Kernel $k = guard Kernel::boot($extensions, $m, $log, $environment, tables: $tables) else ($e) {
+            foreach ($e->lines() as const &$line) {
+                io::eprintln("{$name}: {$line}");
+            }
+            return 1;
+        };
+
+        string $subject = $parsed->subject($app);
+        if ($subject == 'routes') {
+            io::println(Console::table($k));
+            return 0;
+        }
+        if ($subject == 'doctor') {
+            int32 $unbound = 0;
+            foreach ($extra as $cmd) {
+                if (!$cmd->bound($k->services)) {
+                    io::eprintln("{$name}: command {$cmd->name()} has no binding; bind its class in an extension's services");
+                    $unbound = $unbound + 1;
+                }
+            }
+            if ($unbound > 0) {
+                return 1;
+            }
+            foreach (Console::unrouted($k) as const &$action) {
+                io::eprintln("{$name}: warning: {$action} is an action no route reaches; route it with bindAction or drop it");
+            }
+            io::println("ok: {$k->router->count()} routes, {$extra->count()} commands, mode {$m->name()}");
+            return 0;
+        }
+        foreach ($extra as $cmd) {
+            if ($cmd->name() != $subject) {
+                continue;
+            }
+            if (!$cmd->bound($k->services)) {
+                io::eprintln("{$name}: command {$cmd->name()} has no binding; bind its class in an extension's services");
+                $k->shutdown();
+                return 1;
+            }
+            Invocation $in = Invocation($m);
+            $in->out = command::CLIContext::from($parsed, $app, .stdout);
+            $in->positionals = $parsed->positionals;
+            foreach ($cmd->options() as const &$o) {
+                if ($o->kind == OptionKind::flag) {
+                    $in->flags[$o->name] = $parsed->stated($flags->get($o->name));
+                } else if ($o->kind == OptionKind::list) {
+                    $in->lists[$o->name] = $parsed->values($lists->get($o->name));
+                } else if ($o->kind == OptionKind::value) {
+                    command::Arg $a = $values->get($o->name);
+                    $in->values[$o->name] = $parsed->value($a);
+                    $in->given[$o->name] = $parsed->stated($a);
+                }
+            }
+            int32 $code = $cmd->run($k, $in);
+            $k->shutdown();
+            return $code;
+        }
+
+        Serve $options = Serve();
+        if (!$options->listen($parsed->value($listen))) {
+            io::eprintln("{$name}: --listen wants host:port");
+            return 1;
+        }
+        uint64 $w = str::uint($parsed->value($workers)) ?? 0;
+        $options->workers = $w as uint32;
+        $options->work = !$parsed->stated($noWork);
+        $options->schedule = !$parsed->stated($noSchedule);
+        return Console::serve($k, $options, $name);
+    }
+
+    /**
+     * Serves until a signal arrives: starts the extensions' background
+     * work, serves through the transport, then stops the transport (its
+     * requests finish), drains the background work and shuts the kernel
+     * down.
+     */
+    public static function serve(Kernel $k, const Serve& $options, const string& $name) : int32
+    {
+        Transport $t = guard $k->transport() else {
+            io::eprintln("{$name}: no extension brings a transport; add nexus::http::Extension() to main.eco");
+            return 1;
+        };
+        guard signal::Signals::trap() else {
+            io::eprintln("{$name}: cannot trap signals");
+            return 1;
+        };
+        guard $k->start($options) else ($e) {
+            foreach ($e->lines() as const &$line) {
+                io::eprintln("{$name}: {$line}");
+            }
+            $k->shutdown();
+            return 1;
+        };
+        Flag $done = Flag();
+        Logger $log = $k->log;
+        thread::handle $ticker = guard thread::spawn(function[$done, $t, $log]() : void {
+            while (!$done->raised()) {
+                thread::sleep(100);
+                if (signal::Signals::caught()) {
+                    $log->info('stopping');
+                    $t->stop();
+                    return;
+                }
+            }
+        });
+        $log->info("listening on {$options->host}:{$options->port}");
+        status<BootError> $served = $t->serve($k, $options);
+        $done->raise();
+        $ticker->join();
+        $k->drain();
+        $k->shutdown();
+        guard $served else ($e) {
+            foreach ($e->lines() as const &$line) {
+                io::eprintln("{$name}: {$line}");
+            }
+            return 1;
+        };
+        return 0;
+    }
+
+    /**
+     * Runs the extensions' background work without a transport until a
+     * signal arrives, then drains it: what a `work` command does. The
+     * command line shuts the kernel down after the command.
+     */
+    public static function background(Kernel $k, const Serve& $options, const string& $name) : int32
+    {
+        guard signal::Signals::trap() else {
+            io::eprintln("{$name}: cannot trap signals");
+            return 1;
+        };
+        guard $k->start($options) else ($e) {
+            foreach ($e->lines() as const &$line) {
+                io::eprintln("{$name}: {$line}");
+            }
+            return 1;
+        };
+        while (!signal::Signals::caught()) {
+            thread::sleep(100);
+        }
+        $k->log->info('stopping');
+        $k->drain();
+        return 0;
+    }
+
+    /**
+     * Prints `$p` as a command's error, one line per field for a 422, and
+     * answers the exit code: 1.
+     */
+    public static function report(command::CLIContext $out, const Problem& $p, Mode $mode) : int32
+    {
+        array<FieldError> $fields = $p->fields();
+        if ($fields->empty()) {
+            $out->printError("{$p->title()}: {$p->detail($mode)}");
+            return 1;
+        }
+        foreach ($fields as const &$f) {
+            $out->printError("{$f->field}: {$f->message}");
+        }
+        return 1;
+    }
+
+    /**
+     * The exit code for what a command's `handle()` returned: 0, or the
+     * problem reported and 1.
+     */
+    public static function outcome(command::CLIContext $out, status<Problem> $done, Mode $mode) : int32
+    {
+        guard $done else ($p) {
+            return Console::report($out, $p, $mode);
+        };
+        return 0;
+    }
+
+    /**
+     * The route table as aligned text.
+     */
+    /**
+     * The actions `nexus gen` wrote a dispatcher for that no route of the
+     * running app reaches, sorted.
+     */
+    public static function unrouted(Kernel $k) : array<string>
+    {
+        map<string, bool> $routed = [];
+        foreach ($k->router->routes() as const &$r) {
+            $routed[$r->action] = true;
+        }
+        array<string> $out = [];
+        foreach ($k->generated->actionNames() as const &$a) {
+            if (!$routed->has($a)) {
+                $out[] = $a;
+            }
+        }
+        $out->sort();
+        return $out;
+    }
+
+    public static function table(Kernel $k) : string
+    {
+        array<Route> $routes = $k->router->routes();
+        usize $verbs = 6;
+        usize $paths = 4;
+        array<string> $verbCol = [];
+        foreach ($routes as const &$r) {
+            array<string> $vs = [];
+            foreach ($r->methods as const &$m) {
+                $vs[] = $m->verb();
+            }
+            string $v = str::join($vs, '|');
+            if ($v->size() > $verbs) {
+                $verbs = $v->size();
+            }
+            if ($r->path->size() > $paths) {
+                $paths = $r->path->size();
+            }
+            $verbCol[] = $v;
+        }
+        string $out = '';
+        usize $i = 0;
+        foreach ($routes as const &$r) {
+            if (!$out->empty()) {
+                $out->push(10);
+            }
+            $out->append(str::rpad($verbCol[$i], $verbs + 2, 32));
+            $out->append(str::rpad($r->path, $paths + 2, 32));
+            $out->append($r->action);
+            if (!$r->middleware->empty()) {
+                array<string> $names = [];
+                foreach ($r->middleware as const &$mw) {
+                    $names[] = $mw->name;
+                }
+                string $joined = str::join($names, ', ');
+                $out->append("  [{$joined}]");
+            }
+            $i = $i + 1;
+        }
+        return $out;
+    }
+
+    /**
+     * The root logger for a mode, read from the environment. Without
+     * settings it is pretty lines on stderr in dev, JSON lines on stdout in
+     * prod and nothing in testing.
+     *
+     * - `NEXUS_LOG`: the lowest level written, `info` by default.
+     * - `NEXUS_LOG_FORMAT`: `pretty`, `logfmt` or `json` for the stream.
+     * - `NEXUS_LOG_FILE`: also append to this file, as JSON unless
+     *   `NEXUS_LOG_FORMAT` says otherwise; `NEXUS_LOG_ROTATE` (`never`,
+     *   `daily`, a size like `64mb`) and `NEXUS_LOG_KEEP` (5) rotate it.
+     * - `NEXUS_LOG_ASYNC`: a queue size; each sink gets a writer thread.
+     *   `NEXUS_LOG_OVERFLOW` (`block`, `drop`) says what a full queue does.
+     */
+    public static function logFor(Mode $m, const Env& $environment) : result<Logger, log::ConfigError>
+    {
+        string $levelName = $environment->get('NEXUS_LOG') ?? 'info';
+        log::Level $level = try log::Level::parse($levelName);
+        string? $formatName = $environment->get('NEXUS_LOG_FORMAT');
+        array<log::Sink> $sinks = [];
+        if ($m == Mode::dev) {
+            log::Format $pretty = try log::Format::parse($formatName ?? 'pretty');
+            $sinks[] = log::Stream(.stderr, $pretty);
+        } else if ($m == Mode::prod) {
+            log::Format $json = try log::Format::parse($formatName ?? 'json');
+            $sinks[] = log::Stream(.stdout, $json);
+        }
+        string? $file = $environment->get('NEXUS_LOG_FILE');
+        if ($file != null) {
+            string $path = guard $file;
+            log::Format $written = try log::Format::parse($formatName ?? 'json');
+            log::Rotate $rotate = try log::Rotate::parse($environment->get('NEXUS_LOG_ROTATE') ?? 'never');
+            uint32 $keep = try Console::count('NEXUS_LOG_KEEP', $environment->get('NEXUS_LOG_KEEP') ?? '5');
+            log::File $sink = guard log::File::open($path, $written, $rotate, $keep) else ($e) {
+                return .error(.file($e));
+            };
+            $sinks[] = $sink;
+        }
+        string? $queued = $environment->get('NEXUS_LOG_ASYNC');
+        if ($queued != null) {
+            string $q = guard $queued;
+            uint32 $capacity = try Console::count('NEXUS_LOG_ASYNC', $q);
+            log::Overflow $overflow = try log::Overflow::parse($environment->get('NEXUS_LOG_OVERFLOW') ?? 'block');
+            array<log::Sink> $queuedSinks = [];
+            foreach ($sinks as $s) {
+                $queuedSinks[] = log::Async($s, $capacity as usize, $overflow);
+            }
+            $sinks = $queuedSinks;
+        }
+        return .ok(Logger($sinks, $level));
+    }
+
+    internal static function count(const string& $name, const string& $text) : result<uint32, log::ConfigError>
+    {
+        int64 $n = guard str::int(str::trim($text)) else {
+            return .error(.count($name, $text));
+        };
+        if ($n <= 0 || $n > 4294967295) {
+            return .error(.count($name, $text));
+        }
+        return .ok($n as uint32);
+    }
+
+    internal static function program(const array<string>& $argv) : string
+    {
+        if ($argv->empty()) {
+            return 'app';
+        }
+        string $exe = $argv[0];
+        usize $slash = 0;
+        bool $seen = false;
+        usize $i = 0;
+        while ($i < $exe->size()) {
+            if ($exe->byte($i) == 47) {
+                $slash = $i;
+                $seen = true;
+            }
+            $i = $i + 1;
+        }
+        if ($seen) {
+            return $exe->sub($slash + 1, $exe->size() - $slash - 1);
+        }
+        return $exe;
+    }
+}

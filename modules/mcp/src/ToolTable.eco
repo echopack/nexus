@@ -1,0 +1,11 @@
+namespace nexus::mcp;
+
+/**
+ * One module's generated offers, found by nexus-mcp with
+ * `attr::of<ToolTable>("nexus::mcp::tools")`.
+ */
+public struct ToolTable
+{
+    public string $module;
+    public function<void(Offers)> $call;
+}

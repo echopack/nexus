@@ -1,0 +1,41 @@
+namespace nexus::oauth;
+
+/**
+ * The token endpoint: a code and its PKCE verifier, or a refresh token,
+ * for a new pair. The body is a form, as OAuth has it.
+ */
+public class TokenEndpoint : nexus::Action
+{
+    private Grants $grants;
+
+    public constructor(Grants $grants)
+    {
+        $this->grants = $grants;
+    }
+
+    public function handle(nexus::Payload& $payload) : nexus::Response
+    {
+        if ($payload->request->contentType() != 'application/x-www-form-urlencoded') {
+            return OAuthError('invalid_request', 'send the token request as application/x-www-form-urlencoded')->response();
+        }
+        nexus::Query $f = nexus::Query(parse: $payload->request->body);
+        string $grant = $f->get('grant_type') ?? '';
+        string $client = $f->get('client_id') ?? '';
+        if ($client->empty()) {
+            return OAuthError('invalid_client', 'send client_id', 401)->response();
+        }
+        if ($grant == 'authorization_code') {
+            Pair $pair = guard $this->grants->exchange($f->get('code') ?? '', $client, $f->get('redirect_uri') ?? '', $f->get('code_verifier') ?? '') else ($e) {
+                return $e->response();
+            };
+            return $pair->response();
+        }
+        if ($grant == 'refresh_token') {
+            Pair $renewed = guard $this->grants->refresh($f->get('refresh_token') ?? '', $client) else ($e) {
+                return $e->response();
+            };
+            return $renewed->response();
+        }
+        return OAuthError('unsupported_grant_type', 'grant_type is authorization_code or refresh_token')->response();
+    }
+}

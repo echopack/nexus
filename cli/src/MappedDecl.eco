@@ -1,0 +1,33 @@
+namespace nexusgen;
+
+/**
+ * A model or struct with `#[nexus::expose]` fields: its shapes, the fields
+ * each one writes, and the keys of every `#[nexus::sensitive]` field.
+ */
+public struct MappedDecl
+{
+    public string $qualified;
+    public array<ShapeDecl> $shapes = [];
+    public array<ExposedField> $fields = [];
+    public array<string> $sensitive = [];
+
+    /**
+     * Whether the field `$f` is in the shape `$shape`.
+     */
+    public const function holds(const ExposedField& $f, const ShapeDecl& $shape) : bool
+    {
+        if ($f->shapes->empty()) {
+            return true;
+        }
+        string $name = $shape->name;
+        if ($name->empty()) {
+            $name = 'default';
+        }
+        foreach ($f->shapes as const &$s) {
+            if ($s == $name) {
+                return true;
+            }
+        }
+        return false;
+    }
+}

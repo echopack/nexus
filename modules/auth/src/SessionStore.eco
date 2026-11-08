@@ -1,0 +1,23 @@
+namespace nexus::auth;
+
+use std::time;
+
+/**
+ * Where signed sessions are kept. `MemorySessions` keeps them in the
+ * process; nexus-auth-carbon keeps them in the app's database.
+ */
+public interface SessionStore
+{
+    function find(const string& $id) : result<StoredSession?, nexus::Problem>;
+
+    function create(const StoredSession& $session) : status<nexus::Problem>;
+
+    /**
+     * Moves the expiry of session `$id` to `$expiresAt`.
+     */
+    function touch(const string& $id, time::timestamp $expiresAt) : status<nexus::Problem>;
+
+    function remove(const string& $id) : status<nexus::Problem>;
+
+    function removeAll(const string& $subject) : status<nexus::Problem>;
+}

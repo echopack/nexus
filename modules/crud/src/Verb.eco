@@ -1,0 +1,21 @@
+namespace nexus::crud;
+
+/**
+ * Which of the five a `Crud` hook is called for.
+ */
+public enum Verb : uint8
+{
+    case list = 1;
+    case show = 2;
+    case create = 3;
+    case update = 4;
+    case delete = 5;
+
+    /**
+     * Whether it writes.
+     */
+    public const function writes() : bool
+    {
+        return $this == Verb::create || $this == Verb::update || $this == Verb::delete;
+    }
+}

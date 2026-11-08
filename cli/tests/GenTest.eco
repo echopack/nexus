@@ -1,0 +1,570 @@
+/**
+ * The generator on hand-written decls: what it accepts, what it refuses,
+ * and the code it writes.
+ */
+
+use nexusgen::{Program, Emitter, Names, Types, ParamKind};
+use ecotest::expect;
+
+function genDecls(const string& $declarations) : json::Value
+{
+    string $text = "\{\"modules\":[\{\"name\":\"shop\",\"declarations\":[{$declarations}]}]}";
+    json::Value $doc = guard json::parse($text);
+    return $doc;
+}
+
+function genAction(const string& $tools, const string& $params, const string& $returns, const string& $conforms) : string
+{
+    return "\{\"kind\":\"class\",\"name\":\"ShowItem\",\"qualified\":\"shop::ShowItem\",\"visibility\":\"public\",\"file\":\"src/ShowItem.eco\",\"line\":3,\"tools\":[{$tools}],\"conforms\":[{$conforms}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$params}],\"return\":{$returns}}]}";
+}
+
+
+// a program with nexus-mcp in it, so actions can be offered as tools
+function genMcp() : json::Value
+{
+    json::Value $all = guard json::parse('{"modules":[{"name":"nexus-mcp","declarations":[{"kind":"interface","name":"Tool","qualified":"nexus::mcp::Tool","generics":[],"conforms":[]}]},{"name":"shop","declarations":[]}]}');
+    return $all;
+}
+
+function genAct() : string
+{
+    return '{"kind":"named","name":"nexus::Action"}';
+}
+
+function genResult(const string& $ok) : string
+{
+    return "\{\"kind\":\"named\",\"name\":\"result\",\"args\":[{$ok},\{\"kind\":\"named\",\"name\":\"nexus::Problem\"}]}";
+}
+
+test names_spell
+{
+    expect(Names::screaming('pageSize'))->is('PAGE_SIZE');
+    expect(Names::screaming('db'))->is('DB');
+    expect(Names::short('a::b::C'))->is('C');
+    expect(Names::space('a::b::C'))->is('a::b');
+    expect(Names::space('C'))->is('');
+    expect(Names::segment('blog-app'))->is('blog_app');
+    expect(Names::quote("it's"))->is("'it\\'s'");
+}
+
+test loose_params_come_from_the_path
+{
+    string $id = '{"name":"id","type":{"kind":"prim","name":"int64"},"default":false}';
+    string $page = '{"name":"page","type":{"kind":"prim","name":"uint32"},"default":true,"default_value":"1"}';
+    json::Value $d = genDecls(genAction('', "{$id},{$page}", genResult('{"kind":"named","name":"shop::ItemResource"}'), genAct()));
+    Program $p = Program::read($d);
+    expect($p->problems)->empty();
+    expect($p->actions)->size(1);
+    expect($p->actions[0]->params[0]->kind == ParamKind::path)->yes(says: 'the id comes from the path');
+    expect($p->actions[0]->params[1]->kind == ParamKind::path)->yes(says: 'the page comes from the path');
+    expect($p->actions[0]->params[1]->optionalSegment)->yes(says: 'a defaulted path param is an optional segment');
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has('public struct ShowItemDispatch')
+        ->lacks('function url(')
+        ->has("int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) \{")
+        ->has('nexus::Response $res = nexus::Reply::resource($payload, $result);')
+        ->has('#[nexus::generated: "shop"]')
+        ->has('public function generated(nexus::Generated $g) : void')
+        ->has("array<nexus::PathParam> $params0 = [nexus::PathParam('id', 'integer', false), nexus::PathParam('page', 'number', true)];")
+        ->has("$g->action<shop::ShowItem>('shop::ShowItem', $params0, function(nexus::Payload& $payload) : nexus::Response \{")
+        ->has('return shop::ShowItemDispatch::dispatch($payload);');
+}
+
+test without_the_marker_it_is_no_action
+{
+    Program $plain = Program::read(genDecls(genAction('', '', genResult('{"kind":"string"}'), '')));
+    expect($plain->problems)->empty();
+    expect($plain->actions)->empty();
+}
+
+test a_loose_param_must_fit_in_a_path
+{
+    string $flag = '{"name":"all","type":{"kind":"prim","name":"bool"},"default":true,"default_value":"false"}';
+    Program $p = Program::read(genDecls(genAction('', $flag, genResult('{"kind":"string"}'), genAct())));
+    expect($p->problems)->size(1);
+    expect($p->problems[0])
+        ->has('a loose parameter comes from the path, which holds a string or an integer, and a query comes in a nexus::QueryOf<T>');
+}
+
+test body_needs_an_input_struct
+{
+    string $in = '{"name":"in","type":{"kind":"named","name":"nexus::Body","args":[{"kind":"named","name":"shop::NewItem"}]},"default":false}';
+    json::Value $d = genDecls(genAction('', $in, genResult('{"kind":"string"}'), genAct()));
+    Program $p = Program::read($d);
+    expect($p->problems)->size(1);
+    expect($p->problems[0])->has('needs #[nexus::input] on shop::NewItem');
+}
+
+test other_param_types_are_read_from_the_payload
+{
+    string $u = '{"name":"user","type":{"kind":"named","name":"shop::User"},"default":false}';
+    json::Value $d = genDecls(genAction('', $u, genResult('{"kind":"named","name":"json::Value"}'), genAct()));
+    Program $p = Program::read($d);
+    expect($p->problems)->size(1);
+    expect($p->problems[0])
+        ->has('handle() parameter $user of type shop::User is not something nexus can provide; let a middleware the action names in #[nexus::through] put it in the payload, and read it with $payload->state<shop::User>()');
+}
+
+test inputs_decode_with_rules
+{
+    string $fields = '[{"name":"name","visibility":"public","static":false,"type":{"kind":"string"},"default":false,"tools":[{"namespace":"nexus","name":"rule","value":{"kind":"record","fields":[{"key":"min","value":{"kind":"int","integer":2}},{"key":"oneOf","value":{"kind":"list","items":[{"kind":"string","text":"a"},{"kind":"string","text":"b"}]}}]}}]},{"name":"qty","visibility":"public","static":false,"type":{"kind":"prim","name":"int32"},"default":true,"default_value":"1","tools":[{"namespace":"nexus","name":"rule","value":{"kind":"record","fields":[{"key":"max","value":{"kind":"int","integer":9}}]}}]}]';
+    string $input = "\{\"kind\":\"struct\",\"name\":\"NewItem\",\"qualified\":\"shop::NewItem\",\"visibility\":\"public\",\"file\":\"src/NewItem.eco\",\"line\":1,\"tools\":[\{\"namespace\":\"nexus\",\"name\":\"input\",\"value\":null}],\"conforms\":[],\"fields\":{$fields},\"constructors\":[]}";
+    Program $p = Program::read(genDecls($input));
+    expect($p->problems)->empty();
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has('public struct NewItemDecoder')
+        ->has("$v->minLength($xName, 2);")
+        ->has("array<string> $listName2 = ['a', 'b'];")
+        ->has("$v->oneOf($xName, $listName2);")
+        ->has("$v->max($xQty as int64, 9 as int64);")
+        ->has('shop::NewItem $out = shop::NewItem($name: $okName, $qty: $okQty);')
+        ->has('public static function read(nexus::Payload& $payload, nexus::Fields& $f) : shop::NewItem?');
+}
+
+test rules_must_fit_the_type
+{
+    string $fields = '[{"name":"flag","visibility":"public","static":false,"type":{"kind":"prim","name":"bool"},"default":false,"tools":[{"namespace":"nexus","name":"rule","value":{"kind":"record","fields":[{"key":"email","value":{"kind":"bool","value":true}}]}}]}]';
+    string $input = "\{\"kind\":\"struct\",\"name\":\"In\",\"qualified\":\"shop::In\",\"visibility\":\"public\",\"file\":\"src/In.eco\",\"line\":1,\"tools\":[\{\"namespace\":\"nexus\",\"name\":\"input\",\"value\":null}],\"conforms\":[],\"fields\":{$fields},\"constructors\":[]}";
+    Program $p = Program::read(genDecls($input));
+    expect($p->problems)->size(1);
+    expect($p->problems[0])->has("'email' does not apply to a boolean field, which takes accepted, declined");
+}
+
+test configs_read_env_names
+{
+    string $fields = '[{"name":"url","visibility":"public","static":false,"type":{"kind":"string"},"default":false,"tools":[{"namespace":"nexus","name":"env","value":{"kind":"string","text":"DATABASE_URL"}}]},{"name":"poolSize","visibility":"public","static":false,"type":{"kind":"prim","name":"uint32"},"default":true,"default_value":"16","tools":[]}]';
+    string $config = "\{\"kind\":\"struct\",\"name\":\"DbConfig\",\"qualified\":\"shop::DbConfig\",\"visibility\":\"public\",\"file\":\"src/DbConfig.eco\",\"line\":1,\"tools\":[\{\"namespace\":\"nexus\",\"name\":\"config\",\"value\":\{\"kind\":\"string\",\"text\":\"db\"}}],\"conforms\":[],\"fields\":{$fields},\"constructors\":[]}";
+    Program $p = Program::read(genDecls($config));
+    expect($p->problems)->empty();
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has("string? $vC0Url = $s->string('DATABASE_URL', required: true);")
+        ->has("uint32? $vC0PoolSize = $s->uint32('DB_POOL_SIZE', required: false);")
+        ->has('$b->param<shop::DbConfig>(shop::DbConfig($url: $okC0Url, $poolSize: $okC0PoolSize));');
+}
+
+test the_module_name_and_its_declarations
+{
+    expect(nexusgen::Generator::named("/* blog */\n#[module: \"blog\"]\n"))->some('blog');
+    expect(nexusgen::Generator::named("#[module: 'shop']\n"))->some('shop');
+    expect(nexusgen::Generator::named("#[version: \"1\"]\n"))->none();
+
+    json::Value $all = expect(json::parse('{"modules":[{"name":"stdlib","declarations":[]},{"name":"blog","declarations":[{"kind":"class"}]}]}'))->ok();
+    json::Value $local = expect(nexusgen::Generator::only($all, 'blog'))->some();
+    expect(json::dump($local))->is('{"modules":[{"name":"blog","declarations":[{"kind":"class"}]}]}');
+    expect(nexusgen::Generator::only($all, 'shop'))->none();
+}
+
+test tools_are_wired_by_their_define_and_directory
+{
+    string $manifest = "#[if: !CARBON_NOGEN]\n#[sources: \".carbon/*.eco\"]\n#[end]\n";
+    expect(nexusgen::Tool::carbon->wired($manifest))->yes(says: 'carbon is wired by its define and directory');
+    expect(nexusgen::Tool::rest->wired($manifest))->no(says: 'rest is not wired');
+    expect(nexusgen::Tool::rest->target())->is('.rest/models.eco');
+}
+
+test actions_answer_with_responses_their_transformer_builds
+{
+    string $transformer = '{"kind":"class","name":"ItemTransformer","qualified":"shop::ItemTransformer","tools":[],"conforms":[{"kind":"named","name":"nexus::rest::Transformer","args":[{"kind":"named","name":"shop::Item"}]}],"fields":[]}';
+    string $all = "\{\"modules\":[\{\"name\":\"nexus-rest\",\"declarations\":[]},\{\"name\":\"shop\",\"declarations\":[{$transformer}]}]}";
+    json::Value $program = expect(json::parse($all))->ok();
+    string $response = genResult('{"kind":"named","name":"nexus::Response"}');
+    string $answers = '{"namespace":"nexus","name":"answers","value":{"kind":"record","fields":[{"key":"response","value":{"kind":"string","text":"shop::ItemTransformer"}}]}}';
+
+    json::Value $one = genDecls(genAction($answers, '{"name":"id","type":{"kind":"prim","name":"int64"},"default":false}', $response, genAct()));
+    Program $p = Program::read($one, $program);
+    expect($p->problems)->empty();
+    expect($p->actions[0]->answers)->is('shop::ItemTransformer');
+    expect($p->actions[0]->answersAs)->is('response');
+    expect(Emitter::render($p))->has('nexus::Response $res = nexus::Reply::of($payload, $result);');
+
+    string $stranger = '{"namespace":"nexus","name":"answers","value":{"kind":"record","fields":[{"key":"collection","value":{"kind":"string","text":"shop::Nothing"}}]}}';
+    Program $unknown = Program::read(genDecls(genAction($stranger, '', $response, genAct())), $program);
+    expect($unknown->problems)->size(1);
+    expect($unknown->problems[0])->has('shop::Nothing, which is not a class conforming to nexus::rest::Transformer');
+
+    string $wrong = '{"namespace":"nexus","name":"answers","value":{"kind":"record","fields":[{"key":"item","value":{"kind":"string","text":"shop::ItemTransformer"}}]}}';
+    Program $misspelled = Program::read(genDecls(genAction($wrong, '', $response, genAct())), $program);
+    expect($misspelled->problems)->size(1);
+    expect($misspelled->problems[0])->has('takes { response:');
+}
+
+test actions_name_the_middleware_they_go_through
+{
+    string $mw = '{"kind":"class","name":"RequireUser","qualified":"shop::RequireUser","tools":[],"conforms":[{"kind":"named","name":"nexus::Middleware"}],"fields":[]}';
+    string $admin = '{"kind":"class","name":"RequireAdmin","qualified":"shop::RequireAdmin","tools":[],"conforms":[{"kind":"named","name":"nexus::Middleware"}],"fields":[]}';
+    string $plain = '{"kind":"class","name":"Plain","qualified":"shop::Plain","tools":[],"conforms":[],"fields":[]}';
+    string $tool = '{"kind":"interface","name":"Tool","qualified":"nexus::mcp::Tool","generics":[],"conforms":[]}';
+    string $all = "\{\"modules\":[\{\"name\":\"nexus-mcp\",\"declarations\":[{$tool}]},\{\"name\":\"shop\",\"declarations\":[{$mw},{$admin},{$plain}]}]}";
+    json::Value $program = expect(json::parse($all))->ok();
+    string $id = '{"name":"id","type":{"kind":"prim","name":"int64"},"default":false}';
+    string $returns = genResult('{"kind":"named","name":"json::Value"}');
+
+    string $list = '{"namespace":"nexus","name":"through","value":{"kind":"list","items":[{"kind":"string","text":"shop::RequireUser"},{"kind":"string","text":"shop::RequireAdmin"}]}}';
+    Program $p = Program::read(genDecls(genAction($list, $id, $returns, genAct())), $program);
+    expect($p->problems)->empty();
+    expect($p->actions[0]->through)->size(2);
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has("array<nexus::MiddlewareRef> $through0 = [nexus::MiddlewareRef::of<shop::RequireUser>('shop::RequireUser'), nexus::MiddlewareRef::of<shop::RequireAdmin>('shop::RequireAdmin')];")
+        ->has('$g->through<shop::ShowItem>($through0);');
+    // the tool call goes through them too
+    expect($code)
+        ->has('nexus::mcp::Offer $offer = nexus::mcp::Offer($owner, $schema, $about, $call);')
+        ->has('$offer->through = $through;');
+
+    string $one = '{"namespace":"nexus","name":"through","value":{"kind":"string","text":"shop::RequireUser"}}';
+    Program $single = Program::read(genDecls(genAction($one, $id, $returns, genAct())), $program);
+    expect($single->problems)->empty();
+    expect($single->actions[0]->through[0])->is('shop::RequireUser');
+
+    string $stranger = '{"namespace":"nexus","name":"through","value":{"kind":"list","items":[{"kind":"string","text":"shop::Plain"}]}}';
+    Program $notOne = Program::read(genDecls(genAction($stranger, $id, $returns, genAct())), $program);
+    expect($notOne->problems)->size(1);
+    expect($notOne->problems[0])
+        ->has('src/ShowItem.eco:3: #[nexus::through] names shop::Plain, which is not a class conforming to nexus::Middleware');
+
+    string $twice = '{"namespace":"nexus","name":"through","value":{"kind":"list","items":[{"kind":"string","text":"shop::RequireUser"},{"kind":"string","text":"shop::RequireUser"}]}}';
+    Program $dup = Program::read(genDecls(genAction($twice, $id, $returns, genAct())), $program);
+    expect($dup->problems[0])->has('names shop::RequireUser twice');
+
+    string $empty = '{"namespace":"nexus","name":"through","value":{"kind":"list","items":[]}}';
+    Program $none = Program::read(genDecls(genAction($empty, $id, $returns, genAct())), $program);
+    expect($none->problems[0])->has('takes a middleware class');
+
+    Program $without = Program::read(genDecls(genAction('', $id, $returns, genAct())), $program);
+    expect(Emitter::render($without))->lacks('$g->through<');
+}
+
+function genPayload() : string
+{
+    return '{"name":"payload","type":{"kind":"ptr","to":{"kind":"named","name":"nexus::Payload"},"borrow":true,"const":false},"default":false}';
+}
+
+function genTask(const string& $tools, const string& $fields, const string& $handle) : string
+{
+    string $task = '{"kind":"named","name":"nexus::work::Task"}';
+    return "\{\"kind\":\"struct\",\"name\":\"SendMail\",\"qualified\":\"shop::SendMail\",\"visibility\":\"public\",\"file\":\"src/SendMail.eco\",\"line\":4,\"generics\":[],\"tools\":[{$tools}],\"conforms\":[{$task}],\"fields\":[{$fields}],\"constructors\":[],\"methods\":[{$handle}]}";
+}
+
+function genTaskHandle() : string
+{
+    string $ctx = genPayload();
+    return "\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$ctx}],\"return\":\{\"kind\":\"named\",\"name\":\"status\",\"args\":[\{\"kind\":\"named\",\"name\":\"nexus::work::Failure\"}]}}";
+}
+
+test tasks_get_a_companion_and_a_codec
+{
+    string $fields = '{"name":"user","visibility":"public","static":false,"type":{"kind":"prim","name":"int64"},"default":false,"tools":[]},{"name":"note","visibility":"public","static":false,"type":{"kind":"optional","of":{"kind":"string"}},"default":false,"tools":[]},{"name":"count","visibility":"public","static":false,"type":{"kind":"prim","name":"uint32"},"default":true,"default_value":"1","tools":[]}';
+    Program $p = Program::read(genDecls(genTask('', $fields, genTaskHandle())));
+    expect($p->problems)->empty();
+    expect($p->tasks)->size(1);
+    expect($p->tasks[0]->defaults)->no(says: 'a task with a required field has no all-default value');
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has('public struct SendMailTask')
+        ->has('public static function push(nexus::Payload& $payload, const shop::SendMail& $task) : status<nexus::Problem>')
+        ->has('return nexus::work::Tasks::push<shop::SendMail>($payload, shop::SendMailTask::encode($task), after: $delay);')
+        ->lacks('function kind()')
+        ->has("$p->put('user', $task->user);")
+        ->has("$p->nil('note');")
+        ->has("$p->put('count', $task->count as int64);")
+        ->has("int64? $vUser = $p->int64('user', required: true);")
+        ->has("string? $okNote = $p->string('note', required: false);")
+        ->has('return .ok(shop::SendMail($user: $okUser, $note: $okNote, $count: $okCount));')
+        ->has('return .error(.giveUp("the task data does not decode: {$e}"));')
+        ->has('#[nexus::tasks: "shop"]')
+        ->has('public function tasks(nexus::work::Codecs $k) : void')
+        ->has("string $data0 = '';")
+        ->has("nexus::work::Codec $codec0 = nexus::work::Codec('shop::SendMail', $run0, $data0);")
+        ->has('$k->add<shop::SendMail>($codec0);')
+        ->has("$g->name<shop::SendMail>('shop::SendMail');");
+}
+
+test tasks_with_every_default_carry_data_to_schedule
+{
+    string $fields = '{"name":"days","visibility":"public","static":false,"type":{"kind":"prim","name":"int64"},"default":true,"default_value":"30","tools":[]}';
+    Program $p = Program::read(genDecls(genTask('', $fields, genTaskHandle())));
+    expect($p->problems)->empty();
+    expect($p->tasks[0]->defaults)->yes(says: 'every task field has a default');
+    string $code = Emitter::render($p);
+    expect($code)->has('string $data0 = shop::SendMailTask::encode(shop::SendMail());');
+}
+
+test tasks_are_checked
+{
+    string $map = '{"name":"seen","visibility":"public","static":false,"type":{"kind":"map","key":{"kind":"string"},"value":{"kind":"string"}},"default":false,"tools":[]}';
+    Program $badField = Program::read(genDecls(genTask('', $map, genTaskHandle())));
+    expect($badField->problems[0])->has('task field $seen has type map<string, string>');
+
+    Program $noHandle = Program::read(genDecls(genTask('', '', '')));
+    expect($noHandle->problems[0])->has('is a task but has no handle()');
+}
+
+function genListener(const string& $tools, const string& $conforms) : string
+{
+    string $ctx = genPayload();
+    string $ev = '{"name":"e","type":{"kind":"ptr","to":{"kind":"named","name":"shop::Signed","const":true},"borrow":true,"const":false},"default":false}';
+    return "\{\"kind\":\"struct\",\"name\":\"Welcome\",\"qualified\":\"shop::Welcome\",\"visibility\":\"public\",\"file\":\"src/Welcome.eco\",\"line\":2,\"generics\":[],\"tools\":[{$tools}],\"conforms\":[{$conforms}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"static\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$ctx},{$ev}],\"return\":\{\"kind\":\"named\",\"name\":\"status\",\"args\":[\{\"kind\":\"named\",\"name\":\"nexus::Problem\"}]}}]}";
+}
+
+test listeners_are_named
+{
+    string $listener = '{"kind":"named","name":"nexus::Listener","args":[{"kind":"named","name":"shop::Signed"}]}';
+    Program $p = Program::read(genDecls(genListener('', $listener)));
+    expect($p->problems)->empty();
+    string $code = Emitter::render($p);
+    expect($code)->has("$g->name<shop::Welcome>('shop::Welcome');")->lacks('listeners(');
+}
+
+function genInput(const string& $fields) : string
+{
+    return "\{\"kind\":\"struct\",\"name\":\"ItemRef\",\"qualified\":\"shop::ItemRef\",\"visibility\":\"public\",\"file\":\"src/ItemRef.eco\",\"line\":1,\"tools\":[\{\"namespace\":\"nexus\",\"name\":\"input\",\"value\":null}],\"conforms\":[],\"fields\":[{$fields}],\"constructors\":[],\"methods\":[]}";
+}
+
+function genInputFields() : string
+{
+    string $id = '{"name":"id","visibility":"public","static":false,"type":{"kind":"prim","name":"int64"},"default":false,"doc":"/**\\n     * The item.\\n     */","tools":[{"namespace":"nexus","name":"positional","value":null}]}';
+    string $note = '{"name":"fullNote","visibility":"public","static":false,"type":{"kind":"string"},"default":true,"default_value":"\'\'","tools":[{"namespace":"nexus","name":"rule","value":{"kind":"record","fields":[{"key":"max","value":{"kind":"int","integer":40}}]}}]}';
+    string $loud = '{"name":"loud","visibility":"public","static":false,"type":{"kind":"prim","name":"bool"},"default":true,"default_value":"false","tools":[]}';
+    string $tags = '{"name":"tags","visibility":"public","static":false,"type":{"kind":"array","of":{"kind":"string"}},"default":true,"default_value":"[]","tools":[]}';
+    return "{$id},{$note},{$loud},{$tags}";
+}
+
+function genCommand(const string& $tool, const string& $params, const string& $conforms) : string
+{
+    return "\{\"kind\":\"class\",\"name\":\"ShowItemCommand\",\"qualified\":\"shop::ShowItemCommand\",\"visibility\":\"public\",\"file\":\"src/ShowItemCommand.eco\",\"line\":5,\"doc\":\"/**\\n * Prints one item.\\n *\\n * With its note.\\n */\",\"tools\":[{$tool}],\"conforms\":[{$conforms}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$params}],\"return\":\{\"kind\":\"named\",\"name\":\"status\",\"args\":[\{\"kind\":\"named\",\"name\":\"nexus::Problem\"}]}}]}";
+}
+
+function genOut() : string
+{
+    return '{"name":"out","type":{"kind":"ptr","to":{"kind":"named","name":"command::CLIContext"},"borrow":true,"const":false},"default":false}';
+}
+
+test commands_get_options_from_their_input
+{
+    string $ctx = genPayload();
+    string $out = genOut();
+    string $in = '{"name":"in","type":{"kind":"named","name":"shop::ItemRef"},"default":false}';
+    string $cli = '{"kind":"named","name":"nexus::Cli"}';
+    string $input = genInput(genInputFields());
+    string $command = genCommand('', "{$ctx},{$out},{$in}", $cli);
+    Program $p = Program::read(genDecls("{$input},{$command}"));
+    expect($p->problems)->empty();
+    expect($p->commands)->size(1);
+    expect($p->commands[0]->summary)->is('Prints one item.');
+    expect($p->commands[0]->help)->is("Prints one item.\n\nWith its note.");
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has('public class ShowItemCommandCli : nexus::Command')
+        ->has('public constructor(const string& $name)')
+        ->has('return $this->named;')
+        ->has('nexus::Payload $payload = $k->background($this->named, nexus::Kernel::id());')
+        ->has("return str::join(['Prints one item.', '', 'With its note.'], \"\\n\");")
+        ->has("$out[] = nexus::CommandOption(positional: 'id', '<id>', 'The item.', true);")
+        ->has("$out[] = nexus::CommandOption(value: 'full-note', '<fullNote>', '');")
+        ->has("$out[] = nexus::CommandOption(flag: 'loud', '');")
+        ->has("$out[] = nexus::CommandOption(list: 'tags', '<tags>', '');")
+        ->has("$pairs->add('fullNote', $in->value('full-note'));")
+        ->has("shop::ItemRef $input = guard shop::ItemRefDecoder::decode($payload, $fields) else ($p) \{")
+        ->has('$payload->door = nexus::Door::cli;')
+        ->has('status<nexus::Problem> $done = $command->handle($payload, $out, $input);')
+        ->has("$g->command<shop::ShowItemCommand>('shop::ShowItemCommand', function(const string& $name) : nexus::Command \{")
+        ->has('return shop::ShowItemCommandCli($name);')
+        ->lacks('#[nexus::commands');
+}
+
+test commands_are_checked
+{
+    string $ctx = genPayload();
+    string $out = genOut();
+    string $cli = '{"kind":"named","name":"nexus::Cli"}';
+    Program $noOut = Program::read(genDecls(genCommand('', $ctx, $cli)));
+    expect($noOut->problems[0])->has('command::CLIContext& $out');
+    string $plain = '{"name":"in","type":{"kind":"named","name":"shop::Other"},"default":false}';
+    Program $notInput = Program::read(genDecls(genCommand('', "{$ctx},{$out},{$plain}", $cli)));
+    expect($notInput->problems[0])->has('one #[nexus::input] struct, not shop::Other');
+    string $flag = '{"name":"loud","visibility":"public","static":false,"type":{"kind":"prim","name":"bool"},"default":true,"default_value":"true","tools":[]}';
+    string $in = '{"name":"in","type":{"kind":"named","name":"shop::ItemRef"},"default":false}';
+    string $flagged = genInput($flag);
+    string $command = genCommand('', "{$ctx},{$out},{$in}", $cli);
+    Program $onFlag = Program::read(genDecls("{$flagged},{$command}"));
+    expect($onFlag->problems[0])->has('is a flag, so it defaults to false');
+}
+
+test a_tool_class_gets_an_offer_and_a_call
+{
+    string $ctx = genPayload();
+    string $in = '{"name":"in","type":{"kind":"named","name":"shop::ItemRef"},"default":false}';
+    string $marker = '{"kind":"named","name":"nexus::mcp::Tool"}';
+    string $returns = genResult('{"kind":"named","name":"json::Value"}');
+    string $cls = "\{\"kind\":\"class\",\"name\":\"ShowItemTool\",\"qualified\":\"shop::ShowItemTool\",\"visibility\":\"public\",\"file\":\"src/ShowItemTool.eco\",\"line\":5,\"doc\":\"/**\\n * Shows an item.\\n */\",\"tools\":[],\"conforms\":[{$marker}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$ctx},{$in}],\"return\":{$returns}}]}";
+    string $input = genInput(genInputFields());
+    Program $p = Program::read(genDecls("{$input},{$cls}"));
+    expect($p->problems)->empty();
+    expect($p->tools)->size(1);
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has('public struct ShowItemToolMcp')
+        ->has('public static function offer() : nexus::mcp::Offer')
+        ->has("string $text = '\{\"type\":\"object\",\"properties\":\{\"id\":\{\"type\":\"integer\",\"description\":\"The item.\"},\"fullNote\":\{\"type\":\"string\",\"maxLength\":40},\"loud\":\{\"type\":\"boolean\"},\"tags\":\{\"type\":\"array\",\"items\":\{\"type\":\"string\"}}},\"required\":[\"id\"],\"additionalProperties\":false}';")
+        ->has("string $text = 'Shows an item.';")
+        ->has('string $about = shop::ShowItemToolMcp::about();')
+        ->has('return nexus::mcp::Offer($owner, $schema, $about, $call);')
+        ->has("shop::ItemRef $valueIn = guard shop::ItemRefDecoder::decode($payload, $args) else ($p) \{")
+        ->has('result<json::Value, nexus::Problem> $result = $target->handle($payload, $valueIn);')
+        ->has('#[nexus::mcp::tools: "shop"]')
+        ->has('public function tools(nexus::mcp::Offers $o) : void')
+        ->has('$o->add<shop::ShowItemTool>(shop::ShowItemToolMcp::offer());')
+        ->has("$g->name<shop::ShowItemTool>('shop::ShowItemTool');");
+}
+
+test actions_are_offerable_when_the_program_has_mcp
+{
+    string $id = '{"name":"id","type":{"kind":"prim","name":"int64"},"default":false}';
+    json::Value $d = genDecls(genAction('', $id, genResult('{"kind":"named","name":"json::Value"}'), genAct()));
+    Program $p = Program::read($d, genMcp());
+    expect($p->problems)->empty();
+    expect($p->actions[0]->offered)->yes(says: 'the action is offered as a tool when the program has mcp');
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has('public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response')
+        ->has("\"properties\":\{\"id\":\{\"type\":\"integer\"}},\"required\":[\"id\"]")
+        ->has("int64? $vAId = $args->int64('id', required: true);")
+        ->has('return shop::ShowItemDispatch::call($payload, $args);')
+        ->has('$o->add<shop::ShowItem>(shop::ShowItemDispatch::offer());');
+
+    Program $without = Program::read($d);
+    expect($without->actions[0]->offered)->no(says: 'the action is not offered without mcp');
+    expect(Emitter::render($without))->lacks('#[nexus::mcp::tools');
+}
+
+test docblocks_read_as_prose
+{
+    expect(Names::prose("/**\n * One line\n * and more.\n *\n * ```echo\n * code();\n * ```\n *\n * After.\n */"))
+        ->is("One line and more.\n\nAfter.");
+    expect(Names::summary("/**\n * First.\n *\n * Second.\n */"))->is('First.');
+    expect(Names::kebab('withAuthor'))->is('with-author');
+    expect(Names::literal('plain'))->is("'plain'");
+}
+
+function genField(const string& $name, const string& $type, const string& $tools) : string
+{
+    return "\{\"name\":\"{$name}\",\"visibility\":\"public\",\"static\":false,\"type\":{$type},\"default\":false,\"tools\":[{$tools}]}";
+}
+
+function genRule(const string& $fields) : string
+{
+    return "\{\"namespace\":\"nexus\",\"name\":\"rule\",\"value\":\{\"kind\":\"record\",\"fields\":[{$fields}]}}";
+}
+
+function genInputNamed(const string& $name, const string& $tools, const string& $fields) : string
+{
+    return "\{\"kind\":\"struct\",\"name\":\"{$name}\",\"qualified\":\"shop::{$name}\",\"visibility\":\"public\",\"file\":\"src/{$name}.eco\",\"line\":2,\"tools\":[\{\"namespace\":\"nexus\",\"name\":\"input\",\"value\":null}{$tools}],\"conforms\":[],\"fields\":[{$fields}],\"constructors\":[]}";
+}
+
+function genProblems(const string& $declarations) : array<string>
+{
+    Program $p = Program::read(genDecls($declarations));
+    return $p->problems;
+}
+
+test enums_nested_inputs_and_lists_decode
+{
+    string $enum = '{"kind":"enum","name":"Size","qualified":"shop::Size","visibility":"public","file":"src/Size.eco","line":1,"tools":[],"conforms":[],"backing":{"kind":"string"},"cases":[{"name":"small","discriminant":0,"payload":[],"value":"s"},{"name":"large","discriminant":1,"payload":[],"value":"l"}],"fields":[],"methods":[]}';
+    string $line = genInputNamed('Line', '', genField('qty', '{"kind":"prim","name":"int32"}', genRule('{"key":"min","value":{"kind":"int","integer":1}}')));
+    string $size = genField('size', '{"kind":"named","name":"shop::Size"}', '');
+    string $lines = genField('lines', '{"kind":"array","of":{"kind":"named","name":"shop::Line"}}', genRule('{"key":"min","value":{"kind":"int","integer":1}},{"key":"max","value":{"kind":"int","integer":9}}'));
+    string $ship = genField('ship', '{"kind":"optional","of":{"kind":"named","name":"shop::Line"}}', '');
+    string $tags = genField('tags', '{"kind":"array","of":{"kind":"string"}}', genRule('{"key":"distinct","value":{"kind":"bool","boolean":true}},{"key":"each","value":{"kind":"record","fields":[{"key":"trim","value":{"kind":"bool","boolean":true}},{"key":"max","value":{"kind":"int","integer":30}}]}}'));
+    string $order = genInputNamed('Order', '', "{$size},{$lines},{$ship},{$tags}");
+    Program $p = Program::read(genDecls("{$enum},{$order},{$line}"));
+    expect($p->problems)->empty();
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has("if ($tSize == 's') \{")
+        ->has("$rSize = shop::Size::small;")
+        ->has("} else if ($tSize == 'l') \{")
+        ->has("array<string> $allowedESize = ['s', 'l'];")
+        ->has("array<nexus::Fields>? $gLines = $f->objects('lines', required: true);")
+        ->has('$v->minCount($hLines->count(), 1);')
+        ->has('shop::Line? $oLines = shop::LineDecoder::read($payload, $oneLines);')
+        ->has("nexus::Fields? $gShip = $f->object('ship', required: false);")
+        ->has("$v->item('tags', $jTags, 'string');")
+        ->has('$yTags = nexus::Check::trim($yTags);')
+        ->has('$v->maxLength($yTags, 30);')
+        ->has('$v->distinct($xTags);')
+        ->has('public struct LineDecoder');
+}
+
+test rule_classes_labels_and_messages
+{
+    string $rule = '{"kind":"class","name":"Unique","qualified":"shop::Unique","visibility":"public","file":"src/Unique.eco","line":1,"tools":[],"conforms":[{"kind":"named","name":"nexus::Rule","args":[{"kind":"string"}]}],"fields":[],"constructors":[],"methods":[]}';
+    string $whole = '{"kind":"class","name":"Fits","qualified":"shop::Fits","visibility":"public","file":"src/Fits.eco","line":1,"tools":[],"conforms":[{"kind":"named","name":"nexus::Rule","args":[{"kind":"named","name":"shop::Signup"}]}],"fields":[],"constructors":[],"methods":[]}';
+    string $label = '{"namespace":"nexus","name":"label","value":{"kind":"string","text":"e-mail address"}}';
+    string $message = '{"namespace":"nexus","name":"message","value":{"kind":"record","fields":[{"key":"unique","value":{"kind":"string","text":"Taken."}}]}}';
+    string $checks = genRule('{"key":"lower","value":{"kind":"bool","boolean":true}},{"key":"check","value":{"kind":"string","text":"shop::Unique"}}');
+    string $email = genField('email', '{"kind":"string"}', "{$checks},{$label},{$message}");
+    string $pw = genField('password', '{"kind":"string"}', genRule('{"key":"confirmed","value":{"kind":"bool","boolean":true}}'));
+    string $again = genField('passwordConfirmation', '{"kind":"string"}', '');
+    string $wholeRule = genRule('{"key":"check","value":{"kind":"string","text":"shop::Fits"}}');
+    string $signup = genInputNamed('Signup', ",{$wholeRule}", "{$email},{$pw},{$again}");
+    Program $p = Program::read(genDecls("{$rule},{$whole},{$signup}"));
+    expect($p->problems)->empty();
+    string $code = Emitter::render($p);
+    expect($code)
+        ->has("$v->at('email', 'string', 'e-mail address');")
+        ->has('$xEmail = nexus::Check::lower($xEmail);')
+        ->has('if ($v->count() == $bEmail) {')
+        ->has('shop::Unique $ruleEmail0 = $payload->get<shop::Unique>();')
+        ->has('$v->confirmed($cmpPasswordA == $cmpPasswordB);')
+        ->has('shop::Fits $rule0 = $payload->get<shop::Fits>();')
+        ->has('$rule0->check($out, $v);')
+        ->has('#[nexus::inputs: "shop"]')
+        ->has("$in->message('shop::Signup', 'email', 'unique', 'Taken.');")
+        ->has("$in->rule('shop::Unique', function(container::Container $services) : bool {")
+        ->has("$in->rule('shop::Fits', function(container::Container $services) : bool {");
+}
+
+test rules_are_checked_when_generating
+{
+    string $text = '{"kind":"string"}';
+    string $int = '{"kind":"prim","name":"int32"}';
+    array<string> $p1 = genProblems(genInputNamed('A', '', genField('n', $int, genRule('{"key":"email","value":{"kind":"bool","boolean":true}}'))));
+    expect($p1[0])->has("rule on $n: 'email' does not apply to an integer field, which takes min, max");
+    array<string> $p2 = genProblems(genInputNamed('A', '', genField('s', $text, genRule('{"key":"emial","value":{"kind":"bool","boolean":true}}'))));
+    expect($p2[0])->has("'emial' is not a rule; a string field takes trim, lower");
+    array<string> $p3 = genProblems(genInputNamed('A', '', genField('s', $text, genRule('{"key":"between","value":{"kind":"list","items":[{"kind":"int","integer":3}]}}'))));
+    expect($p3[0])->has("'between' takes the two ends");
+    array<string> $p4 = genProblems(genInputNamed('A', '', genField('password', $text, genRule('{"key":"confirmed","value":{"kind":"bool","boolean":true}}'))));
+    expect($p4[0])->has("names $passwordConfirmation, which is not a field of shop::A");
+    array<string> $p5 = genProblems(genInputNamed('A', '', genField('s', $text, genRule('{"key":"check","value":{"kind":"string","text":"shop::Nope"}}'))));
+    expect($p5[0])->has('names shop::Nope, which is not a class conforming to nexus::Rule<string>');
+    string $intRule = '{"kind":"class","name":"Even","qualified":"shop::Even","visibility":"public","file":"src/Even.eco","line":1,"tools":[],"conforms":[{"kind":"named","name":"nexus::Rule","args":[{"kind":"prim","name":"int64"}]}],"fields":[],"constructors":[],"methods":[]}';
+    string $evenInput = genInputNamed('A', '', genField('s', $text, genRule('{"key":"check","value":{"kind":"string","text":"shop::Even"}}')));
+    array<string> $p6 = genProblems("{$intRule},{$evenInput}");
+    expect($p6[0])->has('names shop::Even, a nexus::Rule<int64>, but the value is a string');
+    array<string> $p7 = genProblems(genInputNamed('A', '', genField('s', $text, genRule('{"key":"requiredWith","value":{"kind":"string","text":"t"}}'))));
+    expect($p7[0])->has('needs a field that may be null');
+    array<string> $p8 = genProblems(genInputNamed('A', '', genField('d', '{"kind":"named","name":"calendar::Date"}', genRule('{"key":"after","value":{"kind":"string","text":"now"}}'))));
+    expect($p8[0])->has("'now' is for a timestamp field");
+    string $minRule = genRule('{"key":"min","value":{"kind":"int","integer":1}}');
+    array<string> $p9 = genProblems(genInputNamed('A', ",{$minRule}", genField('s', $text, '')));
+    expect($p9[0])->has("takes only 'check'");
+}
+
+test nested_inputs_cannot_be_command_options
+{
+    string $line = genInputNamed('Line', '', genField('qty', '{"kind":"prim","name":"int32"}', ''));
+    string $order = genInputNamed('Order', '', genField('line', '{"kind":"named","name":"shop::Line"}', ''));
+    string $ctx = genPayload();
+    string $out = '{"name":"out","type":{"kind":"ptr","to":{"kind":"named","name":"command::CLIContext"},"borrow":true,"const":false},"default":false}';
+    string $in = '{"name":"in","type":{"kind":"named","name":"shop::Order"},"default":false}';
+    string $returns = '{"kind":"named","name":"status","args":[{"kind":"named","name":"nexus::Problem"}]}';
+    string $cmd = "\{\"kind\":\"class\",\"name\":\"Place\",\"qualified\":\"shop::Place\",\"visibility\":\"public\",\"file\":\"src/Place.eco\",\"line\":3,\"tools\":[],\"conforms\":[\{\"kind\":\"named\",\"name\":\"nexus::Cli\"}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$ctx},{$out},{$in}],\"return\":{$returns}}]}";
+    array<string> $p = genProblems("{$line},{$order},{$cmd}");
+    expect($p)->size(1);
+    expect($p[0])->has('option $line of shop::Order is a nested input, which a command line cannot give');
+}

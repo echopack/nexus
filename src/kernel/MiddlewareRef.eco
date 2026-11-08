@@ -1,0 +1,47 @@
+namespace nexus;
+
+/**
+ * A middleware resolved from the request's container each time, so it may
+ * depend on request-scoped services: the ones an action names in
+ * `#[nexus::through]`, the ones a route adds with
+ * `$s->bindAction<Export>(...)->middleware<Audit>()`, and the app's own
+ * with `$s->middleware<Timing>()`.
+ */
+public struct MiddlewareRef
+{
+    public string $name;
+    public function<Middleware(container::Container)> $make;
+
+    /**
+     * Whether the container can give it, checked at boot.
+     */
+    public function<bool(container::Container)> $bound;
+
+    /**
+     * Middleware `M`, under its qualified name.
+     */
+    public static function of<M>(const string& $name) : MiddlewareRef
+    {
+        function<Middleware(container::Container)> $make = function(container::Container $services) : Middleware {
+            M $m = $services->get<M>();
+            return $m;
+        };
+        function<bool(container::Container)> $bound = function(container::Container $services) : bool {
+            return $services->has<M>();
+        };
+        return MiddlewareRef($name, $make, $bound);
+    }
+
+    /**
+     * Each of `$refs` built from `$services`, in order.
+     */
+    public static function make(const array<MiddlewareRef>& $refs, container::Container $services) : array<Middleware>
+    {
+        array<Middleware> $links = [];
+        foreach ($refs as const &$ref) {
+            function<Middleware(container::Container)> $build = $ref->make;
+            $links[] = $build($services);
+        }
+        return $links;
+    }
+}

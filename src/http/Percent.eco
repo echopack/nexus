@@ -1,0 +1,103 @@
+namespace nexus;
+
+/**
+ * Percent-encoding (RFC 3986) for paths, queries and forms.
+ */
+public struct Percent
+{
+    /**
+     * Decodes `%XX` escapes. With `plus: true` (queries and forms) a `+` is
+     * a space. Null on a broken escape.
+     */
+    public static function decode(const string& $text, plus: bool $plus) : string?
+    {
+        string $out = '';
+        $out->reserve($text->size());
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c == 37) {
+                if ($i + 2 >= $text->size()) {
+                    return null;
+                }
+                int32 $hi = Percent::nibble($text->byte($i + 1));
+                int32 $lo = Percent::nibble($text->byte($i + 2));
+                if ($hi < 0 || $lo < 0) {
+                    return null;
+                }
+                $out->push((($hi << 4) | $lo) as uint8);
+                $i = $i + 3;
+                continue;
+            }
+            if ($plus && $c == 43) {
+                $out->push(32);
+            } else {
+                $out->push($c);
+            }
+            $i = $i + 1;
+        }
+        string? $done = $out;
+        return $done;
+    }
+
+    /**
+     * Decodes a path segment, where `+` stays a plus.
+     */
+    public static function decode(const string& $text) : string?
+    {
+        return Percent::decode($text, plus: false);
+    }
+
+    /**
+     * Escapes everything but the unreserved characters `A-Z a-z 0-9 - . _ ~`.
+     */
+    public static function encode(const string& $text) : string
+    {
+        string $digits = '0123456789ABCDEF';
+        string $out = '';
+        $out->reserve($text->size());
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if (Percent::unreserved($c)) {
+                $out->push($c);
+            } else {
+                $out->push(37);
+                $out->push($digits->byte(($c >> 4) as usize));
+                $out->push($digits->byte(($c & 15) as usize));
+            }
+            $i = $i + 1;
+        }
+        return $out;
+    }
+
+    /**
+     * Escapes each segment of a path but keeps the `/` between them, for a
+     * catch-all `{rest*}` value.
+     */
+    public static function path(const string& $text) : string
+    {
+        array<string> $parts = str::split($text, '/')->owned();
+        array<string> $out = [];
+        foreach ($parts as const &$p) {
+            $out[] = Percent::encode($p);
+        }
+        return str::join($out, '/');
+    }
+
+    internal static function unreserved(uint8 $c) : bool
+    {
+        if ($c >= 65 && $c <= 90) { return true; }
+        if ($c >= 97 && $c <= 122) { return true; }
+        if ($c >= 48 && $c <= 57) { return true; }
+        return $c == 45 || $c == 46 || $c == 95 || $c == 126;
+    }
+
+    internal static function nibble(uint8 $c) : int32
+    {
+        if ($c >= 48 && $c <= 57) { return ($c as int32) - 48; }
+        if ($c >= 65 && $c <= 70) { return ($c as int32) - 55; }
+        if ($c >= 97 && $c <= 102) { return ($c as int32) - 87; }
+        return -1;
+    }
+}

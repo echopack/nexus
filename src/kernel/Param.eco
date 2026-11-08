@@ -1,0 +1,61 @@
+namespace nexus;
+
+/**
+ * Typed path parameters for the generated dispatchers. The route pattern
+ * already checked the shape; a value that still does not fit (an integer
+ * too large) means the resource does not exist, so the answer is 404.
+ */
+public struct Param
+{
+    public static function string(Payload& $payload, const string& $name) : result<string, Problem>
+    {
+        string $v = guard $payload->param($name) else {
+            return .error(.notFound($payload->request->path));
+        };
+        return .ok($v);
+    }
+
+    public static function int64(Payload& $payload, const string& $name) : result<int64, Problem>
+    {
+        string $raw = guard $payload->param($name) else {
+            return .error(.notFound($payload->request->path));
+        };
+        int64 $n = guard str::int($raw) else {
+            return .error(.notFound($payload->request->path));
+        };
+        return .ok($n);
+    }
+
+    public static function int32(Payload& $payload, const string& $name) : result<int32, Problem>
+    {
+        int64 $n = guard Param::int64($payload, $name) else ($p) {
+            return .error($p);
+        };
+        if ($n < (int32::min() as int64) || $n > (int32::max() as int64)) {
+            return .error(.notFound($payload->request->path));
+        }
+        return .ok($n as int32);
+    }
+
+    public static function uint64(Payload& $payload, const string& $name) : result<uint64, Problem>
+    {
+        string $raw = guard $payload->param($name) else {
+            return .error(.notFound($payload->request->path));
+        };
+        uint64 $n = guard str::uint($raw) else {
+            return .error(.notFound($payload->request->path));
+        };
+        return .ok($n);
+    }
+
+    public static function uint32(Payload& $payload, const string& $name) : result<uint32, Problem>
+    {
+        uint64 $n = guard Param::uint64($payload, $name) else ($p) {
+            return .error($p);
+        };
+        if ($n > (uint32::max() as uint64)) {
+            return .error(.notFound($payload->request->path));
+        }
+        return .ok($n as uint32);
+    }
+}

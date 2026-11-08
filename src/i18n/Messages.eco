@@ -1,0 +1,266 @@
+namespace nexus;
+
+/**
+ * Input messages in more than one language. Every refusal starts in
+ * English; a catalog per locale says it in another language, and the
+ * request picks the locale (`Accept-Language`; `LANG` on the command
+ * line). The kernel binds one, filled with the English overrides that
+ * `#[nexus::message]` and `#[nexus::label]` declare; an app adds its
+ * catalogs in `boot()`:
+ *
+ * ```echo
+ * nexus::Messages $m = $kernel->services->get<nexus::Messages>();
+ * $m->add('de', guard json::parse(std::embed::text('../lang/de.json')));
+ * ```
+ *
+ * A catalog is a JSON object of keys to messages, nested objects joined
+ * with dots. A refusal of field `email` of `blog::Registration` with code
+ * `min` on a `string` looks for, in each locale of the chain (`de-CH`,
+ * `de`, then `en`):
+ *
+ * - `blog::Registration.email.min`, a message for this one field;
+ * - `rule.min.string`, then `rule.min`.
+ *
+ * Its `{label}` is `label.blog::Registration.email`, then `label.email`,
+ * then the English label. The holes are `{label}` and the rule's params
+ * (`{min}`, `{max}`, `{values}`, `{other}`, `{date}`, `{value}`, `{size}`).
+ * Nothing found leaves the English message.
+ */
+#[atomic]
+public class Messages
+{
+    /**
+     * `locale\nkey` to message, every locale lower case.
+     */
+    private map<string, string> $texts = [];
+
+    /**
+     * Every locale with a catalog, lower case, to how it was written.
+     */
+    private map<string, string> $known = [];
+
+    public constructor()
+    {
+        $this->known['en'] = 'en';
+    }
+
+    /**
+     * Adds the messages of `$catalog` to `$locale` (`de`, `de-CH`); a key
+     * given twice keeps the last.
+     */
+    public function add(const string& $locale, const json::Value& $catalog) : void
+    {
+        string $lower = string::from(str::lower($locale));
+        $this->known[$lower] = $locale;
+        $this->walk($lower, '', $catalog);
+    }
+
+    /**
+     * One message.
+     */
+    public function put(const string& $locale, const string& $key, const string& $text) : void
+    {
+        string $lower = string::from(str::lower($locale));
+        $this->known[$lower] = $locale;
+        $this->texts["{$lower}\n{$key}"] = $text;
+    }
+
+    /**
+     * The message under `$key` in `$locale` alone, or null.
+     */
+    public const function get(const string& $locale, const string& $key) : string?
+    {
+        string $lower = string::from(str::lower($locale));
+        string $at = "{$lower}\n{$key}";
+        if (!$this->texts->has($at)) {
+            return null;
+        }
+        return $this->texts->get($at);
+    }
+
+    /**
+     * The best locale with a catalog for an `Accept-Language` value,
+     * highest quality first: `de-CH` is taken as is, else as `de`. `en`
+     * when nothing fits.
+     */
+    public const function pick(const string& $accept) : string
+    {
+        array<string> $given = [];
+        array<float64> $weights = [];
+        foreach (str::split($accept, ',') as const &$raw) {
+            string $part = string::from(str::trim($raw));
+            float64 $q = 1.0;
+            usize $semi = $part->find(';');
+            if ($semi < $part->size()) {
+                string $param = string::from(str::trim($part->sub($semi + 1, $part->size() - $semi - 1)));
+                $part = string::from(str::trim($part->sub(0, $semi)));
+                if ($param->starts('q=')) {
+                    $q = str::float($param->sub(2, $param->size() - 2)) ?? 0.0;
+                }
+            }
+            if ($part->empty() || $part == '*' || $q <= 0.0) {
+                continue;
+            }
+            $given[] = string::from(str::lower($part));
+            $weights[] = $q;
+        }
+        // highest quality first, the first listed winning ties
+        array<string> $tags = [];
+        array<bool> $taken = [];
+        foreach ($given as const &$_) {
+            $taken[] = false;
+        }
+        foreach ($given as const &$_) {
+            usize $best = $given->count();
+            foreach (0 .. $given->count() as $i) {
+                if (!$taken[$i] && ($best == $given->count() || $weights[$i] > $weights[$best])) {
+                    $best = $i;
+                }
+            }
+            $taken[$best] = true;
+            $tags[] = $given[$best];
+        }
+        foreach ($tags as const &$tag) {
+            if ($this->known->has($tag)) {
+                return $this->known->get($tag);
+            }
+            string $primary = Messages::primary($tag);
+            if ($this->known->has($primary)) {
+                return $this->known->get($primary);
+            }
+        }
+        return 'en';
+    }
+
+    /**
+     * The locale `$payload` speaks: its `Accept-Language`, or `LANG` (`de_CH.UTF-8`)
+     * for a command or a task.
+     */
+    public const function locale(const Payload& $payload) : string
+    {
+        if ($payload->door == Door::cli || $payload->door == Door::work) {
+            string $lang = string::from(std::env::var('LANG', 'en'));
+            usize $dot = $lang->find('.');
+            if ($dot < $lang->size()) {
+                $lang = $lang->sub(0, $dot);
+            }
+            string $tag = '';
+            foreach (0 .. $lang->size() as $i) {
+                uint8 $b = $lang->byte($i);
+                if ($b == 95) {
+                    $tag->push(45);
+                } else {
+                    $tag->push($b);
+                }
+            }
+            return $this->pick($tag);
+        }
+        return $this->pick($payload->request->header('Accept-Language') ?? '');
+    }
+
+    /**
+     * `$p` with every field message in `$locale`; other problems as they
+     * are.
+     */
+    public const function translate(const Problem& $p, const string& $locale) : Problem
+    {
+        array<FieldError> $fields = $p->fields();
+        if ($fields->empty()) {
+            return $p;
+        }
+        array<FieldError> $out = [];
+        foreach ($fields as const &$f) {
+            $out[] = $this->translate($f, $locale);
+        }
+        return Problem::invalid($out);
+    }
+
+    /**
+     * `$e` with its message in `$locale`.
+     */
+    public const function translate(const FieldError& $e, const string& $locale) : FieldError
+    {
+        FieldError $out = $e;
+        array<string> $chain = $this->chain($locale);
+        string? $found = null;
+        foreach ($chain as const &$l) {
+            if ($found != null) {
+                break;
+            }
+            if (!$e->input->empty()) {
+                $found = $this->get($l, "{$e->input}.{$e->name}.{$e->code}");
+            }
+            if ($found == null && !$e->kind->empty()) {
+                $found = $this->get($l, "rule.{$e->code}.{$e->kind}");
+            }
+            if ($found == null) {
+                $found = $this->get($l, "rule.{$e->code}");
+            }
+        }
+        string $template = guard $found else {
+            return $out;
+        };
+        string? $label = null;
+        foreach ($chain as const &$l) {
+            if ($label != null) {
+                break;
+            }
+            if (!$e->input->empty()) {
+                $label = $this->get($l, "label.{$e->input}.{$e->name}");
+            }
+            if ($label == null) {
+                $label = $this->get($l, "label.{$e->name}");
+            }
+        }
+        string $shown = $label ?? $e->label;
+        $out->message = FieldError::fill($template, $shown, $e->params);
+        return $out;
+    }
+
+    /**
+     * Where to look for `$locale`: itself, its primary language, then
+     * English.
+     */
+    public const function chain(const string& $locale) : array<string>
+    {
+        string $lower = string::from(str::lower($locale));
+        array<string> $out = [$lower];
+        string $primary = Messages::primary($lower);
+        if ($primary != $lower) {
+            $out[] = $primary;
+        }
+        if ($primary != 'en') {
+            $out[] = 'en';
+        }
+        return $out;
+    }
+
+    internal static function primary(const string& $tag) : string
+    {
+        usize $dash = $tag->find('-');
+        if ($dash < $tag->size()) {
+            return $tag->sub(0, $dash);
+        }
+        return $tag;
+    }
+
+    internal function walk(const string& $locale, const string& $prefix, const json::Value& $node) : void
+    {
+        ordered_map<string, json::Value> $members = guard $node->asObject() else {
+            return;
+        };
+        foreach ($members as $k => const &$v) {
+            string $key = $k;
+            if (!$prefix->empty()) {
+                $key = "{$prefix}.{$k}";
+            }
+            string? $text = $v->asStr();
+            if ($text != null) {
+                string $t = guard $text;
+                $this->texts["{$locale}\n{$key}"] = $t;
+            } else {
+                $this->walk($locale, $key, $v);
+            }
+        }
+    }
+}

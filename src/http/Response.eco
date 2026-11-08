@@ -1,0 +1,103 @@
+namespace nexus;
+
+/**
+ * One response, transport independent. What an action answers with in
+ * most cases, usually built by a nexus-rest transformer
+ * (`$this->transformer->createResponse($payload, $post)`); build it directly for
+ * anything else.
+ */
+public struct Response
+{
+    public int32 $status = 200;
+    public Headers $headers = Headers();
+    public string $body = '';
+
+    /**
+     * A body of any content type.
+     */
+    public constructor(int32 $status, const string& $body, type: const string& $type)
+    {
+        $this->status = $status;
+        $this->headers = Headers();
+        $this->body = $body;
+        $this->headers->set('Content-Type', $type);
+    }
+
+    /**
+     * A status with no body.
+     */
+    public constructor(int32 $status)
+    {
+        $this->status = $status;
+        $this->headers = Headers();
+        $this->body = '';
+    }
+
+    /**
+     * A JSON document, compact.
+     */
+    public constructor(json: json::Value $doc, status: int32 $status = 200)
+    {
+        $this = Response($status, json::dump($doc), type: 'application/json');
+    }
+
+    /**
+     * Plain text, UTF-8.
+     */
+    public constructor(text: const string& $body, status: int32 $status = 200)
+    {
+        $this = Response($status, $body, type: 'text/plain; charset=utf-8');
+    }
+
+    /**
+     * An HTML document, UTF-8.
+     */
+    public constructor(html: const string& $body, status: int32 $status = 200)
+    {
+        $this = Response($status, $body, type: 'text/html; charset=utf-8');
+    }
+
+    /**
+     * A redirect to `$location`, 302 unless told otherwise.
+     */
+    public constructor(redirect: const string& $location, status: int32 $status = 302)
+    {
+        $this = Response($status);
+        $this->headers->set('Location', $location);
+    }
+
+    /**
+     * A redirect to `$to`, 302 unless told otherwise:
+     * `Response(redirect: $router->url<ShowPost>(['id' => '5']))`.
+     */
+    public constructor(redirect: const Url& $to, status: int32 $status = 302)
+    {
+        $this = Response(redirect: $to->text(), status: $status);
+    }
+
+    /**
+     * 204, nothing to say.
+     */
+    public static function noContent() : Response
+    {
+        return Response(204);
+    }
+
+    /**
+     * Sets a header, replacing earlier ones of the name.
+     */
+    public function header(const string& $name, const string& $value) : void
+    {
+        $this->headers->set($name, $value);
+    }
+
+    public const function header(const string& $name) : string?
+    {
+        return $this->headers->get($name);
+    }
+
+    public const function success() : bool
+    {
+        return $this->status >= 200 && $this->status < 300;
+    }
+}

@@ -1,0 +1,38 @@
+namespace nexus::auth;
+
+use std::time;
+
+/**
+ * A bearer token as its store keeps it: the hash of its secret, never the
+ * secret.
+ */
+public struct StoredToken
+{
+    public string $id;
+    public string $hash;
+    public string $subject;
+
+    /**
+     * What the holder called it ("laptop", "deploy"), for a list of tokens.
+     */
+    public string $name = '';
+    public array<string> $scopes = array<string>();
+    public time::timestamp $createdAt;
+
+    /**
+     * Null for a token that never expires.
+     */
+    public time::timestamp? $expiresAt = null;
+
+    /**
+     * Whether the token has expired at `$now`.
+     */
+    public const function expired(time::timestamp $now) : bool
+    {
+        if ($this->expiresAt == null) {
+            return false;
+        }
+        time::timestamp $until = guard $this->expiresAt;
+        return $now >= $until;
+    }
+}

@@ -1,0 +1,11 @@
+namespace nexus;
+
+/**
+ * One segment of a path pattern: literal text or a named parameter.
+ */
+public struct Segment
+{
+    public SegmentKind $kind;
+    public string $text;
+    public Constraint $constraint = .any;
+}

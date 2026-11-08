@@ -1,0 +1,46 @@
+namespace nexus::auth;
+
+/**
+ * Lets only signed in callers through: a 401 for anybody else, and for a
+ * credential that does not hold. It leaves the caller's `Identity` for the
+ * action, which names it in `#[nexus::through]` and reads it as state:
+ *
+ * ```echo
+ * #[nexus::through: ["nexus::auth::Authenticate"]]
+ * public class Logout : nexus::Action
+ * {
+ *     public function handle(nexus::Payload& $payload) : status<nexus::Problem>
+ *     {
+ *         nexus::auth::Identity $me = guard $payload->state<nexus::auth::Identity>() else ($p) {
+ *             return .error($p);
+ *         };
+ *         ...
+ *     }
+ * }
+ * ```
+ *
+ * An app with users of its own writes a middleware like this one that
+ * loads its user too, with the repository in its constructor.
+ */
+#[atomic]
+public class Authenticate : nexus::Middleware
+{
+    private Guards $guards;
+
+    public constructor(Guards $guards)
+    {
+        $this->guards = $guards;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        Identity? $found = guard $this->guards->identify($payload) else ($p) {
+            return $payload->fail($p);
+        };
+        Identity $id = guard $found else {
+            return $payload->fail(nexus::Problem::unauthorized('this needs a signed in caller'));
+        };
+        $payload->put<Identity>($id);
+        return $next->run($payload);
+    }
+}

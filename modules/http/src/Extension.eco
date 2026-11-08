@@ -1,0 +1,25 @@
+namespace nexus::http;
+
+/**
+ * Brings the HTTP transport. Add it to `main.eco` to make `serve` work.
+ */
+public class Extension : nexus::Extension
+{
+    private HttpTransport $transport;
+
+    public constructor()
+    {
+        $this->transport = HttpTransport();
+    }
+
+    public function name() : string
+    {
+        return 'nexus-http';
+    }
+
+    public function transport() : nexus::Transport?
+    {
+        nexus::Transport $t = $this->transport;
+        return $t;
+    }
+}

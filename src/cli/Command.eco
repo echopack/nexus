@@ -1,0 +1,60 @@
+namespace nexus;
+
+/**
+ * A command an extension adds to the app binary, next to `serve`,
+ * `routes` and `doctor`: `migrate`, `migrate:status`. It runs on a booted
+ * kernel, so everything in the container is there.
+ *
+ * ```echo
+ * public class Prune : nexus::Command
+ * {
+ *     public function name() : string { return 'sessions:prune'; }
+ *     public function summary() : string { return 'drop expired sessions'; }
+ *     public function run(nexus::Kernel $k, const nexus::Invocation& $in) : int32 { ... }
+ * }
+ * ```
+ */
+public interface Command
+{
+    /**
+     * The word that runs it. A colon groups related commands:
+     * `migrate:status`.
+     */
+    function name() : string;
+
+    /**
+     * One line for the help.
+     */
+    function summary() : string;
+
+    /**
+     * The longer text `--help` shows; the summary unless a command says
+     * more.
+     */
+    function help() : string
+    {
+        return $this->summary();
+    }
+
+    /**
+     * What it takes besides `--mode` and `--env-file`.
+     */
+    function options() : array<CommandOption>
+    {
+        return array<CommandOption>();
+    }
+
+    /**
+     * Whether the container holds what the command runs on; `doctor` and
+     * the command line refuse a command that answers false.
+     */
+    function bound(container::Container $services) : bool
+    {
+        return true;
+    }
+
+    /**
+     * Runs it; answers the exit code. Prints what it has to say itself.
+     */
+    function run(Kernel $kernel, const Invocation& $in) : int32;
+}

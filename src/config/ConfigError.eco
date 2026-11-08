@@ -1,0 +1,22 @@
+namespace nexus;
+
+/**
+ * Why configuration could not be read.
+ */
+public enum ConfigError
+{
+    case unreadable(string $path);
+    case syntax(string $path, int64 $line, string $why);
+    case missing(string $variable);
+    case invalid(string $variable, string $why);
+
+    public const function message() : string
+    {
+        return match ($this) {
+            ConfigError::unreadable($path) => "cannot read {$path}",
+            ConfigError::syntax($path, $line, $why) => "{$path}:{$line}: {$why}",
+            ConfigError::missing($variable) => "{$variable} is required but not set",
+            ConfigError::invalid($variable, $why) => "{$variable}: {$why}",
+        };
+    }
+}

@@ -1,0 +1,122 @@
+namespace nexus;
+
+/**
+ * The decoded pairs of a query string or an urlencoded form, in order. A
+ * name may repeat: `?tag=a&tag=b` is two values.
+ */
+public struct Query
+{
+    public array<QueryField> $pairs = [];
+
+    /**
+     * Splits and percent-decodes `$raw` (no leading `?`). A `+` is a space.
+     * Pairs that do not decode are dropped.
+     */
+    public constructor(parse: const string& $raw)
+    {
+        $this->pairs = [];
+        if ($raw->empty()) {
+            return;
+        }
+        array<string> $parts = str::split($raw, '&')->owned();
+        foreach ($parts as const &$piece) {
+            if ($piece->empty()) {
+                continue;
+            }
+            usize $at = $piece->find('=');
+            string $name = $piece;
+            string $value = '';
+            if ($at < $piece->size()) {
+                $name = $piece->sub(0, $at);
+                $value = $piece->sub($at + 1, $piece->size() - $at - 1);
+            }
+            string? $n = Percent::decode($name, plus: true);
+            string? $v = Percent::decode($value, plus: true);
+            if ($n == null || $v == null) {
+                continue;
+            }
+            string $dn = guard $n;
+            string $dv = guard $v;
+            $this->pairs[] = QueryField($dn, $dv);
+        }
+    }
+
+    public constructor()
+    {
+        $this->pairs = [];
+    }
+
+    /**
+     * The first value of `$name`, or null.
+     */
+    public const function get(const string& $name) : string?
+    {
+        foreach ($this->pairs as const &$p) {
+            if ($p->name == $name) {
+                string $v = $p->value;
+                return $v;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Every value of `$name`, in order.
+     */
+    public const function all(const string& $name) : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->pairs as const &$p) {
+            if ($p->name == $name) {
+                $out[] = $p->value;
+            }
+        }
+        return $out;
+    }
+
+    public const function has(const string& $name) : bool
+    {
+        return $this->get($name) != null;
+    }
+
+    public function add(const string& $name, const string& $value) : void
+    {
+        $this->pairs[] = QueryField($name, $value);
+    }
+
+    /**
+     * Drops every pair named `$name`.
+     */
+    public function remove(const string& $name) : void
+    {
+        array<QueryField> $kept = [];
+        foreach ($this->pairs as const &$p) {
+            if ($p->name != $name) {
+                $kept[] = $p;
+            }
+        }
+        $this->pairs = mv $kept;
+    }
+
+    public const function count() : usize
+    {
+        return $this->pairs->count();
+    }
+
+    /**
+     * The pairs as an encoded query string, no leading `?`.
+     */
+    public const function encode() : string
+    {
+        string $out = '';
+        foreach ($this->pairs as const &$p) {
+            if (!$out->empty()) {
+                $out->push(38);
+            }
+            $out->append(Percent::encode($p->name));
+            $out->push(61);
+            $out->append(Percent::encode($p->value));
+        }
+        return $out;
+    }
+}

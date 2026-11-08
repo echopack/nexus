@@ -1,0 +1,104 @@
+namespace nexus::auth;
+
+use std::thread;
+use std::time;
+
+/**
+ * Attempts per key (an address, an account) in a window. An attempt is
+ * counted when it starts, so attempts made at once cannot all slip under
+ * the limit, and one that went well is given back, so only failures add
+ * up. A key over its limit waits for its window to pass.
+ */
+#[atomic]
+public class Throttle
+{
+    private thread::mutex<map<string, Strike>> $strikes;
+    public const int32 $limit;
+    public const time::duration $window;
+
+    public constructor(int32 $limit, time::duration $window)
+    {
+        $this->strikes = thread::mutex<map<string, Strike>>(map<string, Strike>());
+        $this->limit = $limit;
+        $this->window = $window;
+    }
+
+    /**
+     * Counts an attempt by `$key` at `$now`, and whether it may go ahead.
+     */
+    public function take(const string& $key, time::timestamp $now) : bool
+    {
+        thread::locked<map<string, Strike>> $held = $this->strikes->lock();
+        Strike $s = Strike(0, $now);
+        if ($held->value->has($key)) {
+            $s = $held->value->get($key);
+        }
+        if ($now - $s->since >= $this->window) {
+            $s = Strike(0, $now);
+        }
+        if ($s->count >= $this->limit) {
+            return false;
+        }
+        $s->count = $s->count + 1;
+        $held->value[$key] = $s;
+        // a flood of keys must not grow this without bound
+        if ($held->value->count() > 100000) {
+            Throttle::prune($held->value, $now, $this->window, $this->limit);
+        }
+        return true;
+    }
+
+    /**
+     * Gives back the attempt of `$key` that just went well.
+     */
+    public function refund(const string& $key) : void
+    {
+        thread::locked<map<string, Strike>> $held = $this->strikes->lock();
+        if (!$held->value->has($key)) {
+            return;
+        }
+        Strike& $s = $held->value->at($key);
+        if ($s->count > 0) {
+            $s->count = $s->count - 1;
+        }
+    }
+
+    /**
+     * Seconds until `$key` may try again, 0 when it may now.
+     */
+    public function wait(const string& $key, time::timestamp $now) : int64
+    {
+        thread::locked<map<string, Strike>> $held = $this->strikes->lock();
+        if (!$held->value->has($key)) {
+            return 0;
+        }
+        Strike $s = $held->value->get($key);
+        time::duration $left = $s->since + $this->window - $now;
+        if ($s->count < $this->limit || $left <= time::duration::zero()) {
+            return 0;
+        }
+        // whole seconds, rounded up
+        int64 $secs = $left->as_secs();
+        if ($left > time::duration::secs($secs)) {
+            $secs = $secs + 1;
+        }
+        return $secs;
+    }
+
+    /**
+     * Drops windows that passed and keys that are not locked out. Locked
+     * out ones stay, or a flood of fresh keys would set them free.
+     */
+    internal static function prune(map<string, Strike>& $strikes, time::timestamp $now, time::duration $window, int32 $limit) : void
+    {
+        array<string> $gone = array<string>();
+        foreach ($strikes as $key => const &$s) {
+            if ($now - $s->since >= $window || $s->count < $limit) {
+                $gone[] = $key;
+            }
+        }
+        foreach ($gone as const &$key) {
+            $strikes->remove($key);
+        }
+    }
+}

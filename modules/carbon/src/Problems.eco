@@ -1,0 +1,50 @@
+namespace nexus::carbon;
+
+/**
+ * What a database error means to an HTTP client.
+ */
+public struct Problems
+{
+    /**
+     * `$e` as a problem: no row is a 404, a duplicate, a broken reference
+     * or a stale version a 409, a refusal from a repository hook a 409
+     * with its message, a lost or exhausted connection and a deadlock a
+     * 503, everything else a 500 whose cause only dev and test show.
+     *
+     * ```echo
+     * Post $post = guard $posts->get($id) else ($e) {
+     *     return .error(nexus::carbon::Problems::of($e));
+     * };
+     * ```
+     */
+    public static function of(const carbon::Error& $e) : nexus::Problem
+    {
+        match ($e) {
+            carbon::Error::missing => {
+                return .notFound('the record');
+            },
+            carbon::Error::stale => {
+                return .conflict('the record changed since it was read');
+            },
+            carbon::Error::refused($why) => {
+                return .conflict($why->message);
+            },
+            carbon::Error::busy => {
+                return .unavailable('the database is busy; try again');
+            },
+            else => {
+            },
+        };
+        carbon::Fault $fault = $e->fault();
+        if ($fault == carbon::Fault::duplicate) {
+            return .conflict('a record with these values exists already');
+        }
+        if ($fault == carbon::Fault::reference || $fault == carbon::Fault::constraint) {
+            return .conflict('the change breaks a rule of the database');
+        }
+        if ($fault == carbon::Fault::deadlock || $fault == carbon::Fault::connection || $fault == carbon::Fault::exhausted) {
+            return .unavailable('the database is busy; try again');
+        }
+        return .server("database: {$e}");
+    }
+}

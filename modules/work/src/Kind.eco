@@ -1,0 +1,60 @@
+namespace nexus::work;
+
+/**
+ * A task type as the queue and the workers know it: its name (the task
+ * struct's qualified name), the queue it goes to, how often it is tried,
+ * its schedule, and how its data runs. `Tasks::bind` makes one from what
+ * `nexus gen` wrote and what the app says; a test may write one by hand.
+ */
+public struct Kind
+{
+    public string $name;
+
+    /**
+     * Decodes a task's data and runs the task on it.
+     */
+    public function<status<Failure>(nexus::Payload&, const string&)> $run;
+
+    public string $queue = 'default';
+    public int64 $tries = 3;
+
+    /**
+     * A duration like `15m`, or empty.
+     */
+    public string $every = '';
+
+    /**
+     * Five fields, minute hour day month weekday, or empty.
+     */
+    public string $cron = '';
+
+    /**
+     * What a scheduled push carries: the task with its defaults.
+     */
+    public string $data = '{}';
+
+    public constructor(const string& $name, function<status<Failure>(nexus::Payload&, const string&)> $run)
+    {
+        $this->name = $name;
+        $this->run = $run;
+    }
+
+    /**
+     * Whether the scheduler pushes it.
+     */
+    public const function scheduled() : bool
+    {
+        return !$this->every->empty() || !$this->cron->empty();
+    }
+
+    /**
+     * The schedule as written, or empty.
+     */
+    public const function schedule() : string
+    {
+        if (!$this->every->empty()) {
+            return "every {$this->every}";
+        }
+        return $this->cron;
+    }
+}

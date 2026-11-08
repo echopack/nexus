@@ -1,0 +1,39 @@
+namespace nexus;
+
+/**
+ * What the inputs of the program bring to boot: the English messages and
+ * labels `#[nexus::message]` and `#[nexus::label]` declare, and the rule
+ * classes they name, each of which the app has to bind. The generated
+ * `#[nexus::inputs]` table of each module fills it.
+ */
+public class Inputs
+{
+    public Messages $messages;
+
+    /**
+     * Every rule class named by an input, with how to tell it is bound.
+     */
+    public array<RuleBinding> $rules = [];
+
+    public constructor(Messages $messages)
+    {
+        $this->messages = $messages;
+    }
+
+    /**
+     * The English message for one field and code:
+     * `message('blog::Registration', 'email', 'unique', '...')`.
+     */
+    public function message(const string& $input, const string& $field, const string& $code, const string& $text) : void
+    {
+        $this->messages->put('en', "{$input}.{$field}.{$code}", $text);
+    }
+
+    /**
+     * A rule class some input names.
+     */
+    public function rule(const string& $name, function<bool(container::Container)> $bound) : void
+    {
+        $this->rules[] = RuleBinding($name, $bound);
+    }
+}

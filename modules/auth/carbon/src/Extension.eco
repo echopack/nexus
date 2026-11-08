@@ -1,0 +1,53 @@
+namespace nexus::auth::carbon;
+
+use container::{Builder, Container};
+
+/**
+ * Keeps nexus-auth's tokens and sessions in the app's carbon database:
+ * binds `TokenStore` and `SessionStore` on each request's
+ * `carbon::Session`, and adds `auth:prune`. List it after nexus-carbon,
+ * with nexus-auth set to `stores: .provided`; the app wires the tables
+ * on its database and runs the migration with its own:
+ *
+ * ```echo
+ * // the database the app opens
+ * guard nexus::auth::carbon::Tables::wire($db) else ($e) { return .error($e); };
+ *
+ * // main.eco
+ * nexus::carbon::Extension(open, blog::Database::migrations()),
+ * nexus::auth::Extension('blog', stores: .provided),
+ * nexus::auth::carbon::Extension(),
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'nexus-auth-carbon';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<nexus::auth::TokenStore>(scope: function(Container $c) : nexus::auth::TokenStore {
+            return CarbonTokens($c->get<carbon::Session>());
+        });
+        $s->bind<nexus::auth::SessionStore>(scope: function(Container $c) : nexus::auth::SessionStore {
+            return CarbonSessions($c->get<carbon::Session>());
+        });
+        return .ok;
+    }
+
+    public function commands(nexus::Commands& $cmds) : void
+    {
+        $cmds->add(PruneCommand());
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        carbon::DB $db = $kernel->services->get<carbon::DB>();
+        if (!$db->has<AuthTokenRepository>() || !$db->has<AuthSessionRepository>()) {
+            return .error(.extension('nexus-auth-carbon', 'wire the auth tables on the database: nexus::auth::carbon::Tables::wire($db)'));
+        }
+        return .ok;
+    }
+}

@@ -1,0 +1,339 @@
+/**
+ * The pipeline `nexus gen` runs in a module directory: one `echoc -p decls`
+ * pass over the whole program, the generators of the dependencies on it,
+ * then `.nexus/nexus.eco` for the module's own actions, inputs and configs.
+ *
+ * The pass defines NEXUS_NOGEN, CARBON_NOGEN and REST_NOGEN, which the
+ * manifest uses to leave every generated directory out, so a stale
+ * generated file never stops the next one from being written, and passes
+ * --no-hooks, since this is the hook. Code that uses generated names fails
+ * to compile in that pass; echoc still prints every declaration, so those
+ * complaints only matter when nothing came out. carbongen and restgen read
+ * the same pass from a file (`--decls`) when the manifest wires `.carbon/`
+ * or `.rest/`.
+ */
+
+namespace nexusgen;
+
+use std::env;
+use std::io;
+
+public class Generator
+{
+    public string $echoc = 'echoc';
+    public bool $quiet = false;
+    public string $target = '.nexus/nexus.eco';
+
+    /**
+     * What the module's dependencies offer, from `echoc -p tools`, read
+     * the first time a tool is needed.
+     */
+    private json::Value? $offered = null;
+
+    /**
+     * Makes the decls pass, runs the wired generators of the dependencies
+     * on it (`check` or `generate`, as `$check` says) and renders nexus's
+     * own file.
+     */
+    public function render(bool $check) : result<string, Failure>
+    {
+        string $manifest = std::fs::readfile('module.eco')->or('');
+        if ($manifest->empty()) {
+            return .error(.input('no module.eco here; run nexus gen in the module that declares the actions'));
+        }
+        if (!$manifest->contains('NEXUS_NOGEN') || !$manifest->contains('.nexus/')) {
+            return .error(.input("module.eco does not wire the generated code; add:\n\n#[if: !NEXUS_NOGEN]\n#[sources: \".nexus/*.eco\"]\n#[end]"));
+        }
+        string $name = guard Generator::named($manifest) else {
+            return .error(.input('module.eco names no module (#[module: "..."])'));
+        };
+        string $file = Generator::declsPath();
+        json::Value $all = guard $this->pass($file) else ($e) {
+            return .error($e);
+        };
+        foreach (Tool::all() as const &$tool) {
+            if ($tool->wired($manifest)) {
+                guard $this->run($tool, $file, $check) else ($e) {
+                    return .error($e);
+                };
+            }
+        }
+        json::Value $local = guard Generator::only($all, $name) else {
+            return .error(.input("the decls pass holds no module named {$name}"));
+        };
+        Program $p = Program::read($local, $all);
+        if (!$p->problems->empty()) {
+            return .error(.problems($p->problems));
+        }
+        string $extra = '';
+        if (!$p->tasks->empty()) {
+            $extra->append(", {$p->tasks->count()} task(s)");
+        }
+        if (!$p->commands->empty()) {
+            $extra->append(", {$p->commands->count()} command(s)");
+        }
+        if (!$p->tools->empty()) {
+            $extra->append(", {$p->tools->count()} tool(s)");
+        }
+        if (!$p->mapped->empty()) {
+            $extra->append(", {$p->mapped->count()} mapped model(s)");
+        }
+        $this->say("nexus gen  {$p->actions->count()} action(s), {$p->inputs->count()} input(s), {$p->configs->count()} config(s){$extra}");
+        return .ok(Emitter::render($p));
+    }
+
+    /**
+     * Writes the generated files when their content changed. With `$force`
+     * false, a module whose sources did not change since the last run is
+     * not even read.
+     */
+    public function generate(bool $force) : status<Failure>
+    {
+        string $stampPath = Generator::stampPath();
+        string $stamp = Stamp::of('.', $this->echoc);
+        if (!$force && $this->there() && std::fs::readfile($stampPath)->or('') == $stamp) {
+            $this->say('nexus gen  up to date');
+            return .ok;
+        }
+        string $text = guard $this->render(false) else ($e) {
+            return .error($e);
+        };
+        std::fs::mkdir('.nexus');
+        if (std::fs::readfile($this->target)->or('') != $text) {
+            if (!Generator::put($this->target, $text)) {
+                return .error(.input("could not write {$this->target}"));
+            }
+            $this->say("wrote      {$this->target}");
+        } else {
+            $this->say("current    {$this->target}");
+        }
+        Generator::put($stampPath, $stamp);
+        return .ok;
+    }
+
+    /**
+     * Whether every generated file is what generating would write now.
+     */
+    public function check() : status<Failure>
+    {
+        string $text = guard $this->render(true) else ($e) {
+            return .error($e);
+        };
+        if (std::fs::readfile($this->target)->or('') != $text) {
+            return .error(.stale($this->target));
+        }
+        $this->say("current    {$this->target}");
+        return .ok;
+    }
+
+    /**
+     * Whether every file a run would write is on disk, so an unchanged
+     * stamp may skip the run.
+     */
+    private function there() : bool
+    {
+        if (!std::fs::exists($this->target)->or(false)) {
+            return false;
+        }
+        string $manifest = std::fs::readfile('module.eco')->or('');
+        foreach (Tool::all() as const &$tool) {
+            if ($tool->wired($manifest) && !std::fs::exists($tool->target())->or(false)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The decls pass over the whole program, kept in `$file` for the
+     * generators of the dependencies.
+     */
+    private function pass(const string& $file) : result<json::Value, Failure>
+    {
+        array<string> $args = ['build', '-p', 'decls', '--no-hooks', '--decls-all'];
+        foreach (['NEXUS_NOGEN', 'CARBON_NOGEN', 'REST_NOGEN'] as const &$define) {
+            $args[] = '--define';
+            $args[] = $define;
+        }
+        $args[] = '-o';
+        $args[] = 'ecobuild/nexus-decls';
+        std::process::output $run = guard std::process::command($this->echoc, $args)->output() else ($e) {
+            return .error(.input("could not run {$this->echoc}: {$e->message()}"));
+        };
+        json::Value $decls = guard json::parse($run->stdout) else {
+            return .error(.tool("{$run->status}", $run->stderr));
+        };
+        if (Json::items($decls, 'modules')->empty()) {
+            return .error(.tool("{$run->status}", $run->stderr));
+        }
+        if (!Generator::put($file, $run->stdout)) {
+            return .error(.input("could not write {$file}"));
+        }
+        return .ok($decls);
+    }
+
+    /**
+     * Builds `$tool` the way echoc says it is built, then runs it on the
+     * decls in `$file`.
+     */
+    private function run(Tool $tool, const string& $file, bool $check) : status<Failure>
+    {
+        json::Value $entry = guard $this->find($tool) else ($e) {
+            return .error($e);
+        };
+        array<string> $build = Json::texts(Json::field($entry, 'build'));
+        if ($build->empty()) {
+            return .error(.input("echoc -p tools gives no way to build {$tool->program()}"));
+        }
+        string $compiler = $build[0];
+        array<string> $rest = [];
+        usize $i = 1;
+        while ($i < $build->count()) {
+            $rest[] = $build[$i];
+            $i = $i + 1;
+        }
+        std::process::output $built = guard std::process::command($compiler, $rest)->output() else ($e) {
+            return .error(.input("could not build {$tool->program()}: {$e->message()}"));
+        };
+        if (!$built->status->success()) {
+            return .error(.generator($tool->program(), "{$built->stdout}{$built->stderr}"));
+        }
+        string $binary = Json::text($entry, 'binary');
+        string $mode = 'generate';
+        if ($check) {
+            $mode = 'check';
+        }
+        array<string> $args = [$mode, '--decls', $file];
+        if ($this->quiet) {
+            $args[] = '--quiet';
+        }
+        std::process::output $ran = guard std::process::command($binary, $args)->output() else ($e) {
+            return .error(.input("could not run {$binary}: {$e->message()}"));
+        };
+        if (!$ran->status->success()) {
+            return .error(.generator($tool->program(), "{$ran->stdout}{$ran->stderr}"));
+        }
+        string $said = string::from(str::trim($ran->stdout));
+        if (!$said->empty()) {
+            $this->say($said);
+        }
+        return .ok;
+    }
+
+    /**
+     * The `echoc -p tools` entry offering `$tool`.
+     */
+    private function find(Tool $tool) : result<json::Value, Failure>
+    {
+        if ($this->offered == null) {
+            std::process::output $run = guard std::process::command($this->echoc, ['build', '-p', 'tools'])->output() else ($e) {
+                return .error(.input("could not run {$this->echoc}: {$e->message()}"));
+            };
+            json::Value $tools = guard json::parse($run->stdout) else {
+                return .error(.tool("{$run->status}", $run->stderr));
+            };
+            $this->offered = $tools;
+        }
+        json::Value $offered = guard $this->offered;
+        foreach (Json::items($offered, 'public_tools') as const &$entry) {
+            foreach (Json::texts(Json::field($entry, 'refs')) as const &$ref) {
+                if ($ref == $tool->program()) {
+                    return .ok($entry);
+                }
+            }
+        }
+        return .error(.input("module.eco wires {$tool->dir()} but no dependency offers {$tool->program()}; depend on {$tool->library()} directly"));
+    }
+
+    /**
+     * The name `#[module: "..."]` gives in `$manifest`, null when it gives
+     * none.
+     */
+    public static function named(const string& $manifest) : string?
+    {
+        foreach (str::split($manifest, "\n") as const &$raw) {
+            string $line = string::from(str::trim($raw));
+            if (!$line->starts('#[module:')) {
+                continue;
+            }
+            // either quote: the manifest is Echo
+            string $quote = '"';
+            usize $open = $line->find($quote);
+            usize $single = $line->find("'");
+            if ($single < $open) {
+                $open = $single;
+                $quote = "'";
+            }
+            if ($open == $line->size()) {
+                return null;
+            }
+            string $tail = $line->sub($open + 1, $line->size() - $open - 1);
+            usize $close = $tail->find($quote);
+            if ($close == $tail->size()) {
+                return null;
+            }
+            string? $name = $tail->sub(0, $close);
+            return $name;
+        }
+        return null;
+    }
+
+    /**
+     * `$decls` cut down to the module called `$name`, in the shape a pass
+     * without `--decls-all` prints; null when no module has that name.
+     */
+    public static function only(const json::Value& $decls, const string& $name) : json::Value?
+    {
+        foreach (Json::items($decls, 'modules') as const &$m) {
+            if (Json::text($m, 'name') != $name) {
+                continue;
+            }
+            json::Value $list = json::arr();
+            $list[] = $m;
+            json::Value $out = json::object();
+            $out['modules'] = $list;
+            json::Value? $found = $out;
+            return $found;
+        }
+        return null;
+    }
+
+    private function say(const string& $line) : void
+    {
+        if (!$this->quiet) {
+            io::eprintln($line);
+        }
+    }
+
+    internal static function declsPath() : string
+    {
+        string::view? $state = env::var('ECHO_HOOK_STATE');
+        if ($state != null) {
+            string::view $dir = guard $state;
+            return std::fs::join($dir, 'decls.json')->string();
+        }
+        std::fs::mkdir('ecobuild');
+        return 'ecobuild/nexus-decls.json';
+    }
+
+    internal static function stampPath() : string
+    {
+        string::view? $state = env::var('ECHO_HOOK_STATE');
+        if ($state != null) {
+            string::view $dir = guard $state;
+            return std::fs::join($dir, 'stamp')->string();
+        }
+        std::fs::mkdir('ecobuild');
+        return 'ecobuild/nexus-gen.stamp';
+    }
+
+    internal static function put(const string& $path, const string& $text) : bool
+    {
+        io::file $f = guard std::fs::open($path, .write) else {
+            return false;
+        };
+        bool $ok = !$f->write($text)->failed();
+        $f->close();
+        return $ok;
+    }
+}

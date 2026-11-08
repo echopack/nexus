@@ -1,0 +1,80 @@
+namespace nexus::carbon;
+
+use container::{Builder, Container};
+
+/**
+ * A carbon database for the app. The app hands over how it opens, from
+ * the `DatabaseConfig`, with its repositories registered; the extension
+ * seals it, binds it as `carbon::DB`, and binds a `carbon::Session` per
+ * request: one connection from the pool for the whole request, back in
+ * the pool when the request ends. With the app's migrations it adds
+ * `migrate`, `migrate:status`, `migrate:down` and `migrate:reset` to the
+ * app binary.
+ *
+ * ```echo
+ * nexus::Kernel::main([
+ *     nexus::http::Extension(),
+ *     nexus::carbon::Extension(function(nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+ *         carbon::Source $pool = guard carbon::mysql::Source::parse($cfg->url) else ($e) {
+ *             return .error($e);
+ *         };
+ *         return blog::Database::wire(carbon::DB($pool));
+ *     }, blog::Carbon::migrations()),
+ *     blog::App(),
+ * ]);
+ * ```
+ *
+ * The app's own bindings take repositories from the request's session:
+ * `nexus::carbon::Repositories::bind<PostRepository>($b)`.
+ */
+public class Extension : nexus::Extension
+{
+    internal function<result<carbon::DB, carbon::Error>(DatabaseConfig)> $open;
+    internal array<carbon::migrate::Step> $steps;
+    internal carbon::ddl::Grammar $grammar;
+
+    /**
+     * `$open` builds the database from its config and registers the
+     * repositories; it runs once, at boot, and an error stops the boot.
+     * `$migrations` is what carbongen lists in `Carbon::migrations()`, in
+     * the dialect of `$grammar`.
+     */
+    public constructor(
+        function<result<carbon::DB, carbon::Error>(DatabaseConfig)> $open,
+        array<carbon::migrate::Step> $migrations = array<carbon::migrate::Step>(),
+        grammar: carbon::ddl::Grammar $grammar = carbon::ddl::Mysql()
+    )
+    {
+        $this->open = $open;
+        $this->steps = $migrations;
+        $this->grammar = $grammar;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-carbon';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        DatabaseConfig $config = $s->get<DatabaseConfig>();
+        function<result<carbon::DB, carbon::Error>(DatabaseConfig)> $open = $this->open;
+        carbon::DB $db = guard $open($config) else ($e) {
+            return .error(.extension('nexus-carbon', "the database did not open: {$e}"));
+        };
+        // from here on threads share it
+        $db->seal();
+        $s->bind<carbon::DB>(put: $db);
+        $s->bind<carbon::Session>(scope: function(Container $c) : carbon::Session {
+            return $c->get<carbon::DB>()->scoped();
+        });
+        return .ok;
+    }
+
+    public function commands(nexus::Commands& $cmds) : void
+    {
+        foreach (MigrateVerb::all() as const &$verb) {
+            $cmds->add(MigrateCommand($verb, $this->steps, $this->grammar));
+        }
+    }
+}

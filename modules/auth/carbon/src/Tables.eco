@@ -1,0 +1,33 @@
+namespace nexus::auth::carbon;
+
+/**
+ * The auth tables on the app's database: one call in the function that
+ * opens it, before it is sealed.
+ *
+ * ```echo
+ * guard nexus::auth::carbon::Tables::wire($db) else ($e) {
+ *     return .error($e);
+ * };
+ * ```
+ */
+public struct Tables
+{
+    /**
+     * Registers the auth repositories on `$db` and makes their stores.
+     */
+    public static function wire(carbon::DB $db) : status<carbon::Error>
+    {
+        guard Carbon::register($db) else ($e) {
+            return .error($e);
+        };
+        return Carbon::check($db);
+    }
+
+    /**
+     * The auth migration, to add to the app's own.
+     */
+    public static function migrations() : array<carbon::migrate::Step>
+    {
+        return Carbon::migrations();
+    }
+}

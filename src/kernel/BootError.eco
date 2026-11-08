@@ -1,0 +1,46 @@
+namespace nexus;
+
+/**
+ * Why the kernel could not start.
+ */
+public enum BootError
+{
+    case config(array<ConfigError> $errors);
+    case route(RouteError $error);
+    case extension(string $name, string $why);
+    case transport(string $why);
+
+    /**
+     * The config errors of a `config` problem, empty otherwise.
+     */
+    public const function configErrors() : array<ConfigError>
+    {
+        array<ConfigError> $none = [];
+        return match ($this) {
+            BootError::config($e) => $e,
+            else => $none,
+        };
+    }
+
+    /**
+     * One line per problem, for the console.
+     */
+    public const function lines() : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->configErrors() as const &$e) {
+            $out[] = "config: {$e->message()}";
+        }
+        string? $one = match ($this) {
+            BootError::route($error) => $error->message(),
+            BootError::extension($name, $why) => "{$name}: {$why}",
+            BootError::transport($why) => "transport: {$why}",
+            else => null,
+        };
+        if ($one != null) {
+            string $line = guard $one;
+            $out[] = $line;
+        }
+        return $out;
+    }
+}

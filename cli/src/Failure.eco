@@ -1,0 +1,24 @@
+namespace nexusgen;
+
+/**
+ * Why `nexus gen` did not write.
+ */
+public enum Failure
+{
+    case input(string $why);
+    case tool(string $status, string $stderr);
+    case problems(array<string> $lines);
+    case stale(string $path);
+    case generator(string $program, string $output);
+
+    public const function message() : string
+    {
+        return match ($this) {
+            Failure::input($why) => $why,
+            Failure::tool($status, $stderr) => "echoc -p decls failed ({$status}):\n{$stderr}",
+            Failure::problems($lines) => str::join($lines, "\n"),
+            Failure::stale($path) => "{$path} is out of date; run nexus gen",
+            Failure::generator($program, $output) => "{$program} failed:\n{$output}",
+        };
+    }
+}

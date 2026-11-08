@@ -1,0 +1,29 @@
+namespace blog;
+
+/**
+ * Signs in with an email and a password and opens a signed session: the
+ * answer carries its id and secret, shown this once, and every request
+ * after signs itself with them.
+ */
+public class OpenSession : nexus::Action
+{
+    private SignIn $signIn;
+    private nexus::auth::Sessions $sessions;
+
+    public constructor(SignIn $signIn, nexus::auth::Sessions $sessions)
+    {
+        $this->signIn = $signIn;
+        $this->sessions = $sessions;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Body<Credentials> $in) : result<nexus::Response, nexus::Problem>
+    {
+        User $u = guard $this->signIn->check($payload, $in->value) else ($p) {
+            return .error($p);
+        };
+        nexus::auth::Opened $opened = guard $this->sessions->open("{$u->id}") else ($p) {
+            return .error($p);
+        };
+        return .ok(nexus::Response(json: $opened->json(), status: 201));
+    }
+}

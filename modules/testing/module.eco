@@ -1,0 +1,21 @@
+/*
+ * nexus-testing: drive a nexus app in process. Boot the app's extensions
+ * with fixed config, send requests without a socket, assert on responses
+ * and on what was logged.
+ */
+
+#[module: "nexus-testing"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "In-process test client and assertions for nexus apps"]
+
+#[depends: "../.."]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+
+#[sources: "src/*.eco"]
+
+#[target: test] {
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

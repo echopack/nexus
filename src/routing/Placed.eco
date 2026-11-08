@@ -1,0 +1,10 @@
+namespace nexus;
+
+/**
+ * A route with its parsed pattern, as the router keeps it.
+ */
+public struct Placed
+{
+    public Route $route;
+    public Pattern $pattern;
+}

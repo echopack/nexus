@@ -1,0 +1,146 @@
+namespace nexus::work;
+
+/**
+ * A five-field cron line: minute, hour, day of month, month, weekday
+ * (0 or 7 is Sunday). A field is `*`, a number, a range `a-b`, any of
+ * those with a step after a slash (`8-18/2`, every second hour from 8 to
+ * 18), or a comma list of them. When both
+ * the day of month and the weekday are restricted, a day matching either
+ * one matches, as cron has it.
+ */
+public struct Cron
+{
+    public string $text;
+    internal array<bool> $minutes = [];
+    internal array<bool> $hours = [];
+    internal array<bool> $days = [];
+    internal array<bool> $months = [];
+    internal array<bool> $weekdays = [];
+    internal bool $anyDay = true;
+    internal bool $anyWeekday = true;
+
+    public static function parse(const string& $text) : result<Cron, string>
+    {
+        array<string> $fields = [];
+        foreach (str::split(str::trim($text), ' ') as const &$f) {
+            if (!$f->empty()) {
+                $fields[] = string::from($f);
+            }
+        }
+        if ($fields->count() != 5) {
+            return .error("'{$text}' needs five fields: minute hour day month weekday");
+        }
+        Cron $c = Cron($text: $text);
+        array<bool> $m = guard Cron::field($fields[0], 0, 59, 'minute') else ($e) {
+            return .error($e);
+        };
+        array<bool> $h = guard Cron::field($fields[1], 0, 23, 'hour') else ($e) {
+            return .error($e);
+        };
+        array<bool> $d = guard Cron::field($fields[2], 1, 31, 'day') else ($e) {
+            return .error($e);
+        };
+        array<bool> $mo = guard Cron::field($fields[3], 1, 12, 'month') else ($e) {
+            return .error($e);
+        };
+        array<bool> $w = guard Cron::field($fields[4], 0, 7, 'weekday') else ($e) {
+            return .error($e);
+        };
+        // 7 is Sunday too
+        if ($w[7]) {
+            $w[0] = true;
+        }
+        $c->minutes = $m;
+        $c->hours = $h;
+        $c->days = $d;
+        $c->months = $mo;
+        $c->weekdays = $w;
+        $c->anyDay = $fields[2] == '*';
+        $c->anyWeekday = $fields[4] == '*';
+        return .ok($c);
+    }
+
+    /**
+     * Whether the minute `$local` falls in matches.
+     */
+    public const function matches(const calendar::DateTime& $local) : bool
+    {
+        if (!$this->minutes[$local->time->minute as usize] || !$this->hours[$local->time->hour as usize]) {
+            return false;
+        }
+        if (!$this->months[$local->date->month->number() as usize]) {
+            return false;
+        }
+        bool $day = $this->days[$local->date->day as usize];
+        // calendar counts Monday 1 to Sunday 7; cron counts Sunday 0
+        int32 $wd = $local->date->weekday()->number() % 7;
+        bool $weekday = $this->weekdays[$wd as usize];
+        if (!$this->anyDay && !$this->anyWeekday) {
+            return $day || $weekday;
+        }
+        return $day && $weekday;
+    }
+
+    /**
+     * The values one field allows, indexed by value, from `$low` to `$high`.
+     */
+    internal static function field(const string& $text, int64 $low, int64 $high, const string& $what) : result<array<bool>, string>
+    {
+        array<bool> $on = [];
+        int64 $i = 0;
+        while ($i <= $high) {
+            $on[] = false;
+            $i = $i + 1;
+        }
+        foreach (str::split($text, ',') as const &$piece) {
+            string $part = string::from($piece);
+            string $range = $part;
+            int64 $step = 1;
+            usize $slash = $part->find('/');
+            if ($slash < $part->size()) {
+                $range = $part->sub(0, $slash);
+                uint64 $s = guard str::uint($part->sub($slash + 1, $part->size() - $slash - 1)) else {
+                    return .error("the {$what} step in '{$text}' is not a number");
+                };
+                if ($s == 0) {
+                    return .error("the {$what} step in '{$text}' is zero");
+                }
+                $step = $s as int64;
+            }
+            int64 $from = $low;
+            int64 $to = $high;
+            if ($range != '*') {
+                usize $dash = $range->find('-');
+                if ($dash < $range->size()) {
+                    uint64 $a = guard str::uint($range->sub(0, $dash)) else {
+                        return .error("'{$part}' is not a {$what} range");
+                    };
+                    uint64 $b = guard str::uint($range->sub($dash + 1, $range->size() - $dash - 1)) else {
+                        return .error("'{$part}' is not a {$what} range");
+                    };
+                    $from = $a as int64;
+                    $to = $b as int64;
+                } else {
+                    uint64 $one = guard str::uint($range) else {
+                        return .error("'{$part}' is not a {$what}");
+                    };
+                    $from = $one as int64;
+                    $to = $from;
+                    // `5/15` runs from 5 to the end of the field
+                    if ($slash < $part->size()) {
+                        $to = $high;
+                    }
+                }
+            }
+            if ($from < $low || $to > $high || $from > $to) {
+                return .error("'{$part}' is outside the {$what}s {$low} to {$high}");
+            }
+            int64 $v = $from;
+            while ($v <= $to) {
+                $on[$v as usize] = true;
+                $v = $v + $step;
+            }
+        }
+        return .ok($on);
+    }
+}

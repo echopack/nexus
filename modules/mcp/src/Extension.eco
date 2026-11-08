@@ -1,0 +1,71 @@
+namespace nexus::mcp;
+
+use container::{Builder, Container};
+
+/**
+ * MCP for a nexus app: binds `Tools` (the tools `tools` gives by hand, and
+ * every one an extension offers after it with `Tools::offer`), the offers
+ * `nexus gen` wrote, and routes the endpoint at `/mcp`. List it after
+ * nexus-auth, whose guards say who calls, and before the app.
+ *
+ * ```echo
+ * nexus::auth::Extension('blog'),
+ * nexus::mcp::Extension(),
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public array<ToolSpec> $tools;
+
+    public constructor(tools: array<ToolSpec> $tools = array<ToolSpec>())
+    {
+        $this->tools = $tools;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-mcp';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        if ($s->find<nexus::auth::Guards>() == null) {
+            return .error(.extension('nexus-mcp', 'every MCP call needs a signed in caller; list nexus::auth::Extension() before nexus::mcp::Extension()'));
+        }
+        Offers $offers = Offers();
+        foreach (attr::of<ToolTable>("nexus::mcp::tools") as const &$t) {
+            function<void(Offers)> $add = $t->call;
+            $add($offers);
+        }
+        $s->bind<Offers>(put: $offers);
+        Tools $all = Tools();
+        foreach ($this->tools as const &$t) {
+            $all->add($t);
+        }
+        $s->bind<Tools>(put: $all);
+        $s->bindAction<Endpoint>(method: .post, path: '/mcp', function(Container $c) : Endpoint {
+            return Endpoint($c->get<Tools>(), $c->get<McpConfig>(), $c->get<nexus::auth::Guards>());
+        });
+        $s->bindAction<Refused>(method: .get, path: '/mcp');
+        $s->route<Refused>(method: .delete, path: '/mcp');
+        return .ok;
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        Tools $all = $kernel->services->get<Tools>();
+        foreach ($all->all() as const &$t) {
+            function<bool(Container)> $bound = $t->bound;
+            if (!$bound($kernel->services)) {
+                return .error(.extension('nexus-mcp', "tool {$t->name} runs {$t->owner}, which has no binding; bind it in the app's services"));
+            }
+            foreach ($t->through as const &$ref) {
+                function<bool(Container)> $has = $ref->bound;
+                if (!$has($kernel->services)) {
+                    return .error(.extension('nexus-mcp', "tool {$t->name} goes through {$ref->name}, which is not bound; bind it in the app's services"));
+                }
+            }
+        }
+        return .ok;
+    }
+}

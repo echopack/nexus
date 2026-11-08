@@ -1,0 +1,42 @@
+/*
+ * nexus-oauth: OAuth 2.1 for the app's MCP endpoint, so an MCP client
+ * connects with a URL and a click instead of a pasted token.
+ *
+ * The app is the authorization server and the resource. A client
+ * registers itself (RFC 7591), sends the user to `/oauth/authorize`, which
+ * hands the browser to the app's own consent page; that page, signed in
+ * as the user, asks `/oauth/request` what is asked and answers through
+ * `/oauth/approve`. The client trades the code for tokens with its PKCE
+ * verifier. Access tokens (`nxo_...`) open the MCP endpoint only; refresh
+ * tokens (`nxr_...`) are single use, and one that comes back after it was
+ * used ends the grant.
+ *
+ * Clients, codes and grants are kept in memory here; nexus-oauth-carbon
+ * keeps them in the app's database.
+ */
+
+#[module: "nexus-oauth"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "OAuth 2.1 for the MCP endpoint of nexus apps"]
+
+#[depends: "../.."]
+#[depends: "../auth"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../libcrypto"]
+#[depends: "../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../mcp"]
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

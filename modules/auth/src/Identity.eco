@@ -1,0 +1,69 @@
+namespace nexus::auth;
+
+/**
+ * Who a request's credential names: the subject the token or session was
+ * issued to (a user id, as text), the guard that read it (`via`), the
+ * credential's own id (to revoke it) and the scopes it carries.
+ * `Authenticate` leaves it in the payload, and an app's middleware builds
+ * its user on it:
+ *
+ * ```echo
+ * public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+ * {
+ *     nexus::auth::Identity? $found = guard $this->guards->identify($payload) else ($p) {
+ *         return $payload->fail($p);
+ *     };
+ *     nexus::auth::Identity $id = guard $found else {
+ *         return $payload->fail(nexus::Problem::unauthorized('this needs a signed in caller'));
+ *     };
+ *     int64 $key = guard $id->number() else { ... };
+ *     User? $user = guard $this->users->find()->get($key) else { ... };
+ *     ...
+ *     $payload->put<Caller>(Caller($id, $user));
+ *     return $next->run($payload);
+ * }
+ * ```
+ */
+public struct Identity
+{
+    public string $via;
+    public string $subject;
+    public string $credential;
+    public array<string> $scopes = [];
+
+    /**
+     * The subject as a number, for apps that key users by an integer id.
+     */
+    public const function number() : int64?
+    {
+        return str::int($this->subject);
+    }
+
+    /**
+     * Whether the credential carries `$scope`. A credential issued without
+     * scopes carries every one.
+     */
+    public const function has(const string& $scope) : bool
+    {
+        if ($this->scopes->empty()) {
+            return true;
+        }
+        foreach ($this->scopes as const &$s) {
+            if ($s == $scope) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A 403 unless the credential carries `$scope`.
+     */
+    public const function require(const string& $scope) : status<nexus::Problem>
+    {
+        if (!$this->has($scope)) {
+            return .error(.forbidden("this needs the {$scope} scope"));
+        }
+        return .ok;
+    }
+}

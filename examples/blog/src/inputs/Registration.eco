@@ -1,0 +1,21 @@
+namespace blog;
+
+/**
+ * Who signs up: a name, an email and a password, given twice.
+ */
+#[nexus::input]
+public struct Registration
+{
+    #[nexus::rule: { squish: true, notBlank: true, max: 190 }]
+    public string $name;
+
+    #[nexus::rule: { trim: true, lower: true, email: true, max: 190, check: 'blog::UniqueEmail' }]
+    #[nexus::label: 'e-mail address']
+    #[nexus::message: { unique: 'Someone already signed up with that e-mail address.' }]
+    public string $email;
+
+    #[nexus::rule: { confirmed: true }]
+    public string $password;
+
+    public string $passwordConfirmation;
+}

@@ -1,0 +1,13 @@
+namespace nexus;
+
+/**
+ * How a command option is given: `--force`, `--to <id>`, `--tag <t>` again
+ * and again, or a word after the command's name.
+ */
+public enum OptionKind : uint8
+{
+    case flag = 1;
+    case value = 2;
+    case list = 3;
+    case positional = 4;
+}

@@ -1,0 +1,16 @@
+/**
+ * A typed record for LogTest, with the overload `nexus gen` would write.
+ */
+
+namespace nexus::log;
+
+public struct LoginThrottled
+{
+    public string $account;
+    public int32 $attempts;
+}
+
+public function record(const LoginThrottled& $r) : Record
+{
+    return Record(.warn, 'login throttled', ['account' => $r->account, 'attempts' => $r->attempts]);
+}

@@ -1,0 +1,70 @@
+namespace nexus::http;
+
+/**
+ * Converts between libhttp's request and response and nexus's own.
+ */
+public struct Wire
+{
+    /**
+     * The nexus method of a wire method, or null for a verb nexus does not
+     * route.
+     */
+    public static function method(const http::Method& $m) : nexus::Method?
+    {
+        return match ($m) {
+            http::Method::get => nexus::Method::get,
+            http::Method::post => nexus::Method::post,
+            http::Method::put => nexus::Method::put,
+            http::Method::patch => nexus::Method::patch,
+            http::Method::delete => nexus::Method::delete,
+            http::Method::head => nexus::Method::head,
+            http::Method::options => nexus::Method::options,
+            http::Method::other($name) => nexus::Method::parse($name),
+        };
+    }
+
+    /**
+     * The nexus request for a wire request, or null for an unknown verb.
+     */
+    public static function request(const http::Request& $in) : nexus::Request?
+    {
+        return Wire::request($in, Proxies());
+    }
+
+    /**
+     * The nexus request for a wire request, its peer the client behind
+     * `$proxies`, or null for an unknown verb.
+     */
+    public static function request(const http::Request& $in, const Proxies& $proxies) : nexus::Request?
+    {
+        nexus::Method $m = guard Wire::method($in->method) else {
+            return null;
+        };
+        nexus::Request $r = nexus::Request($m, $in->target);
+        $r->path = $in->path;
+        $r->queryString = $in->queryString;
+        nexus::Query $q = nexus::Query();
+        foreach ($in->query->pairs as const &$p) {
+            $q->add($p->name, $p->value);
+        }
+        $r->query = $q;
+        foreach ($in->headers->items as const &$h) {
+            $r->headers->add($h->name, $h->value);
+        }
+        $r->body = $in->body;
+        $r->peer = $proxies->client($in->peer, $r->header('X-Forwarded-For') ?? '');
+        return $r;
+    }
+
+    /**
+     * The wire response for a nexus response.
+     */
+    public static function response(const nexus::Response& $out) : http::Response
+    {
+        http::Response $r = http::Response($out->status, $out->body);
+        foreach ($out->headers->items as const &$h) {
+            $r->headers->add($h->name, $h->value);
+        }
+        return $r;
+    }
+}

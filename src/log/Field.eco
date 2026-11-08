@@ -1,0 +1,10 @@
+namespace nexus::log;
+
+/**
+ * One key and its value.
+ */
+public struct Field
+{
+    public string $key;
+    public Value $value;
+}

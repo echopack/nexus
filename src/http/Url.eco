@@ -1,0 +1,330 @@
+namespace nexus;
+
+/**
+ * A URL: absolute, `https://blog.example.com:8443/v1/posts/5?include=author#top`,
+ * or origin-relative, `/v1/posts/5`. The path is kept escaped, as it goes
+ * on the wire; the query holds decoded pairs and the fragment decoded
+ * text, and `text()` escapes both again. The router builds its links as
+ * one.
+ *
+ * ```echo
+ * Url $next = $router->url<ListPosts>(['page' => '2'])->with('tag', 'echo');
+ * $next->text();                       // /v1/posts?page=2&tag=echo
+ * $next->on($request->url())->text();  // https://blog.example.com/v1/posts?page=2&tag=echo
+ * ```
+ */
+public struct Url
+{
+    /**
+     * Lower case, empty for a relative URL.
+     */
+    public string $scheme = '';
+
+    /**
+     * Lower case; an IPv6 address keeps its brackets, `[::1]`.
+     */
+    public string $host = '';
+
+    public uint16? $port = null;
+
+    /**
+     * Escaped, `/files/a%20b`. Empty only for an absolute URL that has
+     * none.
+     */
+    public string $path = '';
+
+    public Query $query = Query();
+
+    /**
+     * Decoded, without the `#`.
+     */
+    public string $fragment = '';
+
+    /**
+     * An origin-relative URL for `$path`, which is escaped already.
+     */
+    public constructor(path: const string& $path)
+    {
+        $this->scheme = '';
+        $this->host = '';
+        $this->port = null;
+        $this->path = $path;
+        $this->query = Query();
+        $this->fragment = '';
+    }
+
+    /**
+     * Parses an absolute URL with a scheme and a host, or a path starting
+     * with `/`. Refuses spaces and control characters, a broken scheme,
+     * host, port or escape, user info before the host, and anything else
+     * (`mailto:x`, `posts/5`, `//host/x`).
+     */
+    public static function parse(const string& $raw) : result<Url, UrlError>
+    {
+        if ($raw->empty()) {
+            return .error(.empty);
+        }
+        foreach (0 .. $raw->size() as $i) {
+            uint8 $b = $raw->byte($i);
+            if ($b <= 32 || $b == 127) {
+                return .error(.character($raw));
+            }
+        }
+        usize $end = $raw->size();
+        Url $url = Url(path: '');
+        usize $hash = $raw->find('#');
+        if ($hash < $end) {
+            string $tail = $raw->sub($hash + 1, $end - $hash - 1);
+            string $fragment = guard Percent::decode($tail) else {
+                return .error(.escape($raw));
+            };
+            $url->fragment = $fragment;
+            $end = $hash;
+        }
+        usize $question = $raw->find('?');
+        if ($question < $end) {
+            string $query = $raw->sub($question + 1, $end - $question - 1);
+            if (Percent::decode($query, plus: true) == null) {
+                return .error(.escape($raw));
+            }
+            $url->query = Query(parse: $query);
+            $end = $question;
+        }
+        string $head = $raw->sub(0, $end);
+        if ($head->starts('/')) {
+            if ($head->starts('//')) {
+                return .error(.form($raw));
+            }
+            if (Percent::decode($head) == null) {
+                return .error(.escape($raw));
+            }
+            $url->path = $head;
+            return .ok($url);
+        }
+        usize $colon = $head->find('://');
+        if ($colon == 0 || $colon >= $head->size()) {
+            return .error(.form($raw));
+        }
+        string $scheme = str::lower($head->sub(0, $colon));
+        if (!Url::scheme($scheme)) {
+            return .error(.scheme($raw));
+        }
+        usize $start = $colon + 3;
+        usize $slash = $head->find('/', $start);
+        if ($slash > $head->size()) {
+            $slash = $head->size();
+        }
+        string $authority = $head->sub($start, $slash - $start);
+        if ($authority->find('@') < $authority->size()) {
+            return .error(.userinfo($raw));
+        }
+        string $host = $authority;
+        string $port = '';
+        bool $bracketed = $authority->starts('[');
+        usize $split = $authority->find(':');
+        if ($bracketed) {
+            usize $close = $authority->find(']');
+            if ($close >= $authority->size()) {
+                return .error(.host($raw));
+            }
+            $host = $authority->sub(0, $close + 1);
+            $split = $close + 1;
+            if ($split < $authority->size() && $authority->byte($split) != 58) {
+                return .error(.host($raw));
+            }
+        }
+        if ($split < $authority->size()) {
+            if (!$bracketed) {
+                $host = $authority->sub(0, $split);
+            }
+            $port = $authority->sub($split + 1, $authority->size() - $split - 1);
+            uint16 $number = guard Url::port($port) else {
+                return .error(.port($raw));
+            };
+            $url->port = $number;
+        }
+        if (!Url::hostname($host, $bracketed)) {
+            return .error(.host($raw));
+        }
+        string $path = $head->sub($slash, $head->size() - $slash);
+        if (Percent::decode($path) == null) {
+            return .error(.escape($raw));
+        }
+        $url->scheme = $scheme;
+        $url->host = str::lower($host);
+        $url->path = $path;
+        return .ok($url);
+    }
+
+    /**
+     * Whether it has a scheme and a host.
+     */
+    public const function absolute() : bool
+    {
+        return !$this->scheme->empty();
+    }
+
+    /**
+     * `https://blog.example.com:8443`, or empty for a relative URL.
+     */
+    public const function origin() : string
+    {
+        if (!$this->absolute()) {
+            return '';
+        }
+        string $out = "{$this->scheme}://{$this->host}";
+        uint16? $port = $this->port;
+        if ($port != null) {
+            uint16 $p = guard $port;
+            $out->append(":{$p}");
+        }
+        return $out;
+    }
+
+    /**
+     * The same URL with query pair `$name=$value` added after the others.
+     */
+    public const function with(const string& $name, const string& $value) : Url
+    {
+        Url $out = $this;
+        $out->query->add($name, $value);
+        return $out;
+    }
+
+    /**
+     * The same URL without any query pair named `$name`.
+     */
+    public const function without(const string& $name) : Url
+    {
+        Url $out = $this;
+        $out->query->remove($name);
+        return $out;
+    }
+
+    /**
+     * The same URL with fragment `$fragment`, given decoded.
+     */
+    public const function at(const string& $fragment) : Url
+    {
+        Url $out = $this;
+        $out->fragment = $fragment;
+        return $out;
+    }
+
+    /**
+     * This URL on `$base`'s origin and under its path: `/v1/posts/5` on
+     * `https://example.com/api` is `https://example.com/api/v1/posts/5`.
+     * The query and the fragment stay this URL's; an origin of its own is
+     * replaced.
+     */
+    public const function on(const Url& $base) : Url
+    {
+        Url $out = $this;
+        $out->scheme = $base->scheme;
+        $out->host = $base->host;
+        $out->port = $base->port;
+        string $path = $base->path;
+        if ($path->ends('/')) {
+            $path = $path->sub(0, $path->size() - 1);
+        }
+        $path->append($this->path);
+        $out->path = $path;
+        return $out;
+    }
+
+    /**
+     * The URL as text, escaped: what goes into a `Location` header or a
+     * link in a document.
+     */
+    public const function text() : string
+    {
+        string $out = $this->origin();
+        bool $more = $this->query->count() > 0 || !$this->fragment->empty();
+        if (!$this->path->empty()) {
+            $out->append($this->path);
+        } else if (!$this->absolute() || $more) {
+            $out->push(47);
+        }
+        if ($this->query->count() > 0) {
+            $out->push(63);
+            $out->append($this->query->encode());
+        }
+        if (!$this->fragment->empty()) {
+            $out->push(35);
+            $out->append(Percent::encode($this->fragment));
+        }
+        return $out;
+    }
+
+    /**
+     * RFC 3986: a letter, then letters, digits, `+`, `-` and `.`.
+     */
+    internal static function scheme(const string& $scheme) : bool
+    {
+        if ($scheme->empty()) {
+            return false;
+        }
+        foreach (0 .. $scheme->size() as $i) {
+            uint8 $b = $scheme->byte($i);
+            bool $letter = $b >= 97 && $b <= 122;
+            if (!$letter && ($i == 0 || !(($b >= 48 && $b <= 57) || $b == 43 || $b == 45 || $b == 46))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * A name, an IPv4 address or, bracketed, an IPv6 one. Bytes above
+     * ASCII pass, for a name not yet in punycode.
+     */
+    internal static function hostname(const string& $host, bool $bracketed) : bool
+    {
+        if ($bracketed) {
+            if ($host->size() < 3) {
+                return false;
+            }
+            foreach (1 .. $host->size() - 1 as $i) {
+                uint8 $b = $host->byte($i);
+                bool $hex = ($b >= 48 && $b <= 57) || ($b >= 65 && $b <= 70) || ($b >= 97 && $b <= 102);
+                if (!$hex && $b != 58 && $b != 46) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if ($host->empty()) {
+            return false;
+        }
+        foreach (0 .. $host->size() as $i) {
+            uint8 $b = $host->byte($i);
+            if (!Percent::unreserved($b) && $b != 37 && $b < 128) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 1 to 65535, digits only.
+     */
+    internal static function port(const string& $text) : uint16?
+    {
+        if ($text->empty() || $text->size() > 5) {
+            return null;
+        }
+        uint32 $n = 0;
+        foreach (0 .. $text->size() as $i) {
+            uint8 $b = $text->byte($i);
+            if ($b < 48 || $b > 57) {
+                return null;
+            }
+            $n = $n * 10 + (($b - 48) as uint32);
+        }
+        if ($n == 0 || $n > 65535) {
+            return null;
+        }
+        uint16? $out = $n as uint16;
+        return $out;
+    }
+}

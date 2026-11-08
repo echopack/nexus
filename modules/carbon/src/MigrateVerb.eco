@@ -1,0 +1,48 @@
+namespace nexus::carbon;
+
+/**
+ * What a migrate command does with the app's migrations.
+ */
+public enum MigrateVerb : uint8
+{
+    case up = 1;
+    case status = 2;
+    case down = 3;
+    case reset = 4;
+
+    public static function all() : array<MigrateVerb>
+    {
+        return [MigrateVerb::up, MigrateVerb::status, MigrateVerb::down, MigrateVerb::reset];
+    }
+
+    /**
+     * The command's word in the app binary.
+     */
+    public const function command() : string
+    {
+        return match ($this) {
+            MigrateVerb::up => 'migrate',
+            MigrateVerb::status => 'migrate:status',
+            MigrateVerb::down => 'migrate:down',
+            MigrateVerb::reset => 'migrate:reset',
+        };
+    }
+
+    public const function summary() : string
+    {
+        return match ($this) {
+            MigrateVerb::up => 'run the migrations that have not run yet',
+            MigrateVerb::status => 'list the migrations that ran and the ones still pending',
+            MigrateVerb::down => 'undo the last batch of migrations',
+            MigrateVerb::reset => 'undo every migration',
+        };
+    }
+
+    /**
+     * Whether it undoes schema changes, and so wants `--force` in prod.
+     */
+    public const function destructive() : bool
+    {
+        return $this == MigrateVerb::down || $this == MigrateVerb::reset;
+    }
+}

@@ -1,0 +1,15 @@
+namespace nexusgen;
+
+/**
+ * A struct conforming to `nexus::work::Task`: its data fields, and
+ * whether every one has a default, so it can be scheduled (pushed as
+ * `T()`).
+ */
+public struct TaskDecl
+{
+    public string $qualified;
+    public string $file;
+    public int64 $line;
+    public array<FieldDecl> $fields = [];
+    public bool $defaults = true;
+}

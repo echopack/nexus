@@ -1,0 +1,35 @@
+/*
+ * nexus-rest: transformers that turn models into what actions answer.
+ *
+ * A transformer is a shared class over one model. The mapping `nexus gen`
+ * writes from the model's #[nexus::expose] fields (one per shape, with
+ * #[nexus::sensitive] fields kept to sensitive shapes) names the entity,
+ * writes the fields into a nexus::rest::Item and says what `?include=`
+ * may ask for; the transformer's transform() hook edits each item. Its
+ * createResponse() and createCollectionResponse() answer with a
+ * nexus::Response in the format the request accepts, JSON or XML, the
+ * model under `data`. Transformers sit in a
+ * nexus::rest::TransformerNetwork by model (nexus::rest::Transformers::add),
+ * so one nests another through the nexus::rest::TransformerContext
+ * (transformInto, transformReferenceInto with meta) without holding it,
+ * cycles included; the context also carries what the action knows beyond
+ * the model to every transform().
+ */
+
+#[module: "nexus-rest"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "transformers for nexus apps: models answered as negotiated JSON and XML, includes per request"]
+
+#[depends: "../.."]
+#[depends: "../../../RestTransformers"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+
+#[sources: "src/*.eco"]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

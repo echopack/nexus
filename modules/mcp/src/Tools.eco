@@ -1,0 +1,197 @@
+namespace nexus::mcp;
+
+/**
+ * Every tool the app offers, by name, in the order they were added. Built
+ * at boot, read by every call.
+ */
+#[atomic]
+public class Tools
+{
+    internal ordered_map<string, ToolSpec> $byName = ordered_map<string, ToolSpec>();
+
+    /**
+     * Adds `$t`; a second tool of the same name replaces the first.
+     */
+    public function add(ToolSpec $t) : void
+    {
+        $this->byName[$t->name] = $t;
+    }
+
+    /**
+     * Offers `T` (an action, or a class conforming to `nexus::mcp::Tool`)
+     * as tool `$name`, from what `nexus gen` wrote for it. The title, the
+     * hints and the description are what MCP clients show; the
+     * description defaults to `T`'s docblock. `map` renames arguments,
+     * tool argument to the name `handle()` uses (`['post' => 'id']`). Bind
+     * `T` like any service. A problem stops the boot.
+     *
+     * ```echo
+     * nexus::mcp::Tools::offer<ShowPost>($s, name: 'show_post', readOnly: true, map: ['post' => 'id']);
+     * ```
+     */
+    public static function offer<T>(
+        nexus::Services& $s,
+        name: const string& $name,
+        title: const string& $title = '',
+        description: const string& $description = '',
+        readOnly: bool? $readOnly = null,
+        destructive: bool? $destructive = null,
+        idempotent: bool? $idempotent = null,
+        openWorld: bool? $openWorld = null,
+        map: map<string, string> $renames = []
+    ) : void
+    {
+        Tools $tools = guard $s->find<Tools>() else {
+            $s->fail(.extension('nexus-mcp', "tool {$name}: list nexus::mcp::Extension() before the extension that offers it"));
+            return;
+        };
+        Offers $offers = $s->get<Offers>();
+        string $owner = $s->generated->nameOf<T>('its class');
+        Offer $o = guard $offers->find<T>() else {
+            $s->fail(.extension('nexus-mcp', "tool {$name}: nexus gen wrote no tool code for {$owner}; offer a nexus::mcp::Tool class, or an action whose path parameters and input fields have distinct names"));
+            return;
+        };
+        if (!Tools::named($name)) {
+            $s->fail(.extension('nexus-mcp', "tool name '{$name}' must be 1 to 64 letters, digits, _ and -, like show_post"));
+            return;
+        }
+        if ($tools->find($name) != null) {
+            $s->fail(.extension('nexus-mcp', "tool {$name} is offered twice"));
+            return;
+        }
+        json::Value $schema = $o->schema;
+        map<string, string> $renamed = [];
+        foreach ($renames as $arg => const &$param) {
+            json::Value? $moved = Tools::rename($schema, $param, $arg);
+            if ($moved == null) {
+                $s->fail(.extension('nexus-mcp', "tool {$name} maps '{$arg}' to '{$param}', which is no argument of {$owner}, or '{$arg}' is one already"));
+                return;
+            }
+            json::Value $next = guard $moved;
+            $schema = $next;
+            $renamed[$arg] = $param;
+        }
+        function<bool(container::Container)> $bound = function(container::Container $services) : bool {
+            return $services->has<T>();
+        };
+        ToolSpec $spec = ToolSpec($name, $o->owner, $schema, $o->call, $bound);
+        $spec->renamed = $renamed;
+        $spec->through = $o->through;
+        $spec->description = $o->description;
+        if (!$description->empty()) {
+            $spec->description = $description;
+        }
+        json::Value $hints = json::object();
+        if (!$title->empty()) {
+            $spec->title = $title;
+            $hints['title'] = json::str($title);
+        }
+        Tools::hint($hints, 'readOnlyHint', $readOnly);
+        Tools::hint($hints, 'destructiveHint', $destructive);
+        Tools::hint($hints, 'idempotentHint', $idempotent);
+        Tools::hint($hints, 'openWorldHint', $openWorld);
+        $spec->annotations = $hints;
+        $tools->add($spec);
+    }
+
+    public const function find(const string& $name) : ToolSpec?
+    {
+        if (!$this->byName->has($name)) {
+            return null;
+        }
+        ToolSpec $t = $this->byName[$name];
+        return $t;
+    }
+
+    public const function all() : array<ToolSpec>
+    {
+        array<ToolSpec> $out = [];
+        foreach ($this->byName as $name => const &$t) {
+            $out[] = $t;
+        }
+        return $out;
+    }
+
+    public const function count() : usize
+    {
+        return $this->byName->count();
+    }
+
+    /**
+     * The `tools/list` result.
+     */
+    public const function listing() : json::Value
+    {
+        json::Value $list = json::arr();
+        foreach ($this->byName as $name => const &$t) {
+            $list[] = $t->entry();
+        }
+        json::Value $o = json::object();
+        $o['tools'] = $list;
+        return $o;
+    }
+
+    internal static function hint(json::Value& $hints, const string& $key, bool? $value) : void
+    {
+        if ($value == null) {
+            return;
+        }
+        bool $v = guard $value;
+        $hints[$key] = json::bool($v);
+    }
+
+    /**
+     * `$schema` with property `$from` renamed `$to`, in place and in the
+     * required list; null when there is no `$from` or `$to` is taken.
+     */
+    internal static function rename(const json::Value& $schema, const string& $from, const string& $to) : json::Value?
+    {
+        ordered_map<string, json::Value> $props = guard $schema->get('properties')?->asObject() else {
+            return null;
+        };
+        if (!$props->has($from) || $props->has($to)) {
+            return null;
+        }
+        json::Value $out = json::object();
+        foreach (($schema->asObject() ?? ordered_map<string, json::Value>()) as $key => const &$value) {
+            if ($key == 'properties') {
+                json::Value $renamed = json::object();
+                foreach ($props as $name => const &$p) {
+                    if ($name == $from) {
+                        $renamed[$to] = $p;
+                    } else {
+                        $renamed[$name] = $p;
+                    }
+                }
+                $out[$key] = $renamed;
+            } else if ($key == 'required') {
+                json::Value $list = json::arr();
+                foreach (($value->asArray() ?? array<json::Value>()) as const &$r) {
+                    if (($r->asStr() ?? '') == $from) {
+                        $list[] = json::str($to);
+                    } else {
+                        $list[] = $r;
+                    }
+                }
+                $out[$key] = $list;
+            } else {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
+    }
+
+    internal static function named(const string& $name) : bool
+    {
+        if ($name->empty() || $name->size() > 64) {
+            return false;
+        }
+        foreach (0 .. $name->size() as $i) {
+            uint8 $c = $name->byte($i);
+            if (!(($c >= 97 && $c <= 122) || ($c >= 65 && $c <= 90) || ($c >= 48 && $c <= 57) || $c == 45 || $c == 95)) {
+                return false;
+            }
+        }
+        return true;
+    }
+}

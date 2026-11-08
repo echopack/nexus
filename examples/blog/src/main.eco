@@ -1,0 +1,15 @@
+array<nexus::Extension> $extensions = [
+    nexus::http::Extension(),
+    nexus::carbon::Extension(function(nexus::carbon::DatabaseConfig $config) : result<carbon::DB, carbon::Error> {
+        return blog::Database::open($config);
+    }, blog::Database::migrations()),
+    nexus::auth::Extension('blog', stores: .provided),
+    nexus::auth::carbon::Extension(),
+    nexus::oauth::Extension(stores: .provided),
+    nexus::oauth::carbon::Extension(),
+    nexus::mcp::Extension(),
+    nexus::work::Extension(stores: .provided),
+    nexus::work::carbon::Extension(),
+    blog::App(),
+];
+nexus::Kernel::main($extensions);

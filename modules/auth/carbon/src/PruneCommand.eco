@@ -1,0 +1,54 @@
+namespace nexus::auth::carbon;
+
+use std::io;
+use std::time;
+
+/**
+ * `auth:prune`: deletes the tokens and sessions that have expired. Safe to
+ * run any time; a scheduled task can run it nightly.
+ */
+public class PruneCommand : nexus::Command
+{
+    public function name() : string
+    {
+        return 'auth:prune';
+    }
+
+    public function summary() : string
+    {
+        return 'delete expired tokens and sessions';
+    }
+
+    public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
+    {
+        carbon::DB $db = $kernel->services->get<carbon::DB>();
+        uint64 $tokens = guard PruneCommand::tokens($db) else ($e) {
+            io::eprintln("auth:prune: {$e}");
+            return 1;
+        };
+        uint64 $sessions = guard PruneCommand::sessions($db) else ($e) {
+            io::eprintln("auth:prune: {$e}");
+            return 1;
+        };
+        io::println("pruned  {$tokens} tokens, {$sessions} sessions");
+        return 0;
+    }
+
+    public static function tokens(carbon::DB $db) : result<uint64, carbon::Error>
+    {
+        time::timestamp $now = $db->clock()->now();
+        AuthTokenRepository $repo = guard $db->session()->repo<AuthTokenRepository>() else ($e) {
+            return .error($e);
+        };
+        return $repo->find()->where(AuthTokenTable::$expiresAt < $now)->purge();
+    }
+
+    public static function sessions(carbon::DB $db) : result<uint64, carbon::Error>
+    {
+        time::timestamp $now = $db->clock()->now();
+        AuthSessionRepository $repo = guard $db->session()->repo<AuthSessionRepository>() else ($e) {
+            return .error($e);
+        };
+        return $repo->find()->where(AuthSessionTable::$expiresAt < $now)->purge();
+    }
+}

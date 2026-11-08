@@ -1,0 +1,127 @@
+namespace nexus::log;
+
+use std::fs;
+use std::io;
+use std::thread;
+
+// the open file and what rotation compares, held under the sink's lock
+internal struct Handle
+{
+    public io::file $file;
+    public uint64 $size;
+    public int64 $day;
+}
+
+/**
+ * Appends lines to a file, never coloured, and starts a fresh one by size
+ * or by day, the way spdlog's rotating and daily sinks do:
+ *
+ *     log::File $f = guard log::File::open('var/app.log', .json, $rotate: .daily, $keep: 7);
+ *
+ * On rotation `app.log` becomes `app.1.log`, `app.1.log` becomes
+ * `app.2.log` and so on; the file past `keep` is removed. Every line is
+ * flushed as it is written, so a crash loses nothing; wrap the sink in
+ * `Async` when that costs too much.
+ */
+#[atomic]
+public class File : Sink
+{
+    public const fs::path $path;
+    public const Format $format;
+    public const Rotate $rotate;
+    public const uint32 $keep;
+    private thread::mutex<Handle> $handle;
+
+    internal constructor(fs::path $path, Format $format, Rotate $rotate, uint32 $keep, Handle $handle)
+    {
+        $this->path = $path;
+        $this->format = $format;
+        $this->rotate = $rotate;
+        $this->keep = $keep;
+        $this->handle = thread::mutex<Handle>($handle);
+    }
+
+    /**
+     * Opens `$path` for appending, creating it when missing. The day of an
+     * existing file is the day it was last written.
+     */
+    public static function open(fs::path $path, Format $format, Rotate $rotate = .never, uint32 $keep = 5) : result<File, FileError>
+    {
+        io::file $f = guard fs::append($path) else ($e) {
+            return .error(.open($path->string(), "{$e}"));
+        };
+        uint64 $size = 0;
+        int64 $day = Stamp::day(std::time::timestamp::now());
+        fs::fileinfo $info = guard fs::info($path) else ($e) {
+            return .error(.open($path->string(), "{$e}"));
+        };
+        $size = $info->size as uint64;
+        if ($size > 0) {
+            $day = Stamp::day($info->modified);
+        }
+        return .ok(File($path, $format, $rotate, $keep, Handle($f, $size, $day)));
+    }
+
+    public function write(const Entry& $e) : void
+    {
+        string $line = $this->format->render($e, false);
+        $line->push(10);
+        thread::locked<Handle> $held = $this->handle->lock();
+        bool $turn = match ($this->rotate) {
+            .never => false,
+            .daily => Stamp::day($e->at) != $held->value->day,
+            .size($max) => $held->value->size > 0 && $held->value->size + ($line->size() as uint64) > $max,
+        };
+        if ($turn) {
+            $this->turn($held->value);
+        }
+        $held->value->day = Stamp::day($e->at);
+        usize $n = guard $held->value->file->write($line) else ($err) {
+            io::eprintln("nexus: cannot write {$this->path->string()}: {$err}");
+            return;
+        };
+        $held->value->size = $held->value->size + ($n as uint64);
+        if ($held->value->file->flush()->failed()) {
+            io::eprintln("nexus: cannot flush {$this->path->string()}");
+        }
+    }
+
+    public function flush() : void
+    {
+        thread::locked<Handle> $held = $this->handle->lock();
+        if ($held->value->file->flush()->failed()) {
+            io::eprintln("nexus: cannot flush {$this->path->string()}");
+        }
+    }
+
+    /**
+     * The name of the `$n`th older file: `app.2.log` for `app.log`.
+     */
+    public const function older(uint32 $n) : fs::path
+    {
+        return $this->path->dirname() / "{$this->path->stem()}.{$n}{$this->path->extension()}";
+    }
+
+    // shifts the older files up by one, moves the current one to .1 and reopens
+    private function turn(Handle& $h) : void
+    {
+        $h->file->close();
+        if ($this->keep == 0) {
+            fs::remove($this->path);
+        } else {
+            uint32 $i = $this->keep;
+            fs::remove($this->older($i));
+            while ($i > 1) {
+                $i = $i - 1;
+                fs::rename($this->older($i), $this->older($i + 1));
+            }
+            fs::rename($this->path, $this->older(1));
+        }
+        io::file $f = guard fs::append($this->path) else ($err) {
+            io::eprintln("nexus: cannot reopen {$this->path->string()}: {$err}");
+            return;
+        };
+        $h->file = $f;
+        $h->size = 0;
+    }
+}

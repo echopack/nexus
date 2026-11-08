@@ -1,0 +1,48 @@
+namespace nexus::work::carbon;
+
+use std::time;
+
+/**
+ * A row of `nexus_tasks`.
+ */
+#[carbon::model: 'nexus_tasks']
+public class QueuedTask : carbon::Model<QueuedTask, QueuedTaskRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $id;
+
+    public string $name;
+    public string $queue;
+    public string $data;
+    public int64 $tries;
+    public int64 $attempts = 0;
+    public string? $uniqueKey = null;
+    public time::timestamp $createdAt;
+    public time::timestamp $availableAt;
+    public time::timestamp? $reservedUntil = null;
+    public time::timestamp? $doneAt = null;
+    public time::timestamp? $failedAt = null;
+    public string $error = '';
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    public static function of(const nexus::work::StoredTask& $j) : QueuedTask
+    {
+        string? $key = null;
+        if (!$j->key->empty()) {
+            $key = $j->key;
+        }
+        return QueuedTask($id: $j->id, $name: $j->name, $queue: $j->queue, $data: $j->data, $tries: $j->tries, $attempts: $j->attempts, $uniqueKey: $key, $createdAt: $j->createdAt, $availableAt: $j->availableAt, $reservedUntil: $j->reservedUntil, $doneAt: $j->doneAt, $failedAt: $j->failedAt, $error: $j->error);
+    }
+
+    public const function stored() : nexus::work::StoredTask
+    {
+        string $key = $this->uniqueKey ?? '';
+        return nexus::work::StoredTask($id: $this->id, $name: $this->name, $queue: $this->queue, $data: $this->data, $tries: $this->tries, $attempts: $this->attempts, $key: $key, $createdAt: $this->createdAt, $availableAt: $this->availableAt, $reservedUntil: $this->reservedUntil, $doneAt: $this->doneAt, $failedAt: $this->failedAt, $error: $this->error);
+    }
+}

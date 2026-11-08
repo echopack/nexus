@@ -1,0 +1,43 @@
+namespace nexus;
+
+/**
+ * The route `bindAction` or `route` just added, for what goes on it next:
+ * middleware that wraps only this route.
+ *
+ * ```echo
+ * $s->bindAction<Export>(method: .get, path: '/v1/export')->middleware<Audit>();
+ * ```
+ */
+public class ActionRef<A>
+{
+    internal Services $services;
+    internal Wiring $wiring;
+
+    internal constructor(Services $services, Wiring $wiring)
+    {
+        $this->services = $services;
+        $this->wiring = $wiring;
+    }
+
+    /**
+     * Wraps this route in middleware `M`, taken from the request's
+     * container each time, so it may depend on request-scoped services.
+     * Bind `M` like any other service. Middleware runs in the order it is
+     * added, after the global middleware and before the middleware the
+     * action names in `#[nexus::through]`.
+     */
+    public function middleware<M>() : ActionRef<A>
+    {
+        string $name = $this->services->generated->nameOf<M>('middleware');
+        $this->wiring->route->middleware[] = MiddlewareRef::of<M>($name);
+        return $this;
+    }
+
+    /**
+     * The action's qualified name.
+     */
+    public const function action() : string
+    {
+        return $this->wiring->route->action;
+    }
+}

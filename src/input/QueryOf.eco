@@ -1,0 +1,10 @@
+namespace nexus;
+
+/**
+ * A `handle()` parameter decoded from the query string, validated by the
+ * rules on `T`'s fields. `T` is an `#[nexus::input]` struct.
+ */
+public struct QueryOf<T>
+{
+    public T $value;
+}

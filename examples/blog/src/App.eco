@@ -1,0 +1,64 @@
+namespace blog;
+
+use container::Container;
+
+/**
+ * The blog itself, as an extension: its providers, one per part, and
+ * what belongs to the whole blog.
+ */
+public class App : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'blog';
+    }
+
+    /**
+     * The parts of the blog, each wiring itself.
+     */
+    public function providers() : array<nexus::Provider>
+    {
+        array<nexus::Provider> $all = [AuthProvider(), PostsProvider()];
+        return $all;
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::App $app = nexus::App($s, $this->providers());
+
+        // every answer says how long it took
+        $app->bind<ServerTiming>(scoped: () => ServerTiming());
+        $app->middleware<ServerTiming>();
+
+        $app->bindAction<Health>((Container $c) => Health($c->get<BlogConfig>()))
+            ->route([.get], '/health');
+
+        // a sign up is welcomed on a worker; expired tokens go every night at three
+        $app->bindListener<WelcomeNewUser>()->on<UserRegistered>();
+        $app->bindTask<SendWelcome>()->queue('mail')->tries(5);
+        $app->bindTask<PruneAuth>()->cron('0 3 * * *');
+        return .ok;
+    }
+
+    /**
+     * Input messages in German, next to the English ones.
+     */
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        json::Value $german = guard json::parse(std::embed::text('../lang/de.json')) else ($e) {
+            return .error(.extension('blog', "lang/de.json: {$e->message()}"));
+        };
+        nexus::Messages $messages = $kernel->services->get<nexus::Messages>();
+        $messages->add('de', $german);
+        return .ok;
+    }
+
+    /**
+     * The providers' commands, and setting a password.
+     */
+    public function commands(nexus::Commands& $cmds) : void
+    {
+        nexus::App::commands($cmds, $this->providers());
+        $cmds->add(SetPassword());
+    }
+}

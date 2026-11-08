@@ -1,0 +1,20 @@
+namespace nexus;
+
+/**
+ * How one action runs, written by `nexus gen` from its `handle()`: the
+ * action's name, the path parameters it reads and the code that reads
+ * the request, calls it and turns the result into a response, and the
+ * middleware it goes through.
+ */
+public struct Dispatcher
+{
+    public string $action;
+    public array<PathParam> $params;
+    public function<Response(Payload&)> $dispatch;
+
+    /**
+     * The middleware `#[nexus::through]` names, on every route of the
+     * action.
+     */
+    public array<MiddlewareRef> $through = [];
+}

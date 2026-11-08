@@ -1,0 +1,92 @@
+namespace nexus::mcp;
+
+/**
+ * One tool as nexus-mcp offers it: the name, title and description the
+ * model reads, the JSON Schema of its arguments, the hints, the class
+ * behind it and the generated call that runs it.
+ */
+public struct ToolSpec
+{
+    public string $name;
+
+    /**
+     * The class whose `handle()` runs, for the log and the boot check.
+     */
+    public string $owner;
+    public json::Value $schema;
+    public function<nexus::Response(nexus::Payload&, nexus::Fields&)> $call;
+    public function<bool(container::Container)> $bound;
+
+    /**
+     * The middleware the class names in `#[nexus::through]`, around every
+     * call as around every route.
+     */
+    public array<nexus::MiddlewareRef> $through = [];
+    public string $title = '';
+    public string $description = '';
+
+    /**
+     * `readOnlyHint`, `destructiveHint`, ...: what the tool says of itself,
+     * as the client shows it.
+     */
+    public json::Value $annotations = json::object();
+
+    /**
+     * Tool argument to the name the generated call reads, for the
+     * arguments the app renamed when it offered the tool.
+     */
+    public map<string, string> $renamed = [];
+
+    /**
+     * `$args` with every renamed argument back under the name the
+     * generated call reads.
+     */
+    public const function unmap(const json::Value& $args) : json::Value
+    {
+        if ($this->renamed->empty()) {
+            return $args;
+        }
+        json::Value $out = json::object();
+        foreach (($args->asObject() ?? ordered_map<string, json::Value>()) as $key => const &$value) {
+            if ($this->renamed->has($key)) {
+                $out[$this->renamed->get($key)] = $value;
+            } else {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * The entry `tools/list` answers with.
+     */
+    public const function entry() : json::Value
+    {
+        json::Value $o = json::object();
+        $o['name'] = json::str($this->name);
+        if (!$this->title->empty()) {
+            $o['title'] = json::str($this->title);
+        }
+        if (!$this->description->empty()) {
+            $o['description'] = json::str($this->description);
+        }
+        $o['inputSchema'] = $this->schema;
+        if (!(($this->annotations->asObject() ?? ordered_map<string, json::Value>())->empty())) {
+            $o['annotations'] = $this->annotations;
+        }
+        return $o;
+    }
+
+    /**
+     * Whether the schema names argument `$key`.
+     */
+    public const function takes(const string& $key) : bool
+    {
+        json::Value? $props = $this->schema->get('properties');
+        if ($props == null) {
+            return false;
+        }
+        json::Value $p = guard $props;
+        return $p->get($key) != null;
+    }
+}

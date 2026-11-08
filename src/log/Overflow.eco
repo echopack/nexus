@@ -1,0 +1,29 @@
+namespace nexus::log;
+
+/**
+ * What an `Async` sink does with an entry when its queue is full.
+ */
+public enum Overflow
+{
+    /**
+     * The writing thread waits for room. Nothing is lost.
+     */
+    case block;
+
+    /**
+     * The entry is dropped and counted; the sink writes how many it
+     * dropped once there is room again.
+     */
+    case drop;
+
+    /**
+     * `block` or `drop`.
+     */
+    public static function parse(const string& $text) : result<Overflow, ConfigError>
+    {
+        string $t = str::lower(str::trim($text));
+        if ($t == 'block') { return .ok(.block); }
+        if ($t == 'drop') { return .ok(.drop); }
+        return .error(.overflow($text));
+    }
+}

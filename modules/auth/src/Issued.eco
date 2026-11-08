@@ -1,0 +1,37 @@
+namespace nexus::auth;
+
+use std::time;
+
+/**
+ * A token just issued: the only time its text is seen. Answers as
+ * `{"token": "...", "id": "...", "expires_at": "..."}`.
+ */
+public struct Issued : nexus::Resource
+{
+    public string $token;
+    public StoredToken $stored;
+
+    public function json() : json::Value
+    {
+        json::Value $o = json::object();
+        $o['token'] = json::str($this->token);
+        $o['id'] = json::str($this->stored->id);
+        $o['expires_at'] = Issued::stamp($this->stored->expiresAt);
+        return $o;
+    }
+
+    /**
+     * `$at` as RFC 3339 in UTC, or JSON null.
+     */
+    public static function stamp(time::timestamp? $at) : json::Value
+    {
+        if ($at == null) {
+            return json::nil();
+        }
+        time::timestamp $t = guard $at;
+        calendar::Zoned $z = guard calendar::Zoned::of($t, calendar::Zone::utc()) else {
+            return json::nil();
+        };
+        return json::str($z->format(calendar::Format::rfc3339()));
+    }
+}

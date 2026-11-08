@@ -1,0 +1,39 @@
+/*
+ * nexus-oauth-carbon: nexus-oauth's clients, codes and grants in the app's
+ * carbon database.
+ *
+ * Three tables, `oauth_clients`, `oauth_codes` and `oauth_grants`, in one
+ * migration the app adds to its own. A code is taken with a delete that
+ * only one caller wins, and a refresh rotates the grant with an update on
+ * the refresh hash it read, so several processes never both spend one.
+ */
+
+#[module: "nexus-oauth-carbon"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "nexus-oauth clients, codes and grants in a carbon database"]
+
+#[depends: "../../.."]
+#[depends: ".."]
+#[depends: "../../carbon"]
+#[depends: "../../../../carbon"]
+#[depends: "../../../../container"]
+#[depends: "../../../../libjson"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+#[if: !CARBON_NOGEN]
+#[sources: ".carbon/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../../../carbon/fake"]
+    #[depends: "../../testing"]
+    #[depends: "../../auth"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

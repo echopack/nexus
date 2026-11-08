@@ -1,0 +1,126 @@
+namespace nexus;
+
+/**
+ * One request, transport independent. The HTTP transport builds it from the
+ * wire; tests build it directly: `Request(Method::get, '/v1/posts/42')`.
+ * `$params` is filled by the router, `$id` by the kernel.
+ */
+public struct Request
+{
+    public Method $method = .get;
+    public string $target = '';
+    public string $path = '';
+    public string $queryString = '';
+    public Query $query = Query();
+    public Headers $headers = Headers();
+    public string $body = '';
+    public string $peer = '';
+    public map<string, string> $params = map<string, string>();
+    public string $id = '';
+
+    /**
+     * A request for `$target` (path plus optional `?query`).
+     */
+    public constructor(Method $method, const string& $target)
+    {
+        $this->method = $method;
+        $this->target = $target;
+        usize $q = $target->find('?');
+        if ($q < $target->size()) {
+            $this->path = $target->sub(0, $q);
+            $this->queryString = $target->sub($q + 1, $target->size() - $q - 1);
+        } else {
+            $this->path = $target;
+            $this->queryString = '';
+        }
+        $this->query = Query(parse: $this->queryString);
+        $this->headers = Headers();
+        $this->body = '';
+        $this->peer = '';
+        $this->params = map<string, string>();
+        $this->id = '';
+    }
+
+    /**
+     * A request carrying a body of the given content type.
+     */
+    public constructor(Method $method, const string& $target, body: const string& $body, type: const string& $type)
+    {
+        $this = Request($method, $target);
+        $this->body = $body;
+        $this->headers->set('Content-Type', $type);
+    }
+
+    /**
+     * The first header of `$name`, any case, or null.
+     */
+    public const function header(const string& $name) : string?
+    {
+        return $this->headers->get($name);
+    }
+
+    /**
+     * A path parameter the router captured, or null.
+     */
+    public const function param(const string& $name) : string?
+    {
+        if (!$this->params->has($name)) {
+            return null;
+        }
+        string $v = $this->params->get($name);
+        return $v;
+    }
+
+    /**
+     * The media type of the body without parameters, lower case, or empty.
+     */
+    public const function contentType() : string
+    {
+        string $raw = $this->headers->get('Content-Type') ?? '';
+        usize $semi = $raw->find(';');
+        if ($semi < $raw->size()) {
+            return str::lower(str::trim($raw->sub(0, $semi)));
+        }
+        return str::lower(str::trim($raw));
+    }
+
+    /**
+     * Where the client reached the app, `https://blog.example.com`: the
+     * scheme from `X-Forwarded-Proto` (a proxy that ends TLS sets it), else
+     * http, and the `Host` header. For links in answers to the same client;
+     * an app behind several names configures its public origin instead.
+     */
+    public const function origin() : string
+    {
+        string $scheme = 'http';
+        string $forwarded = str::lower(str::trim($this->headers->get('X-Forwarded-Proto') ?? ''));
+        usize $comma = $forwarded->find(',');
+        if ($comma < $forwarded->size()) {
+            $forwarded = str::trim($forwarded->sub(0, $comma));
+        }
+        if ($forwarded == 'https') {
+            $scheme = 'https';
+        }
+        string $host = str::trim($this->headers->get('Host') ?? '');
+        if ($host->empty()) {
+            $host = 'localhost';
+        }
+        return "{$scheme}://{$host}";
+    }
+
+    /**
+     * The URL the client asked for, on `origin()`. A `Host` header that
+     * is no host gives `localhost`, as an empty one does.
+     */
+    public const function url() : Url
+    {
+        Url $url = Url(path: $this->path);
+        $url->query = $this->query;
+        Url $origin = guard Url::parse($this->origin()) else {
+            $url->scheme = 'http';
+            $url->host = 'localhost';
+            return $url;
+        };
+        return $url->on($origin);
+    }
+}

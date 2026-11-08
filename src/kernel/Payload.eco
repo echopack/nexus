@@ -1,0 +1,132 @@
+namespace nexus;
+
+/**
+ * Everything one request carries through middleware and the action: the
+ * request, its own child container, the mode and a log stamped with the
+ * request id. The container holds the services bound with `scope:` (a
+ * database session, the repositories on it) and the state middleware
+ * learned on the way, such as who signed the request. Middleware puts that
+ * state, the action reads it:
+ *
+ * ```echo
+ * #[nexus::through: ["blog::RequireUser"]]
+ * public class CreatePost : nexus::Action
+ * {
+ *     public function handle(nexus::Payload& $payload, nexus::Body<NewPost> $in) : result<nexus::Response, nexus::Problem>
+ *     {
+ *         Caller $me = guard $payload->state<Caller>() else ($p) {
+ *             return .error($p);
+ *         };
+ *         ...
+ *     }
+ * }
+ * ```
+ */
+public struct Payload
+{
+    public Request $request;
+    public container::Container $services;
+    public Mode $mode;
+    public Logger $log;
+    public string $action = '';
+
+    /**
+     * How the work came in: `.http` for a request, `.cli`, `.mcp` or
+     * `.work` for the other doors.
+     */
+    public Door $door = .http;
+
+    /**
+     * The service of type `T` for this request.
+     */
+    public function get<T>() : T
+    {
+        return $this->services->get<T>();
+    }
+
+    /**
+     * The service or value of type `T`, or null when nothing provides it.
+     */
+    public function find<T>() : T?
+    {
+        return $this->services->find<T>();
+    }
+
+    /**
+     * What a middleware put for this request with `put`. None did is a
+     * mistake in the wiring, not in the request: a 500, logged, naming
+     * the action.
+     */
+    public function state<T>() : result<T, Problem>
+    {
+        T? $found = $this->services->find<T>();
+        T $value = guard $found else {
+            return .error(.server("{$this->action} reads state no middleware put in its payload; name the middleware that puts it in the action's #[nexus::through]"));
+        };
+        return .ok($value);
+    }
+
+    /**
+     * Leaves `$value` for whatever runs later in this request: the state
+     * a middleware learned, for `state<T>()`.
+     */
+    public function put<T>(T $value) : void
+    {
+        $this->services->put<T>($value);
+    }
+
+    /**
+     * A path parameter, or null.
+     */
+    public const function param(const string& $name) : string?
+    {
+        return $this->request->param($name);
+    }
+
+    /**
+     * `$p` rendered for this request, logged first when it is the server's
+     * fault.
+     */
+    public function fail(const Problem& $p) : Response
+    {
+        if ($p->fault()) {
+            $this->log->error('request failed', ['status' => $p->status(), 'detail' => $p->detail(Mode::dev)]);
+        }
+        if ($p->fields()->empty()) {
+            return $p->response($this->mode, $this->request->id);
+        }
+        string $locale = $this->locale();
+        Problem $shown = $this->localized($p, $locale);
+        Response $r = $shown->response($this->mode, $this->request->id);
+        $r->header('Content-Language', $locale);
+        return $r;
+    }
+
+    /**
+     * `$p` with its field messages in the language this request speaks,
+     * through the bound `Messages`; as it is without one.
+     */
+    public function localized(const Problem& $p) : Problem
+    {
+        return $this->localized($p, $this->locale());
+    }
+
+    internal function localized(const Problem& $p, const string& $locale) : Problem
+    {
+        Messages $m = guard $this->find<Messages>() else {
+            return $p;
+        };
+        return $m->translate($p, $locale);
+    }
+
+    /**
+     * The locale this request speaks, `en` without a bound `Messages`.
+     */
+    public function locale() : string
+    {
+        Messages $m = guard $this->find<Messages>() else {
+            return 'en';
+        };
+        return $m->locale($this);
+    }
+}

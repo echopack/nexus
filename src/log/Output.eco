@@ -1,0 +1,22 @@
+namespace nexus::log;
+
+/**
+ * The standard stream a `Stream` sink writes to.
+ */
+public enum Output
+{
+    case stdout;
+    case stderr;
+
+    /**
+     * Whether the stream is a terminal, which is when the pretty format
+     * is coloured.
+     */
+    public const function terminal() : bool
+    {
+        return match ($this) {
+            .stdout => std::io::stdout->isatty(),
+            .stderr => std::io::stderr->isatty(),
+        };
+    }
+}

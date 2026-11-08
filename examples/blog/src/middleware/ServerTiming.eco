@@ -1,0 +1,19 @@
+namespace blog;
+
+use std::time;
+
+/**
+ * Says how long the app took on every answer, in a `Server-Timing` header
+ * a browser's network panel shows.
+ */
+public class ServerTiming : nexus::Middleware
+{
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        time::instant $start = time::instant::now();
+        nexus::Response $r = $next->run($payload);
+        float64 $ms = ($start->elapsed()->as_micros() as float64) / 1000.0;
+        $r->header('Server-Timing', "app;dur={$ms}");
+        return $r;
+    }
+}

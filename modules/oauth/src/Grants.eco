@@ -1,0 +1,189 @@
+namespace nexus::oauth;
+
+use std::time;
+
+/**
+ * The token side of the server, per request on the store: codes traded
+ * for grants, refresh tokens traded for new pairs, access tokens checked
+ * and revoked.
+ */
+public class Grants
+{
+    public const string ACCESS = 'nxo';
+    public const string REFRESH = 'nxr';
+
+    public OAuthStore $store;
+    public OAuthConfig $config;
+    public calendar::Clock $clock;
+
+    public constructor(OAuthStore $store, OAuthConfig $config, calendar::Clock $clock)
+    {
+        $this->store = $store;
+        $this->config = $config;
+        $this->clock = $clock;
+    }
+
+    /**
+     * A code for what `$asked` asks, allowed by `$subject`: kept as its
+     * hash for a minute, handed out once.
+     */
+    public function code(const Asked& $asked, const string& $subject) : result<string, nexus::Problem>
+    {
+        string $code = nexus::auth::Secrets::hex(32);
+        Code $c = Code($hash: Grants::hash($code), $client: $asked->client->id, $subject: $subject, $redirect: $asked->redirect->text,
+            $named: $asked->named, $challenge: $asked->challenge, $scope: $asked->scope, $expiresAt: $this->clock->now() + time::duration::secs(60));
+        guard $this->store->keep($c) else ($p) {
+            return .error($p);
+        };
+        return .ok($code);
+    }
+
+    /**
+     * Trades a code, with the verifier of its challenge, for a new grant.
+     */
+    public function exchange(const string& $code, const string& $client, const string& $redirect, const string& $verifier) : result<Pair, OAuthError>
+    {
+        Code? $taken = guard $this->store->take(Grants::hash($code)) else ($p) {
+            return .error(OAuthError::of($p));
+        };
+        Code $c = guard $taken else {
+            return .error(OAuthError('invalid_grant', 'the code is unknown, used or expired'));
+        };
+        time::timestamp $now = $this->clock->now();
+        if ($c->expiresAt < $now) {
+            return .error(OAuthError('invalid_grant', 'the code expired'));
+        }
+        if ($c->client != $client) {
+            return .error(OAuthError('invalid_grant', 'the code was issued to another client'));
+        }
+        // RFC 6749 4.1.3: required, and the same, when the authorization request had one
+        if (($c->named || !$redirect->empty()) && $redirect != $c->redirect) {
+            return .error(OAuthError('invalid_grant', 'redirect_uri differs from the one the code was issued for'));
+        }
+        if (!Pkce::verify($verifier, $c->challenge)) {
+            return .error(OAuthError('invalid_grant', 'the code_verifier does not match the code_challenge'));
+        }
+        Client? $known = guard $this->store->client($client) else ($p) {
+            return .error(OAuthError::of($p));
+        };
+        if ($known == null) {
+            return .error(OAuthError('invalid_client', 'the client is no longer registered', 401));
+        }
+        nexus::auth::Token $access = nexus::auth::Token::mint(Grants::ACCESS);
+        nexus::auth::Token $refresh = nexus::auth::Token($prefix: Grants::REFRESH, $id: $access->id, $secret: nexus::auth::Secrets::hex(32));
+        Grant $g = Grant($id: $access->id, $client: $client, $subject: $c->subject, $scope: $c->scope,
+            $accessHash: $access->hash(), $accessExpiresAt: $now + $this->config->access,
+            $refreshHash: $refresh->hash(), $refreshExpiresAt: $now + $this->config->refresh,
+            $createdAt: $now, $usedAt: $now);
+        guard $this->store->open($g) else ($p) {
+            return .error(OAuthError::of($p));
+        };
+        guard $this->store->touch($client, $now) else ($p) {
+            return .error(OAuthError::of($p));
+        };
+        return .ok(Pair($access: $access->text(), $refresh: $refresh->text(), $expiresIn: $this->config->access->as_secs() as int64, $scope: $c->scope));
+    }
+
+    /**
+     * Trades refresh token `$text` of `$client` for a new pair. The token
+     * is spent; one spent before that comes back means a copy is out
+     * there, and the grant ends.
+     */
+    public function refresh(const string& $text, const string& $client) : result<Pair, OAuthError>
+    {
+        nexus::auth::Token $t = guard nexus::auth::Token::parse(Grants::REFRESH, $text) else {
+            return .error(OAuthError('invalid_grant', 'the refresh token is not valid'));
+        };
+        Grant? $found = guard $this->store->grant($t->id) else ($p) {
+            return .error(OAuthError::of($p));
+        };
+        Grant $g = guard $found else {
+            return .error(OAuthError('invalid_grant', 'the refresh token is not valid'));
+        };
+        time::timestamp $now = $this->clock->now();
+        if ($g->client != $client || $g->refreshExpiresAt < $now) {
+            return .error(OAuthError('invalid_grant', 'the refresh token is not valid'));
+        }
+        if (!$g->previousHash->empty() && $t->matches($g->previousHash)) {
+            guard $this->store->drop($g->id) else ($p) {
+                return .error(OAuthError::of($p));
+            };
+            return .error(OAuthError('invalid_grant', 'the refresh token was already used; connect the app again'));
+        }
+        if (!$t->matches($g->refreshHash)) {
+            return .error(OAuthError('invalid_grant', 'the refresh token is not valid'));
+        }
+        string $was = $g->refreshHash;
+        nexus::auth::Token $access = nexus::auth::Token($prefix: Grants::ACCESS, $id: $g->id, $secret: nexus::auth::Secrets::hex(32));
+        nexus::auth::Token $next = nexus::auth::Token($prefix: Grants::REFRESH, $id: $g->id, $secret: nexus::auth::Secrets::hex(32));
+        $g->previousHash = $was;
+        $g->refreshHash = $next->hash();
+        $g->accessHash = $access->hash();
+        $g->accessExpiresAt = $now + $this->config->access;
+        $g->refreshExpiresAt = $now + $this->config->refresh;
+        $g->usedAt = $now;
+        bool $won = guard $this->store->rotate($g, $was) else ($p) {
+            return .error(OAuthError::of($p));
+        };
+        if (!$won) {
+            return .error(OAuthError('invalid_grant', 'the refresh token was just used'));
+        }
+        guard $this->store->touch($client, $now) else ($p) {
+            return .error(OAuthError::of($p));
+        };
+        return .ok(Pair($access: $access->text(), $refresh: $next->text(), $expiresIn: $this->config->access->as_secs() as int64, $scope: $g->scope));
+    }
+
+    /**
+     * Who access token `$text` was issued to: a 401 for a token that is
+     * malformed, unknown, replaced or expired.
+     */
+    public function identify(const string& $text) : result<nexus::auth::Identity, nexus::Problem>
+    {
+        nexus::auth::Token $t = guard nexus::auth::Token::parse(Grants::ACCESS, $text) else {
+            return .error(.unauthorized('the token is not valid'));
+        };
+        Grant? $found = guard $this->store->grant($t->id) else ($p) {
+            return .error($p);
+        };
+        Grant $g = guard $found else {
+            return .error(.unauthorized('the token is not valid'));
+        };
+        if (!$t->matches($g->accessHash) || $g->accessExpiresAt <= $this->clock->now()) {
+            return .error(.unauthorized('the token is not valid'));
+        }
+        array<string> $scopes = [$g->scope];
+        return .ok(nexus::auth::Identity($via: OAuthGuard::NAME, $subject: $g->subject, $credential: $g->id, $scopes: $scopes));
+    }
+
+    /**
+     * Ends the grant an access or refresh token belongs to (RFC 7009); a
+     * token that is not one of ours is no error.
+     */
+    public function revoke(const string& $text) : status<nexus::Problem>
+    {
+        nexus::auth::Token? $access = nexus::auth::Token::parse(Grants::ACCESS, $text);
+        nexus::auth::Token? $refresh = nexus::auth::Token::parse(Grants::REFRESH, $text);
+        nexus::auth::Token $t = guard ($access ?? $refresh) else {
+            return .ok;
+        };
+        Grant? $found = guard $this->store->grant($t->id) else ($p) {
+            return .error($p);
+        };
+        Grant $g = guard $found else {
+            return .ok;
+        };
+        if ($t->matches($g->accessHash) || $t->matches($g->refreshHash)) {
+            return $this->store->drop($g->id);
+        }
+        return .ok;
+    }
+
+    /**
+     * The hex sha256 a code is kept by.
+     */
+    public static function hash(const string& $code) : string
+    {
+        return crypto::hex(crypto::sha256($code));
+    }
+}

@@ -1,0 +1,29 @@
+namespace nexus::rest;
+
+/**
+ * The top-level keys a list answer carries next to its `data`: `page`,
+ * `size`, `total_count`.
+ */
+public struct Meta
+{
+    internal ordered_map<string, json::Value> $keys;
+
+    public constructor()
+    {
+        $this->keys = ordered_map<string, json::Value>();
+    }
+
+    /**
+     * Adds `$key`. Setting a key twice keeps the first position and the
+     * last value.
+     */
+    public function with(const string& $key, json::Value $value) : void
+    {
+        $this->keys[$key] = $value;
+    }
+
+    public const function empty() : bool
+    {
+        return $this->keys->count() == 0;
+    }
+}

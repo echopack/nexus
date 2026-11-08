@@ -1,0 +1,14 @@
+namespace blog;
+
+/**
+ * Which post a command is about.
+ */
+#[nexus::input]
+public struct PostRef
+{
+    /**
+     * The post's id.
+     */
+    #[nexus::positional]
+    public int64 $id;
+}

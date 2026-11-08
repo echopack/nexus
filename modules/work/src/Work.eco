@@ -1,0 +1,27 @@
+namespace nexus::work;
+
+/**
+ * The app's work, bound once: every task type, the scheduled ones with
+ * their schedules, the queues workers take from, the clock and the zone
+ * cron lines are read in.
+ */
+#[atomic]
+public class Work
+{
+    public Kinds $kinds;
+    public array<Planned> $planned;
+    public array<string> $queues;
+    public WorkConfig $config;
+    public calendar::Clock $clock;
+    public calendar::Zone $zone;
+
+    public constructor(Kinds $kinds, array<Planned> $planned, array<string> $queues, WorkConfig $config, calendar::Clock $clock, calendar::Zone $zone)
+    {
+        $this->kinds = $kinds;
+        $this->planned = $planned;
+        $this->queues = $queues;
+        $this->config = $config;
+        $this->clock = $clock;
+        $this->zone = $zone;
+    }
+}

@@ -1,0 +1,233 @@
+namespace nexus;
+
+/**
+ * Why a request did not succeed. Every handler, decoder and middleware
+ * speaks it; the responder renders it as RFC 9457 problem details
+ * (`application/problem+json`).
+ */
+public enum Problem
+{
+    case badRequest(string $detail);
+    case unauthorized(string $detail);
+    case forbidden(string $why);
+    case notFound(string $what);
+    case methodNotAllowed(array<Method> $allow);
+    case conflict(string $detail);
+    case invalid(array<FieldError> $fields);
+    case tooLarge;
+    case unsupportedMedia(string $type);
+    case tooMany(int64 $retryAfter);
+    case unavailable(string $detail);
+    case server(string $cause);
+    case custom(ProblemDetail $detail);
+
+    /**
+     * The HTTP status this problem answers with.
+     */
+    public const function status() : int32
+    {
+        return match ($this) {
+            Problem::badRequest($d) => 400,
+            Problem::unauthorized($d) => 401,
+            Problem::forbidden($w) => 403,
+            Problem::notFound($w) => 404,
+            Problem::methodNotAllowed($a) => 405,
+            Problem::conflict($d) => 409,
+            Problem::invalid($f) => 422,
+            Problem::tooLarge => 413,
+            Problem::unsupportedMedia($t) => 415,
+            Problem::tooMany($s) => 429,
+            Problem::unavailable($d) => 503,
+            Problem::server($c) => 500,
+            Problem::custom($d) => $d->status,
+        };
+    }
+
+    /**
+     * The short, fixed summary of the problem kind.
+     */
+    public const function title() : string
+    {
+        return match ($this) {
+            Problem::badRequest($d) => 'Bad Request',
+            Problem::unauthorized($d) => 'Unauthorized',
+            Problem::forbidden($w) => 'Forbidden',
+            Problem::notFound($w) => 'Not Found',
+            Problem::methodNotAllowed($a) => 'Method Not Allowed',
+            Problem::conflict($d) => 'Conflict',
+            Problem::invalid($f) => 'Unprocessable Content',
+            Problem::tooLarge => 'Content Too Large',
+            Problem::unsupportedMedia($t) => 'Unsupported Media Type',
+            Problem::tooMany($s) => 'Too Many Requests',
+            Problem::unavailable($d) => 'Service Unavailable',
+            Problem::server($c) => 'Internal Server Error',
+            Problem::custom($d) => $d->title,
+        };
+    }
+
+    /**
+     * The type URI. Plain HTTP problems are `about:blank`, as RFC 9457 says.
+     */
+    public const function type() : string
+    {
+        return match ($this) {
+            Problem::custom($d) => $d->type,
+            else => 'about:blank',
+        };
+    }
+
+    /**
+     * The occurrence-specific explanation. An internal cause is only told
+     * when the mode reveals internals.
+     */
+    public const function detail(Mode $mode) : string
+    {
+        return match ($this) {
+            Problem::badRequest($d) => $d,
+            Problem::unauthorized($d) => $d,
+            Problem::forbidden($w) => $w,
+            Problem::notFound($w) => "{$w} not found",
+            Problem::methodNotAllowed($a) => 'the resource does not answer this method',
+            Problem::conflict($d) => $d,
+            Problem::invalid($f) => 'the input did not validate',
+            Problem::tooLarge => 'the request body is too large',
+            Problem::unsupportedMedia($t) => "content type '{$t}' is not accepted here",
+            Problem::tooMany($s) => 'slow down',
+            Problem::unavailable($d) => $d,
+            Problem::server($c) => Problem::hidden($c, $mode),
+            Problem::custom($d) => $d->detail,
+        };
+    }
+
+    /**
+     * Whether this is the server's fault (5xx), worth logging as an error.
+     */
+    public const function fault() : bool
+    {
+        return $this->status() >= 500;
+    }
+
+    /**
+     * The problem details document.
+     */
+    public const function json(Mode $mode, const string& $requestId) : json::Value
+    {
+        json::Value $o = json::object();
+        $o['type'] = json::str($this->type());
+        $o['title'] = json::str($this->title());
+        $o['status'] = json::int($this->status() as int64);
+        string $detail = $this->detail($mode);
+        if (!$detail->empty()) {
+            $o['detail'] = json::str($detail);
+        }
+        if (!$requestId->empty()) {
+            $o['requestId'] = json::str($requestId);
+        }
+        array<FieldError> $fields = $this->fields();
+        if (!$fields->empty()) {
+            json::Value $list = json::arr();
+            foreach ($fields as const &$f) {
+                $list[] = $f->json();
+            }
+            $o['errors'] = $list;
+        }
+        ProblemDetail? $custom = $this->custom();
+        if ($custom != null) {
+            ProblemDetail $d = guard $custom;
+            ordered_map<string, json::Value>? $more = $d->extra->asObject();
+            if ($more != null) {
+                ordered_map<string, json::Value> $members = guard $more;
+                foreach ($members as $k => const &$v) {
+                    $o[$k] = $v->clone();
+                }
+            }
+        }
+        return $o;
+    }
+
+    /**
+     * The problem as a response: problem+json body, plus `Allow` or
+     * `Retry-After` where the status calls for one.
+     */
+    public const function response(Mode $mode, const string& $requestId) : Response
+    {
+        Response $r = Response($this->status(), json::dump($this->json($mode, $requestId)), type: 'application/problem+json');
+        array<Method> $allow = $this->allowed();
+        if (!$allow->empty()) {
+            array<string> $verbs = [];
+            foreach ($allow as const &$m) {
+                $verbs[] = $m->verb();
+            }
+            $r->header('Allow', str::join($verbs, ', '));
+        }
+        int64? $wait = $this->retryAfter();
+        if ($wait != null) {
+            int64 $seconds = guard $wait;
+            $r->header('Retry-After', str::from($seconds));
+        }
+        return $r;
+    }
+
+    /**
+     * The refused fields of an `invalid` problem, empty otherwise.
+     */
+    public const function fields() : array<FieldError>
+    {
+        array<FieldError> $none = [];
+        return match ($this) {
+            Problem::invalid($f) => $f,
+            else => $none,
+        };
+    }
+
+    /**
+     * The methods a `methodNotAllowed` problem allows, empty otherwise.
+     */
+    public const function allowed() : array<Method>
+    {
+        array<Method> $none = [];
+        return match ($this) {
+            Problem::methodNotAllowed($a) => $a,
+            else => $none,
+        };
+    }
+
+    /**
+     * The seconds a `tooMany` problem asks the client to wait, or null.
+     */
+    public const function retryAfter() : int64?
+    {
+        return match ($this) {
+            Problem::tooMany($s) => $s,
+            else => null,
+        };
+    }
+
+    /**
+     * The app's own detail of a `custom` problem, or null.
+     */
+    public const function custom() : ProblemDetail?
+    {
+        return match ($this) {
+            Problem::custom($d) => $d,
+            else => null,
+        };
+    }
+
+    /**
+     * One field refused, as an `invalid` problem.
+     */
+    public static function field(const string& $field, const string& $code, const string& $message) : Problem
+    {
+        array<FieldError> $one = [FieldError($field, $code, $message)];
+        return Problem::invalid($one);
+    }
+
+    internal static function hidden(const string& $cause, Mode $mode) : string
+    {
+        if ($mode->reveals()) {
+            return $cause;
+        }
+        return 'the server failed to answer this request';
+    }
+}

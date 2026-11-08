@@ -1,0 +1,13 @@
+namespace blog;
+
+/**
+ * A user as an admin sees them: the `admin` shape of `User`, email and
+ * role included. Not in the network, so a nested author never gets it.
+ */
+#[atomic]
+public class UserAdminTransformer : nexus::rest::Transformer<User>, UserAdminMapping
+{
+    public constructor()
+    {
+    }
+}

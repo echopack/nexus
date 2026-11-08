@@ -1,0 +1,29 @@
+namespace blog;
+
+/**
+ * Signs in with an email and a password and answers with a bearer token,
+ * shown this once.
+ */
+public class Login : nexus::Action
+{
+    private SignIn $signIn;
+    private nexus::auth::Tokens $tokens;
+
+    public constructor(SignIn $signIn, nexus::auth::Tokens $tokens)
+    {
+        $this->signIn = $signIn;
+        $this->tokens = $tokens;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Body<Credentials> $in) : result<nexus::Response, nexus::Problem>
+    {
+        User $u = guard $this->signIn->check($payload, $in->value) else ($p) {
+            return .error($p);
+        };
+        
+        nexus::auth::Issued $issued = guard $this->tokens->issue("{$u->id}", 'login') else ($p) {
+            return .error($p);
+        };
+        return .ok(nexus::Response(json: $issued->json(), status: 201));
+    }
+}

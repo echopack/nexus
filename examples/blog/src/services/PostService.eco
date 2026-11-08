@@ -1,0 +1,136 @@
+namespace blog;
+
+/**
+ * What the blog does with posts, whichever door asks: the HTTP actions,
+ * the `posts:*` commands and the MCP tools all call it, so the rules (who
+ * may change a post, what a tag looks like) live here once.
+ */
+public class PostService
+{
+    private PostRepository $posts;
+    private UserRepository $users;
+
+    public constructor(PostRepository $posts, UserRepository $users)
+    {
+        $this->posts = $posts;
+        $this->users = $users;
+    }
+
+    /**
+     * Post `$id` with its author; a 404 when there is none.
+     */
+    public function find(int64 $id) : result<Post, nexus::Problem>
+    {
+        Post? $found = guard $this->posts->find()->withAuthor()->get($id) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        Post $p = guard $found else {
+            return .error(.notFound('the post'));
+        };
+        return .ok($p);
+    }
+
+    /**
+     * User `$id`, for a door that names the author itself; a 404 when there
+     * is none.
+     */
+    public function author(int64 $id) : result<User, nexus::Problem>
+    {
+        User? $found = guard $this->users->find()->get($id) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        User $u = guard $found else {
+            return .error(.notFound("user {$id}"));
+        };
+        return .ok($u);
+    }
+
+    /**
+     * Publishes `$in` by `$author`, its tags cleaned.
+     */
+    public function create(const User& $author, const NewPost& $in) : result<Post, nexus::Problem>
+    {
+        Post $made = guard $this->posts->create(Post($authorId: $author->id, $title: $in->title, $body: $in->body, $tags: PostService::tags($in->tags))) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($made);
+    }
+
+    /**
+     * Publishes every one of `$in` by `$author`, all or none.
+     */
+    public function createAll(const User& $author, const array<NewPost>& $in) : result<array<Post>, nexus::Problem>
+    {
+        PostRepository $repo = $this->posts;
+        int64 $authorId = $author->id;
+        array<NewPost> $all = $in;
+        carbon::Connection $db = $repo->connection();
+        array<Post> $made = guard $db->transaction<array<Post>>(function[$repo, $authorId, $all]() : result<array<Post>, carbon::Error> {
+            array<Post> $out = [];
+            foreach ($all as const &$one) {
+                Post $p = guard $repo->create(Post($authorId: $authorId, $title: $one->title, $body: $one->body, $tags: PostService::tags($one->tags))) else ($e) {
+                    return .error($e);
+                };
+                $out[] = $p;
+            }
+            return .ok($out);
+        }) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($made);
+    }
+
+    /**
+     * Changes post `$id` as `$change` says; whatever it leaves out stays.
+     * Only its author or an admin may.
+     */
+    public function update(const User& $me, int64 $id, const PostChanges& $change) : result<Post, nexus::Problem>
+    {
+        Post? $found = guard $this->posts->find()->get($id) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        Post $p = guard $found else {
+            return .error(.notFound('the post'));
+        };
+        guard $p->changeableBy($me) else ($problem) {
+            return .error($problem);
+        };
+        if ($change->title != null) {
+            string $title = guard $change->title;
+            $p->title = $title;
+        }
+        if ($change->body != null) {
+            string $body = guard $change->body;
+            $p->body = $body;
+        }
+        guard $this->posts->save($p) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($p);
+    }
+
+    /**
+     * Tags as the blog keeps them: trimmed, lower case, each once, the
+     * empty ones dropped.
+     */
+    public static function tags(const array<string>& $given) : array<string>
+    {
+        array<string> $out = [];
+        foreach ($given as const &$raw) {
+            string $tag = str::lower(str::trim($raw));
+            if ($tag->empty()) {
+                continue;
+            }
+            bool $seen = false;
+            foreach ($out as const &$have) {
+                if ($have == $tag) {
+                    $seen = true;
+                }
+            }
+            if (!$seen) {
+                $out[] = $tag;
+            }
+        }
+        return $out;
+    }
+}

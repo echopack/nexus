@@ -1,0 +1,289 @@
+namespace nexus::log;
+
+/**
+ * How a sink spells an entry. A sink decides where lines go, a format
+ * decides what they look like, so any sink can write any format.
+ */
+public enum Format
+{
+    /**
+     * For people at a terminal, with spans the way tracing prints them:
+     *
+     *     12:00:01.123 INFO  import{file=a.csv}: rows read n=5 req=abc
+     */
+    case pretty;
+
+    /**
+     * `key=value` pairs, quoted where needed:
+     *
+     *     t=2026-11-09T12:00:01.123Z level=info msg="rows read" span=import n=5
+     */
+    case logfmt;
+
+    /**
+     * One JSON object per line: `t`, `lvl`, `msg`, the span keys, then the
+     * fields.
+     */
+    case json;
+
+    /**
+     * A format by name: pretty, logfmt or json.
+     */
+    public static function parse(const string& $name) : result<Format, ConfigError>
+    {
+        string $n = str::lower(str::trim($name));
+        if ($n == 'pretty') { return .ok(.pretty); }
+        if ($n == 'logfmt') { return .ok(.logfmt); }
+        if ($n == 'json') { return .ok(.json); }
+        return .error(.format($name));
+    }
+
+    /**
+     * The entry as one line without its newline. `$color` adds ANSI colours
+     * to the pretty format and changes nothing in the others.
+     */
+    public const function render(const Entry& $e, bool $color) : string
+    {
+        return match ($this) {
+            .pretty => Format::pretty($e, $color),
+            .logfmt => Format::logfmt($e),
+            .json => Format::json($e),
+        };
+    }
+
+    private static function pretty(const Entry& $e, bool $color) : string
+    {
+        string $out = Stamp::clock($e->at);
+        $out->push(32);
+        if ($color) {
+            Format::paint($out, Format::shade($e->level), $e->level->label());
+        } else {
+            $out->append($e->level->label());
+        }
+        $out->push(32);
+        Fields $plain = Fields();
+        if ($e->context != null) {
+            Context $c = guard $e->context;
+            Format::spans($c, $out, $plain, $color);
+        }
+        $out->append($e->message);
+        $plain->merge($e->fields);
+        foreach ($plain->items as const &$f) {
+            $out->push(32);
+            if ($color) {
+                Format::paint($out, 2, $f->key);
+            } else {
+                $out->append($f->key);
+            }
+            $out->push(61);
+            Format::bare($out, $f->value);
+        }
+        return $out;
+    }
+
+    // spans root first as `name{k=v}: `, the other nodes' fields into $plain
+    private static function spans(const Context& $c, string& $out, Fields& $plain, bool $color) : void
+    {
+        if ($c->parent != null) {
+            Context $p = guard $c->parent;
+            Format::spans($p, $out, $plain, $color);
+        }
+        if (!$c->opens) {
+            $plain->merge($c->fields);
+            return;
+        }
+        if ($color) {
+            Format::paint($out, 1, $c->span);
+        } else {
+            $out->append($c->span);
+        }
+        if (!$c->fields->empty()) {
+            $out->push(123);
+            bool $first = true;
+            foreach ($c->fields->items as const &$f) {
+                if (!$first) {
+                    $out->push(32);
+                }
+                $first = false;
+                $out->append($f->key);
+                $out->push(61);
+                Format::bare($out, $f->value);
+            }
+            $out->push(125);
+        }
+        $out->append(': ');
+    }
+
+    private static function logfmt(const Entry& $e) : string
+    {
+        string $out = 't=';
+        $out->append(Stamp::rfc3339($e->at));
+        $out->append(' level=');
+        $out->append($e->level->name());
+        $out->append(' msg=');
+        Format::quote($out, $e->message);
+        string $span = $e->span();
+        if (!$span->empty()) {
+            $out->append(' span=');
+            Format::quote($out, $span);
+            $out->append(' span_id=');
+            $out->append($e->spanId());
+            string $up = $e->parentId();
+            if (!$up->empty()) {
+                $out->append(' parent_id=');
+                $out->append($up);
+            }
+        }
+        foreach ($e->all()->items as const &$f) {
+            $out->push(32);
+            $out->append($f->key);
+            $out->push(61);
+            Format::quote($out, $f->value->text());
+        }
+        return $out;
+    }
+
+    private static function json(const Entry& $e) : string
+    {
+        string $out = '{"t":';
+        Format::string($out, Stamp::rfc3339($e->at));
+        $out->append(',"lvl":');
+        Format::string($out, $e->level->name());
+        $out->append(',"msg":');
+        Format::string($out, $e->message);
+        string $span = $e->span();
+        if (!$span->empty()) {
+            $out->append(',"span":');
+            Format::string($out, $span);
+            $out->append(',"span_id":');
+            Format::string($out, $e->spanId());
+            string $up = $e->parentId();
+            if (!$up->empty()) {
+                $out->append(',"parent_id":');
+                Format::string($out, $up);
+            }
+        }
+        foreach ($e->all()->items as const &$f) {
+            $out->push(44);
+            Format::string($out, $f->key);
+            $out->push(58);
+            Format::value($out, $f->value);
+        }
+        $out->push(125);
+        return $out;
+    }
+
+    // a value in JSON: numbers and bools bare, raw JSON as it is
+    private static function value(string& $out, const Value& $v) : void
+    {
+        match ($v) {
+            .float($n) => {
+                if ($n - $n != 0.0) {
+                    $out->append('null');
+                } else {
+                    $out->append("{$n}");
+                }
+            },
+            .raw($j) => { $out->append($j); },
+            else => {
+                if ($v->quoted()) {
+                    Format::string($out, $v->text());
+                } else {
+                    $out->append($v->text());
+                }
+            },
+        }
+    }
+
+    // a value in the pretty format: as text, quoted only when it has a space
+    private static function bare(string& $out, const Value& $v) : void
+    {
+        string $t = $v->text();
+        if ($v->quoted() && ($t->empty() || $t->contains(' '))) {
+            Format::string($out, $t);
+        } else {
+            $out->append($t);
+        }
+    }
+
+    // logfmt: bare when the text has no space, quote, equals or control byte
+    private static function quote(string& $out, const string& $s) : void
+    {
+        bool $plain = !$s->empty();
+        usize $i = 0;
+        while ($plain && $i < $s->size()) {
+            uint8 $c = $s->byte($i);
+            if ($c <= 32 || $c == 34 || $c == 61 || $c == 92 || $c == 127) {
+                $plain = false;
+            }
+            $i = $i + 1;
+        }
+        if ($plain) {
+            $out->append($s);
+        } else {
+            Format::string($out, $s);
+        }
+    }
+
+    // a JSON string literal; logfmt quotes the same way
+    private static function string(string& $out, const string& $s) : void
+    {
+        $out->push(34);
+        usize $i = 0;
+        while ($i < $s->size()) {
+            uint8 $c = $s->byte($i);
+            // escapes are pushed as bytes: quoted strings process them
+            if ($c == 34 || $c == 92) {
+                $out->push(92);
+                $out->push($c);
+            } else if ($c == 10) {
+                $out->push(92);
+                $out->push(110);
+            } else if ($c == 13) {
+                $out->push(92);
+                $out->push(114);
+            } else if ($c == 9) {
+                $out->push(92);
+                $out->push(116);
+            } else if ($c < 32 || $c == 127) {
+                $out->push(92);
+                $out->append('u00');
+                $out->push(Format::hex($c / 16));
+                $out->push(Format::hex($c % 16));
+            } else {
+                $out->push($c);
+            }
+            $i = $i + 1;
+        }
+        $out->push(34);
+    }
+
+    private static function hex(uint8 $d) : uint8
+    {
+        if ($d < 10) {
+            return 48 + $d;
+        }
+        return 87 + $d;
+    }
+
+    private static function shade(Level $l) : int32
+    {
+        return match ($l) {
+            .trace => 90,
+            .debug => 34,
+            .info => 32,
+            .warn => 33,
+            .error => 31,
+        };
+    }
+
+    // `ESC[<code>m text ESC[0m`
+    private static function paint(string& $out, int32 $code, const string& $text) : void
+    {
+        $out->push(27);
+        $out->append("[{$code}m");
+        $out->append($text);
+        $out->push(27);
+        $out->append('[0m');
+    }
+}

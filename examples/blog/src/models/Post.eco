@@ -1,0 +1,72 @@
+namespace blog;
+
+use std::time;
+
+/**
+ * A post, written by a user, tagged with a few words. The fields marked
+ * `#[nexus::expose]` are what `PostMapping` writes, the author when the
+ * request includes it.
+ */
+#[carbon::model: 'posts']
+public class Post : carbon::Model<Post, PostRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    #[nexus::expose: { attribute: true }]
+    public int64 $id = 0;
+
+    public int64 $authorId;
+
+    #[nexus::expose]
+    public string $title;
+
+    #[nexus::expose]
+    public string $body = '';
+
+    #[carbon::codec: 'csv']
+    #[nexus::expose: { item: 'tag' }]
+    public array<string> $tags = [];
+
+    #[carbon::created]
+    #[nexus::expose]
+    public time::timestamp? $createdAt = null;
+
+    #[carbon::updated]
+    public time::timestamp? $updatedAt = null;
+
+    #[carbon::belongsTo: 'authorId']
+    #[nexus::expose]
+    public carbon::One<User> $author = .unloaded();
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    /**
+     * Whether `$me` may change this post: its author or an admin may, a
+     * 403 for anyone else.
+     */
+    public const function changeableBy(const User& $me) : status<nexus::Problem>
+    {
+        if ($this->authorId == $me->id || $me->role == Role::admin) {
+            return .ok;
+        }
+        return .error(.forbidden('only its author or an admin may change a post'));
+    }
+
+    /**
+     * The crud's `authorize` for `$me`: anyone reads, and a write needs
+     * `changeableBy`.
+     */
+    public static function authorizeFor(User $me) : function<status<nexus::Problem>(nexus::crud::Verb, const Post&)>
+    {
+        return function[$me](nexus::crud::Verb $v, const Post& $p) : status<nexus::Problem> {
+            if (!$v->writes()) {
+                return .ok;
+            }
+            return $p->changeableBy($me);
+        };
+    }
+}

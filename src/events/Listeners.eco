@@ -1,0 +1,11 @@
+namespace nexus;
+
+/**
+ * The listeners of one event type, held type-erased by `Events`.
+ */
+#[atomic]
+internal class Listeners<E>
+{
+    public array<string> $names = [];
+    public array<function<status<Problem>(Payload&, const E&)>> $calls = [];
+}

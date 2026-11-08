@@ -1,0 +1,17 @@
+namespace nexus;
+
+/**
+ * The middleware of one pass plus the handler at its end.
+ */
+#[atomic]
+public class Chain
+{
+    public array<Middleware> $links;
+    public function<Response(Payload&)> $last;
+
+    public constructor(array<Middleware> $links, function<Response(Payload&)> $last)
+    {
+        $this->links = $links;
+        $this->last = $last;
+    }
+}

@@ -1,0 +1,18 @@
+namespace nexusgen;
+
+/**
+ * One `handle()` parameter, classified.
+ */
+public struct Param
+{
+    public string $name;
+    public ParamKind $kind;
+    public json::Value $type;
+    public string $typeText;
+    public bool $hasDefault;
+    public string $defaultText;
+    // the input struct of a Body<T> or QueryOf<T>, qualified
+    public string $input = '';
+    // whether the path segment is `{name?}`
+    public bool $optionalSegment = false;
+}

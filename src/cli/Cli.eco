@@ -1,0 +1,33 @@
+namespace nexus;
+
+/**
+ * Marks a class as a command of the app binary, next to `serve` and the
+ * extensions' commands. `$cmds->bindCommand<ShowPostCommand>(...)->name('posts:show')`
+ * in an extension's `commands()` names it, its docblock is its help, and
+ * its `handle()` takes the payload, libcommand's output and one
+ * `#[nexus::input]` struct whose fields are the options
+ * (`#[nexus::positional]` makes one a word after the name). A command
+ * calls the same services the actions do and prints for itself; a problem
+ * it returns is printed as an error and exits 1.
+ *
+ * ```echo
+ * public class ShowPostCommand : nexus::Cli
+ * {
+ *     public function handle(nexus::Payload& $payload, command::CLIContext& $out, PostRef $in) : status<nexus::Problem>
+ *     {
+ *         Post $p = guard $this->posts->find($in->id) else ($e) {
+ *             return .error($e);
+ *         };
+ *         $out->line($p->title);
+ *         return .ok;
+ *     }
+ * }
+ * ```
+ *
+ * `nexus gen` writes a `nexus::Command` for it, `ShowPostCommandCli`, that
+ * reads the options, runs it on a payload of its own and reports; the
+ * name it answers to is the one `add` gives.
+ */
+public interface Cli
+{
+}

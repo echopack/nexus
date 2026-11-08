@@ -1,0 +1,21 @@
+namespace nexus::oauth;
+
+/**
+ * `OAUTH_ISSUER` is the app's public origin (`https://blog.example.com`);
+ * empty takes it from each request. `OAUTH_CONSENT` is the app's page that
+ * asks the user, relative to the issuer or absolute. Access tokens last
+ * `OAUTH_ACCESS`, refresh tokens `OAUTH_REFRESH` from their last use;
+ * at most `OAUTH_CLIENTS` clients are registered at once. `OAUTH_SCOPE` is
+ * the one scope granted, `OAUTH_NAME` what the metadata calls the app.
+ */
+#[nexus::config: "oauth"]
+public struct OAuthConfig
+{
+    public string $issuer = '';
+    public string $consent = '/oauth/consent';
+    public std::time::duration $access = std::time::duration::hours(1);
+    public std::time::duration $refresh = std::time::duration::hours(720);
+    public uint32 $clients = 1000;
+    public string $scope = 'mcp';
+    public string $name = '';
+}

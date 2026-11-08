@@ -1,0 +1,38 @@
+/*
+ * nexus-auth-carbon: nexus-auth's tokens and signed sessions in the app's
+ * carbon database.
+ *
+ * Two tables, `auth_tokens` and `auth_sessions`, in one migration the app
+ * adds to its own; the repositories are registered with the app's, and
+ * the extension binds the stores on each request's carbon session.
+ * `auth:prune` deletes what has expired.
+ */
+
+#[module: "nexus-auth-carbon"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "nexus-auth tokens and sessions in a carbon database"]
+
+#[depends: "../../.."]
+#[depends: ".."]
+#[depends: "../../carbon"]
+#[depends: "../../../../carbon"]
+#[depends: "../../../../container"]
+#[depends: "../../../../libjson"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+#[if: !CARBON_NOGEN]
+#[sources: ".carbon/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../../../carbon/fake"]
+    #[depends: "../../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

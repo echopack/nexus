@@ -1,0 +1,41 @@
+namespace nexus;
+
+/**
+ * One part of the app wiring itself: its bindings, actions, tools, tasks
+ * and commands, side by side. The app lists its providers and hands them
+ * to `nexus::App` in both hooks:
+ *
+ * ```echo
+ * public class PostsProvider : nexus::Provider
+ * {
+ *     public function register(nexus::App $app) : void
+ *     {
+ *         $app->bindRepository<PostRepository>();
+ *         $app->bind<PostService>(scoped: (Container $c) => PostService($c->get<PostRepository>(), $c->get<UserRepository>()));
+ *         $app->bindAction<CreatePost>((Container $c) => CreatePost($c->get<PostService>(), $c->get<PostTransformer>()))
+ *             ->route([.post], '/v1/posts');
+ *     }
+ *
+ *     public function commands(nexus::Commands& $cmds) : void
+ *     {
+ *         $cmds->bindCommand<ShowPostCommand>((Container $c) => ShowPostCommand($c->get<PostService>()))
+ *             ->name('posts:show');
+ *     }
+ * }
+ * ```
+ */
+public interface Provider
+{
+    /**
+     * Wires this part of the app, at boot.
+     */
+    function register(App $app) : void;
+
+    /**
+     * Adds this part's commands. The command line reads them before the
+     * app boots, so this only records.
+     */
+    function commands(Commands& $cmds) : void
+    {
+    }
+}

@@ -1,0 +1,107 @@
+/**
+ * The URL value: parsing, building and printing.
+ */
+
+use nexus::{Url, UrlError, Request, Response, Method, Query};
+use ecotest::expect;
+
+test url_parses_an_absolute_one
+{
+    Url $u = guard Url::parse('HTTPS://Blog.Example.com:8443/v1/posts/a%20b?include=author&tag=a+b#top%20part');
+    expect($u->scheme)->is('https');
+    expect($u->host)->is('blog.example.com');
+    expect($u->port)->some(8443);
+    expect($u->path)->is('/v1/posts/a%20b');
+    expect($u->query->get('include'))->some('author');
+    expect($u->query->get('tag'))->some('a b');
+    expect($u->fragment)->is('top part');
+    expect($u->absolute())->yes(says: 'a url with a scheme and host is absolute');
+    expect($u->origin())->is('https://blog.example.com:8443');
+    expect($u->text())->is('https://blog.example.com:8443/v1/posts/a%20b?include=author&tag=a%20b#top%20part');
+}
+
+test url_parses_hosts_and_relative_paths
+{
+    Url $v6 = guard Url::parse('http://[::1]:8080/x');
+    expect($v6->host)->is('[::1]');
+    expect($v6->port)->some(8080);
+    Url $bare = guard Url::parse('https://example.com');
+    expect($bare->path)->is('');
+    expect($bare->port)->none();
+    expect($bare->text())->is('https://example.com');
+    expect($bare->with('a', '1')->text())->is('https://example.com/?a=1');
+    Url $rel = guard Url::parse('/v1/posts?page=2');
+    expect($rel->absolute())->no(says: 'a path-only url is relative');
+    expect($rel->origin())->is('');
+    expect($rel->text())->is('/v1/posts?page=2');
+}
+
+test url_refuses_what_is_no_url
+{
+    expect(Url::parse(''))->fails();
+    expect(Url::parse('/a b'))->fails();
+    expect(Url::parse('posts/5'))->fails();
+    expect(Url::parse('//evil.com/x'))->fails();
+    expect(Url::parse('mailto:x@example.com'))->fails();
+    expect(Url::parse('1http://example.com'))->fails();
+    expect(Url::parse('https:///x'))->fails();
+    expect(Url::parse('https://user@example.com'))->fails();
+    expect(Url::parse('https://example.com:0'))->fails();
+    expect(Url::parse('https://example.com:65536'))->fails();
+    expect(Url::parse('https://example.com:8o'))->fails();
+    expect(Url::parse('https://[::1/x'))->fails();
+    expect(Url::parse('https://[::1]x/'))->fails();
+    expect(Url::parse('https://exa\\mple.com/'))->fails();
+    expect(Url::parse('/a%zz'))->fails();
+    expect(Url::parse('/a?b=%4'))->fails();
+    expect(Url::parse('/a#%'))->fails();
+    UrlError $e = Url::parse('posts/5')->failure();
+    expect($e->message())->has('neither');
+}
+
+test url_builds_by_copy
+{
+    Url $u = Url(path: '/v1/posts');
+    Url $more = $u->with('tag', 'a&b=c')->with('page', '2')->at('top');
+    expect($u->text())->is('/v1/posts');
+    expect($more->text())->is('/v1/posts?tag=a%26b%3Dc&page=2#top');
+    expect($more->without('tag')->text())->is('/v1/posts?page=2#top');
+    expect("{$more->without('page')}")->is('/v1/posts?tag=a%26b%3Dc#top');
+    expect(Url(path: '')->text())->is('/');
+    expect(Url(path: '/caf%C3%A9')->with('q', 'café')->text())->is('/caf%C3%A9?q=caf%C3%A9');
+}
+
+test url_goes_on_an_origin
+{
+    Url $path = Url(path: '/v1/posts/5')->with('a', '1');
+    Url $plain = guard Url::parse('https://example.com');
+    Url $mounted = guard Url::parse('https://example.com/api/');
+    expect($path->on($plain)->text())->is('https://example.com/v1/posts/5?a=1');
+    expect($path->on($mounted)->text())->is('https://example.com/api/v1/posts/5?a=1');
+    Url $other = guard Url::parse('http://old.example.com/v1/posts/5');
+    expect($other->on($plain)->text())->is('https://example.com/v1/posts/5');
+}
+
+test request_and_redirect_speak_url
+{
+    Request $req = Request(Method::get, '/v1/posts?page=2');
+    $req->headers->set('Host', 'blog.example.com:8080');
+    $req->headers->set('X-Forwarded-Proto', 'https');
+    expect($req->url()->text())->is('https://blog.example.com:8080/v1/posts?page=2');
+    Request $odd = Request(Method::get, '/x');
+    $odd->headers->set('Host', 'bad host');
+    expect($odd->url()->text())->is('http://localhost/x');
+    Response $r = Response(redirect: Url(path: '/login')->with('next', '/a b'));
+    expect($r->status)->is(302);
+    expect($r->headers->get('Location'))->some('/login?next=%2Fa%20b');
+    Response $s = Response(redirect: '/plain', status: 301);
+    expect($s->headers->get('Location'))->some('/plain');
+}
+
+test query_removes_by_name
+{
+    Query $q = Query(parse: 'a=1&b=2&a=3');
+    $q->remove('a');
+    expect($q->count())->is(1);
+    expect($q->encode())->is('b=2');
+}

@@ -1,0 +1,32 @@
+namespace nexus::mcp;
+
+/**
+ * Why a JSON-RPC message gets an error instead of a result.
+ */
+public enum RpcError
+{
+    case parse(string $why);
+    case invalidRequest(string $why);
+    case methodNotFound(string $method);
+    case invalidParams(string $why);
+
+    public const function code() : int64
+    {
+        return match ($this) {
+            RpcError::parse($w) => -32700,
+            RpcError::invalidRequest($w) => -32600,
+            RpcError::methodNotFound($m) => -32601,
+            RpcError::invalidParams($w) => -32602,
+        };
+    }
+
+    public const function message() : string
+    {
+        return match ($this) {
+            RpcError::parse($why) => "the body is not JSON: {$why}",
+            RpcError::invalidRequest($why) => $why,
+            RpcError::methodNotFound($method) => "no method {$method}",
+            RpcError::invalidParams($why) => $why,
+        };
+    }
+}

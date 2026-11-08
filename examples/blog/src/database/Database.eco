@@ -1,0 +1,69 @@
+namespace blog;
+
+/**
+ * How the blog's database opens: a MySQL pool from `DATABASE_URL`, the
+ * repositories registered and checked, the auth, tasks and OAuth tables
+ * with them.
+ */
+public struct Database
+{
+    /**
+     * The database `DATABASE_URL` names.
+     */
+    public static function open(const nexus::carbon::DatabaseConfig& $config) : result<carbon::DB, carbon::Error>
+    {
+        if ($config->url->empty()) {
+            return .error(.invalid('DATABASE_URL is not set; it looks like mysql://user:pass@host:3306/blog'));
+        }
+        carbon::mysql::Source $pool = guard carbon::mysql::Source::parse($config->url) else ($e) {
+            return .error($e);
+        };
+        return Database::wire(carbon::DB($pool));
+    }
+
+    /**
+     * `$db` with the blog's repositories registered, every one the models
+     * need checked.
+     */
+    public static function wire(carbon::DB $db) : result<carbon::DB, carbon::Error>
+    {
+        guard $db->register<UserRepository>() else ($e) {
+            return .error($e);
+        };
+        guard $db->register<PostRepository>() else ($e) {
+            return .error($e);
+        };
+        guard Carbon::check($db) else ($e) {
+            return .error($e);
+        };
+        guard nexus::auth::carbon::Tables::wire($db) else ($e) {
+            return .error($e);
+        };
+        guard nexus::work::carbon::Tables::wire($db) else ($e) {
+            return .error($e);
+        };
+        guard nexus::oauth::carbon::Tables::wire($db) else ($e) {
+            return .error($e);
+        };
+        return .ok($db);
+    }
+
+    /**
+     * The blog's migrations after the auth, tasks and OAuth tables', in id
+     * order.
+     */
+    public static function migrations() : array<carbon::migrate::Step>
+    {
+        array<carbon::migrate::Step> $all = nexus::auth::carbon::Tables::migrations();
+        foreach (nexus::work::carbon::Tables::migrations() as $step) {
+            $all[] = $step;
+        }
+        foreach (nexus::oauth::carbon::Tables::migrations() as $step) {
+            $all[] = $step;
+        }
+        foreach (Carbon::migrations() as $step) {
+            $all[] = $step;
+        }
+        return $all;
+    }
+}

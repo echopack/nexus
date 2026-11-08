@@ -1,0 +1,43 @@
+namespace nexus::oauth;
+
+/**
+ * Reads `Authorization: Bearer nxo_...`, the access tokens this server
+ * issues. They open the MCP door only: anywhere else the token is a 401.
+ * nexus-oauth adds this guard after nexus-auth's own.
+ */
+#[atomic]
+public class OAuthGuard : nexus::auth::Guard
+{
+    public const string NAME = 'oauth';
+
+    public function name() : string
+    {
+        return OAuthGuard::NAME;
+    }
+
+    public function identify(nexus::Payload& $payload) : result<nexus::auth::Identity?, nexus::Problem>
+    {
+        string $header = guard $payload->request->header('Authorization') else {
+            return .ok(null);
+        };
+        if ($header->size() < 7 || str::lower($header->sub(0, 7)->clone()) != 'bearer ') {
+            return .ok(null);
+        }
+        string $text = str::trim($header->sub(7, $header->size() - 7)->clone());
+        if (nexus::auth::Token::parse(Grants::ACCESS, $text) == null) {
+            return .ok(null);
+        }
+        if ($payload->door != nexus::Door::mcp) {
+            return .error(.unauthorized('this token opens the MCP endpoint only'));
+        }
+        nexus::auth::Identity $id = guard $payload->get<Grants>()->identify($text) else ($p) {
+            return .error($p);
+        };
+        return .ok($id);
+    }
+
+    public function revoke(nexus::Payload& $payload, const nexus::auth::Identity& $id) : status<nexus::Problem>
+    {
+        return $payload->get<Grants>()->store->drop($id->credential);
+    }
+}

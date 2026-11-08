@@ -1,0 +1,81 @@
+namespace nexus::auth;
+
+use std::time;
+
+/**
+ * Issues and revokes bearer tokens, on this request's `TokenStore`. Ask
+ * for it in an action's constructor.
+ *
+ * ```echo
+ * nexus::auth::Issued $t = guard $this->tokens->issue("{$user->id}", name: 'cli') else ($p) {
+ *     return .error($p);
+ * };
+ * ```
+ */
+public class Tokens
+{
+    public TokenStore $store;
+    public string $prefix;
+    public time::duration $lifetime;
+    public calendar::Clock $clock;
+
+    public constructor(TokenStore $store, const string& $prefix, time::duration $lifetime, calendar::Clock $clock)
+    {
+        $this->store = $store;
+        $this->prefix = $prefix;
+        $this->lifetime = $lifetime;
+        $this->clock = $clock;
+    }
+
+    /**
+     * A new token for `$subject`, expiring after the configured lifetime
+     * (never, when that is zero), with `$scopes` (none means all).
+     */
+    public function issue(const string& $subject, string $name = '', array<string> $scopes = array<string>()) : result<Issued, nexus::Problem>
+    {
+        Token $t = Token::mint($this->prefix);
+        time::timestamp $now = $this->clock->now();
+        StoredToken $s = StoredToken($id: $t->id, $hash: $t->hash(), $subject: $subject, $name: $name, $scopes: $scopes, $createdAt: $now);
+        if ($this->lifetime > time::duration::zero()) {
+            $s->expiresAt = $now + $this->lifetime;
+        }
+        guard $this->store->create($s) else ($p) {
+            return .error($p);
+        };
+        return .ok(Issued($t->text(), $s));
+    }
+
+    public function revoke(const string& $id) : status<nexus::Problem>
+    {
+        return $this->store->remove($id);
+    }
+
+    /**
+     * Revokes every token of `$subject`.
+     */
+    public function revokeAll(const string& $subject) : status<nexus::Problem>
+    {
+        return $this->store->removeAll($subject);
+    }
+
+    /**
+     * Who the token `$text` was issued to: a 401 for a token that is
+     * malformed, unknown, expired or not the stored one.
+     */
+    public function check(const string& $text) : result<Identity, nexus::Problem>
+    {
+        Token $t = guard Token::parse($this->prefix, $text) else {
+            return .error(.unauthorized('the token is not valid'));
+        };
+        StoredToken? $found = guard $this->store->find($t->id) else ($p) {
+            return .error($p);
+        };
+        StoredToken $s = guard $found else {
+            return .error(.unauthorized('the token is not valid'));
+        };
+        if (!$t->matches($s->hash) || $s->expired($this->clock->now())) {
+            return .error(.unauthorized('the token is not valid'));
+        }
+        return .ok(Identity($via: BearerGuard::NAME, $subject: $s->subject, $credential: $s->id, $scopes: $s->scopes));
+    }
+}

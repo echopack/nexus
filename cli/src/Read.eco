@@ -1,0 +1,18 @@
+namespace nexusgen;
+
+/**
+ * What reading one value emitted: the local that holds it once checked,
+ * and the line that unwraps it after `done()` (empty when none is needed).
+ */
+public struct Read
+{
+    public string $local;
+    public string $unwrap;
+
+    /**
+     * The local the value is kept in while the input is read, and whether
+     * it may still be null there.
+     */
+    public string $holder = '';
+    public bool $nullable = false;
+}

@@ -1,0 +1,91 @@
+namespace nexus::auth;
+
+/**
+ * What a signed request sends: `Authorization: Nexus-Sig
+ * id=<session>,ts=<unix seconds>,sig=<hex>`, or in compat mode the
+ * `X-AccessToken` header, base64 JSON of `{token, timestamp, signature}`.
+ */
+public struct SignedHeader
+{
+    public string $id;
+    public int64 $time;
+    public string $sig;
+    public bool $compat = false;
+
+    public const string SCHEME = 'Nexus-Sig ';
+
+    /**
+     * The fields of a `Nexus-Sig` authorization value; null when it is
+     * not one, or misses a field.
+     */
+    public static function parse(const string& $value) : SignedHeader?
+    {
+        if (!$value->starts(SignedHeader::SCHEME)) {
+            return null;
+        }
+        string $id = '';
+        string $ts = '';
+        string $sig = '';
+        string $rest = $value->sub(SignedHeader::SCHEME->size(), $value->size() - SignedHeader::SCHEME->size())->clone();
+        foreach (str::split($rest, ',') as const &$part) {
+            string $p = string::from(str::trim($part));
+            usize $eq = $p->find('=');
+            if ($eq == $p->size()) {
+                return null;
+            }
+            string $key = $p->sub(0, $eq)->clone();
+            string $v = $p->sub($eq + 1, $p->size() - $eq - 1)->clone();
+            if ($key == 'id') {
+                $id = $v;
+            } else if ($key == 'ts') {
+                $ts = $v;
+            } else if ($key == 'sig') {
+                $sig = $v;
+            }
+        }
+        int64 $time = guard str::int($ts) else {
+            return null;
+        };
+        if ($id->empty() || $sig->empty()) {
+            return null;
+        }
+        return SignedHeader($id, $time, $sig);
+    }
+
+    /**
+     * The fields of an `X-AccessToken` value; null when it does not decode.
+     */
+    public static function access(const string& $value) : SignedHeader?
+    {
+        string $raw = guard crypto::unbase64(str::trim($value)) else {
+            return null;
+        };
+        json::Value $doc = guard json::parse($raw) else {
+            return null;
+        };
+        json::Value $token = guard $doc->get('token') else {
+            return null;
+        };
+        json::Value $timestamp = guard $doc->get('timestamp') else {
+            return null;
+        };
+        json::Value $signature = guard $doc->get('signature') else {
+            return null;
+        };
+        string $id = guard $token->asStr() else {
+            return null;
+        };
+        string $sig = guard $signature->asStr() else {
+            return null;
+        };
+        int64? $time = $timestamp->asInt();
+        if ($time == null) {
+            string $text = $timestamp->asStr() ?? '';
+            $time = str::int($text);
+        }
+        int64 $at = guard $time else {
+            return null;
+        };
+        return SignedHeader($id, $at, $sig, $compat: true);
+    }
+}

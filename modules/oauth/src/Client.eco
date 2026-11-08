@@ -1,0 +1,75 @@
+namespace nexus::oauth;
+
+use std::time;
+
+/**
+ * An app that registered itself (an MCP client, an editor, an inspector).
+ * It is a public client: no secret, PKCE proves a code was its own. It
+ * only names where codes may go; what it may do is the access of the user
+ * who allows it.
+ */
+public struct Client
+{
+    /**
+     * The public `client_id`.
+     */
+    public string $id;
+    public string $name;
+    public array<string> $redirects;
+    public time::timestamp $createdAt;
+
+    /**
+     * When it last traded a code or a refresh token; clients never used
+     * are swept.
+     */
+    public time::timestamp? $usedAt = null;
+
+    /**
+     * The registered redirect `$asked` names; with none asked, the only one
+     * registered. Null when it is not one of them.
+     */
+    public const function redirect(const string& $asked) : RedirectUri?
+    {
+        if ($asked->empty()) {
+            if ($this->redirects->count() != 1) {
+                return null;
+            }
+            RedirectUri $only = guard RedirectUri::parse($this->redirects[0]) else {
+                return null;
+            };
+            return $only;
+        }
+        RedirectUri $wanted = guard RedirectUri::parse($asked) else {
+            return null;
+        };
+        foreach ($this->redirects as const &$raw) {
+            RedirectUri $known = guard RedirectUri::parse($raw) else {
+                continue;
+            };
+            if ($known->matches($wanted)) {
+                return $wanted;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * What the registration endpoint answers (RFC 7591, section 3.2.1).
+     */
+    public const function json() : json::Value
+    {
+        json::Value $uris = json::arr();
+        foreach ($this->redirects as const &$r) {
+            $uris[] = json::str($r);
+        }
+        json::Value $o = json::object();
+        $o['client_id'] = json::str($this->id);
+        $o['client_id_issued_at'] = json::int($this->createdAt->unix_secs());
+        $o['client_name'] = json::str($this->name);
+        $o['redirect_uris'] = $uris;
+        $o['grant_types'] = Metadata::strings(['authorization_code', 'refresh_token']);
+        $o['response_types'] = Metadata::strings(['code']);
+        $o['token_endpoint_auth_method'] = json::str('none');
+        return $o;
+    }
+}

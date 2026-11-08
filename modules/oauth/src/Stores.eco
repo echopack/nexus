@@ -1,0 +1,17 @@
+namespace nexus::oauth;
+
+/**
+ * Where clients, codes and grants are kept.
+ */
+public enum Stores : uint8
+{
+    /**
+     * In the process, gone when it stops: tests, single-process apps.
+     */
+    case memory = 1;
+
+    /**
+     * Bound by another extension, such as nexus-oauth-carbon.
+     */
+    case provided = 2;
+}

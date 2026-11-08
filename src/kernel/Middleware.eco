@@ -1,0 +1,12 @@
+namespace nexus;
+
+/**
+ * Wraps request handling: look at the request, answer early, or call
+ * `$next->run($c)` and adjust the response. Global middleware is shared by
+ * every worker thread, so its class must be `#[atomic]` and keep no
+ * per-request state in fields.
+ */
+public interface Middleware
+{
+    function handle(Payload& $payload, Next $next) : Response;
+}

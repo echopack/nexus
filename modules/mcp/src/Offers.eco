@@ -1,0 +1,31 @@
+namespace nexus::mcp;
+
+/**
+ * Every `Offer` of the program, keyed by the type it runs; filled from the
+ * tables `nexus gen` writes when the app boots.
+ */
+#[atomic]
+public class Offers
+{
+    internal map<type_id, Offer> $byType = map<type_id, Offer>();
+
+    /**
+     * Registers what `T` offers.
+     */
+    public function add<T>(Offer $o) : void
+    {
+        $this->byType[type_id<T>()] = $o;
+    }
+
+    /**
+     * What `T` offers, or null when `nexus gen` wrote nothing for it.
+     */
+    public const function find<T>() : Offer?
+    {
+        type_id $id = type_id<T>();
+        if (!$this->byType->has($id)) {
+            return null;
+        }
+        return $this->byType->get($id);
+    }
+}

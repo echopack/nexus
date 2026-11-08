@@ -1,0 +1,182 @@
+/**
+ * Mappings on hand-written decls: the interface per shape, every writer,
+ * includes, sensitive fields, and what the reader refuses.
+ */
+
+use nexusgen::{Program, Emitter, Names, Mappings, Code};
+use ecotest::expect;
+
+function mapDecls(const string& $declarations) : json::Value
+{
+    string $text = "\{\"modules\":[\{\"name\":\"shop\",\"declarations\":[{$declarations}]}]}";
+    json::Value $doc = guard json::parse($text);
+    return $doc;
+}
+
+function mapModel(const string& $tools, const string& $fields) : string
+{
+    return "\{\"kind\":\"class\",\"name\":\"Item\",\"qualified\":\"shop::Item\",\"visibility\":\"public\",\"file\":\"src/Item.eco\",\"line\":4,\"tools\":[{$tools}],\"conforms\":[],\"fields\":[{$fields}],\"constructors\":[],\"methods\":[]}";
+}
+
+function mapField(const string& $name, const string& $type, const string& $tools) : string
+{
+    return "\{\"name\":\"{$name}\",\"visibility\":\"public\",\"static\":false,\"type\":{$type},\"default\":false,\"line\":9,\"tools\":[{$tools}]}";
+}
+
+/**
+ * `#[nexus::expose]`, with options when `$fields` (record entries) is not
+ * empty.
+ */
+function mapExpose(const string& $fields) : string
+{
+    if ($fields->empty()) {
+        return '{"namespace":"nexus","name":"expose","value":null}';
+    }
+    return "\{\"namespace\":\"nexus\",\"name\":\"expose\",\"value\":\{\"kind\":\"record\",\"fields\":[{$fields}]}}";
+}
+
+function mapSensitive() : string
+{
+    return '{"namespace":"nexus","name":"sensitive","value":null}';
+}
+
+function mapAdminShape() : string
+{
+    return '{"namespace":"nexus","name":"shapes","value":{"kind":"list","items":[{"kind":"string","text":"public"},{"kind":"record","fields":[{"key":"name","value":{"kind":"string","text":"admin"}},{"key":"sensitive","value":{"kind":"bool","boolean":true}}]}]}}';
+}
+
+function mapShapes(const string& $names) : string
+{
+    return "\{\"key\":\"shapes\",\"value\":\{\"kind\":\"list\",\"items\":[{$names}]}}";
+}
+
+function mapBoth(const string& $a, const string& $b) : string
+{
+    return "{$a},{$b}";
+}
+
+function mapProblems(const string& $declarations) : array<string>
+{
+    Program $p = Program::read(mapDecls($declarations));
+    return $p->problems;
+}
+
+test names_spell_snake
+{
+    expect(Names::snake('createdAt'))->is('created_at');
+    expect(Names::snake('BlogPost'))->is('blog_post');
+    expect(Names::snake('id'))->is('id');
+}
+
+test a_model_gets_one_mapping_per_shape
+{
+    string $string = '{"kind":"string"}';
+    string $role = '{"kind":"enum","name":"Size","qualified":"shop::Size","visibility":"public","file":"src/Size.eco","line":1,"tools":[],"conforms":[],"backing":{"kind":"string"},"cases":[{"name":"small","discriminant":0,"payload":[],"value":"s"},{"name":"large","discriminant":1,"payload":[],"value":"l"}],"fields":[],"methods":[]}';
+    string $level = '{"kind":"enum","name":"Level","qualified":"shop::Level","visibility":"public","file":"src/Level.eco","line":1,"tools":[],"conforms":[],"backing":{"kind":"prim","name":"uint8"},"cases":[{"name":"low","discriminant":1,"payload":[]},{"name":"high","discriminant":2,"payload":[]}],"fields":[],"methods":[]}';
+    array<string> $fields = [
+        mapField('id', '{"kind":"prim","name":"int64"}', mapExpose('{"key":"attribute","value":{"kind":"bool","boolean":true}}')),
+        mapField('name', $string, mapExpose('')),
+        mapField('size', '{"kind":"named","name":"shop::Size"}', mapExpose('')),
+        mapField('level', '{"kind":"optional","of":{"kind":"named","name":"shop::Level"}}', mapExpose(mapShapes('{"kind":"string","text":"public"}'))),
+        mapField('qty', '{"kind":"prim","name":"uint8"}', mapExpose('')),
+        mapField('price', '{"kind":"optional","of":{"kind":"prim","name":"float64"}}', mapExpose('')),
+        mapField('tags', '{"kind":"array","of":{"kind":"string"}}', mapExpose('{"key":"item","value":{"kind":"string","text":"tag"}}')),
+        mapField('createdAt', '{"kind":"optional","of":{"kind":"named","name":"std::time::timestamp"}}', mapExpose('{"key":"stamp","value":{"kind":"string","text":"date"}}')),
+        mapField('passwordHash', $string, mapSensitive()),
+        mapField('email', $string, mapBoth(mapSensitive(), mapExpose(mapShapes('{"kind":"string","text":"admin"}')))),
+        mapField('owner', '{"kind":"named","name":"carbon::One","args":[{"kind":"named","name":"shop::User"}]}', mapExpose('{"key":"include","value":{"kind":"string","text":"default"}}')),
+        mapField('lines', '{"kind":"named","name":"carbon::Many","args":[{"kind":"named","name":"shop::Line"}]}', mapExpose('{"key":"key","value":{"kind":"string","text":"items"}}')),
+        mapField('notes', $string, '')
+    ];
+    string $joined = str::join($fields, ',');
+    string $model = mapModel(mapAdminShape(), $joined);
+    Program $p = Program::read(mapDecls("{$role},{$level},{$model}"));
+    expect($p->problems)->empty();
+    expect($p->mapped)->size(1);
+    string $code = Emitter::render($p);
+
+    // one interface per shape, the default first
+    expect($code)
+        ->has('public interface ItemMapping')
+        ->has('public interface ItemPublicMapping')
+        ->has('public interface ItemAdminMapping')
+        ->has("return 'item';")
+        ->has("array<string> $out = ['owner', 'items'];")
+        ->has('foreach ($this->extraIncludes() as const &$extra) {')
+        ->has("array<string> $out = ['owner'];")
+        ->has('function map(const shop::Item& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void');
+
+    // every writer
+    expect($code)
+        ->has("$item->protect(['password_hash', 'email']);")
+        ->has("$item->attribute('id', $m->id);")
+        ->has("$item->text('name', $m->name);")
+        ->has("if ($e2 == shop::Size::small) \{")
+        ->has("$item->text('size', 's');")
+        ->has("$item->int('level', 2);")
+        ->has("uint8 $c3 = $m->qty;")
+        ->has("$item->int('qty', $c3 as int64);")
+        ->has("float64? $v4 = $m->price;")
+        ->has("$item->nil('price');")
+        ->has("$item->float('price', $w4);")
+        ->has("$item->texts('tags', $m->tags, item: 'tag');")
+        ->has("$item->time('created_at', $m->createdAt, EchoPack::Rest::Stamp::date);")
+        ->has("$item->include<shop::User>('owner', $m->owner->get());")
+        ->has("$item->includeCollection<shop::Line>('items', $m->lines->get());")
+        ->lacks("'notes'");
+
+    // the sensitive email only in the admin shape, revealed there
+    Code $admin = Code();
+    Mappings::mapping($admin, $p, $p->mapped[0], $p->mapped[0]->shapes[2]);
+    expect($admin->text)
+        ->has('public interface ItemAdminMapping')
+        ->has("$item->reveal('email');")
+        ->has("$item->text('email', $m->email);")
+        ->lacks("'level'");
+    Code $plain = Code();
+    Mappings::mapping($plain, $p, $p->mapped[0], $p->mapped[0]->shapes[0]);
+    expect($plain->text)->lacks("$item->text('email'")->lacks('reveal(');
+}
+
+test the_reader_refuses_what_does_not_fit
+{
+    string $string = '{"kind":"string"}';
+    array<string> $unknown = mapProblems(mapModel(mapAdminShape(), mapField('name', $string, mapExpose(mapShapes('{"kind":"string","text":"pubic"}')))));
+    expect($unknown[0])->has("names the shape 'pubic', which #[nexus::shapes] on shop::Item does not declare")->has('src/Item.eco:9');
+
+    array<string> $type = mapProblems(mapModel('', mapField('when', '{"kind":"named","name":"shop::Odd"}', mapExpose(''))));
+    expect($type[0])->has('$when has type shop::Odd, which no mapping writes');
+
+    string $twice = mapBoth(mapField('a', $string, mapExpose('{"key":"key","value":{"kind":"string","text":"x"}}')), mapField('x', $string, mapExpose('')));
+    array<string> $dup = mapProblems(mapModel('', $twice));
+    expect($dup[0])->has("two exposed fields of shop::Item write the key 'x'");
+
+    array<string> $bare = mapProblems(mapModel(mapAdminShape(), mapField('email', $string, mapBoth(mapSensitive(), mapExpose('')))));
+    expect($bare[0])->has('$email is sensitive, so it needs shapes:');
+
+    array<string> $open = mapProblems(mapModel(mapAdminShape(), mapField('email', $string, mapBoth(mapSensitive(), mapExpose(mapShapes('{"kind":"string","text":"public"}'))))));
+    expect($open[0])->has("$email is sensitive, but the shape 'public' is not");
+
+    array<string> $dflt = mapProblems(mapModel(mapAdminShape(), mapField('email', $string, mapBoth(mapSensitive(), mapExpose(mapShapes('{"kind":"string","text":"default"}'))))));
+    expect($dflt[0])->has("but the shape 'default' is not");
+
+    string $named = '{"namespace":"nexus","name":"shapes","value":{"kind":"list","items":[{"kind":"record","fields":[{"key":"name","value":{"kind":"string","text":"default"}},{"key":"sensitive","value":{"kind":"bool","boolean":true}}]}]}}';
+    array<string> $redeclared = mapProblems(mapModel($named, mapField('name', $string, mapExpose(''))));
+    expect($redeclared[0])->has("cannot declare 'default'");
+
+    array<string> $attr = mapProblems(mapModel('', mapField('tags', '{"kind":"array","of":{"kind":"string"}}', mapExpose('{"key":"attribute","value":{"kind":"bool","boolean":true}}'))));
+    expect($attr[0])->has('attribute: on $tags needs a non-null integer, string or backed enum');
+
+    array<string> $opt = mapProblems(mapModel('', mapField('name', $string, mapExpose('{"key":"hidden","value":{"kind":"bool","boolean":true}}'))));
+    expect($opt[0])->has("#[nexus::expose] knows no 'hidden'");
+}
+
+test a_sensitive_field_alone_still_protects_its_key
+{
+    string $string = '{"kind":"string"}';
+    string $fields = mapBoth(mapField('name', $string, mapExpose('')), mapField('passwordHash', $string, mapSensitive()));
+    Program $p = Program::read(mapDecls(mapModel('', $fields)));
+    expect($p->problems)->empty();
+    string $code = Emitter::render($p);
+    expect($code)->has("$item->protect(['password_hash']);")->lacks('reveal(');
+}

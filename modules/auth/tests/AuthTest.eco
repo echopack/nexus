@@ -1,0 +1,459 @@
+/**
+ * nexus-auth through its extension: tokens, signed sessions, the compat
+ * header, passwords and the login throttles, on memory stores and a clock
+ * the tests move.
+ */
+
+use nexus::auth::{Identity, Guards, Authenticate, Tokens, Sessions, Issued, Opened, Signer, Logins, Passwords, MemoryTokens, TokenStore};
+use nexus::testing::TestApp;
+use std::time;
+use ecotest::expect;
+
+const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+const START = 1700000000;
+
+/**
+ * Who a test request is, as an app's middleware leaves it: the identity
+ * and the user it names.
+ */
+struct TCaller
+{
+    public Identity $identity;
+    public int64 $user;
+}
+
+/**
+ * An app's own middleware, the way a real one loads its user: subjects
+ * that are numbers exist, anything else is gone.
+ */
+class TRequireUser : nexus::Middleware
+{
+    private Guards $guards;
+
+    public constructor(Guards $guards)
+    {
+        $this->guards = $guards;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        Identity? $found = guard $this->guards->identify($payload) else ($p) {
+            return $payload->fail($p);
+        };
+        Identity $id = guard $found else {
+            return $payload->fail(nexus::Problem::unauthorized('this needs a signed in caller'));
+        };
+        int64 $n = guard $id->number() else {
+            return $payload->fail(nexus::Problem::unauthorized('the account is gone'));
+        };
+        $payload->put<TCaller>(TCaller($id, $n));
+        return $next->run($payload);
+    }
+}
+
+/**
+ * Counts how often it is asked, and never knows anyone.
+ */
+#[atomic]
+class Counting : nexus::auth::Guard
+{
+    public atomic<int32> $asked = atomic<int32>(0);
+
+    public function name() : string
+    {
+        return 'counting';
+    }
+
+    public function identify(nexus::Payload& $payload) : result<Identity?, nexus::Problem>
+    {
+        $this->asked->add(1);
+        return .ok(null);
+    }
+}
+
+class Rig
+{
+    public TestApp $app;
+    public calendar::ManualClock $clock;
+
+    public constructor(bool $compat, array<nexus::auth::Guard> $extra)
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        map<string, string> $vars = ['AUTH_KEY' => KEY, 'AUTH_TOKENS' => '1h', 'AUTH_SESSIONS' => '2h'];
+        array<nexus::Extension> $exts = [nexus::auth::Extension('test', compat: $compat, clock: $this->clock, cost: crypto::PasswordCost(8, 1), guards: $extra)];
+        $this->app = TestApp::boot($exts, $vars);
+    }
+
+    /**
+     * A payload for one request, on its own child container.
+     */
+    public function payload(nexus::Request $req) : nexus::Payload
+    {
+        $req->peer = '10.0.0.1:50000';
+        return nexus::Payload($request: $req, $services: $this->app->kernel->services->child(), $mode: nexus::Mode::testing, $log: nexus::Log([], nexus::Level::info));
+    }
+
+    public function get(const string& $target) : nexus::Payload
+    {
+        return $this->payload(nexus::Request(nexus::Method::get, $target));
+    }
+
+    public function bearer(const string& $target, const string& $token) : nexus::Payload
+    {
+        nexus::Request $req = nexus::Request(nexus::Method::get, $target);
+        $req->headers->set('Authorization', "Bearer {$token}");
+        return $this->payload($req);
+    }
+
+    public function signed(nexus::Method $m, const string& $target, const string& $body, const string& $auth) : nexus::Payload
+    {
+        nexus::Request $req = nexus::Request($m, $target, body: $body, type: 'application/json');
+        $req->headers->set('Authorization', $auth);
+        return $this->payload($req);
+    }
+
+    public function issue(const string& $subject) : Issued
+    {
+        nexus::Payload $payload = $this->get('/');
+        Issued $t = guard $payload->get<Tokens>()->issue($subject) else ($p) {
+            die('issue failed');
+        };
+        return $t;
+    }
+
+    public function open(const string& $subject) : Opened
+    {
+        nexus::Payload $payload = $this->get('/');
+        Opened $o = guard $payload->get<Sessions>()->open($subject) else ($p) {
+            die('open failed');
+        };
+        return $o;
+    }
+
+    public function now() : int64
+    {
+        return $this->clock->now()->unix_secs();
+    }
+}
+
+function rig() : Rig
+{
+    array<nexus::auth::Guard> $none = [];
+    return Rig(false, $none);
+}
+
+/**
+ * The status `$m` answers `$payload` with: 200 when it lets it through.
+ */
+function through(nexus::Payload& $payload, nexus::Middleware $m) : int32
+{
+    array<nexus::Middleware> $links = [$m];
+    nexus::Next $next = nexus::Next(nexus::Chain($links, function(nexus::Payload& $p) : nexus::Response {
+        return nexus::Response(200);
+    }));
+    return $next->run($payload)->status;
+}
+
+function status(nexus::Payload& $payload) : int32
+{
+    return through($payload, $payload->get<Authenticate>());
+}
+
+/**
+ * The identity `Authenticate` left; the test stops when it left none.
+ */
+function identity(nexus::Payload& $payload) : Identity
+{
+    through($payload, $payload->get<Authenticate>());
+    Identity $id = guard $payload->state<Identity>();
+    return $id;
+}
+
+function subject(nexus::Payload& $payload) : string
+{
+    int32 $code = status($payload);
+    if ($code != 200) {
+        return "{$code}";
+    }
+    Identity $id = guard $payload->state<Identity>();
+    return "{$id->via}:{$id->subject}";
+}
+
+function refused(status<nexus::Problem> $s) : nexus::Problem
+{
+    guard $s else ($p) {
+        return $p;
+    };
+    return nexus::Problem::server('it went through');
+}
+
+test a_bearer_token_names_its_subject
+{
+    Rig $r = rig();
+    Issued $t = $r->issue('7');
+    expect($t->token)->starts('test_')->length(5 + 12 + 1 + 64);
+    nexus::Payload $payload = $r->bearer('/', $t->token);
+    expect(subject($payload))->is('bearer:7');
+    Identity $id = identity($payload);
+    expect($id->credential)->is($t->stored->id);
+    expect($t->stored->hash)->isNot($t->token);
+}
+
+test no_credential_is_anonymous_until_one_is_needed
+{
+    Rig $r = rig();
+    nexus::Payload $payload = $r->get('/');
+    Identity? $none = guard $payload->get<Guards>()->identify($payload);
+    expect($none)->none();
+    expect(status($payload))->is(401);
+}
+
+test a_bad_token_is_a_401_not_anonymous
+{
+    Rig $r = rig();
+    Issued $t = $r->issue('7');
+    string $tampered = $t->token->sub(0, $t->token->size() - 1)->clone();
+    if ($t->token->ends('0')) {
+        $tampered->append('1');
+    } else {
+        $tampered->append('0');
+    }
+    expect(status($r->bearer('/', $tampered)))->is(401);
+    expect(status($r->bearer('/', 'test_000000000000_0000000000000000000000000000000000000000000000000000000000000000')))->is(401);
+    expect(status($r->bearer('/', 'nope')))->is(401);
+    string $other = $t->token->sub(5, $t->token->size() - 5)->clone();
+    expect(status($r->bearer('/', "else_{$other}")))->is(401);
+}
+
+test tokens_expire_and_can_be_revoked
+{
+    Rig $r = rig();
+    Issued $t = $r->issue('7');
+    Issued $u = $r->issue('7');
+    Issued $v = $r->issue('8');
+    $r->clock->advance(time::duration::mins(59));
+    expect(status($r->bearer('/', $t->token)))->is(200);
+    $r->clock->advance(time::duration::mins(1));
+    expect(status($r->bearer('/', $t->token)))->is(401);
+    Rig $s = rig();
+    Issued $a = $s->issue('7');
+    Issued $b = $s->issue('7');
+    Issued $other = $s->issue('8');
+    nexus::Payload $payload = $s->bearer('/', $a->token);
+    Identity $id = identity($payload);
+    guard $payload->get<Guards>()->revoke($payload, $id);
+    expect(status($s->bearer('/', $a->token)))->is(401);
+    expect(status($s->bearer('/', $b->token)))->is(200);
+    guard $s->get('/')->get<Tokens>()->revokeAll('7');
+    expect(status($s->bearer('/', $b->token)))->is(401);
+    expect(status($s->bearer('/', $other->token)))->is(200);
+}
+
+test a_signed_request_names_its_session
+{
+    Rig $r = rig();
+    Opened $o = $r->open('7');
+    expect($o->secret)->length(64);
+    expect($o->stored->id)->length(32);
+    string $body = '{"title":"Hello"}';
+    string $auth = $o->signer()->header('POST', '/v1/posts?draft=1', $r->now(), $body);
+    expect($auth)->starts('Nexus-Sig id=');
+    nexus::Payload $payload = $r->signed(nexus::Method::post, '/v1/posts?draft=1', $body, $auth);
+    expect(subject($payload))->is('signed:7');
+}
+
+test a_signature_covers_method_target_time_and_body
+{
+    Rig $r = rig();
+    Opened $o = $r->open('7');
+    int64 $now = $r->now();
+    string $auth = $o->signer()->header('POST', '/v1/posts', $now, 'one');
+    expect(status($r->signed(nexus::Method::post, '/v1/posts', 'one', $auth)))->is(200);
+    expect(status($r->signed(nexus::Method::post, '/v1/posts', 'two', $auth)))->is(401);
+    expect(status($r->signed(nexus::Method::put, '/v1/posts', 'one', $auth)))->is(401);
+    expect(status($r->signed(nexus::Method::post, '/v1/posts?x=1', 'one', $auth)))->is(401);
+    string $later = $o->signer()->header('POST', '/v1/posts', $now + 1, 'one');
+    string $spliced = $auth->sub(0, $auth->find(',sig='))->clone();
+    $spliced->append($later->sub($later->find(',sig='), $later->size() - $later->find(',sig=')));
+    expect(status($r->signed(nexus::Method::post, '/v1/posts', 'one', $spliced)))->is(401);
+    Signer $forged = Signer($o->stored->id, 'not-the-secret');
+    expect(status($r->signed(nexus::Method::post, '/v1/posts', 'one', $forged->header('POST', '/v1/posts', $now, 'one'))))->is(401);
+    expect(status($r->signed(nexus::Method::post, '/v1/posts', 'one', 'Nexus-Sig id=abc')))->is(401);
+}
+
+test a_signed_request_holds_five_minutes_either_way
+{
+    Rig $r = rig();
+    Opened $o = $r->open('7');
+    int64 $now = $r->now();
+    expect(status($r->signed(nexus::Method::get, '/', '', $o->signer()->header('GET', '/', $now - 300, ''))))->is(200);
+    expect(status($r->signed(nexus::Method::get, '/', '', $o->signer()->header('GET', '/', $now + 300, ''))))->is(200);
+    expect(status($r->signed(nexus::Method::get, '/', '', $o->signer()->header('GET', '/', $now - 301, ''))))->is(401);
+    expect(status($r->signed(nexus::Method::get, '/', '', $o->signer()->header('GET', '/', $now + 301, ''))))->is(401);
+}
+
+test a_session_slides_while_used_and_ends
+{
+    Rig $r = rig();
+    Opened $o = $r->open('7');
+    $r->clock->advance(time::duration::mins(90));
+    expect(status($r->signed(nexus::Method::get, '/', '', $o->signer()->header('GET', '/', $r->now(), ''))))->is(200);
+    // used at 90 minutes, so it now lasts until 210
+    $r->clock->advance(time::duration::mins(100));
+    expect(status($r->signed(nexus::Method::get, '/', '', $o->signer()->header('GET', '/', $r->now(), ''))))->is(200);
+    $r->clock->advance(time::duration::mins(121));
+    expect(status($r->signed(nexus::Method::get, '/', '', $o->signer()->header('GET', '/', $r->now(), ''))))->is(401);
+    Opened $p = $r->open('7');
+    nexus::Payload $payload = $r->signed(nexus::Method::get, '/', '', $p->signer()->header('GET', '/', $r->now(), ''));
+    Identity $id = identity($payload);
+    guard $payload->get<Guards>()->revoke($payload, $id);
+    expect(status($r->signed(nexus::Method::get, '/', '', $p->signer()->header('GET', '/', $r->now(), ''))))->is(401);
+}
+
+test the_compat_header_only_in_compat_mode
+{
+    array<nexus::auth::Guard> $none = [];
+    Rig $r = Rig(true, $none);
+    Opened $o = $r->open('9');
+    nexus::Request $req = nexus::Request(nexus::Method::get, '/v1/me?x=1');
+    $req->headers->set('X-AccessToken', $o->signer()->accessToken('GET', '/v1/me?x=1', $r->now()));
+    expect(subject($r->payload($req)))->is('signed:9');
+    nexus::Request $wrong = nexus::Request(nexus::Method::get, '/v1/me');
+    $wrong->headers->set('X-AccessToken', $o->signer()->accessToken('GET', '/v1/me?x=1', $r->now()));
+    expect(status($r->payload($wrong)))->is(401);
+    nexus::Request $junk = nexus::Request(nexus::Method::get, '/');
+    $junk->headers->set('X-AccessToken', 'bm90IGpzb24=');
+    expect(status($r->payload($junk)))->is(401);
+    Rig $strict = rig();
+    Opened $s = $strict->open('9');
+    nexus::Request $plain = nexus::Request(nexus::Method::get, '/v1/me');
+    $plain->headers->set('X-AccessToken', $s->signer()->accessToken('GET', '/v1/me', $strict->now()));
+    nexus::Payload $payload = $strict->payload($plain);
+    Identity? $none2 = guard $payload->get<Guards>()->identify($payload);
+    expect($none2)->none();
+}
+
+test an_app_middleware_builds_its_user_on_the_identity
+{
+    Rig $r = rig();
+    nexus::Payload $payload = $r->bearer('/', $r->issue('42')->token);
+    TRequireUser $mw = TRequireUser($payload->get<Guards>());
+    expect(through($payload, $mw))->is(200);
+    TCaller $me = guard $payload->state<TCaller>();
+    expect($me->user)->is(42);
+    expect($me->identity->via)->is('bearer');
+    expect(through($r->bearer('/', $r->issue('someone')->token), $mw))->is(401);
+    expect(through($r->get('/'), $mw))->is(401);
+}
+
+test authenticate_leaves_the_identity_and_refuses_anyone_else
+{
+    Rig $r = rig();
+    nexus::Payload $signed = $r->bearer('/', $r->issue('7')->token);
+    expect(status($signed))->is(200);
+    Identity $id = guard $signed->state<Identity>();
+    expect($id->subject)->is('7');
+    nexus::Payload $nobody = $r->get('/');
+    expect(status($nobody))->is(401);
+    expect($nobody->state<Identity>())->fails();
+    expect(status($r->bearer('/', 'test_000000000000_0000000000000000000000000000000000000000000000000000000000000000')))->is(401);
+}
+
+test state_no_middleware_put_is_a_500
+{
+    Rig $r = rig();
+    nexus::Payload $payload = $r->bearer('/', $r->issue('7')->token);
+    $payload->action = 'Reads';
+    result<Identity, nexus::Problem> $read = $payload->state<Identity>();
+    expect($read)->fails();
+    nexus::Problem $p = $read->failure();
+    expect($p->status())->is(500);
+    expect($p->detail(nexus::Mode::dev))->has('Reads reads state no middleware put');
+}
+
+test scopes_narrow_a_credential
+{
+    Rig $r = rig();
+    nexus::Payload $payload = $r->get('/');
+    array<string> $read = ['posts:read'];
+    Issued $t = guard $payload->get<Tokens>()->issue('7', 'reader', $read);
+    Identity $id = identity($r->bearer('/', $t->token));
+    expect($id->has('posts:read'))->yes(says: 'the reader token holds posts:read');
+    expect($id->has('posts:write'))->no(says: 'the reader token lacks posts:write');
+    status<nexus::Problem> $s = $id->require('posts:write');
+    expect($s)->fails();
+    Identity $all = identity($r->bearer('/', $r->issue('7')->token));
+    expect($all->has('anything'))->yes(says: 'a token without scopes holds every scope');
+}
+
+test the_guards_run_once_per_request_and_take_extras
+{
+    Counting $counting = Counting();
+    array<nexus::auth::Guard> $extra = [$counting];
+    Rig $r = Rig(false, $extra);
+    nexus::Payload $payload = $r->get('/');
+    expect(status($payload))->is(401);
+    expect(status($payload))->is(401);
+    Identity? $none = guard $payload->get<Guards>()->identify($payload);
+    expect($counting->asked->load())->is(1);
+    expect(status($r->get('/')))->is(401);
+    expect($counting->asked->load())->is(2);
+}
+
+test passwords_hash_verify_and_check_length
+{
+    Passwords $p = Passwords(crypto::PasswordCost(8, 1));
+    string $h = guard $p->hash('correct horse battery');
+    expect($h)->starts('$argon2id$');
+    expect($p->verify('correct horse battery', $h))->yes(says: 'the right password verifies');
+    expect($p->verify('wrong horse battery', $h))->no(says: 'a wrong password does not verify');
+    expect($p->decoy('correct horse battery'))->no(says: 'the decoy never verifies');
+    expect($p->needsRehash($h))->no(says: 'a hash at the current cost needs no rehash');
+    expect(Passwords(crypto::PasswordCost(16, 1))->needsRehash($h))->yes(says: 'a hash below a higher cost needs a rehash');
+    expect($p->acceptable('short'))->fails();
+    expect($p->acceptable('long enough!')->failed())->no(says: 'a long enough password is accepted');
+}
+
+test logins_are_throttled_per_account_and_address
+{
+    Rig $r = rig();
+    nexus::Payload $payload = $r->get('/');
+    Logins $l = $payload->get<Logins>();
+    string $h = guard $l->passwords->hash('the right one');
+    foreach (0 .. 10 as $i) {
+        guard $l->attempt($payload, 'Ann@Example.com');
+        expect($l->verify($payload, 'ann@example.com', 'a wrong one', $h))->fails();
+    }
+    nexus::Problem $p = refused($l->attempt($payload, 'ann@example.com'));
+    expect($p->status())->is(429);
+    expect($p->retryAfter())->some(900);
+    // a good login for someone else from the same address is fine, and gives its attempt back
+    guard $l->attempt($payload, 'bob@example.com');
+    guard $l->verify($payload, 'bob@example.com', 'the right one', $h);
+    expect($l->unknown('anything')->status())->is(401);
+    $r->clock->advance(time::duration::mins(15));
+    guard $l->attempt($payload, 'ann@example.com');
+}
+
+test the_address_throttle_spans_accounts
+{
+    Rig $r = rig();
+    nexus::Payload $payload = $r->get('/');
+    Logins $l = $payload->get<Logins>();
+    foreach (0 .. 30 as $i) {
+        guard $l->attempt($payload, "user{$i}@example.com");
+    }
+    expect($l->attempt($payload, 'one-more@example.com'))->fails();
+}
+
+test boot_needs_a_key_and_a_good_prefix
+{
+    map<string, string> $short = ['AUTH_KEY' => 'too short'];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test')];
+    expect(TestApp::attempt($exts, $short))->fails();
+    map<string, string> $ok = ['AUTH_KEY' => KEY];
+    array<nexus::Extension> $bad = [nexus::auth::Extension('Has_Under')];
+    expect(TestApp::attempt($bad, $ok))->fails();
+    array<nexus::Extension> $good = [nexus::auth::Extension('ok1', cost: crypto::PasswordCost(8, 1))];
+    expect(TestApp::attempt($good, $ok)->failed())->no(says: 'a good key and prefix boot');
+}

@@ -1,0 +1,13 @@
+namespace nexus;
+
+/**
+ * A path parameter an action's `handle()` reads, as `nexus gen` saw it:
+ * the name, the constraint its type implies (`integer` for an `int64`)
+ * and whether a request may leave it out (nullable or with a default).
+ */
+public struct PathParam
+{
+    public string $name;
+    public string $constraint = '';
+    public bool $optional = false;
+}

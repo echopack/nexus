@@ -1,0 +1,59 @@
+namespace nexus::oauth;
+
+use std::time;
+
+/**
+ * Where clients, codes and grants are kept. `MemoryOAuth` keeps them in
+ * the process; nexus-oauth-carbon in the app's database, per request.
+ */
+public interface OAuthStore
+{
+    function client(const string& $id) : result<Client?, nexus::Problem>;
+
+    function register(const Client& $c) : status<nexus::Problem>;
+
+    /**
+     * Marks client `$id` as used at `$at`.
+     */
+    function touch(const string& $id, time::timestamp $at) : status<nexus::Problem>;
+
+    /**
+     * How many clients are registered.
+     */
+    function clients() : result<uint64, nexus::Problem>;
+
+    /**
+     * Removes the clients registered before `$before` that were never used.
+     */
+    function sweep(time::timestamp $before) : status<nexus::Problem>;
+
+    function keep(const Code& $c) : status<nexus::Problem>;
+
+    /**
+     * The code with hash `$hash`, removed as it is read: two callers never
+     * both get it.
+     */
+    function take(const string& $hash) : result<Code?, nexus::Problem>;
+
+    function grant(const string& $id) : result<Grant?, nexus::Problem>;
+
+    function open(const Grant& $g) : status<nexus::Problem>;
+
+    /**
+     * Saves `$g` when the stored grant still has refresh hash `$was`;
+     * false when another refresh got there first.
+     */
+    function rotate(const Grant& $g, const string& $was) : result<bool, nexus::Problem>;
+
+    function drop(const string& $id) : status<nexus::Problem>;
+
+    /**
+     * Every grant of `$subject`.
+     */
+    function grants(const string& $subject) : result<array<Grant>, nexus::Problem>;
+
+    /**
+     * Removes the codes and grants that expired before `$now`.
+     */
+    function prune(time::timestamp $now) : status<nexus::Problem>;
+}

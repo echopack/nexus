@@ -1,0 +1,66 @@
+namespace nexusgen;
+
+/**
+ * An indented text builder for generated source.
+ */
+public class Code
+{
+    public string $text = '';
+    private int32 $depth = 0;
+
+    public function line(const string& $s) : void
+    {
+        if (!$s->empty()) {
+            for ($i = 0; $i < $this->depth; $i++) {
+                $this->text->append('    ');
+            }
+            $this->text->append($s);
+        }
+        $this->text->push(10);
+    }
+
+    public function blank() : void
+    {
+        $this->text->push(10);
+    }
+
+    /**
+     * `$head`, then `{` on its own line, one level deeper.
+     */
+    public function open(const string& $head) : void
+    {
+        $this->line($head);
+        $this->line('{');
+        $this->depth = $this->depth + 1;
+    }
+
+    /**
+     * `{` at the end of `$head`, one level deeper.
+     */
+    public function begin(const string& $head) : void
+    {
+        $this->line("{$head} \{");
+        $this->depth = $this->depth + 1;
+    }
+
+    /**
+     * `} $head {`: the next branch of an if-chain, at the same depth.
+     */
+    public function next(const string& $head) : void
+    {
+        $this->depth = $this->depth - 1;
+        $this->line("} {$head} \{");
+        $this->depth = $this->depth + 1;
+    }
+
+    public function close(const string& $suffix) : void
+    {
+        $this->depth = $this->depth - 1;
+        $this->line("}{$suffix}");
+    }
+
+    public function close() : void
+    {
+        $this->close('');
+    }
+}

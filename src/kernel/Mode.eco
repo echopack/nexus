@@ -1,0 +1,38 @@
+namespace nexus;
+
+/**
+ * What the process is for. `dev` shows problem details and logs pretty;
+ * `prod` hides internals and logs JSON lines; `testing` is quiet.
+ */
+public enum Mode : uint8
+{
+    case dev = 1;
+    case testing = 2;
+    case prod = 3;
+
+    public const function name() : string
+    {
+        return match ($this) {
+            Mode::dev => 'dev',
+            Mode::testing => 'test',
+            Mode::prod => 'prod',
+        };
+    }
+
+    /**
+     * Whether internals (error causes) may leave the process.
+     */
+    public const function reveals() : bool
+    {
+        return $this != Mode::prod;
+    }
+
+    public static function parse(const string& $name) : Mode?
+    {
+        string $n = str::lower($name);
+        if ($n == 'dev' || $n == 'development') { return Mode::dev; }
+        if ($n == 'test' || $n == 'testing') { return Mode::testing; }
+        if ($n == 'prod' || $n == 'production') { return Mode::prod; }
+        return null;
+    }
+}

@@ -1,0 +1,56 @@
+namespace nexus;
+
+/**
+ * A request method nexus routes. Closed on purpose: a transport answers an
+ * unknown verb with 501 before the kernel sees it, so `==` works everywhere.
+ */
+public enum Method : uint8
+{
+    case get = 1;
+    case head = 2;
+    case post = 3;
+    case put = 4;
+    case patch = 5;
+    case delete = 6;
+    case options = 7;
+
+    /**
+     * The verb as it travels on the wire, upper case.
+     */
+    public const function verb() : string
+    {
+        return match ($this) {
+            Method::get => 'GET',
+            Method::head => 'HEAD',
+            Method::post => 'POST',
+            Method::put => 'PUT',
+            Method::patch => 'PATCH',
+            Method::delete => 'DELETE',
+            Method::options => 'OPTIONS',
+        };
+    }
+
+    /**
+     * Whether a request with this method may carry a body nexus decodes.
+     */
+    public const function carriesBody() : bool
+    {
+        return $this == Method::post || $this == Method::put || $this == Method::patch || $this == Method::delete;
+    }
+
+    /**
+     * The method a wire verb names, or null for one nexus does not route.
+     */
+    public static function parse(const string& $verb) : Method?
+    {
+        string $up = str::upper($verb);
+        if ($up == 'GET') { return Method::get; }
+        if ($up == 'HEAD') { return Method::head; }
+        if ($up == 'POST') { return Method::post; }
+        if ($up == 'PUT') { return Method::put; }
+        if ($up == 'PATCH') { return Method::patch; }
+        if ($up == 'DELETE') { return Method::delete; }
+        if ($up == 'OPTIONS') { return Method::options; }
+        return null;
+    }
+}

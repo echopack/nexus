@@ -1,0 +1,77 @@
+namespace nexus::mcp;
+
+/**
+ * Outgoing JSON-RPC answers, as responses.
+ */
+public struct Answer
+{
+    public static function result(const json::Value& $id, json::Value $result) : nexus::Response
+    {
+        json::Value $o = json::object();
+        $o['jsonrpc'] = json::str('2.0');
+        $o['id'] = $id;
+        $o['result'] = mv $result;
+        return nexus::Response(json: $o);
+    }
+
+    public static function error(const json::Value& $id, const RpcError& $e) : nexus::Response
+    {
+        return Answer::error($id, $e, 200);
+    }
+
+    /**
+     * An error answer with HTTP status `$status`, for a message refused
+     * before it was read.
+     */
+    public static function error(const json::Value& $id, const RpcError& $e, int32 $status) : nexus::Response
+    {
+        json::Value $err = json::object();
+        $err['code'] = json::int($e->code());
+        $err['message'] = json::str($e->message());
+        json::Value $o = json::object();
+        $o['jsonrpc'] = json::str('2.0');
+        $o['id'] = $id;
+        $o['error'] = mv $err;
+        return nexus::Response(json: $o, status: $status);
+    }
+
+    /**
+     * A tool's response as a `tools/call` result: its body as text
+     * content, a JSON object body as structured content too, and any
+     * status from 400 on as an error the model reads.
+     */
+    public static function tool(const nexus::Response& $res) : json::Value
+    {
+        bool $failed = $res->status >= 400;
+        string $text = $res->body;
+        if ($text->empty()) {
+            $text = 'done';
+        }
+        json::Value $o = json::object();
+        if (!$failed) {
+            json::Value? $doc = Answer::parsed($res->body);
+            if ($doc != null) {
+                json::Value $d = guard $doc;
+                if ($d->isObject()) {
+                    $o['structuredContent'] = $d;
+                }
+            }
+        }
+        json::Value $item = json::object();
+        $item['type'] = json::str('text');
+        $item['text'] = json::str($text);
+        json::Value $content = json::arr();
+        $content[] = mv $item;
+        $o['content'] = mv $content;
+        $o['isError'] = json::bool($failed);
+        return $o;
+    }
+
+    internal static function parsed(const string& $text) : json::Value?
+    {
+        json::Value $doc = guard json::parse($text) else {
+            return null;
+        };
+        return $doc;
+    }
+}

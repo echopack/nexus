@@ -1,0 +1,13 @@
+namespace nexus::oauth;
+
+/**
+ * Why an authorization request is refused: shown to the user when the
+ * client or its redirect is in doubt (sending the browser there is
+ * exactly what must not happen), or sent back to the client's redirect
+ * with an OAuth error code otherwise.
+ */
+public enum Denial
+{
+    case shown(nexus::Problem $problem);
+    case back(string $location);
+}

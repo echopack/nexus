@@ -1,0 +1,14 @@
+namespace nexus;
+
+/**
+ * An app's own problem: a type URI, a status and a title, plus any extra
+ * members the client should see.
+ */
+public struct ProblemDetail
+{
+    public string $type;
+    public int32 $status;
+    public string $title;
+    public string $detail = '';
+    public json::Value $extra = json::object();
+}

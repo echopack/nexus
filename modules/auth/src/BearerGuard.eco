@@ -1,0 +1,41 @@
+namespace nexus::auth;
+
+/**
+ * Reads `Authorization: Bearer <prefix>_<id>_<secret>`. A bearer token in
+ * another shape (another prefix) is left to the guards after it; when none
+ * claims it, the request has no credential.
+ */
+#[atomic]
+public class BearerGuard : Guard
+{
+    public const string NAME = 'bearer';
+
+    public function name() : string
+    {
+        return BearerGuard::NAME;
+    }
+
+    public function identify(nexus::Payload& $payload) : result<Identity?, nexus::Problem>
+    {
+        string $header = guard $payload->request->header('Authorization') else {
+            return .ok(null);
+        };
+        if ($header->size() < 7 || str::lower($header->sub(0, 7)->clone()) != 'bearer ') {
+            return .ok(null);
+        }
+        string $text = str::trim($header->sub(7, $header->size() - 7)->clone());
+        Tokens $tokens = $payload->get<Tokens>();
+        if (Token::parse($tokens->prefix, $text) == null) {
+            return .ok(null);
+        }
+        Identity $id = guard $tokens->check($text) else ($p) {
+            return .error($p);
+        };
+        return .ok($id);
+    }
+
+    public function revoke(nexus::Payload& $payload, const Identity& $id) : status<nexus::Problem>
+    {
+        return $payload->get<Tokens>()->revoke($id->credential);
+    }
+}

@@ -1,0 +1,124 @@
+namespace nexus::oauth;
+
+use container::{Builder, Container};
+use std::time;
+
+/**
+ * OAuth 2.1 for the MCP endpoint. Adds its guard to nexus-auth's (so list
+ * it after nexus::auth::Extension), binds `Grants` per request on the
+ * store, and with `stores: .memory` a `MemoryOAuth`. Serves the metadata,
+ * registration, authorize, consent, token and revoke endpoints, and adds
+ * `oauth:prune`.
+ *
+ * ```echo
+ * nexus::auth::Extension('blog', stores: .provided),
+ * nexus::oauth::Extension(stores: .provided),     // the store from nexus-oauth-carbon
+ * nexus::oauth::carbon::Extension(),
+ * nexus::mcp::Extension(),
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public Stores $stores;
+    public calendar::Clock $clock;
+    internal nexus::auth::Throttle $registrations;
+
+    public constructor(stores: Stores $stores = Stores::memory, clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->stores = $stores;
+        $this->clock = $clock;
+        $this->registrations = nexus::auth::Throttle(10, time::duration::mins(15));
+    }
+
+    public function name() : string
+    {
+        return 'nexus-oauth';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::auth::Guards $guards = guard $s->find<nexus::auth::Guards>() else {
+            return .error(.extension('nexus-oauth', 'its tokens are read by a nexus-auth guard; list nexus::auth::Extension() before nexus::oauth::Extension()'));
+        };
+        $guards->add(OAuthGuard());
+        OAuthConfig $config = $s->get<OAuthConfig>();
+        guard Extension::urls($config) else ($e) {
+            return .error($e);
+        };
+        if ($this->stores == Stores::memory) {
+            $s->bind<MemoryOAuth>(put: MemoryOAuth());
+            $s->alias<OAuthStore, MemoryOAuth>();
+        }
+        calendar::Clock $clock = $this->clock;
+        nexus::auth::Throttle $throttle = $this->registrations;
+        $s->bind<Grants>(scope: function[$config, $clock](Container $c) : Grants {
+            return Grants($c->get<OAuthStore>(), $config, $clock);
+        });
+        $s->bindAction<ResourceMetadata>(method: .get, path: '/.well-known/oauth-protected-resource', function[$config](Container $c) : ResourceMetadata {
+            return ResourceMetadata($config);
+        });
+        $s->route<ResourceMetadata>(method: .get, path: '/.well-known/oauth-protected-resource/mcp');
+        $s->bindAction<ServerMetadata>(method: .get, path: '/.well-known/oauth-authorization-server', function[$config](Container $c) : ServerMetadata {
+            return ServerMetadata($config);
+        });
+        $s->bindAction<Register>(method: .post, path: '/oauth/register', function[$config, $clock, $throttle](Container $c) : Register {
+            return Register($c->get<OAuthStore>(), $config, $clock, $throttle);
+        });
+        $s->bindAction<Authorize>(method: .get, path: '/oauth/authorize', function[$config](Container $c) : Authorize {
+            return Authorize($c->get<OAuthStore>(), $config);
+        });
+        $s->bindAction<Pending>(method: .get, path: '/oauth/request', function[$config](Container $c) : Pending {
+            return Pending($c->get<OAuthStore>(), $config);
+        });
+        $s->bindAction<Approve>(method: .post, path: '/oauth/approve', function[$config](Container $c) : Approve {
+            return Approve($c->get<OAuthStore>(), $config, $c->get<Grants>());
+        });
+        $s->bindAction<TokenEndpoint>(method: .post, path: '/oauth/token', function(Container $c) : TokenEndpoint {
+            return TokenEndpoint($c->get<Grants>());
+        });
+        $s->bindAction<Revoke>(method: .post, path: '/oauth/revoke', function(Container $c) : Revoke {
+            return Revoke($c->get<Grants>());
+        });
+        $s->bindAction<ListGrants>(method: .get, path: '/oauth/grants', function(Container $c) : ListGrants {
+            return ListGrants($c->get<OAuthStore>());
+        });
+        $s->bindAction<DropGrant>(method: .delete, path: '/oauth/grants/{id}', function(Container $c) : DropGrant {
+            return DropGrant($c->get<OAuthStore>());
+        });
+        return .ok;
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        if (!$kernel->services->has<OAuthStore>()) {
+            return .error(.extension('nexus-oauth', 'no store is bound; use stores: .memory or add nexus::oauth::carbon::Extension()'));
+        }
+        return .ok;
+    }
+
+    public function commands(nexus::Commands& $cmds) : void
+    {
+        $cmds->add(PruneCommand());
+    }
+
+    /**
+     * Refuses a consent page or an issuer that is no URL, and an issuer
+     * that is not absolute, before the first request trips over it.
+     */
+    internal static function urls(const OAuthConfig& $config) : status<nexus::BootError>
+    {
+        nexus::Url $consent = guard nexus::Url::parse($config->consent) else ($e) {
+            return .error(.config([nexus::ConfigError::invalid('OAUTH_CONSENT', $e->message())]));
+        };
+        if ($config->issuer->empty()) {
+            return .ok;
+        }
+        nexus::Url $issuer = guard nexus::Url::parse($config->issuer) else ($e) {
+            return .error(.config([nexus::ConfigError::invalid('OAUTH_ISSUER', $e->message())]));
+        };
+        if (!$issuer->absolute()) {
+            return .error(.config([nexus::ConfigError::invalid('OAUTH_ISSUER', "'{$config->issuer}' is not absolute; give a scheme and a host")]));
+        }
+        return .ok;
+    }
+}

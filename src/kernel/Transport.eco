@@ -1,0 +1,11 @@
+namespace nexus;
+
+/**
+ * Carries requests from the outside world to the kernel. nexus-http is the
+ * HTTP/1.1 one. `serve` blocks until `stop` is called from another thread.
+ */
+public interface Transport
+{
+    function serve(Kernel $kernel, const Serve& $options) : status<BootError>;
+    function stop() : void;
+}

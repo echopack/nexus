@@ -1,0 +1,149 @@
+namespace nexusgen;
+
+/**
+ * Renders a decls type tree back into Echo source, and sorts types into
+ * what the generated code knows how to read.
+ */
+public struct Types
+{
+    public static function render(const json::Value& $t) : string
+    {
+        string $kind = Json::text($t, 'kind');
+        if ($kind == 'string') {
+            return 'string';
+        }
+        if ($kind == 'prim') {
+            return Json::text($t, 'name');
+        }
+        if ($kind == 'optional') {
+            string $inner = Types::render(Json::field($t, 'of'));
+            return "{$inner}?";
+        }
+        if ($kind == 'array') {
+            string $of = Types::render(Json::field($t, 'of'));
+            return "array<{$of}>";
+        }
+        if ($kind == 'map') {
+            string $k = Types::render(Json::field($t, 'key'));
+            string $v = Types::render(Json::field($t, 'value'));
+            return "map<{$k}, {$v}>";
+        }
+        if ($kind == 'ptr') {
+            string $to = Types::render(Json::field($t, 'to'));
+            if (!Json::flag($t, 'borrow')) {
+                return '';
+            }
+            if (Json::flag($t, 'const') || Json::flag(Json::field($t, 'to'), 'const')) {
+                return "const {$to}&";
+            }
+            return "{$to}&";
+        }
+        if ($kind == 'named') {
+            string $name = Json::text($t, 'name');
+            array<json::Value> $args = Json::items($t, 'args');
+            if ($args->count() == 0) {
+                return $name;
+            }
+            array<string> $parts = [];
+            foreach ($args as const &$a) {
+                $parts[] = Types::render($a);
+            }
+            string $joined = str::join($parts, ', ');
+            return "{$name}<{$joined}>";
+        }
+        return '';
+    }
+
+    /**
+     * The named type's name, or empty.
+     */
+    public static function name(const json::Value& $t) : string
+    {
+        if (Json::text($t, 'kind') != 'named') {
+            return '';
+        }
+        return Json::text($t, 'name');
+    }
+
+    /**
+     * The single type argument of `name<T>`, or nil.
+     */
+    public static function argument(const json::Value& $t) : json::Value
+    {
+        array<json::Value> $args = Json::items($t, 'args');
+        if ($args->count() != 1) {
+            return json::nil();
+        }
+        return $args[0]->clone();
+    }
+
+    public static function optional(const json::Value& $t) : bool
+    {
+        return Json::text($t, 'kind') == 'optional';
+    }
+
+    /**
+     * `T` for `T?`, the type itself otherwise.
+     */
+    public static function bare(const json::Value& $t) : json::Value
+    {
+        if (Types::optional($t)) {
+            return Json::field($t, 'of');
+        }
+        return $t->clone();
+    }
+
+    /**
+     * The reader a value of this type uses on `nexus::Fields` and
+     * `nexus::Settings` (`string`, `int64`, `strings`, `duration`, ...),
+     * or empty when it has none.
+     */
+    public static function reader(const json::Value& $t) : string
+    {
+        json::Value $b = Types::bare($t);
+        string $kind = Json::text($b, 'kind');
+        if ($kind == 'string') {
+            return 'string';
+        }
+        if ($kind == 'prim') {
+            string $n = Json::text($b, 'name');
+            if ($n == 'bool' || $n == 'int32' || $n == 'int64' || $n == 'uint16' || $n == 'uint32' || $n == 'uint64' || $n == 'float64') {
+                return $n;
+            }
+            return '';
+        }
+        if ($kind == 'array') {
+            json::Value $of = Json::field($b, 'of');
+            if (Json::text($of, 'kind') == 'string') {
+                return 'strings';
+            }
+            if (Json::text($of, 'kind') == 'prim' && Json::text($of, 'name') == 'int64') {
+                return 'ints';
+            }
+            return '';
+        }
+        string $name = Types::name($b);
+        if ($name == 'json::Value') {
+            return 'json';
+        }
+        if ($name == 'std::time::duration' || $name == 'time::duration') {
+            return 'duration';
+        }
+        return '';
+    }
+
+    /**
+     * The path constraint a parameter of this type implies, or empty.
+     */
+    public static function constraint(const json::Value& $t) : string
+    {
+        string $r = Types::reader($t);
+        if ($r == 'int32' || $r == 'int64') {
+            return 'integer';
+        }
+        if ($r == 'uint16' || $r == 'uint32' || $r == 'uint64') {
+            return 'number';
+        }
+        return '';
+    }
+}

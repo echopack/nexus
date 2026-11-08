@@ -1,0 +1,54 @@
+namespace nexus::http;
+
+/**
+ * Serves the kernel over HTTP/1.1. Every request goes through one libhttp
+ * wrap straight into `Kernel::handle`, on libhttp's worker threads.
+ */
+#[atomic]
+public class HttpTransport : nexus::Transport
+{
+    private http::Server $server;
+
+    public constructor()
+    {
+        $this->server = http::Server();
+    }
+
+    public function serve(nexus::Kernel $kernel, const nexus::Serve& $options) : status<nexus::BootError>
+    {
+        if ($options->workers > 0) {
+            $this->server->workers($options->workers as int32);
+        }
+        $this->server->maxBody($options->maxBody);
+        nexus::Mode $mode = $kernel->mode;
+        Proxies $proxies = Proxies::parse($kernel->services->get<HttpConfig>()->trustedProxies);
+        $this->server->wrap(function[$kernel, $mode, $proxies](http::Request $req, http::Next $next) : http::Response {
+            nexus::Request? $in = Wire::request($req, $proxies);
+            if ($in == null) {
+                nexus::Response $refused = nexus::Problem::custom(nexus::ProblemDetail('about:blank', 501, 'Not Implemented', $detail: 'this method is not routed'))->response($mode, '');
+                return Wire::response($refused);
+            }
+            nexus::Request $request = guard $in;
+            nexus::Response $out = $kernel->handle($request);
+            return Wire::response($out);
+        });
+        int32 $port = $options->port as int32;
+        guard $this->server->listen($options->host, $port) else ($e) {
+            return .error(.transport("cannot listen on {$options->host}:{$port}: {$e}"));
+        };
+        return .ok;
+    }
+
+    public function stop() : void
+    {
+        $this->server->stop();
+    }
+
+    /**
+     * The bound port once listening, for port 0.
+     */
+    public function port() : int32
+    {
+        return $this->server->port();
+    }
+}

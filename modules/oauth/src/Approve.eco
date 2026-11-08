@@ -1,0 +1,43 @@
+namespace nexus::oauth;
+
+/**
+ * The signed in user's answer on the consent page. The answer is where
+ * the browser goes next: back to the client with a code, or with
+ * `access_denied`.
+ */
+#[nexus::through: ["nexus::auth::Authenticate"]]
+public class Approve : nexus::Action
+{
+    private OAuthStore $store;
+    private OAuthConfig $config;
+    private Grants $grants;
+
+    public constructor(OAuthStore $store, OAuthConfig $config, Grants $grants)
+    {
+        $this->store = $store;
+        $this->config = $config;
+        $this->grants = $grants;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Body<Approval> $in) : result<json::Value, nexus::Problem>
+    {
+        nexus::auth::Identity $me = guard $payload->state<nexus::auth::Identity>() else ($p) {
+            return .error($p);
+        };
+        string $issuer = Metadata::issuer($this->config, $payload->request);
+        Asked $asked = guard Asked::check($in->value->query, $this->store, $issuer, $this->config) else ($d) {
+            return .error(Pending::problem($d));
+        };
+        json::Value $o = json::object();
+        if (!$in->value->allow) {
+            $o['redirect'] = json::str($asked->back('error', 'access_denied', $issuer));
+            return .ok($o);
+        }
+        string $code = guard $this->grants->code($asked, $me->subject) else ($p) {
+            return .error($p);
+        };
+        $payload->log->info('oauth code issued', ['client' => $asked->client->id, 'subject' => $me->subject]);
+        $o['redirect'] = json::str($asked->back('code', $code, $issuer));
+        return .ok($o);
+    }
+}

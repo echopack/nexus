@@ -1,0 +1,19 @@
+namespace nexus::mcp;
+
+/**
+ * The JSON Schemas `nexus gen` writes into the tool companions, as text.
+ */
+public struct Schema
+{
+    /**
+     * `$text` parsed. The text is generated, so text that does not parse
+     * is a bug in the generator and stops the program.
+     */
+    public static function of(const string& $text) : json::Value
+    {
+        json::Value $v = guard json::parse($text) else ($e) {
+            die("nexus-mcp: a generated schema does not parse: {$e->message()}");
+        };
+        return $v;
+    }
+}

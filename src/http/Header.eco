@@ -1,0 +1,10 @@
+namespace nexus;
+
+/**
+ * One header line. The name keeps the spelling it arrived or was set with.
+ */
+public struct Header
+{
+    public string $name;
+    public string $value;
+}

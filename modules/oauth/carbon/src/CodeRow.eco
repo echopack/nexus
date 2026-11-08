@@ -1,0 +1,40 @@
+namespace nexus::oauth::carbon;
+
+use std::time;
+
+/**
+ * A row of `oauth_codes`: an authorization code by its hash.
+ */
+#[carbon::model: 'oauth_codes']
+public class CodeRow : carbon::Model<CodeRow, CodeRowRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $hash;
+
+    public string $client;
+    public string $subject;
+    public string $redirect;
+    public bool $named;
+    public string $challenge;
+    public string $scope;
+    public time::timestamp $expiresAt;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    public static function of(const nexus::oauth::Code& $c) : CodeRow
+    {
+        return CodeRow($hash: $c->hash, $client: $c->client, $subject: $c->subject, $redirect: $c->redirect, $named: $c->named,
+            $challenge: $c->challenge, $scope: $c->scope, $expiresAt: $c->expiresAt);
+    }
+
+    public const function code() : nexus::oauth::Code
+    {
+        return nexus::oauth::Code($hash: $this->hash, $client: $this->client, $subject: $this->subject, $redirect: $this->redirect,
+            $named: $this->named, $challenge: $this->challenge, $scope: $this->scope, $expiresAt: $this->expiresAt);
+    }
+}

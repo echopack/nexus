@@ -1,0 +1,20 @@
+namespace nexus::mcp;
+
+/**
+ * What `nexus gen` wrote to offer one action or tool class over MCP: its
+ * name, the JSON Schema of its arguments, its docblock as the default
+ * description, the call that runs it and the middleware around that. The app makes it a tool, under
+ * the name it picks, with `Tools::offer`.
+ */
+public struct Offer
+{
+    public string $owner;
+    public json::Value $schema;
+    public string $description;
+    public function<nexus::Response(nexus::Payload&, nexus::Fields&)> $call;
+
+    /**
+     * The middleware `#[nexus::through]` names, which a call goes through.
+     */
+    public array<nexus::MiddlewareRef> $through = [];
+}

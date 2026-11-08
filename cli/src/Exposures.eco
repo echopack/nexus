@@ -1,0 +1,353 @@
+namespace nexusgen;
+
+/**
+ * Reads what a model exposes: `#[nexus::shapes]` on the type,
+ * `#[nexus::expose]` and `#[nexus::sensitive]` on its fields. Everything
+ * that does not fit is a problem at the field's line, so a slip never
+ * turns into a field written where it should not be.
+ */
+public struct Exposures
+{
+    /**
+     * Whether `$d` has anything for a mapping: a shapes list or a field
+     * marked expose or sensitive.
+     */
+    public static function marked(const json::Value& $d) : bool
+    {
+        if (Json::has($d, 'shapes')) {
+            return true;
+        }
+        foreach (Json::items($d, 'fields') as const &$f) {
+            if (Json::has($f, 'expose') || Json::has($f, 'sensitive')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static function read(Program& $p, const json::Value& $d) : void
+    {
+        string $q = Json::text($d, 'qualified');
+        MappedDecl $m = MappedDecl($q);
+        $m->shapes[] = ShapeDecl('');
+        if (!Exposures::shapes($p, $d, $m)) {
+            return;
+        }
+        bool $refused = false;
+        foreach (Json::items($d, 'fields') as const &$f) {
+            if (Json::flag($f, 'static')) {
+                continue;
+            }
+            bool $sensitive = Json::has($f, 'sensitive');
+            json::Value? $tool = Json::tool($f, 'expose');
+            if ($tool == null) {
+                if ($sensitive) {
+                    $m->sensitive[] = Names::snake(Json::text($f, 'name'));
+                }
+                continue;
+            }
+            json::Value $expose = guard $tool;
+            ExposedField $field = guard Exposures::field($p, $d, $f, $expose, $m) else {
+                // keep going: every field that does not fit is reported in one run
+                $refused = true;
+                continue;
+            };
+            if ($sensitive) {
+                $m->sensitive[] = $field->key;
+            }
+            $m->fields[] = $field;
+        }
+        if ($refused || !Exposures::unique($p, $d, $m)) {
+            return;
+        }
+        $p->mapped[] = $m;
+    }
+
+    /**
+     * The named shapes of `#[nexus::shapes: ["public", { name: "admin",
+     * sensitive: true }]]`, after the default one.
+     */
+    internal static function shapes(Program& $p, const json::Value& $d, MappedDecl& $m) : bool
+    {
+        json::Value $tool = guard Json::tool($d, 'shapes') else {
+            return true;
+        };
+        string $usage = '#[nexus::shapes] lists named shapes: ["public", { name: "admin", sensitive: true }]';
+        json::Value $list = Json::value($tool);
+        if (Json::text($list, 'kind') != 'list') {
+            $p->fail($d, $usage);
+            return false;
+        }
+        foreach (Json::items($list, 'items') as const &$item) {
+            ShapeDecl $s = ShapeDecl(Json::string($item));
+            if (Json::text($item, 'kind') == 'record') {
+                foreach (Json::record($item) as const &$e) {
+                    if ($e->key == 'name') {
+                        $s->name = Json::string($e->value);
+                    } else if ($e->key == 'sensitive') {
+                        $s->sensitive = Exposures::boolean($e->value);
+                    } else {
+                        $p->fail($d, "#[nexus::shapes] knows no '{$e->key}'; a shape takes name and sensitive");
+                        return false;
+                    }
+                }
+            }
+            if (!Exposures::identifier($s->name)) {
+                $p->fail($d, $usage);
+                return false;
+            }
+            if ($s->name == 'default') {
+                $p->fail($d, "#[nexus::shapes] cannot declare 'default': that shape is always there, and it is never sensitive, since nested includes use it");
+                return false;
+            }
+            foreach ($m->shapes as const &$have) {
+                if ($have->name == $s->name) {
+                    $p->fail($d, "#[nexus::shapes] names '{$s->name}' twice");
+                    return false;
+                }
+            }
+            $m->shapes[] = $s;
+        }
+        return true;
+    }
+
+    internal static function field(Program& $p, const json::Value& $d, const json::Value& $f, const json::Value& $expose, const MappedDecl& $m) : ExposedField?
+    {
+        string $name = Json::text($f, 'name');
+        string $text = Types::render(Json::field($f, 'type'));
+        if (Json::text($f, 'visibility') != 'public') {
+            $p->failAt($d, $f, "field ${$name} must be public for its mapping to read it");
+            return null;
+        }
+        ExposedField $out = ExposedField($name, Names::snake($name), '');
+        bool $always = false;
+        json::Value $options = Json::value($expose);
+        string $optionsKind = Json::text($options, 'kind');
+        if ($optionsKind != '' && $optionsKind != 'record') {
+            $p->failAt($d, $f, "#[nexus::expose] on ${$name} takes options as a record, like #[nexus::expose: { key: 'created' }]");
+            return null;
+        }
+        foreach (Json::record($options) as const &$e) {
+            if ($e->key == 'key') {
+                $out->key = Json::string($e->value);
+                if ($out->key->empty()) {
+                    $p->failAt($d, $f, "key: on ${$name} takes the wire name, like key: 'created'");
+                    return null;
+                }
+            } else if ($e->key == 'shapes') {
+                $out->shapes = Json::strings($e->value);
+                if ($out->shapes->empty()) {
+                    $p->failAt($d, $f, "shapes: on ${$name} lists at least one shape; leave it out for every shape");
+                    return null;
+                }
+            } else if ($e->key == 'attribute') {
+                $out->attribute = Exposures::boolean($e->value);
+            } else if ($e->key == 'item') {
+                $out->item = Json::string($e->value);
+            } else if ($e->key == 'stamp') {
+                $out->stamp = Json::string($e->value);
+                if ($out->stamp != 'zulu' && $out->stamp != 'atom' && $out->stamp != 'date') {
+                    $p->failAt($d, $f, "stamp: on ${$name} is zulu, atom or date");
+                    return null;
+                }
+            } else if ($e->key == 'include') {
+                if (Json::string($e->value) != 'default') {
+                    $p->failAt($d, $f, "include: on ${$name} takes only 'default', for a relation written without being asked");
+                    return null;
+                }
+                $always = true;
+            } else {
+                $p->failAt($d, $f, "#[nexus::expose] knows no '{$e->key}'; it takes key, shapes, attribute, item, stamp and include");
+                return null;
+            }
+        }
+        foreach ($out->shapes as const &$s) {
+            if (!Exposures::declared($m, $s)) {
+                $p->failAt($d, $f, "${$name} names the shape '{$s}', which #[nexus::shapes] on {$m->qualified} does not declare");
+                return null;
+            }
+        }
+        if (Json::has($f, 'sensitive')) {
+            $out->sensitive = true;
+            if ($out->shapes->empty()) {
+                $p->failAt($d, $f, "${$name} is sensitive, so it needs shapes: naming the sensitive shapes it is in; a bare #[nexus::expose] would put it in every shape");
+                return null;
+            }
+            foreach ($out->shapes as const &$s) {
+                if (!Exposures::sensitiveShape($m, $s)) {
+                    $p->failAt($d, $f, "${$name} is sensitive, but the shape '{$s}' is not; declare it { name: \"{$s}\", sensitive: true } or leave it out");
+                    return null;
+                }
+            }
+        }
+        if (!Exposures::writer($p, $f, $out)) {
+            $p->failAt($d, $f, "${$name} has type {$text}, which no mapping writes; leave it unexposed and write it in the transformer's transform()");
+            return null;
+        }
+        bool $relation = $out->writer == 'include' || $out->writer == 'includeCollection';
+        if ($always && !$relation) {
+            $p->failAt($d, $f, "include: on ${$name} is for a carbon::One or carbon::Many relation");
+            return null;
+        }
+        $out->always = $always;
+        if ($out->attribute && ($out->nullable || ($out->writer != 'int' && $out->writer != 'text' && $out->writer != 'enum'))) {
+            $p->failAt($d, $f, "attribute: on ${$name} needs a non-null integer, string or backed enum");
+            return null;
+        }
+        if (!$out->item->empty() && $out->writer != 'texts' && $out->writer != 'ints') {
+            $p->failAt($d, $f, "item: on ${$name} names the elements of a list; it is not one");
+            return null;
+        }
+        if (!$out->stamp->empty() && $out->writer != 'time') {
+            $p->failAt($d, $f, "stamp: on ${$name} is for a time::timestamp");
+            return null;
+        }
+        return $out;
+    }
+
+    /**
+     * Picks the `Item` writer for the field's type, false when there is
+     * none.
+     */
+    internal static function writer(const Program& $p, const json::Value& $f, ExposedField& $out) : bool
+    {
+        json::Value $type = Json::field($f, 'type');
+        json::Value $bare = Types::bare($type);
+        $out->nullable = Types::optional($type);
+        $out->type = Types::render($bare);
+        string $kind = Json::text($bare, 'kind');
+        if ($kind == 'string') {
+            $out->writer = 'text';
+            return true;
+        }
+        if ($kind == 'prim') {
+            string $n = Json::text($bare, 'name');
+            if ($n == 'bool') {
+                $out->writer = 'bool';
+                return true;
+            }
+            if ($n == 'float64' || $n == 'float32') {
+                $out->writer = 'float';
+                if ($n == 'float32') {
+                    $out->cast = ' as float64';
+                }
+                return true;
+            }
+            if ($n == 'int8' || $n == 'int16' || $n == 'int32' || $n == 'int64' || $n == 'uint8' || $n == 'uint16' || $n == 'uint32') {
+                $out->writer = 'int';
+                if ($n != 'int64') {
+                    $out->cast = ' as int64';
+                }
+                return true;
+            }
+            return false;
+        }
+        if ($kind == 'array') {
+            string $r = Types::reader($bare);
+            if ($r == 'strings') {
+                $out->writer = 'texts';
+                return true;
+            }
+            if ($r == 'ints') {
+                $out->writer = 'ints';
+                return true;
+            }
+            return false;
+        }
+        string $named = Types::name($bare);
+        if ($named == 'std::time::timestamp' || $named == 'time::timestamp') {
+            // time() writes null itself
+            $out->writer = 'time';
+            $out->nullable = false;
+            return true;
+        }
+        if ($named == 'json::Value') {
+            $out->writer = 'value';
+            return true;
+        }
+        if ($p->enumNamed($named)) {
+            $out->writer = 'enum';
+            $out->of = $named;
+            return true;
+        }
+        if (($named == 'carbon::One' || $named == 'carbon::Many') && !$out->nullable) {
+            $out->writer = 'include';
+            if ($named == 'carbon::Many') {
+                $out->writer = 'includeCollection';
+            }
+            $out->of = Types::render(Types::argument($bare));
+            return !$out->of->empty();
+        }
+        return false;
+    }
+
+    /**
+     * Whether two fields of one shape write the same key.
+     */
+    internal static function unique(Program& $p, const json::Value& $d, const MappedDecl& $m) : bool
+    {
+        foreach ($m->shapes as const &$shape) {
+            map<string, bool> $seen = [];
+            foreach ($m->fields as const &$f) {
+                if (!$m->holds($f, $shape)) {
+                    continue;
+                }
+                if ($seen->has($f->key)) {
+                    $p->fail($d, "two exposed fields of {$m->qualified} write the key '{$f->key}'");
+                    return false;
+                }
+                $seen[$f->key] = true;
+            }
+        }
+        return true;
+    }
+
+    internal static function declared(const MappedDecl& $m, const string& $name) : bool
+    {
+        if ($name == 'default') {
+            return true;
+        }
+        foreach ($m->shapes as const &$s) {
+            if ($s->name == $name) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    internal static function sensitiveShape(const MappedDecl& $m, const string& $name) : bool
+    {
+        foreach ($m->shapes as const &$s) {
+            if ($s->name == $name) {
+                return $s->sensitive;
+            }
+        }
+        return false;
+    }
+
+    internal static function boolean(const json::Value& $v) : bool
+    {
+        return Json::text($v, 'kind') == 'bool' && Json::flag($v, 'boolean');
+    }
+
+    /**
+     * A shape name: a letter, then letters and digits.
+     */
+    internal static function identifier(const string& $name) : bool
+    {
+        if ($name->empty()) {
+            return false;
+        }
+        usize $i = 0;
+        while ($i < $name->size()) {
+            uint8 $c = $name->byte($i);
+            bool $letter = ($c >= 97 && $c <= 122) || ($c >= 65 && $c <= 90);
+            bool $digit = $c >= 48 && $c <= 57;
+            if (!$letter && !($digit && $i > 0)) {
+                return false;
+            }
+            $i = $i + 1;
+        }
+        return true;
+    }
+}

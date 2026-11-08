@@ -1,0 +1,39 @@
+namespace nexus::auth::carbon;
+
+use std::time;
+
+/**
+ * A row of `auth_sessions`: a signed session by its id. Its secret is
+ * derived from the id, never stored.
+ */
+#[carbon::model: 'auth_sessions']
+public class AuthSession : carbon::Model<AuthSession, AuthSessionRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $id;
+
+    public string $subject;
+
+    #[carbon::codec: 'csv']
+    public array<string> $scopes = [];
+
+    public time::timestamp $createdAt;
+    public time::timestamp $expiresAt;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    public static function of(const nexus::auth::StoredSession& $s) : AuthSession
+    {
+        return AuthSession($id: $s->id, $subject: $s->subject, $scopes: $s->scopes, $createdAt: $s->createdAt, $expiresAt: $s->expiresAt);
+    }
+
+    public const function stored() : nexus::auth::StoredSession
+    {
+        return nexus::auth::StoredSession($id: $this->id, $subject: $this->subject, $scopes: $this->scopes, $createdAt: $this->createdAt, $expiresAt: $this->expiresAt);
+    }
+}

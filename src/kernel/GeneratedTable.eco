@@ -1,0 +1,12 @@
+namespace nexus;
+
+/**
+ * One module's generated table, found by the kernel with
+ * `attr::of<GeneratedTable>("nexus::generated")`: it fills `Generated`
+ * with that module's actions, commands and type names.
+ */
+public struct GeneratedTable
+{
+    public string $module;
+    public function<void(Generated)> $call;
+}

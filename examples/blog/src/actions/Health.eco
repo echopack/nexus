@@ -1,0 +1,22 @@
+namespace blog;
+
+/**
+ * Whether the blog is up, and what it is called.
+ */
+public class Health : nexus::Action
+{
+    private BlogConfig $config;
+
+    public constructor(BlogConfig $config)
+    {
+        $this->config = $config;
+    }
+
+    public function handle() : json::Value
+    {
+        json::Value $o = json::object();
+        $o['ok'] = true;
+        $o['title'] = json::str($this->config->title);
+        return $o;
+    }
+}

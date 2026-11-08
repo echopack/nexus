@@ -1,0 +1,374 @@
+namespace nexus::crud;
+
+/**
+ * List, show, create, update and delete for one model: model `M`, its
+ * query `Q` (a `carbon::Query<M, Q>`), key `K`, repository `Repo` (a
+ * `carbon::Repository<M, Q, K>`) and transformer `T` (a
+ * `nexus::rest::Transformer<M>`), which answers and says what `?include=`
+ * may name. Built per request with the request's repository; a type alias
+ * keeps the five names in one place.
+ *
+ * ```echo
+ * public type PostCrud = nexus::crud::Crud<Post, PostQuery, int64, PostRepository, PostTransformer>;
+ *
+ * $s->bind<PostCrud>(scope: function(Container $c) : PostCrud {
+ *     PostCrud $crud = PostCrud($c->get<PostRepository>(), $c->get<PostTransformer>());
+ *     $crud->load = function(PostQuery $q, const EchoPack::Rest::Includes& $inc) : PostQuery {
+ *         if ($inc->has('author')) {
+ *             return $q->withAuthor();
+ *         }
+ *         return $q;
+ *     };
+ *     return $crud;
+ * });
+ *
+ * $s->bindAction<ShowPost>(method: .get, path: '/v1/posts/{id}', function(Container $c) : ShowPost {
+ *     return ShowPost($c->get<PostCrud>());
+ * });
+ *
+ * public class ShowPost : nexus::Action
+ * {
+ *     public function handle(nexus::Payload& $payload, int64 $id) : result<nexus::Response, nexus::Problem>
+ *     {
+ *         return $this->crud->show($payload, $id);
+ *     }
+ * }
+ * ```
+ *
+ * `find` and `page` hand back the models, for an action that answers
+ * itself; `show`, `list`, `create` and `update` answer through `T`. Every
+ * read starts from the repository's `find()`, narrowed by `scope` (who
+ * sees which rows) and widened by `load` (the relations the request's
+ * includes name). `authorize` runs on every record shown or written,
+ * `before` and `after` around every write. A database error becomes its
+ * `nexus::carbon::Problems` answer.
+ */
+// Q, Repo and T are what their names say, but unconstrained: a type alias to this class in
+// the module that declares Q cannot see Q's conformances yet, and every call is checked once
+// the class is instantiated anyway
+public class Crud<M, Q, K, Repo, T>
+{
+    public Repo $repo;
+    public T $transformer;
+
+    /**
+     * What `T` gets next to the model in `show`, `list`, `create` and
+     * `update`: `$crud->context->set<UserContext>($user: $me->user)`.
+     */
+    public nexus::rest::TransformerContext $context = nexus::rest::TransformerContext();
+
+    /**
+     * Loads the relations the request includes.
+     */
+    public function<Q(Q, const EchoPack::Rest::Includes&)>? $load = null;
+
+    /**
+     * Narrows every read to what this request may see.
+     */
+    public function<Q(Q)>? $scope = null;
+
+    /**
+     * Whether this request may show or write `M`: a problem (a 403, or a
+     * 404 to hide that it exists) answers instead.
+     */
+    public function<status<nexus::Problem>(Verb, const M&)>? $authorize = null;
+
+    /**
+     * Runs before a create, update or delete, after `authorize`.
+     */
+    public function<status<nexus::Problem>(Verb, M&)>? $before = null;
+
+    /**
+     * Runs after a create, update or delete went through.
+     */
+    public function<void(Verb, const M&)>? $after = null;
+
+    /**
+     * What a missing record is called in a 404.
+     */
+    public string $name = 'record';
+
+    public constructor(Repo $repo, T $transformer)
+    {
+        $this->repo = $repo;
+        $this->transformer = $transformer;
+    }
+
+    /**
+     * The record with key `$key`, with the relations the request includes:
+     * a 404 when there is none, `authorize`'s answer when it refuses.
+     */
+    public function find(nexus::Payload& $payload, K $key) : result<M, nexus::Problem>
+    {
+        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
+            return .error($p);
+        };
+        return $this->find($key, $inc);
+    }
+
+    /**
+     * The record with key `$key`, loaded for `$inc`.
+     */
+    public function find(K $key, const EchoPack::Rest::Includes& $inc) : result<M, nexus::Problem>
+    {
+        M $m = guard $this->fetch($key, $inc) else ($p) {
+            return .error($p);
+        };
+        guard $this->allowed(Verb::show, $m) else ($p) {
+            return .error($p);
+        };
+        return .ok($m);
+    }
+
+    /**
+     * A page of records, read as `$o` says, with the relations the request
+     * includes.
+     */
+    public function page(nexus::Payload& $payload, const Listing<Q>& $o) : result<Page<M>, nexus::Problem>
+    {
+        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
+            return .error($p);
+        };
+        return $this->page($payload, $o, $inc);
+    }
+
+    /**
+     * A page of records, read as `$o` says and loaded for `$inc`: the
+     * request's filter, `ids`, `order`, `page` and `size`, and with
+     * `count=1` the counts.
+     */
+    public function page(nexus::Payload& $payload, const Listing<Q>& $o, const EchoPack::Rest::Includes& $inc) : result<Page<M>, nexus::Problem>
+    {
+        Page<M> $out = Page<M>();
+        Q $base = $this->scoped();
+        Q $q = $base;
+        if ($o->filter != null) {
+            function<result<Q, nexus::Problem>(Q, const nexus::Request&)> $filter = guard $o->filter;
+            Q $filtered = guard $filter($q, $payload->request) else ($p) {
+                return .error($p);
+            };
+            $q = $filtered;
+        }
+        array<int64> $ids = guard $o->wanted($payload->request) else ($p) {
+            return .error($p);
+        };
+        if (!$ids->empty()) {
+            function<hydrahon::Term<bool>(array<int64>)> $match = guard $o->ids;
+            $q = $q->where($match($ids));
+        }
+        $out->counted = $o->counting && ($payload->request->query->get('count') ?? '') == '1';
+        if ($out->counted) {
+            uint64 $all = guard $base->count() else ($e) {
+                return .error(nexus::carbon::Problems::of($e));
+            };
+            uint64 $left = guard $q->count() else ($e) {
+                return .error(nexus::carbon::Problems::of($e));
+            };
+            $out->total = $all;
+            $out->matching = $left;
+        }
+        Sorting? $sorting = guard $o->sorting($payload->request) else ($p) {
+            return .error($p);
+        };
+        if ($sorting != null) {
+            Sorting $s = guard $sorting;
+            if ($s->desc) {
+                $q = $q->order(desc: $s->column);
+            } else {
+                $q = $q->order(asc: $s->column);
+            }
+        }
+        if ($o->paging) {
+            Window $asked = guard $o->window($payload->request) else ($p) {
+                return .error($p);
+            };
+            $out->paged = true;
+            $out->window = $asked;
+            $q = $q->page($asked->page - 1, size: $asked->size);
+        }
+        $q = $this->loading($q, $inc);
+        array<M> $models = guard $q->get() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        $out->models = mv $models;
+        return .ok($out);
+    }
+
+    /**
+     * A page of records, with the default listing conventions.
+     */
+    public function list(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        Listing<Q> $o = Listing<Q>();
+        return $this->list($payload, $o);
+    }
+
+    /**
+     * A page of records as the answer, read as `$o` says. It carries
+     * `page` and `size`, and with `count=1` `total_count` and
+     * `filter_count`.
+     */
+    public function list(nexus::Payload& $payload, const Listing<Q>& $o) : result<nexus::Response, nexus::Problem>
+    {
+        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
+            return .error($p);
+        };
+        Page<M> $page = guard $this->page($payload, $o, $inc) else ($p) {
+            return .error($p);
+        };
+        nexus::rest::Meta $meta = $page->meta();
+        return .ok($this->transformer->createCollectionResponse($payload, $page->models, $meta, $this->context, mv $inc));
+    }
+
+    /**
+     * The record with key `$key` as the answer.
+     */
+    public function show(nexus::Payload& $payload, K $key) : result<nexus::Response, nexus::Problem>
+    {
+        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
+            return .error($p);
+        };
+        M $m = guard $this->find($key, $inc) else ($p) {
+            return .error($p);
+        };
+        return .ok($this->transformer->createResponse($payload, $m, $this->context, mv $inc));
+    }
+
+    /**
+     * Creates `$model`, built by the action from the request's input, and
+     * answers with it: a 201.
+     */
+    public function create(nexus::Payload& $payload, M $model) : result<nexus::Response, nexus::Problem>
+    {
+        // checked before the write: a bad ?include= changes nothing
+        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
+            return .error($p);
+        };
+        M $m = $model;
+        guard $this->allowed(Verb::create, $m) else ($p) {
+            return .error($p);
+        };
+        guard $this->hook(Verb::create, $m) else ($p) {
+            return .error($p);
+        };
+        M $made = guard $this->repo->create($m) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        $this->done(Verb::create, $made);
+        return .ok($this->transformer->createResponse($payload, $made, $this->context, mv $inc, status: 201));
+    }
+
+    /**
+     * The record with key `$key`, changed by `$fill` and saved. Answers
+     * with it, with the relations the request includes.
+     */
+    public function update(nexus::Payload& $payload, K $key, function<status<nexus::Problem>(M&)> $fill) : result<nexus::Response, nexus::Problem>
+    {
+        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
+            return .error($p);
+        };
+        M $m = guard $this->fetch($key, $inc) else ($p) {
+            return .error($p);
+        };
+        guard $this->allowed(Verb::update, $m) else ($p) {
+            return .error($p);
+        };
+        guard $fill($m) else ($p) {
+            return .error($p);
+        };
+        guard $this->hook(Verb::update, $m) else ($p) {
+            return .error($p);
+        };
+        guard $this->repo->save($m) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        $this->done(Verb::update, $m);
+        return .ok($this->transformer->createResponse($payload, $m, $this->context, mv $inc));
+    }
+
+    /**
+     * Deletes the record with key `$key`: a 204, a 404 when there is none.
+     */
+    public function delete(nexus::Payload& $payload, K $key) : status<nexus::Problem>
+    {
+        EchoPack::Rest::Includes $none = EchoPack::Rest::Includes();
+        M $m = guard $this->fetch($key, $none) else ($p) {
+            return .error($p);
+        };
+        guard $this->allowed(Verb::delete, $m) else ($p) {
+            return .error($p);
+        };
+        guard $this->hook(Verb::delete, $m) else ($p) {
+            return .error($p);
+        };
+        guard $this->repo->delete($m) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        $this->done(Verb::delete, $m);
+        return .ok;
+    }
+
+    /**
+     * `find()` narrowed by `scope`.
+     */
+    internal function scoped() : Q
+    {
+        Q $q = $this->repo->find();
+        if ($this->scope != null) {
+            function<Q(Q)> $narrow = guard $this->scope;
+            $q = $narrow($q);
+        }
+        return $q;
+    }
+
+    /**
+     * `$q` with the relations `$inc` names.
+     */
+    internal function loading(Q $q, const EchoPack::Rest::Includes& $inc) : Q
+    {
+        if ($this->load == null) {
+            return $q;
+        }
+        function<Q(Q, const EchoPack::Rest::Includes&)> $load = guard $this->load;
+        return $load($q, $inc);
+    }
+
+    internal function fetch(K $key, const EchoPack::Rest::Includes& $inc) : result<M, nexus::Problem>
+    {
+        Q $q = $this->loading($this->scoped(), $inc);
+        M? $found = guard $q->get($key) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        M $m = guard $found else {
+            return .error(.notFound("the {$this->name}"));
+        };
+        return .ok($m);
+    }
+
+    internal function allowed(Verb $v, const M& $m) : status<nexus::Problem>
+    {
+        if ($this->authorize == null) {
+            return .ok;
+        }
+        function<status<nexus::Problem>(Verb, const M&)> $check = guard $this->authorize;
+        return $check($v, $m);
+    }
+
+    internal function hook(Verb $v, M& $m) : status<nexus::Problem>
+    {
+        if ($this->before == null) {
+            return .ok;
+        }
+        function<status<nexus::Problem>(Verb, M&)> $run = guard $this->before;
+        return $run($v, $m);
+    }
+
+    internal function done(Verb $v, const M& $m) : void
+    {
+        if ($this->after == null) {
+            return;
+        }
+        function<void(Verb, const M&)> $run = guard $this->after;
+        $run($v, $m);
+    }
+}

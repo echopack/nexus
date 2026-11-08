@@ -1,0 +1,49 @@
+namespace nexus::log;
+
+/**
+ * A logging setting that does not read, with the text that was given.
+ */
+public enum ConfigError
+{
+    /**
+     * Not a level: trace, debug, info, warn or error.
+     */
+    case level(string $given);
+
+    /**
+     * Not a format: pretty, logfmt or json.
+     */
+    case format(string $given);
+
+    /**
+     * Not a rotation: never, daily or a size such as `64mb`.
+     */
+    case rotate(string $given);
+
+    /**
+     * Not a positive count.
+     */
+    case count(string $name, string $given);
+
+    /**
+     * Not an overflow policy: block or drop.
+     */
+    case overflow(string $given);
+
+    /**
+     * The log file could not be opened.
+     */
+    case file(FileError $cause);
+
+    public const function message() : string
+    {
+        return match ($this) {
+            .level($g) => "NEXUS_LOG must be trace, debug, info, warn or error, not '{$g}'",
+            .format($g) => "NEXUS_LOG_FORMAT must be pretty, logfmt or json, not '{$g}'",
+            .rotate($g) => "NEXUS_LOG_ROTATE must be never, daily or a size such as 64mb, not '{$g}'",
+            .count($n, $g) => "{$n} must be a positive number, not '{$g}'",
+            .overflow($g) => "NEXUS_LOG_OVERFLOW must be block or drop, not '{$g}'",
+            .file($e) => $e->message(),
+        };
+    }
+}

@@ -1,0 +1,36 @@
+/*
+ * nexus-crud: list, show, create, update and delete over a carbon
+ * repository, answered through a nexus-rest transformer.
+ *
+ * One nexus::crud::Crud per model holds what the five share: the
+ * repository, the transformer (which also says what a client may
+ * include), how includes are loaded, who may see what, and hooks around
+ * writes. Each action is still
+ * a class of its own with its route, and calls the verb it is:
+ * `return $this->crud->show($payload, $id);`. Listing follows one set of query
+ * conventions: page, size, order, ids, count, include.
+ */
+
+#[module: "nexus-crud"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "CRUD endpoints for nexus apps on carbon, answered by transformers"]
+
+#[depends: "../.."]
+#[depends: "../carbon"]
+#[depends: "../rest"]
+#[depends: "../../../carbon"]
+#[depends: "../../../RestTransformers"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+
+#[sources: "src/*.eco"]
+
+#[target: test] {
+    // carbon's own example models, generated tables included
+    #[depends: "../../../carbon/examples/blog"]
+    #[depends: "../../../carbon/fake"]
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

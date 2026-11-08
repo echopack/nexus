@@ -1,0 +1,49 @@
+namespace nexus;
+
+/**
+ * How `serve` runs: address, port, worker threads (0 means one per core),
+ * the largest request body accepted, and whether the background work of
+ * the extensions runs too (`--no-work`, `--no-schedule`).
+ */
+public struct Serve
+{
+    public string $host = '127.0.0.1';
+    public uint16 $port = 8080;
+    public uint32 $workers = 0;
+    public usize $maxBody = 8388608;
+
+    /**
+     * Whether task workers run in this process.
+     */
+    public bool $work = true;
+
+    /**
+     * Whether scheduled tasks are pushed from this process.
+     */
+    public bool $schedule = true;
+
+    /**
+     * Parses `host:port`, `:port` or a bare port into `$host` and `$port`.
+     */
+    public function listen(const string& $address) : bool
+    {
+        string $a = str::trim($address);
+        usize $colon = $a->find(':');
+        string $portText = $a;
+        if ($colon < $a->size()) {
+            string $host = $a->sub(0, $colon);
+            if (!$host->empty()) {
+                $this->host = $host;
+            }
+            $portText = $a->sub($colon + 1, $a->size() - $colon - 1);
+        }
+        uint64 $p = guard str::uint($portText) else {
+            return false;
+        };
+        if ($p == 0 || $p > 65535) {
+            return false;
+        }
+        $this->port = $p as uint16;
+        return true;
+    }
+}

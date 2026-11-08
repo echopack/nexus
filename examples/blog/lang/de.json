@@ -1,0 +1,40 @@
+{
+  "rule": {
+    "required": "Das Feld {label} ist erforderlich.",
+    "type": {
+      "string": "Das Feld {label} muss Text sein.",
+      "integer": "Das Feld {label} muss eine ganze Zahl sein.",
+      "number": "Das Feld {label} muss eine Zahl sein.",
+      "boolean": "Das Feld {label} muss wahr oder falsch sein.",
+      "list": "Das Feld {label} muss eine Liste sein.",
+      "object": "Das Feld {label} muss ein Objekt sein."
+    },
+    "min": {
+      "string": "Das Feld {label} muss mindestens {min} Zeichen lang sein.",
+      "integer": "Das Feld {label} muss mindestens {min} sein.",
+      "list": "Das Feld {label} muss mindestens {min} Einträge haben."
+    },
+    "max": {
+      "string": "Das Feld {label} darf höchstens {max} Zeichen lang sein.",
+      "integer": "Das Feld {label} darf höchstens {max} sein.",
+      "list": "Das Feld {label} darf höchstens {max} Einträge haben."
+    },
+    "notBlank": "Das Feld {label} darf nicht leer sein.",
+    "email": "Das Feld {label} muss eine gültige E-Mail-Adresse sein.",
+    "distinct": "Das Feld {label} enthält einen Wert doppelt.",
+    "confirmed": "Die Bestätigung von {label} stimmt nicht überein.",
+    "unique": "Diese {label} ist bereits vergeben."
+  },
+  "label": {
+    "title": "Titel",
+    "body": "Text",
+    "tags": "Stichworte",
+    "posts": "Beiträge",
+    "name": "Name",
+    "password": "Passwort",
+    "passwordConfirmation": "Passwortbestätigung",
+    "blog::Registration": {
+      "email": "E-Mail-Adresse"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+namespace nexus::oauth;
+
+/**
+ * Proof Key for Code Exchange (RFC 7636), S256 only: the client sends
+ * `base64url(sha256(verifier))` when it asks, and the verifier itself
+ * when it trades the code.
+ */
+public struct Pkce
+{
+    public static function challenge(const string& $verifier) : string
+    {
+        return crypto::base64url(crypto::sha256($verifier));
+    }
+
+    /**
+     * Whether `$verifier` is well formed (43 to 128 unreserved characters)
+     * and hashes to `$challenge`, in constant time.
+     */
+    public static function verify(const string& $verifier, const string& $challenge) : bool
+    {
+        if ($verifier->size() < 43 || $verifier->size() > 128) {
+            return false;
+        }
+        foreach (0 .. $verifier->size() as $i) {
+            uint8 $c = $verifier->byte($i);
+            bool $ok = ($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122) || ($c >= 48 && $c <= 57) || $c == 45 || $c == 46 || $c == 95 || $c == 126;
+            if (!$ok) {
+                return false;
+            }
+        }
+        return crypto::equal(Pkce::challenge($verifier), $challenge);
+    }
+}

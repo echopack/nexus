@@ -1,0 +1,26 @@
+namespace nexus::auth;
+
+/**
+ * Reads one kind of credential. `identify` is null when the request
+ * carries none of its kind, so the next guard may look; a credential of
+ * its kind that does not hold (unknown, expired, tampered with) is a 401
+ * right away, never an anonymous request. Guards are shared by every
+ * worker thread: `#[atomic]`, no per-request state in fields.
+ */
+public interface Guard
+{
+    /**
+     * The name an `Identity` carries in `via`.
+     */
+    function name() : string;
+
+    function identify(nexus::Payload& $payload) : result<Identity?, nexus::Problem>;
+
+    /**
+     * Ends the credential `$id` names, for a logout.
+     */
+    function revoke(nexus::Payload& $payload, const Identity& $id) : status<nexus::Problem>
+    {
+        return .ok;
+    }
+}

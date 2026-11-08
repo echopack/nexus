@@ -1,0 +1,13 @@
+namespace blog;
+
+/**
+ * What updating a post may change; whatever is left out stays.
+ */
+#[nexus::input]
+public struct PostChanges
+{
+    #[nexus::rule: { min: 3, max: 120 }]
+    public string? $title = null;
+
+    public string? $body = null;
+}

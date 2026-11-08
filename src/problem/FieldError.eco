@@ -1,0 +1,127 @@
+namespace nexus;
+
+/**
+ * Why one input field was refused. `$code` is stable for clients to switch
+ * on (`required`, `type`, `min`, `max`, `email`, `oneOf`, ...) and
+ * `$params` holds what the rule was given (`min: 3`); `$message` is for
+ * people, in English until `nexus::Messages` renders it in the request's
+ * language.
+ */
+public struct FieldError
+{
+    /**
+     * Where the field is in the whole input: `title`, `posts.1.title`,
+     * `tags.2`.
+     */
+    public string $field;
+    public string $code;
+    public string $message;
+    public ordered_map<string, string> $params;
+
+    /**
+     * The input type the field belongs to, `blog::NewPost`, and the field's
+     * own name there, without the path: what message catalogs are keyed by.
+     */
+    public string $input = '';
+    public string $name = '';
+
+    /**
+     * What the field holds: `string`, `integer`, `number`, `boolean`,
+     * `list`, `date`, `timestamp`, `enum` or `object`. A rule like `min`
+     * reads differently for each.
+     */
+    public string $kind = '';
+
+    /**
+     * How the message calls the field, in English: `#[nexus::label]`, or
+     * the field's name made readable.
+     */
+    public string $label = '';
+
+    /**
+     * The English message before its holes were filled:
+     * `The {label} field must be at least {min} characters.`
+     */
+    public string $template = '';
+
+    public constructor(const string& $field, const string& $code, const string& $message)
+    {
+        $this->field = $field;
+        $this->code = $code;
+        $this->message = $message;
+        $this->params = ordered_map<string, string>();
+        $this->template = $message;
+    }
+
+    public const function json() : json::Value
+    {
+        json::Value $o = json::object();
+        $o['field'] = json::str($this->field);
+        $o['code'] = json::str($this->code);
+        $o['message'] = json::str($this->message);
+        json::Value $p = json::object();
+        foreach ($this->params as $k => const &$v) {
+            $p[$k] = json::str($v);
+        }
+        $o['params'] = $p;
+        return $o;
+    }
+
+    /**
+     * `$template` with `{label}` and every `{param}` filled in.
+     */
+    public static function fill(const string& $template, const string& $label, const ordered_map<string, string>& $params) : string
+    {
+        string $out = FieldError::swap($template, '{label}', $label);
+        foreach ($params as $k => const &$v) {
+            $out = FieldError::swap($out, "\{{$k}}", $v);
+        }
+        return $out;
+    }
+
+    /**
+     * `$text` with every `$find` replaced by `$with`.
+     */
+    internal static function swap(const string& $text, const string& $find, const string& $with) : string
+    {
+        string $out = '';
+        usize $i = 0;
+        usize $n = $text->size();
+        while ($i < $n) {
+            usize $at = $text->find($find, $i);
+            if ($at >= $n) {
+                $out->append($text->sub($i, $n - $i));
+                break;
+            }
+            $out->append($text->sub($i, $at - $i));
+            $out->append($with);
+            $i = $at + $find->size();
+        }
+        return $out;
+    }
+
+    /**
+     * A field name as words: `passwordConfirmation` is `password
+     * confirmation`, `created_at` is `created at`.
+     */
+    public static function readable(const string& $name) : string
+    {
+        string $out = '';
+        usize $i = 0;
+        while ($i < $name->size()) {
+            uint8 $b = $name->byte($i);
+            if ($b >= 65 && $b <= 90) {
+                if ($i > 0) {
+                    $out->push(32);
+                }
+                $out->push($b + 32);
+            } else if ($b == 95 || $b == 45) {
+                $out->push(32);
+            } else {
+                $out->push($b);
+            }
+            $i = $i + 1;
+        }
+        return $out;
+    }
+}

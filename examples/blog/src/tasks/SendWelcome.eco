@@ -1,0 +1,31 @@
+namespace blog;
+
+/**
+ * Welcomes a new user and notes when. There is no mail yet, so the
+ * welcome is a log line; the note is what `/v1/me` shows.
+ */
+public struct SendWelcome : nexus::work::Task
+{
+    public int64 $user;
+
+    public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
+    {
+        UserRepository $users = $payload->get<UserRepository>();
+        User? $found = guard $users->find()->get($this->user) else ($e) {
+            return .error(.retry("the users table: {$e}"));
+        };
+        User $u = guard $found else {
+            return .error(.giveUp("user {$this->user} is gone"));
+        };
+        if ($u->welcomedAt != null) {
+            // a try that died after saving: welcomed already
+            return .ok;
+        }
+        $payload->log->info('welcome', ['to' => $u->email]);
+        $u->welcomedAt = $payload->get<nexus::work::Work>()->clock->now();
+        guard $users->save($u) else ($e) {
+            return .error(.retry("saving the welcome: {$e}"));
+        };
+        return .ok;
+    }
+}

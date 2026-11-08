@@ -1,0 +1,86 @@
+namespace nexus::app;
+
+/**
+ * The action `bindAction` just bound, for where it answers and what goes
+ * around it: routes, middleware on every one of them, and an offer as an
+ * MCP tool. The middleware the action itself needs it names in
+ * `#[nexus::through]`, which runs on every route and as a tool; the
+ * routes' `->middleware<M>()` runs outside of that, on the routes only.
+ *
+ * ```echo
+ * $app->bindAction<UpdatePost>((Container $c) => UpdatePost($c->get<PostService>(), $c->get<PostTransformer>()))
+ *     ->route([.put, .patch], '/v1/posts/{id}')
+ *     ->middleware<Audit>()
+ *     ->tool('update_post', title: 'Edit a post');
+ * ```
+ */
+public class ActionRef<A>
+{
+    internal nexus::App $app;
+    internal array<nexus::ActionRef<A>> $routes = [];
+    internal array<function<void(nexus::ActionRef<A>)>> $around = [];
+
+    internal constructor(nexus::App $app)
+    {
+        $this->app = $app;
+    }
+
+    /**
+     * Answers `$methods` at `$path` with this action. Call it again for
+     * another path; the middleware of this ref wraps every route.
+     */
+    public function route(array<nexus::Method> $methods, const string& $path) : ActionRef<A>
+    {
+        if ($methods->empty()) {
+            string $name = $this->app->services->generated->nameOf<A>('an action');
+            $this->app->services->fail(.extension('nexus-app', "{$name} is routed at {$path} without a method; name at least one, like [.get]"));
+            return $this;
+        }
+        nexus::ActionRef<A> $ref = $this->app->services->route<A>(method: $methods[0], path: $path);
+        for ($i = 1; $i < $methods->count(); $i++) {
+            $this->app->services->route<A>(method: $methods[$i], path: $path);
+        }
+        foreach ($this->around as const &$wrap) {
+            $wrap($ref);
+        }
+        $this->routes[] = $ref;
+        return $this;
+    }
+
+    /**
+     * Wraps every route of this action in middleware `M`, taken from the
+     * request's container each time.
+     */
+    public function middleware<M>() : ActionRef<A>
+    {
+        function<void(nexus::ActionRef<A>)> $wrap = function(nexus::ActionRef<A> $r) {
+            $r->middleware<M>();
+        };
+        foreach ($this->routes as const &$ref) {
+            $wrap($ref);
+        }
+        $this->around[] = $wrap;
+        return $this;
+    }
+
+    /**
+     * Offers the action as MCP tool `$name` too: its path parameters and
+     * its input's fields are the tool's arguments. The description
+     * defaults to the action's docblock; `map` renames arguments, tool
+     * argument to the name `handle()` uses (`['post' => 'id']`).
+     */
+    public function tool(
+        const string& $name,
+        title: const string& $title = '',
+        description: const string& $description = '',
+        readOnly: bool? $readOnly = null,
+        destructive: bool? $destructive = null,
+        idempotent: bool? $idempotent = null,
+        openWorld: bool? $openWorld = null,
+        map: map<string, string> $renames = []
+    ) : ActionRef<A>
+    {
+        nexus::mcp::Tools::offer<A>($this->app->services, name: $name, title: $title, description: $description, readOnly: $readOnly, destructive: $destructive, idempotent: $idempotent, openWorld: $openWorld, map: $renames);
+        return $this;
+    }
+}

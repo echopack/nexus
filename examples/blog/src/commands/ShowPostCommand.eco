@@ -1,0 +1,34 @@
+namespace blog;
+
+/**
+ * Prints one post: its title, author, tags and text.
+ */
+public class ShowPostCommand : nexus::Cli
+{
+    private PostService $posts;
+
+    public constructor(PostService $posts)
+    {
+        $this->posts = $posts;
+    }
+
+    public function handle(nexus::Payload& $payload, command::CLIContext& $out, PostRef $in) : status<nexus::Problem>
+    {
+        Post $p = guard $this->posts->find($in->id) else ($e) {
+            return .error($e);
+        };
+        $out->line("#{$p->id}  {$p->title}");
+        User? $author = $p->author->get();
+        if ($author != null) {
+            User $u = guard $author;
+            $out->line("by {$u->name} <{$u->email}>");
+        }
+        if (!$p->tags->empty()) {
+            string $tags = str::join($p->tags, ', ');
+            $out->line("tags: {$tags}");
+        }
+        $out->gap();
+        $out->line($p->body);
+        return .ok;
+    }
+}

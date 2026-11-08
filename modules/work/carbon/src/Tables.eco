@@ -1,0 +1,33 @@
+namespace nexus::work::carbon;
+
+/**
+ * The tasks table on the app's database: one call in the function that
+ * opens it, before it is sealed.
+ *
+ * ```echo
+ * guard nexus::work::carbon::Tables::wire($db) else ($e) {
+ *     return .error($e);
+ * };
+ * ```
+ */
+public struct Tables
+{
+    /**
+     * Registers the tasks repository on `$db` and makes its store.
+     */
+    public static function wire(carbon::DB $db) : status<carbon::Error>
+    {
+        guard Carbon::register($db) else ($e) {
+            return .error($e);
+        };
+        return Carbon::check($db);
+    }
+
+    /**
+     * The tasks migration, to add to the app's own.
+     */
+    public static function migrations() : array<carbon::migrate::Step>
+    {
+        return Carbon::migrations();
+    }
+}

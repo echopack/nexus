@@ -1,0 +1,67 @@
+namespace nexus::auth;
+
+/**
+ * A bearer token, `<prefix>_<id>_<secret>`: the app's prefix, 12 hex to
+ * find the record and 64 hex of secret. The store keeps the sha256 of the
+ * secret, never the secret, and compares it in constant time; tokens are
+ * long and random, so a fast hash is enough for every request.
+ */
+public struct Token
+{
+    public const string $prefix;
+    public const string $id;
+    public const string $secret;
+
+    public constructor(const string& $prefix, const string& $id, const string& $secret)
+    {
+        $this->prefix = $prefix;
+        $this->id = $id;
+        $this->secret = $secret;
+    }
+
+    /**
+     * A fresh token with `$prefix`.
+     */
+    public static function mint(const string& $prefix) : Token
+    {
+        return Token($prefix, Secrets::hex(6), Secrets::hex(32));
+    }
+
+    /**
+     * Reads `<prefix>_<id>_<secret>`; anything else is null.
+     */
+    public static function parse(const string& $prefix, const string& $text) : Token?
+    {
+        usize $p = $prefix->size();
+        if ($text->size() != $p + 1 + 12 + 1 + 64 || !$text->starts("{$prefix}_") || $text->byte($p + 13) != 95) {
+            return null;
+        }
+        string $id = $text->sub($p + 1, 12)->clone();
+        string $secret = $text->sub($p + 14, 64)->clone();
+        if (!Secrets::isHex($id) || !Secrets::isHex($secret)) {
+            return null;
+        }
+        return Token($prefix, $id, $secret);
+    }
+
+    public const function text() : string
+    {
+        return "{$this->prefix}_{$this->id}_{$this->secret}";
+    }
+
+    /**
+     * What the store keeps: the hex sha256 of the secret.
+     */
+    public const function hash() : string
+    {
+        return crypto::hex(crypto::sha256($this->secret));
+    }
+
+    /**
+     * Whether the secret hashes to `$hash`, in constant time.
+     */
+    public const function matches(const string& $hash) : bool
+    {
+        return crypto::equal($this->hash(), $hash);
+    }
+}

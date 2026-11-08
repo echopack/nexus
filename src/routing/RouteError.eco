@@ -1,0 +1,24 @@
+namespace nexus;
+
+/**
+ * Why a route was refused at boot.
+ */
+public enum RouteError
+{
+    case pattern(string $source, string $why);
+    case duplicate(string $verb, string $source);
+    case unbound(string $action);
+    case undispatched(string $action);
+    case param(string $action, string $source, string $why);
+
+    public const function message() : string
+    {
+        return match ($this) {
+            RouteError::pattern($source, $why) => "route '{$source}': {$why}",
+            RouteError::duplicate($verb, $source) => "route {$verb} '{$source}' is declared twice",
+            RouteError::unbound($action) => "action {$action} is routed but has no container binding",
+            RouteError::undispatched($action) => "{$action} is routed but nexus gen wrote no dispatcher for it; is it a class conforming to nexus::Action, and did nexus gen run?",
+            RouteError::param($action, $source, $why) => "route '{$source}' of {$action}: {$why}",
+        };
+    }
+}

@@ -1,0 +1,19 @@
+namespace nexus;
+
+/**
+ * Marks a class as an action: one endpoint, one `handle(...)` method. The
+ * parameters of `handle` say what the request must provide, and the return
+ * type says what goes back; `nexus gen` reads both and writes the code that
+ * runs it. A loose scalar parameter (`int64 $id`) comes from the path, a
+ * query from `nexus::QueryOf<T>`, a body from `nexus::Body<T>`. Where it
+ * answers is said where the app is wired:
+ *
+ * ```echo
+ * $s->bindAction<ShowPost>(method: .get, path: '/v1/posts/{id}', function(Container $c) : ShowPost {
+ *     return ShowPost($c->get<PostCrud>());
+ * });
+ * ```
+ */
+public interface Action
+{
+}

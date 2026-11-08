@@ -1,0 +1,39 @@
+namespace blog;
+
+/**
+ * Posts, newest first, a page at a time: `?order=title`, `?tag=echo`,
+ * `?ids=1,2`, `?count=1`, `?include=author`.
+ */
+#[nexus::answers: { collection: "blog::PostTransformer" }]
+public class ListPosts : nexus::Action
+{
+    private PostCrud $crud;
+    private BlogConfig $config;
+
+    public constructor(PostCrud $crud, BlogConfig $config)
+    {
+        $this->crud = $crud;
+        $this->config = $config;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        nexus::crud::Listing<PostQuery> $o = nexus::crud::Listing<PostQuery>();
+        $o->orderable('created_at', PostTable::$createdAt);
+        $o->orderable('title', PostTable::$title);
+        $o->order = '-created_at';
+        $o->size = $this->config->pageSize as uint64;
+        $o->ids = function(array<int64> $ids) : hydrahon::Term<bool> {
+            return PostTable::$id in $ids;
+        };
+        $o->filter = function(PostQuery $q, const nexus::Request& $req) : result<PostQuery, nexus::Problem> {
+            string? $tag = $req->query->get('tag');
+            if ($tag == null) {
+                return .ok($q);
+            }
+            string $t = guard $tag;
+            return .ok($q->tagged($t));
+        };
+        return $this->crud->list($payload, $o);
+    }
+}

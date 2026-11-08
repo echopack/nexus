@@ -1,0 +1,28 @@
+namespace nexus::auth;
+
+/**
+ * A signed session just opened: the only time its secret is sent. Answers
+ * as `{"id": "...", "secret": "...", "expires_at": "..."}`.
+ */
+public struct Opened : nexus::Resource
+{
+    public string $secret;
+    public StoredSession $stored;
+
+    public function json() : json::Value
+    {
+        json::Value $o = json::object();
+        $o['id'] = json::str($this->stored->id);
+        $o['secret'] = json::str($this->secret);
+        $o['expires_at'] = Issued::stamp($this->stored->expiresAt);
+        return $o;
+    }
+
+    /**
+     * The signer for this session, for clients written in Echo.
+     */
+    public const function signer() : Signer
+    {
+        return Signer($this->stored->id, $this->secret);
+    }
+}

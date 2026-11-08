@@ -1,0 +1,197 @@
+namespace nexus::work::carbon;
+
+use std::time;
+
+/**
+ * The queue in `nexus_tasks`, through a request's or task's carbon session.
+ * A claim reads a few due rows, then takes one with an update that only
+ * holds while its attempt count is still the one read: of two workers
+ * after the same row, one updates it and the other moves on. Every later
+ * change names the attempt too, so a worker whose lease ran out changes
+ * nothing.
+ */
+public class CarbonQueue : nexus::work::Queue
+{
+    internal carbon::Session $session;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->session = $session;
+    }
+
+    public function push(const nexus::work::StoredTask& $task) : result<bool, nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        if (!$task->key->empty()) {
+            QueuedTask? $have = guard $repo->find()->where(QueuedTaskTable::$uniqueKey == $task->key)->first() else ($e) {
+                return .error(nexus::carbon::Problems::of($e));
+            };
+            if ($have != null) {
+                return .ok(false);
+            }
+        }
+        guard $repo->create(QueuedTask::of($task)) else ($e) {
+            // another process stored the same key in between
+            if ($e->duplicate() && !$task->key->empty()) {
+                return .ok(false);
+            }
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok(true);
+    }
+
+    public function claim(const array<string>& $queues, time::timestamp $now, time::timestamp $until) : result<nexus::work::StoredTask?, nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        array<QueuedTask> $due = guard $repo->find()
+            ->where(QueuedTaskTable::$queue in $queues)
+            ->where(QueuedTaskTable::$doneAt->isNull())
+            ->where(QueuedTaskTable::$failedAt->isNull())
+            ->where(QueuedTaskTable::$availableAt <= $now)
+            ->where(QueuedTaskTable::$reservedUntil->isNull() || QueuedTaskTable::$reservedUntil < $now)
+            ->order(asc: QueuedTaskTable::$availableAt)
+            ->limit(5)
+            ->get() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        foreach ($due as $row) {
+            hydrahon::Values $set = hydrahon::Values();
+            $set[QueuedTaskTable::$attempts] = $row->attempts + 1;
+            $set[QueuedTaskTable::$reservedUntil] = $until;
+            uint64 $taken = guard $repo->find()->where(QueuedTaskTable::$id == $row->id)->where(QueuedTaskTable::$attempts == $row->attempts)->update($set) else ($e) {
+                return .error(nexus::carbon::Problems::of($e));
+            };
+            if ($taken == 1) {
+                nexus::work::StoredTask $task = $row->stored();
+                $task->attempts = $row->attempts + 1;
+                $task->reservedUntil = $until;
+                return .ok($task);
+            }
+        }
+        return .ok(null);
+    }
+
+    public function done(const nexus::work::StoredTask& $task, time::timestamp $now) : status<nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        if ($task->key->empty()) {
+            guard $repo->find()->where(QueuedTaskTable::$id == $task->id)->where(QueuedTaskTable::$attempts == $task->attempts)->purge() else ($e) {
+                return .error(nexus::carbon::Problems::of($e));
+            };
+            return .ok;
+        }
+        hydrahon::Values $set = hydrahon::Values();
+        $set[QueuedTaskTable::$doneAt] = $now;
+        $set[QueuedTaskTable::$reservedUntil] = CarbonQueue::never();
+        return $this->change($repo, $task, $set);
+    }
+
+    public function retry(const nexus::work::StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        hydrahon::Values $set = hydrahon::Values();
+        $set[QueuedTaskTable::$availableAt] = $at;
+        $set[QueuedTaskTable::$reservedUntil] = CarbonQueue::never();
+        $set[QueuedTaskTable::$error] = $error;
+        return $this->change($repo, $task, $set);
+    }
+
+    public function fail(const nexus::work::StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        hydrahon::Values $set = hydrahon::Values();
+        $set[QueuedTaskTable::$failedAt] = $now;
+        $set[QueuedTaskTable::$reservedUntil] = CarbonQueue::never();
+        $set[QueuedTaskTable::$error] = $error;
+        return $this->change($repo, $task, $set);
+    }
+
+    public function failed(uint64 $limit) : result<array<nexus::work::StoredTask>, nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        array<QueuedTask> $rows = guard $repo->find()->where(QueuedTaskTable::$failedAt->isNotNull())->order(desc: QueuedTaskTable::$failedAt)->limit($limit)->get() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        array<nexus::work::StoredTask> $out = [];
+        foreach ($rows as const &$r) {
+            $out[] = $r->stored();
+        }
+        return .ok($out);
+    }
+
+    public function again(const string& $id, time::timestamp $now) : result<bool, nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        hydrahon::Values $set = hydrahon::Values();
+        $set[QueuedTaskTable::$failedAt] = CarbonQueue::never();
+        $set[QueuedTaskTable::$attempts] = 0;
+        $set[QueuedTaskTable::$availableAt] = $now;
+        uint64 $n = guard $repo->find()->where(QueuedTaskTable::$id == $id)->where(QueuedTaskTable::$failedAt->isNotNull())->update($set) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($n == 1);
+    }
+
+    public function prune(time::timestamp $before) : result<uint64, nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        uint64 $n = guard $repo->find()->where(QueuedTaskTable::$doneAt < $before)->purge() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($n);
+    }
+
+    public function waiting() : result<uint64, nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
+            return .error($p);
+        };
+        uint64 $n = guard $repo->find()->where(QueuedTaskTable::$doneAt->isNull())->where(QueuedTaskTable::$failedAt->isNull())->count() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($n);
+    }
+
+    /**
+     * Applies `$set` to `$task`'s row while the claim it names still holds.
+     */
+    internal function change(QueuedTaskRepository $repo, const nexus::work::StoredTask& $task, hydrahon::Values $set) : status<nexus::Problem>
+    {
+        guard $repo->find()->where(QueuedTaskTable::$id == $task->id)->where(QueuedTaskTable::$attempts == $task->attempts)->update($set) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok;
+    }
+
+    /**
+     * No time: clears a nullable time column.
+     */
+    internal static function never() : hydrahon::DateTime?
+    {
+        return null;
+    }
+
+    internal function repo() : result<QueuedTaskRepository, nexus::Problem>
+    {
+        QueuedTaskRepository $repo = guard $this->session->repo<QueuedTaskRepository>() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($repo);
+    }
+}

@@ -1,0 +1,16 @@
+namespace nexusgen;
+
+/**
+ * A backed enum an input field may hold, read from decls: its cases and
+ * the value each one stands for on the wire.
+ */
+public struct EnumDecl
+{
+    public string $qualified;
+
+    /**
+     * Backed by strings (else by integers).
+     */
+    public bool $text;
+    public array<EnumCase> $cases = [];
+}

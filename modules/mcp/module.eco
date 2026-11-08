@@ -1,0 +1,39 @@
+/*
+ * nexus-mcp: the app's tools over the Model Context Protocol.
+ *
+ * A tool is a class conforming to `nexus::mcp::Tool` whose `handle()`
+ * takes the payload and one `#[nexus::input]` struct; an action can be a tool too, its path
+ * parameters and its body's fields read from the tool's arguments. The
+ * app offers either under a name where it is wired:
+ * `nexus::mcp::Tools::offer<CreatePostTool>($s, name: 'create_post')`.
+ * `nexus gen` writes each one's JSON Schema from the input's types, rules
+ * and docblocks, and the code that runs it.
+ *
+ * The endpoint is `POST /mcp`, the stateless form of the Streamable HTTP
+ * transport: one JSON-RPC message per request, answered with one JSON
+ * body. Every call needs a signed in caller, through nexus-auth's guards;
+ * nexus-oauth lets an MCP client sign in with OAuth.
+ */
+
+#[module: "nexus-mcp"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "MCP tools for nexus apps"]
+
+#[depends: "../.."]
+#[depends: "../auth"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

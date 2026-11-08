@@ -1,0 +1,50 @@
+namespace blog;
+
+/**
+ * Checks an email and a password, throttled per address and per account,
+ * and rehashes a password stored at an older cost.
+ */
+public class SignIn
+{
+    private UserRepository $users;
+    private nexus::auth::Logins $logins;
+
+    public constructor(UserRepository $users, nexus::auth::Logins $logins)
+    {
+        $this->users = $users;
+        $this->logins = $logins;
+    }
+
+    /**
+     * The user `$in` names, or a 401 (the same for an unknown email and a
+     * wrong password) or a 429.
+     */
+    public function check(nexus::Payload& $payload, const Credentials& $in) : result<User, nexus::Problem>
+    {
+        guard $this->logins->attempt($payload, $in->email) else ($p) {
+            return .error($p);
+        };
+        User? $found = guard $this->users->find()->where(UserTable::$email == $in->email)->first() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        User $u = guard $found else {
+            return .error($this->logins->unknown($in->password));
+        };
+        if ($u->passwordHash->empty()) {
+            return .error($this->logins->unknown($in->password));
+        }
+        guard $this->logins->verify($payload, $in->email, $in->password, $u->passwordHash) else ($p) {
+            return .error($p);
+        };
+        if ($this->logins->passwords->needsRehash($u->passwordHash)) {
+            string $hash = guard $this->logins->passwords->hash($in->password) else ($p) {
+                return .error($p);
+            };
+            $u->passwordHash = $hash;
+            guard $this->users->save($u) else ($e) {
+                return .error(nexus::carbon::Problems::of($e));
+            };
+        }
+        return .ok($u);
+    }
+}

@@ -1,0 +1,14 @@
+namespace nexus;
+
+/**
+ * The refusals of one whole input, shared by the checks of its nested
+ * inputs.
+ */
+public class Refusals
+{
+    public array<FieldError> $errors = [];
+
+    public constructor()
+    {
+    }
+}

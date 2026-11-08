@@ -1,0 +1,68 @@
+namespace nexus::auth;
+
+use std::thread;
+
+/**
+ * Bearer tokens kept in the process: for tests and single-process apps.
+ * They are gone when it stops.
+ */
+#[atomic]
+public class MemoryTokens : TokenStore
+{
+    private thread::mutex<map<string, StoredToken>> $tokens;
+
+    public constructor()
+    {
+        $this->tokens = thread::mutex<map<string, StoredToken>>(map<string, StoredToken>());
+    }
+
+    public function find(const string& $id) : result<StoredToken?, nexus::Problem>
+    {
+        thread::locked<map<string, StoredToken>> $held = $this->tokens->lock();
+        if (!$held->value->has($id)) {
+            return .ok(null);
+        }
+        return .ok($held->value->get($id));
+    }
+
+    public function create(const StoredToken& $token) : status<nexus::Problem>
+    {
+        thread::locked<map<string, StoredToken>> $held = $this->tokens->lock();
+        if ($held->value->has($token->id)) {
+            return .error(.conflict('a token with this id exists'));
+        }
+        $held->value[$token->id] = $token;
+        return .ok;
+    }
+
+    public function remove(const string& $id) : status<nexus::Problem>
+    {
+        thread::locked<map<string, StoredToken>> $held = $this->tokens->lock();
+        $held->value->remove($id);
+        return .ok;
+    }
+
+    public function removeAll(const string& $subject) : status<nexus::Problem>
+    {
+        thread::locked<map<string, StoredToken>> $held = $this->tokens->lock();
+        array<string> $gone = array<string>();
+        foreach ($held->value as $id => const &$t) {
+            if ($t->subject == $subject) {
+                $gone[] = $id;
+            }
+        }
+        foreach ($gone as const &$id) {
+            $held->value->remove($id);
+        }
+        return .ok;
+    }
+
+    /**
+     * How many tokens are kept.
+     */
+    public function count() : usize
+    {
+        thread::locked<map<string, StoredToken>> $held = $this->tokens->lock();
+        return $held->value->count();
+    }
+}

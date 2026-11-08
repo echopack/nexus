@@ -1,0 +1,65 @@
+namespace nexus::log;
+
+use std::time;
+
+/**
+ * One field's value. Small and copyable, so a context shares its fields
+ * with every entry instead of cloning them. A map literal of plain values
+ * fills `Fields` through its `[k] =` operators, which pick the case.
+ */
+public enum Value
+{
+    case str(string $text);
+    case int(int64 $n);
+    case uint(uint64 $n);
+    case float(float64 $n);
+    case bool(bool $b);
+    case duration(time::duration $d);
+    case time(time::timestamp $at);
+
+    /**
+     * Already encoded JSON, kept as text: written as it is in the JSON
+     * format and as plain text in the others.
+     */
+    case raw(string $json);
+
+    /**
+     * The value as plain text: strings as they are, numbers in shortest
+     * form, durations like `1.5s`, timestamps in RFC 3339.
+     */
+    public const function text() : string
+    {
+        return match ($this) {
+            .str($s) => $s,
+            .int($n) => "{$n}",
+            .uint($n) => "{$n}",
+            .float($n) => "{$n}",
+            .bool($b) => Value::word($b),
+            .duration($d) => "{$d}",
+            .time($at) => Stamp::rfc3339($at),
+            .raw($j) => $j,
+        };
+    }
+
+    private static function word(bool $b) : string
+    {
+        if ($b) {
+            return 'true';
+        }
+        return 'false';
+    }
+
+    /**
+     * Whether the JSON format writes the text as a string and the logfmt
+     * format may need to quote it.
+     */
+    public const function quoted() : bool
+    {
+        return match ($this) {
+            .str($s) => true,
+            .duration($d) => true,
+            .time($at) => true,
+            else => false,
+        };
+    }
+}

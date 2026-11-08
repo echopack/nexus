@@ -1,0 +1,10 @@
+namespace nexus::crud;
+
+/**
+ * The page of a list a request asks for: `page` from 1, rows per page.
+ */
+public struct Window
+{
+    public uint64 $page;
+    public uint64 $size;
+}

@@ -1,0 +1,40 @@
+/*
+ * nexus-auth: who is calling a nexus app.
+ *
+ * Guards read a request's credential and name its caller: prefixed bearer
+ * tokens, kept as a hash, and signed sessions, where every request carries
+ * an HMAC of itself under a secret the server derives and never stores.
+ * Middleware asks them: `Authenticate` lets only signed in callers through
+ * and leaves their `Identity` in the payload, an app's own middleware
+ * loads its user on top. The action names the middleware in
+ * `#[nexus::through]` and reads what it left with `$payload->state<T>()`.
+ * Passwords are Argon2id, checked against a decoy when the account is unknown, and
+ * logins are throttled per address and per account.
+ *
+ * The stores here keep tokens and sessions in memory; nexus-auth-carbon
+ * keeps them in the app's database.
+ */
+
+#[module: "nexus-auth"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "Bearer tokens, signed sessions, passwords and login throttling for nexus apps"]
+
+#[depends: "../.."]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../libcrypto"]
+#[depends: "../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

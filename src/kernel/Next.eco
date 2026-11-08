@@ -1,0 +1,36 @@
+namespace nexus;
+
+/**
+ * The rest of the chain, as a middleware sees it.
+ */
+public struct Next
+{
+    internal Chain $chain;
+    internal usize $at;
+
+    public constructor(Chain $chain)
+    {
+        $this->chain = $chain;
+        $this->at = 0;
+    }
+
+    internal constructor(Chain $chain, usize $at)
+    {
+        $this->chain = $chain;
+        $this->at = $at;
+    }
+
+    /**
+     * Runs the next middleware, or the handler when none is left.
+     */
+    public function run(Payload& $payload) : Response
+    {
+        if ($this->at >= $this->chain->links->count()) {
+            function<Response(Payload&)> $last = $this->chain->last;
+            return $last($payload);
+        }
+        Middleware $m = $this->chain->links[$this->at];
+        Next $rest = Next($this->chain, $this->at + 1);
+        return $m->handle($payload, $rest);
+    }
+}

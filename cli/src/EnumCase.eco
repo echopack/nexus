@@ -1,0 +1,11 @@
+namespace nexusgen;
+
+/**
+ * One case of a backed enum: its name and its wire value.
+ */
+public struct EnumCase
+{
+    public string $name;
+    public string $text;
+    public int64 $number;
+}

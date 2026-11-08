@@ -1,0 +1,73 @@
+namespace nexus::rest;
+
+/**
+ * Every transformer of the app, by the model it transforms. It is what
+ * lets one transformer nest another without holding it: a post asks the
+ * network for the transformer of `User` while it writes, so the order
+ * they are registered in does not matter, and a user that nests their
+ * posts again is fine (the depth limit of `Out` ends the cycle).
+ * Filled while the app boots through `Transformers::add`, only read
+ * afterwards.
+ *
+ * ```echo
+ * // in a transformer
+ * $ctx->transformInto<User>($o, 'author', $p->author->get());
+ * ```
+ */
+#[atomic]
+public class TransformerNetwork
+{
+    private ordered_map<type_id, erased> $byModel;
+
+    public constructor()
+    {
+        $this->byModel = ordered_map<type_id, erased>();
+    }
+
+    /**
+     * Registers `$t` as the transformer of `M`. A second one for the same
+     * model stops the program.
+     */
+    public function add<M>(Transformer<M> $t) : void
+    {
+        type_id $id = type_id<M>();
+        if ($this->byModel->has($id)) {
+            die('nexus::rest::TransformerNetwork: a model was given a second transformer');
+        }
+        $this->byModel[$id] = erased::from(Held<Transformer<M>>($t));
+    }
+
+    /**
+     * The transformer of `M`. Missing stops the program.
+     */
+    public const function get<M>() : Transformer<M>
+    {
+        Transformer<M> $found = guard $this->find<M>() else {
+            die('nexus::rest::TransformerNetwork: no transformer for the model asked; register one with nexus::rest::Transformers::add');
+        };
+        return $found;
+    }
+
+    /**
+     * The transformer of `M`, or null.
+     */
+    public const function find<M>() : Transformer<M>?
+    {
+        type_id $id = type_id<M>();
+        if (!$this->byModel->has($id)) {
+            return null;
+        }
+        unsafe {
+            Held<Transformer<M>> $held = assume<Held<Transformer<M>>>($this->byModel->get($id));
+            return $held->value;
+        }
+    }
+
+    /**
+     * Whether `M` has a transformer.
+     */
+    public const function has<M>() : bool
+    {
+        return $this->byModel->has(type_id<M>());
+    }
+}

@@ -1,0 +1,17 @@
+namespace blog;
+
+/**
+ * What creating a post takes. Its author is whoever is signed in.
+ */
+#[nexus::input]
+public struct NewPost
+{
+    #[nexus::rule: { min: 3, max: 120 }]
+    public string $title;
+
+    #[nexus::rule: { notBlank: true }]
+    public string $body;
+
+    #[nexus::rule: { max: 5, distinct: true, each: { trim: true, lower: true, notBlank: true, max: 30 } }]
+    public array<string> $tags = [];
+}

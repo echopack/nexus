@@ -1,0 +1,905 @@
+namespace nexus;
+
+use std::time;
+
+/**
+ * Where an input's rules write what they refuse. The decoders `nexus gen`
+ * writes point it at a field (`at`) and call a rule method per rule; a rule
+ * class (`nexus::Rule<T>`) gets it to refuse in its own words. Every
+ * nested input gets its own `Check` over the same list of refusals, so one
+ * 422 answers for the whole request.
+ *
+ * ```echo
+ * public function check(const string& $email, nexus::Check $v) : void
+ * {
+ *     if ($this->users->taken($email)) {
+ *         $v->fail('unique', 'The {label} has already been taken.');
+ *     }
+ * }
+ * ```
+ */
+public class Check
+{
+    /**
+     * The input type being checked, `blog::NewPost`.
+     */
+    public string $input = '';
+
+    /**
+     * Where this input sits in the whole one: empty at the top,
+     * `posts.1` for the second of a list.
+     */
+    public string $prefix = '';
+
+    /**
+     * The field the next rule checks, its kind and its English label.
+     */
+    public string $name = '';
+    public string $kind = '';
+    public string $label = '';
+
+    /**
+     * The path of the field the next rule checks, when it differs from
+     * `name`: `tags.2` for one item of a list.
+     */
+    private string $at = '';
+    private Refusals $sink;
+
+    public constructor()
+    {
+        $this->sink = Refusals();
+    }
+
+    /**
+     * A check over `$sink`, at `$prefix`.
+     */
+    public constructor(sink: Refusals $sink, prefix: const string& $prefix)
+    {
+        $this->sink = $sink;
+        $this->prefix = $prefix;
+    }
+
+    /**
+     * The check of a nested input at `$path` below this one, writing into
+     * the same refusals.
+     */
+    public function child(const string& $path) : Check
+    {
+        return Check(sink: $this->sink, prefix: $this->join($path));
+    }
+
+    /**
+     * Points the next rules at field `$name`.
+     */
+    public function at(const string& $name, const string& $kind, const string& $label) : void
+    {
+        $this->name = $name;
+        $this->kind = $kind;
+        $this->label = $label;
+        $this->at = '';
+    }
+
+    /**
+     * Points the next rules at item `$index` of the list field `$name`.
+     */
+    public function item(const string& $name, usize $index, const string& $kind) : void
+    {
+        $this->name = $name;
+        $this->kind = $kind;
+        int64 $i = $index as int64;
+        $this->at = "{$name}.{$i}";
+    }
+
+    /**
+     * How many refusals there are so far, across the whole input.
+     */
+    public const function count() : usize
+    {
+        return $this->sink->errors->count();
+    }
+
+    /**
+     * Every refusal so far.
+     */
+    public const function errors() : array<FieldError>
+    {
+        return $this->sink->errors;
+    }
+
+    /**
+     * Ok when nothing was refused, otherwise one `invalid` problem listing
+     * every refusal.
+     */
+    public const function done() : status<Problem>
+    {
+        if ($this->sink->errors->empty()) {
+            return .ok;
+        }
+        return .error(.invalid($this->sink->errors));
+    }
+
+    // refusing ---------------------------------------------------------------
+
+    /**
+     * Refuses the current field with `$code`. `$message` may name
+     * `{label}` and any of `$params`.
+     */
+    public function fail(const string& $code, const string& $message) : void
+    {
+        ordered_map<string, string> $none = ordered_map<string, string>();
+        $this->current($code, $message, $none);
+    }
+
+    public function fail(const string& $code, const string& $message, params: const map<string, string>& $params) : void
+    {
+        $this->current($code, $message, Check::ordered($params));
+    }
+
+    /**
+     * Refuses field `$field` of this input, for a rule on the whole input
+     * that blames one field: `$v->fail(field: 'ends', 'after', '...')`.
+     */
+    public function fail(field: const string& $field, const string& $code, const string& $message) : void
+    {
+        ordered_map<string, string> $none = ordered_map<string, string>();
+        $this->add($this->join($field), $field, $code, '', '', $message, $none);
+    }
+
+    public function fail(field: const string& $field, const string& $code, const string& $message, params: const map<string, string>& $params) : void
+    {
+        $this->add($this->join($field), $field, $code, '', '', $message, Check::ordered($params));
+    }
+
+    /**
+     * Refuses field `$name` with a built-in rule's English message, for the
+     * readers of `Fields`.
+     */
+    public function refuse(const string& $name, const string& $code, const string& $kind, const ordered_map<string, string>& $params) : void
+    {
+        string $label = '';
+        string $path = $this->join($name);
+        if ($name == $this->name) {
+            $label = $this->label;
+            if (!$this->at->empty()) {
+                $path = $this->join($this->at);
+            }
+        }
+        $this->add($path, $name, $code, $kind, $label, Check::english($code, $kind), $params);
+    }
+
+    /**
+     * Refuses the current field with a built-in rule.
+     */
+    public function rule(const string& $code, const ordered_map<string, string>& $params) : void
+    {
+        string $kind = $this->kind;
+        $this->current($code, Check::english($code, $kind), $params);
+    }
+
+    public function rule(const string& $code) : void
+    {
+        ordered_map<string, string> $none = ordered_map<string, string>();
+        $this->rule($code, $none);
+    }
+
+    // strings ----------------------------------------------------------------
+
+    public function minLength(const string& $value, int64 $min) : void
+    {
+        if (($value->count() as int64) < $min) {
+            $this->rule('min', Check::one('min', str::from($min)));
+        }
+    }
+
+    public function maxLength(const string& $value, int64 $max) : void
+    {
+        if (($value->count() as int64) > $max) {
+            $this->rule('max', Check::one('max', str::from($max)));
+        }
+    }
+
+    public function betweenLength(const string& $value, int64 $min, int64 $max) : void
+    {
+        int64 $n = $value->count() as int64;
+        if ($n < $min || $n > $max) {
+            $this->rule('between', Check::two('min', str::from($min), 'max', str::from($max)));
+        }
+    }
+
+    public function sizeLength(const string& $value, int64 $size) : void
+    {
+        if (($value->count() as int64) != $size) {
+            $this->rule('size', Check::one('size', str::from($size)));
+        }
+    }
+
+    public function notBlank(const string& $value) : void
+    {
+        if (str::trim($value)->empty()) {
+            $this->rule('notBlank');
+        }
+    }
+
+    /**
+     * A plausible mail address: one `@`, something before it, a dot in the
+     * domain after it, no spaces.
+     */
+    public function email(const string& $value) : void
+    {
+        usize $at = $value->find('@');
+        bool $ok = $at > 0 && $at < $value->size() && !$value->contains(' ');
+        if ($ok) {
+            string $domain = $value->sub($at + 1, $value->size() - $at - 1);
+            $ok = $domain->contains('.') && !$domain->contains('@') && !$domain->starts('.') && !$domain->ends('.');
+        }
+        if (!$ok) {
+            $this->rule('email');
+        }
+    }
+
+    /**
+     * An absolute `http` or `https` URL with a host and no spaces.
+     */
+    public function url(const string& $value) : void
+    {
+        string $rest = '';
+        if ($value->starts('https://')) {
+            $rest = $value->sub(8, $value->size() - 8);
+        } else if ($value->starts('http://')) {
+            $rest = $value->sub(7, $value->size() - 7);
+        }
+        bool $ok = !$rest->empty() && !$value->contains(' ') && !$rest->starts('/') && !$rest->starts('?') && !$rest->starts('#');
+        if (!$ok) {
+            $this->rule('url');
+        }
+    }
+
+    /**
+     * A UUID in its 8-4-4-4-12 hex form, any case.
+     */
+    public function uuid(const string& $value) : void
+    {
+        bool $ok = $value->size() == 36;
+        usize $i = 0;
+        while ($ok && $i < 36) {
+            uint8 $b = $value->byte($i);
+            if ($i == 8 || $i == 13 || $i == 18 || $i == 23) {
+                $ok = $b == 45;
+            } else {
+                $ok = Check::hex($b);
+            }
+            $i = $i + 1;
+        }
+        if (!$ok) {
+            $this->rule('uuid');
+        }
+    }
+
+    /**
+     * Letters only. Any letter beyond ASCII counts.
+     */
+    public function alpha(const string& $value) : void
+    {
+        if (!Check::only($value, false, false)) {
+            $this->rule('alpha');
+        }
+    }
+
+    /**
+     * Letters and digits only.
+     */
+    public function alphaNum(const string& $value) : void
+    {
+        if (!Check::only($value, true, false)) {
+            $this->rule('alphaNum');
+        }
+    }
+
+    /**
+     * Letters, digits, `-` and `_` only.
+     */
+    public function alphaDash(const string& $value) : void
+    {
+        if (!Check::only($value, true, true)) {
+            $this->rule('alphaDash');
+        }
+    }
+
+    public function ascii(const string& $value) : void
+    {
+        usize $i = 0;
+        while ($i < $value->size()) {
+            if ($value->byte($i) > 127) {
+                $this->rule('ascii');
+                return;
+            }
+            $i = $i + 1;
+        }
+    }
+
+    /**
+     * Digits `0` to `9` only, at least one.
+     */
+    public function digits(const string& $value) : void
+    {
+        bool $ok = !$value->empty();
+        usize $i = 0;
+        while ($ok && $i < $value->size()) {
+            uint8 $b = $value->byte($i);
+            $ok = $b >= 48 && $b <= 57;
+            $i = $i + 1;
+        }
+        if (!$ok) {
+            $this->rule('digits');
+        }
+    }
+
+    public function startsWith(const string& $value, const array<string>& $prefixes) : void
+    {
+        foreach ($prefixes as const &$p) {
+            if ($value->starts($p)) {
+                return;
+            }
+        }
+        $this->rule('startsWith', Check::one('values', str::join($prefixes, ', ')));
+    }
+
+    public function endsWith(const string& $value, const array<string>& $suffixes) : void
+    {
+        foreach ($suffixes as const &$s) {
+            if ($value->ends($s)) {
+                return;
+            }
+        }
+        $this->rule('endsWith', Check::one('values', str::join($suffixes, ', ')));
+    }
+
+    public function oneOf(const string& $value, const array<string>& $allowed) : void
+    {
+        foreach ($allowed as const &$a) {
+            if ($a == $value) {
+                return;
+            }
+        }
+        $this->rule('oneOf', Check::one('values', str::join($allowed, ', ')));
+    }
+
+    public function noneOf(const string& $value, const array<string>& $refused) : void
+    {
+        foreach ($refused as const &$r) {
+            if ($r == $value) {
+                $this->rule('noneOf', Check::one('values', str::join($refused, ', ')));
+                return;
+            }
+        }
+    }
+
+    // numbers ----------------------------------------------------------------
+
+    public function min(int64 $value, int64 $min) : void
+    {
+        if ($value < $min) {
+            $this->rule('min', Check::one('min', str::from($min)));
+        }
+    }
+
+    public function max(int64 $value, int64 $max) : void
+    {
+        if ($value > $max) {
+            $this->rule('max', Check::one('max', str::from($max)));
+        }
+    }
+
+    public function between(int64 $value, int64 $min, int64 $max) : void
+    {
+        if ($value < $min || $value > $max) {
+            $this->rule('between', Check::two('min', str::from($min), 'max', str::from($max)));
+        }
+    }
+
+    public function min(float64 $value, float64 $min) : void
+    {
+        if ($value < $min) {
+            $this->rule('min', Check::one('min', str::from($min)));
+        }
+    }
+
+    public function max(float64 $value, float64 $max) : void
+    {
+        if ($value > $max) {
+            $this->rule('max', Check::one('max', str::from($max)));
+        }
+    }
+
+    public function between(float64 $value, float64 $min, float64 $max) : void
+    {
+        if ($value < $min || $value > $max) {
+            $this->rule('between', Check::two('min', str::from($min), 'max', str::from($max)));
+        }
+    }
+
+    public function multipleOf(int64 $value, int64 $of) : void
+    {
+        if ($of != 0 && $value % $of != 0) {
+            $this->rule('multipleOf', Check::one('value', str::from($of)));
+        }
+    }
+
+    public function multipleOf(float64 $value, float64 $of) : void
+    {
+        if ($of == 0.0) {
+            return;
+        }
+        float64 $times = $value / $of;
+        float64 $whole = std::math::round($times);
+        if (std::math::abs($times - $whole) > 0.000000001) {
+            $this->rule('multipleOf', Check::one('value', str::from($of)));
+        }
+    }
+
+    public function oneOf(int64 $value, const array<int64>& $allowed) : void
+    {
+        array<string> $shown = [];
+        foreach ($allowed as $a) {
+            if ($a == $value) {
+                return;
+            }
+            $shown[] = str::from($a);
+        }
+        $this->rule('oneOf', Check::one('values', str::join($shown, ', ')));
+    }
+
+    public function noneOf(int64 $value, const array<int64>& $refused) : void
+    {
+        array<string> $shown = [];
+        bool $hit = false;
+        foreach ($refused as $r) {
+            if ($r == $value) {
+                $hit = true;
+            }
+            $shown[] = str::from($r);
+        }
+        if ($hit) {
+            $this->rule('noneOf', Check::one('values', str::join($shown, ', ')));
+        }
+    }
+
+    /**
+     * `gt`, `gte`, `lt` or `lte` against `$than`; `$shown` is what the
+     * message names (a number, or the other field's value).
+     */
+    public function compare(const string& $code, float64 $value, float64 $than, const string& $shown) : void
+    {
+        bool $ok = true;
+        if ($code == 'gt') {
+            $ok = $value > $than;
+        } else if ($code == 'gte') {
+            $ok = $value >= $than;
+        } else if ($code == 'lt') {
+            $ok = $value < $than;
+        } else if ($code == 'lte') {
+            $ok = $value <= $than;
+        }
+        if (!$ok) {
+            $this->rule($code, Check::one('value', $shown));
+        }
+    }
+
+    // booleans ---------------------------------------------------------------
+
+    /**
+     * Must be true: a box ticked to accept terms.
+     */
+    public function accepted(bool $value) : void
+    {
+        if (!$value) {
+            $this->rule('accepted');
+        }
+    }
+
+    public function declined(bool $value) : void
+    {
+        if ($value) {
+            $this->rule('declined');
+        }
+    }
+
+    // dates ------------------------------------------------------------------
+
+    /**
+     * `after`, `before`, `afterOrEqual` or `beforeOrEqual` against
+     * `$other`; `$shown` is what the message names.
+     */
+    public function date(const string& $code, const calendar::Date& $value, const calendar::Date& $other, const string& $shown) : void
+    {
+        bool $ok = Check::order($code, $value < $other, $value == $other);
+        if (!$ok) {
+            $this->rule($code, Check::one('date', $shown));
+        }
+    }
+
+    public function date(const string& $code, time::timestamp $value, time::timestamp $other, const string& $shown) : void
+    {
+        bool $ok = Check::order($code, $value < $other, $value == $other);
+        if (!$ok) {
+            $this->rule($code, Check::one('date', $shown));
+        }
+    }
+
+    /**
+     * Today in UTC, for `after: 'today'`.
+     */
+    public static function today() : calendar::Date
+    {
+        return calendar::Zoned::now(calendar::Zone::utc())->date;
+    }
+
+    public static function now() : time::timestamp
+    {
+        return calendar::SystemClock()->now();
+    }
+
+    // lists ------------------------------------------------------------------
+
+    public function minCount(usize $count, int64 $min) : void
+    {
+        if (($count as int64) < $min) {
+            $this->rule('min', Check::one('min', str::from($min)));
+        }
+    }
+
+    public function maxCount(usize $count, int64 $max) : void
+    {
+        if (($count as int64) > $max) {
+            $this->rule('max', Check::one('max', str::from($max)));
+        }
+    }
+
+    public function betweenCount(usize $count, int64 $min, int64 $max) : void
+    {
+        int64 $n = $count as int64;
+        if ($n < $min || $n > $max) {
+            $this->rule('between', Check::two('min', str::from($min), 'max', str::from($max)));
+        }
+    }
+
+    public function sizeCount(usize $count, int64 $size) : void
+    {
+        if (($count as int64) != $size) {
+            $this->rule('size', Check::one('size', str::from($size)));
+        }
+    }
+
+    public function distinct(const array<string>& $values) : void
+    {
+        map<string, bool> $seen = [];
+        foreach ($values as const &$v) {
+            if ($seen->has($v)) {
+                $this->rule('distinct');
+                return;
+            }
+            $seen[$v] = true;
+        }
+    }
+
+    public function distinct(const array<int64>& $values) : void
+    {
+        map<int64, bool> $seen = [];
+        foreach ($values as $v) {
+            if ($seen->has($v)) {
+                $this->rule('distinct');
+                return;
+            }
+            $seen[$v] = true;
+        }
+    }
+
+    // more than one field ----------------------------------------------------
+
+    /**
+     * `{name}Confirmation` must hold the same: `$same` says whether it does.
+     */
+    public function confirmed(bool $same) : void
+    {
+        if (!$same) {
+            $this->rule('confirmed');
+        }
+    }
+
+    public function same(bool $same, const string& $other) : void
+    {
+        if (!$same) {
+            $this->rule('same', Check::one('other', $other));
+        }
+    }
+
+    public function different(bool $differs, const string& $other) : void
+    {
+        if (!$differs) {
+            $this->rule('different', Check::one('other', $other));
+        }
+    }
+
+    /**
+     * Required when `$other` is in the input: `$given` says whether this
+     * field is, `$otherGiven` whether the other one is.
+     */
+    public function requiredWith(bool $given, bool $otherGiven, const string& $other) : void
+    {
+        if (!$given && $otherGiven) {
+            $this->rule('requiredWith', Check::one('other', $other));
+        }
+    }
+
+    public function requiredWithout(bool $given, bool $otherGiven, const string& $other) : void
+    {
+        if (!$given && !$otherGiven) {
+            $this->rule('requiredWithout', Check::one('other', $other));
+        }
+    }
+
+    // normalisers ------------------------------------------------------------
+
+    public static function trim(const string& $value) : string
+    {
+        return string::from(str::trim($value));
+    }
+
+    public static function lower(const string& $value) : string
+    {
+        return string::from(str::lower($value));
+    }
+
+    public static function upper(const string& $value) : string
+    {
+        return string::from(str::upper($value));
+    }
+
+    /**
+     * Trimmed, and every run of whitespace inside one space.
+     */
+    public static function squish(const string& $value) : string
+    {
+        string $out = '';
+        bool $gap = false;
+        string $t = Check::trim($value);
+        usize $i = 0;
+        while ($i < $t->size()) {
+            uint8 $b = $t->byte($i);
+            if ($b == 32 || $b == 9 || $b == 10 || $b == 13) {
+                $gap = true;
+            } else {
+                if ($gap) {
+                    $out->push(32);
+                    $gap = false;
+                }
+                $out->push($b);
+            }
+            $i = $i + 1;
+        }
+        return $out;
+    }
+
+    public static function blank(const string& $value) : bool
+    {
+        return str::trim($value)->empty();
+    }
+
+    // messages ---------------------------------------------------------------
+
+    /**
+     * The English message of a built-in rule, before `nexus::Messages`
+     * renders it in another language. `{label}` and the rule's params are
+     * holes.
+     */
+    public static function english(const string& $code, const string& $kind) : string
+    {
+        if ($code == 'required') {
+            return 'The {label} field is required.';
+        }
+        if ($code == 'type') {
+            map<string, string> $types = [
+                'string' => 'The {label} field must be text.',
+                'integer' => 'The {label} field must be a whole number.',
+                'number' => 'The {label} field must be a number.',
+                'boolean' => 'The {label} field must be true or false.',
+                'list' => 'The {label} field must be a list.',
+                'object' => 'The {label} field must be an object.',
+                'date' => 'The {label} field must be a date like 2026-10-28.',
+                'timestamp' => 'The {label} field must be a date and time like 2026-10-28T09:30:00Z.',
+            ];
+            return Check::lookup($types, $kind, 'The {label} field has the wrong type.');
+        }
+        if ($code == 'range') {
+            return 'The {label} field is out of range.';
+        }
+        if ($code == 'min' || $code == 'max' || $code == 'between' || $code == 'size') {
+            return Check::measured($code, $kind);
+        }
+        map<string, string> $rules = [
+            'notBlank' => 'The {label} field must not be blank.',
+            'email' => 'The {label} field must be a valid email address.',
+            'url' => 'The {label} field must be a valid URL.',
+            'uuid' => 'The {label} field must be a valid UUID.',
+            'alpha' => 'The {label} field must only contain letters.',
+            'alphaNum' => 'The {label} field must only contain letters and numbers.',
+            'alphaDash' => 'The {label} field must only contain letters, numbers, dashes and underscores.',
+            'ascii' => 'The {label} field must only contain ASCII characters.',
+            'digits' => 'The {label} field must only contain digits.',
+            'startsWith' => 'The {label} field must start with one of: {values}.',
+            'endsWith' => 'The {label} field must end with one of: {values}.',
+            'oneOf' => 'The {label} field must be one of: {values}.',
+            'noneOf' => 'The {label} field must not be one of: {values}.',
+            'multipleOf' => 'The {label} field must be a multiple of {value}.',
+            'gt' => 'The {label} field must be greater than {value}.',
+            'gte' => 'The {label} field must be greater than or equal to {value}.',
+            'lt' => 'The {label} field must be less than {value}.',
+            'lte' => 'The {label} field must be less than or equal to {value}.',
+            'accepted' => 'The {label} field must be accepted.',
+            'declined' => 'The {label} field must be declined.',
+            'after' => 'The {label} field must be a date after {date}.',
+            'before' => 'The {label} field must be a date before {date}.',
+            'afterOrEqual' => 'The {label} field must be a date after or equal to {date}.',
+            'beforeOrEqual' => 'The {label} field must be a date before or equal to {date}.',
+            'distinct' => 'The {label} field has a duplicate value.',
+            'confirmed' => 'The {label} field confirmation does not match.',
+            'same' => 'The {label} field must match {other}.',
+            'different' => 'The {label} field must be different from {other}.',
+            'requiredWith' => 'The {label} field is required when {other} is present.',
+            'requiredWithout' => 'The {label} field is required when {other} is not present.',
+        ];
+        return Check::lookup($rules, $code, 'The {label} field is invalid.');
+    }
+
+    internal static function measured(const string& $code, const string& $kind) : string
+    {
+        if ($kind == 'string') {
+            map<string, string> $chars = [
+                'min' => 'The {label} field must be at least {min} characters.',
+                'max' => 'The {label} field must not be longer than {max} characters.',
+                'between' => 'The {label} field must be between {min} and {max} characters.',
+            ];
+            return Check::lookup($chars, $code, 'The {label} field must be {size} characters.');
+        }
+        if ($kind == 'list') {
+            map<string, string> $items = [
+                'min' => 'The {label} field must have at least {min} items.',
+                'max' => 'The {label} field must not have more than {max} items.',
+                'between' => 'The {label} field must have between {min} and {max} items.',
+            ];
+            return Check::lookup($items, $code, 'The {label} field must contain {size} items.');
+        }
+        map<string, string> $values = [
+            'min' => 'The {label} field must be at least {min}.',
+            'max' => 'The {label} field must not be greater than {max}.',
+            'between' => 'The {label} field must be between {min} and {max}.',
+        ];
+        return Check::lookup($values, $code, 'The {label} field must be {size}.');
+    }
+
+    // inside -----------------------------------------------------------------
+
+    internal function current(const string& $code, const string& $template, ordered_map<string, string> $params) : void
+    {
+        string $path = $this->here();
+        string $name = $this->name;
+        string $kind = $this->kind;
+        string $label = $this->label;
+        $this->add($path, $name, $code, $kind, $label, $template, mv $params);
+    }
+
+    internal function add(const string& $path, const string& $name, const string& $code, const string& $kind, const string& $label, const string& $template, ordered_map<string, string> $params) : void
+    {
+        string $shown = $label;
+        if ($shown->empty()) {
+            $shown = FieldError::readable($name);
+        }
+        FieldError $e = FieldError($path, $code, FieldError::fill($template, $shown, $params));
+        $e->params = mv $params;
+        $e->input = $this->input;
+        $e->name = $name;
+        $e->kind = $kind;
+        $e->label = $shown;
+        $e->template = $template;
+        $this->sink->errors[] = mv $e;
+    }
+
+    internal const function here() : string
+    {
+        if (!$this->at->empty()) {
+            return $this->join($this->at);
+        }
+        return $this->join($this->name);
+    }
+
+    internal const function join(const string& $name) : string
+    {
+        if ($this->prefix->empty()) {
+            return $name;
+        }
+        if ($name->empty()) {
+            return $this->prefix;
+        }
+        return "{$this->prefix}.{$name}";
+    }
+
+    internal static function one(const string& $k, const string& $v) : ordered_map<string, string>
+    {
+        ordered_map<string, string> $m = ordered_map<string, string>();
+        $m[$k] = $v;
+        return $m;
+    }
+
+    internal static function two(const string& $k1, const string& $v1, const string& $k2, const string& $v2) : ordered_map<string, string>
+    {
+        ordered_map<string, string> $m = ordered_map<string, string>();
+        $m[$k1] = $v1;
+        $m[$k2] = $v2;
+        return $m;
+    }
+
+    /**
+     * `$params` in key order, so answers do not depend on hashing.
+     */
+    internal static function ordered(const map<string, string>& $params) : ordered_map<string, string>
+    {
+        array<string> $keys = $params->keys();
+        $keys->sort();
+        ordered_map<string, string> $m = ordered_map<string, string>();
+        foreach ($keys as const &$k) {
+            $m[$k] = $params->get($k);
+        }
+        return $m;
+    }
+
+    internal static function order(const string& $code, bool $less, bool $equal) : bool
+    {
+        if ($code == 'after') {
+            return !$less && !$equal;
+        }
+        if ($code == 'afterOrEqual') {
+            return !$less;
+        }
+        if ($code == 'before') {
+            return $less;
+        }
+        return $less || $equal;
+    }
+
+    internal static function lookup(const map<string, string>& $table, const string& $key, const string& $otherwise) : string
+    {
+        if ($table->has($key)) {
+            return $table->get($key);
+        }
+        return $otherwise;
+    }
+
+    internal static function hex(uint8 $b) : bool
+    {
+        return ($b >= 48 && $b <= 57) || ($b >= 65 && $b <= 70) || ($b >= 97 && $b <= 102);
+    }
+
+    /**
+     * Whether `$value` is letters only, plus digits and `-`/`_` when asked.
+     * Bytes past ASCII belong to letters beyond it.
+     */
+    internal static function only(const string& $value, bool $digits, bool $dashes) : bool
+    {
+        if ($value->empty()) {
+            return false;
+        }
+        usize $i = 0;
+        while ($i < $value->size()) {
+            uint8 $b = $value->byte($i);
+            bool $letter = ($b >= 65 && $b <= 90) || ($b >= 97 && $b <= 122) || $b > 127;
+            bool $digit = $b >= 48 && $b <= 57;
+            bool $dash = $b == 45 || $b == 95;
+            if (!$letter && !($digits && $digit) && !($dashes && $dash)) {
+                return false;
+            }
+            $i = $i + 1;
+        }
+        return true;
+    }
+}
+

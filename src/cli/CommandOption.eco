@@ -1,0 +1,80 @@
+namespace nexus;
+
+/**
+ * One option of a `Command`: a flag (`--force`), a value (`--to <id>`), a
+ * list (`--tag <t>`, given again for each) or a positional word
+ * (`posts:show <id>`). Two commands may share an option by name, as long
+ * as they spell it the same way.
+ */
+public struct CommandOption
+{
+    public string $name = '';
+    public string $summary = '';
+    public OptionKind $kind = .flag;
+
+    /**
+     * How the help shows the value, `<id>`; empty for a flag.
+     */
+    public string $metavar = '';
+
+    /**
+     * The value when the option is not given.
+     */
+    public string $fallback = '';
+
+    /**
+     * Whether a positional word must be given.
+     */
+    public bool $required = false;
+
+    /**
+     * A flag: there or not.
+     */
+    public constructor(flag: string $name, string $summary)
+    {
+        $this->name = $name;
+        $this->summary = $summary;
+        $this->kind = OptionKind::flag;
+    }
+
+    /**
+     * An option with a value.
+     */
+    public constructor(value: string $name, string $metavar, string $summary, string $fallback = '')
+    {
+        $this->name = $name;
+        $this->metavar = $metavar;
+        $this->summary = $summary;
+        $this->fallback = $fallback;
+        $this->kind = OptionKind::value;
+    }
+
+    /**
+     * An option given once per value.
+     */
+    public constructor(list: string $name, string $metavar, string $summary)
+    {
+        $this->name = $name;
+        $this->metavar = $metavar;
+        $this->summary = $summary;
+        $this->kind = OptionKind::list;
+    }
+
+    /**
+     * A word after the command's name; positionals are read in the order
+     * the command lists them.
+     */
+    public constructor(positional: string $name, string $metavar, string $summary, bool $required)
+    {
+        $this->name = $name;
+        $this->metavar = $metavar;
+        $this->summary = $summary;
+        $this->required = $required;
+        $this->kind = OptionKind::positional;
+    }
+
+    public const function flag() : bool
+    {
+        return $this->kind == OptionKind::flag;
+    }
+}

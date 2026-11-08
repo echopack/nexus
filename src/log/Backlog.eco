@@ -1,0 +1,9 @@
+namespace nexus::log;
+
+// what an Async sink and its writer thread both count
+#[atomic]
+internal class Backlog
+{
+    public atomic<usize> $pending = atomic<usize>(0);
+    public atomic<uint64> $dropped = atomic<uint64>(0);
+}

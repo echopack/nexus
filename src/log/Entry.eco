@@ -1,0 +1,61 @@
+namespace nexus::log;
+
+use std::time;
+
+/**
+ * One log entry as sinks see it: when, how bad, what, the context it was
+ * written in and the fields of the call itself.
+ */
+public struct Entry
+{
+    public time::timestamp $at;
+    public Level $level;
+    public string $message;
+    public Context? $context;
+    public Fields $fields;
+
+    /**
+     * Every field, the context's from the root down, then the call's. A
+     * nearer value wins.
+     */
+    public const function all() : Fields
+    {
+        Fields $out = Fields();
+        if ($this->context != null) {
+            Context $c = guard $this->context;
+            $c->collect($out);
+        }
+        $out->merge($this->fields);
+        return $out;
+    }
+
+    /**
+     * The innermost span the entry was written in, or empty.
+     */
+    public const function span() : string
+    {
+        if ($this->context == null) {
+            return '';
+        }
+        Context $c = guard $this->context;
+        return $c->span;
+    }
+
+    public const function spanId() : string
+    {
+        if ($this->context == null) {
+            return '';
+        }
+        Context $c = guard $this->context;
+        return $c->spanId;
+    }
+
+    public const function parentId() : string
+    {
+        if ($this->context == null) {
+            return '';
+        }
+        Context $c = guard $this->context;
+        return $c->parentId;
+    }
+}

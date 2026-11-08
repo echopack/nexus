@@ -1,0 +1,69 @@
+/**
+ * nexus, the developer tool. `nexus gen` writes the generated code of the
+ * module in the working directory; a build runs it through the manifest's
+ * before_build hook.
+ */
+
+use std::env;
+use std::io;
+
+function usage() : void
+{
+    io::println('usage: nexus <command> [options]');
+    io::println('');
+    io::println('  gen              write .nexus/nexus.eco for this module');
+    io::println('  gen --check      exit 1 when .nexus/nexus.eco is out of date');
+    io::println('  gen --force      regenerate even when nothing changed');
+    io::println('');
+    io::println('  --echoc <path>   the compiler, default $ECHOC or echoc on PATH');
+    io::println('  --quiet          say nothing on success');
+}
+
+array<string> $argv = env::argv();
+string $command = '';
+bool $check = false;
+bool $force = false;
+nexusgen::Generator $generator = nexusgen::Generator();
+$generator->echoc = string::from(env::var('ECHOC', 'echoc'));
+
+usize $i = 1;
+while ($i < $argv->count()) {
+    string $a = $argv[$i];
+    if ($a == '--echoc' && $i + 1 < $argv->count()) {
+        $generator->echoc = $argv[$i + 1];
+        $i = $i + 2;
+        continue;
+    }
+    if ($a == '--quiet') {
+        $generator->quiet = true;
+    } else if ($a == '--check') {
+        $check = true;
+    } else if ($a == '--force') {
+        $force = true;
+    } else if ($a == 'gen' && $command->empty()) {
+        $command = $a;
+    } else {
+        usage();
+        if ($a == 'help' || $a == '--help' || $a == '-h') {
+            env::exit(0);
+        }
+        env::exit(2);
+    }
+    $i = $i + 1;
+}
+
+if ($command != 'gen') {
+    usage();
+    env::exit(2);
+}
+
+status<nexusgen::Failure> $done = .ok;
+if ($check) {
+    $done = $generator->check();
+} else {
+    $done = $generator->generate($force);
+}
+guard $done else ($e) {
+    io::eprintln("nexus: {$e->message()}");
+    env::exit(1);
+}

@@ -1,0 +1,10 @@
+namespace nexus;
+
+/**
+ * A rule class an input names, and whether a container binds it.
+ */
+public struct RuleBinding
+{
+    public string $name;
+    public function<bool(container::Container)> $bound;
+}

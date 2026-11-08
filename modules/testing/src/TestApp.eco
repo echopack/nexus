@@ -1,0 +1,70 @@
+namespace nexus::testing;
+
+/**
+ * A booted app for tests: the kernel with the program's generated route and
+ * config tables, fixed config values instead of the environment, and a log
+ * that keeps every entry.
+ *
+ *     TestApp $app = TestApp::boot($extensions, ['BLOG_KEY' => 'k']);
+ *     $app->client()->get('/health')->assertStatus(200);
+ */
+public class TestApp
+{
+    public nexus::Kernel $kernel;
+    public nexus::MemorySink $log;
+
+    internal constructor(nexus::Kernel $kernel, nexus::MemorySink $log)
+    {
+        $this->kernel = $kernel;
+        $this->log = $log;
+    }
+
+    /**
+     * Boots `$extensions` with nothing but `$vars` as config. A failed boot
+     * stops the test with every reason.
+     */
+    public static function boot(const array<nexus::Extension>& $extensions, map<string, string> $vars) : TestApp
+    {
+        TestApp $app = guard TestApp::attempt($extensions, $vars) else ($e) {
+            string $lines = str::join($e->lines(), '; ');
+            die("nexus-testing: the app did not boot: {$lines}");
+        };
+        return $app;
+    }
+
+    public static function boot(const array<nexus::Extension>& $extensions) : TestApp
+    {
+        map<string, string> $none = map<string, string>();
+        return TestApp::boot($extensions, $none);
+    }
+
+    /**
+     * Boots and hands back why it failed, for tests about boot itself.
+     */
+    public static function attempt(const array<nexus::Extension>& $extensions, map<string, string> $vars) : result<TestApp, nexus::BootError>
+    {
+        nexus::MemorySink $sink = nexus::MemorySink();
+        array<nexus::Sink> $sinks = [$sink];
+        nexus::Log $log = nexus::Log($sinks, nexus::Level::debug);
+        nexus::Kernel $k = guard nexus::Kernel::boot($extensions, nexus::Mode::testing, $log, nexus::Env(fixed: $vars)) else ($e) {
+            return .error($e);
+        };
+        return .ok(TestApp($k, $sink));
+    }
+
+    /**
+     * A client with no default headers.
+     */
+    public function client() : Client
+    {
+        return Client($this->kernel);
+    }
+
+    /**
+     * Whether a log entry with exactly this message was written.
+     */
+    public function logged(const string& $message) : bool
+    {
+        return $this->log->saw($message);
+    }
+}

@@ -1,0 +1,18 @@
+namespace nexus::mcp;
+
+/**
+ * How the MCP server introduces itself: `MCP_NAME`, `MCP_TITLE`,
+ * `MCP_VERSION`, and `MCP_INSTRUCTIONS` for the model (what the app is,
+ * which tool to start with). `MCP_ORIGIN` is the public origin the
+ * OAuth metadata link in a 401 points at; empty takes it from the
+ * request.
+ */
+#[nexus::config: "mcp"]
+public struct McpConfig
+{
+    public string $name = 'nexus';
+    public string $title = '';
+    public string $version = '0.1.0';
+    public string $instructions = '';
+    public string $origin = '';
+}

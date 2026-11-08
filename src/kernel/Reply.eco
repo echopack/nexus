@@ -1,0 +1,84 @@
+namespace nexus;
+
+/**
+ * Turns what an action returned into a response. The generated dispatcher
+ * picks the overload from the declared return type of `handle()`.
+ */
+public struct Reply
+{
+    public static function of(Payload& $payload, result<Response, Problem> $r) : Response
+    {
+        Response $ok = guard $r else ($p) {
+            return $payload->fail($p);
+        };
+        return $ok;
+    }
+
+    public static function of(Payload& $payload, result<json::Value, Problem> $r) : Response
+    {
+        json::Value $doc = guard $r else ($p) {
+            return $payload->fail($p);
+        };
+        return Response(json: $doc);
+    }
+
+    public static function of(Payload& $payload, result<string, Problem> $r) : Response
+    {
+        string $text = guard $r else ($p) {
+            return $payload->fail($p);
+        };
+        return Response(text: $text);
+    }
+
+    public static function of(Payload& $payload, status<Problem> $s) : Response
+    {
+        guard $s else ($p) {
+            return $payload->fail($p);
+        };
+        return Response::noContent();
+    }
+
+    public static function of(Payload& $payload, Response $r) : Response
+    {
+        return $r;
+    }
+
+    public static function of(Payload& $payload, json::Value $doc) : Response
+    {
+        return Response(json: $doc);
+    }
+
+    /**
+     * A resource as its JSON document.
+     */
+    public static function resource<T : Resource>(Payload& $payload, result<T, Problem> $r) : Response
+    {
+        T $value = guard $r else ($p) {
+            return $payload->fail($p);
+        };
+        return Response(json: $value->json());
+    }
+
+    /**
+     * A list of resources as a JSON array.
+     */
+    public static function resources<T : Resource>(Payload& $payload, result<array<T>, Problem> $r) : Response
+    {
+        array<T> $values = guard $r else ($p) {
+            return $payload->fail($p);
+        };
+        json::Value $list = json::arr();
+        foreach ($values as $v) {
+            $list[] = $v->json();
+        }
+        return Response(json: $list);
+    }
+
+    /**
+     * A failed input decoder, answered before the action ran.
+     */
+    public static function problem(Payload& $payload, const Problem& $p) : Response
+    {
+        return $payload->fail($p);
+    }
+}

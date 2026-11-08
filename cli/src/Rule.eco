@@ -1,0 +1,10 @@
+namespace nexusgen;
+
+/**
+ * One `#[nexus::rule: {...}]` entry on an input field.
+ */
+public struct Rule
+{
+    public string $key;
+    public json::Value $value;
+}

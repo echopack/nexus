@@ -1,0 +1,29 @@
+/*
+ * nexus-http: serves a nexus app over HTTP/1.1 through libhttp.
+ *
+ * libhttp's own router stays empty: one wrap hands every request to the
+ * kernel, so nexus owns routing, 404, 405 and HEAD. TLS belongs to the
+ * reverse proxy in front.
+ */
+
+#[module: "nexus-http"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "HTTP/1.1 transport for nexus apps, on libhttp"]
+
+#[depends: "../.."]
+#[depends: "../../../libhttp"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

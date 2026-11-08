@@ -1,0 +1,10 @@
+namespace nexusgen;
+
+/**
+ * One `key: value` of a record attribute.
+ */
+public struct Entry
+{
+    public string $key;
+    public json::Value $value;
+}

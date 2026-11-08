@@ -1,0 +1,11 @@
+namespace nexus::rest;
+
+/**
+ * One key of an `Item` and how to write it.
+ */
+internal struct Slot
+{
+    public string $key;
+    public Place $place;
+    public function<void(Out&, const TransformerContext&)> $write;
+}

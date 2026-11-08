@@ -1,0 +1,10 @@
+namespace nexus::crud;
+
+/**
+ * The column a list is ordered by, and which way.
+ */
+public struct Sorting
+{
+    public hydrahon::Order $column;
+    public bool $desc;
+}

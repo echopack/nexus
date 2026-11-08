@@ -1,0 +1,20 @@
+namespace nexus::auth;
+
+/**
+ * Where bearer tokens are kept. `MemoryTokens` keeps them in the process;
+ * nexus-auth-carbon keeps them in the app's database, per request.
+ */
+public interface TokenStore
+{
+    function find(const string& $id) : result<StoredToken?, nexus::Problem>;
+
+    function create(const StoredToken& $token) : status<nexus::Problem>;
+
+    function remove(const string& $id) : status<nexus::Problem>;
+
+    /**
+     * Removes every token of `$subject`: a password change, a "sign out
+     * everywhere".
+     */
+    function removeAll(const string& $subject) : status<nexus::Problem>;
+}

@@ -1,0 +1,79 @@
+namespace nexus::auth;
+
+use std::thread;
+use std::time;
+
+/**
+ * Signed sessions kept in the process: for tests and single-process apps.
+ * They are gone when it stops.
+ */
+#[atomic]
+public class MemorySessions : SessionStore
+{
+    private thread::mutex<map<string, StoredSession>> $sessions;
+
+    public constructor()
+    {
+        $this->sessions = thread::mutex<map<string, StoredSession>>(map<string, StoredSession>());
+    }
+
+    public function find(const string& $id) : result<StoredSession?, nexus::Problem>
+    {
+        thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
+        if (!$held->value->has($id)) {
+            return .ok(null);
+        }
+        return .ok($held->value->get($id));
+    }
+
+    public function create(const StoredSession& $session) : status<nexus::Problem>
+    {
+        thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
+        if ($held->value->has($session->id)) {
+            return .error(.conflict('a session with this id exists'));
+        }
+        $held->value[$session->id] = $session;
+        return .ok;
+    }
+
+    public function touch(const string& $id, time::timestamp $expiresAt) : status<nexus::Problem>
+    {
+        thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
+        if ($held->value->has($id)) {
+            StoredSession& $s = $held->value->at($id);
+            $s->expiresAt = $expiresAt;
+        }
+        return .ok;
+    }
+
+    public function remove(const string& $id) : status<nexus::Problem>
+    {
+        thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
+        $held->value->remove($id);
+        return .ok;
+    }
+
+    public function removeAll(const string& $subject) : status<nexus::Problem>
+    {
+        thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
+        array<string> $gone = array<string>();
+        foreach ($held->value as $id => const &$s) {
+            if ($s->subject == $subject) {
+                $gone[] = $id;
+            }
+        }
+        foreach ($gone as const &$id) {
+            $held->value->remove($id);
+        }
+        return .ok;
+    }
+
+    /**
+     * How many sessions are kept.
+     */
+    public function count() : usize
+    {
+        thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
+        return $held->value->count();
+    }
+}

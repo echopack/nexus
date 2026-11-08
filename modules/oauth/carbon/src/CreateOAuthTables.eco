@@ -1,0 +1,61 @@
+namespace nexus::oauth::carbon;
+
+/**
+ * `oauth_clients`, `oauth_codes` and `oauth_grants`. Add it to the app's
+ * migrations with `nexus::oauth::carbon::Tables::migrations()`.
+ */
+#[carbon::migration: '20261102000600_create_oauth_tables']
+public class CreateOAuthTables : carbon::Migration
+{
+    public function up(carbon::Migrating $m) : status<carbon::Error>
+    {
+        guard $m->create(carbon::ddl::Table('oauth_clients')
+            ->string('id', 32)
+            ->string('name', 190)
+            ->text('redirect_uris')
+            ->datetime('created_at')
+            ->datetime('used_at', $nullable: true)
+            ->primary(['id'])) else ($e) {
+            return .error($e);
+        };
+        guard $m->create(carbon::ddl::Table('oauth_codes')
+            ->string('hash', 64)
+            ->string('client', 32)
+            ->string('subject', 190)
+            ->text('redirect')
+            ->bool('named')
+            ->string('challenge', 128)
+            ->string('scope', 190)
+            ->datetime('expires_at')
+            ->index(['expires_at'])
+            ->primary(['hash'])) else ($e) {
+            return .error($e);
+        };
+        return $m->create(carbon::ddl::Table('oauth_grants')
+            ->string('id', 12)
+            ->string('client', 32)
+            ->string('subject', 190)
+            ->string('scope', 190)
+            ->string('access_hash', 64)
+            ->datetime('access_expires_at')
+            ->string('refresh_hash', 64)
+            ->datetime('refresh_expires_at')
+            ->string('previous_hash', 64)
+            ->datetime('created_at')
+            ->datetime('used_at')
+            ->index(['subject'])
+            ->index(['refresh_expires_at'])
+            ->primary(['id']));
+    }
+
+    public function down(carbon::Migrating $m) : status<carbon::Error>
+    {
+        guard $m->drop('oauth_grants') else ($e) {
+            return .error($e);
+        };
+        guard $m->drop('oauth_codes') else ($e) {
+            return .error($e);
+        };
+        return $m->drop('oauth_clients');
+    }
+}

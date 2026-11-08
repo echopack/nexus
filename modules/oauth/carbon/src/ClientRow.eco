@@ -1,0 +1,43 @@
+namespace nexus::oauth::carbon;
+
+use std::time;
+
+/**
+ * A row of `oauth_clients`: a registered client, its redirect URIs one per
+ * line.
+ */
+#[carbon::model: 'oauth_clients']
+public class ClientRow : carbon::Model<ClientRow, ClientRowRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $id;
+
+    public string $name;
+    public string $redirectUris;
+    public time::timestamp $createdAt;
+    public time::timestamp? $usedAt = null;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    public static function of(const nexus::oauth::Client& $c) : ClientRow
+    {
+        return ClientRow($id: $c->id, $name: $c->name, $redirectUris: str::join($c->redirects, "\n"), $createdAt: $c->createdAt, $usedAt: $c->usedAt);
+    }
+
+    public const function client() : nexus::oauth::Client
+    {
+        array<string> $redirects = [];
+        foreach (str::split($this->redirectUris, "\n") as $raw) {
+            string $uri = string::from($raw);
+            if (!$uri->empty()) {
+                $redirects[] = $uri;
+            }
+        }
+        return nexus::oauth::Client($id: $this->id, $name: $this->name, $redirects: $redirects, $createdAt: $this->createdAt, $usedAt: $this->usedAt);
+    }
+}

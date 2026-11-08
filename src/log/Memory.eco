@@ -1,0 +1,70 @@
+namespace nexus::log;
+
+use std::thread;
+
+/**
+ * Keeps entries in memory, for tests that assert on what was logged.
+ */
+#[atomic]
+public class Memory : Sink
+{
+    private thread::mutex<array<Entry>> $entries = thread::mutex<array<Entry>>([]);
+
+    public function write(const Entry& $e) : void
+    {
+        thread::locked<array<Entry>> $held = $this->entries->lock();
+        $held->value[] = $e;
+    }
+
+    /**
+     * A copy of every entry so far, oldest first.
+     */
+    public function entries() : array<Entry>
+    {
+        thread::locked<array<Entry>> $held = $this->entries->lock();
+        return $held->value->clone();
+    }
+
+    /**
+     * The first entry with exactly this message, or null.
+     */
+    public function find(const string& $message) : Entry?
+    {
+        foreach ($this->entries() as const &$e) {
+            if ($e->message == $message) {
+                return $e;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether an entry with exactly this message was written.
+     */
+    public function saw(const string& $message) : bool
+    {
+        return $this->find($message) != null;
+    }
+
+    /**
+     * Whether an entry with exactly this message was written at `$level`.
+     */
+    public function saw(Level $level, const string& $message) : bool
+    {
+        foreach ($this->entries() as const &$e) {
+            if ($e->level == $level && $e->message == $message) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Forgets every entry so far.
+     */
+    public function clear() : void
+    {
+        thread::locked<array<Entry>> $held = $this->entries->lock();
+        $held->value = [];
+    }
+}

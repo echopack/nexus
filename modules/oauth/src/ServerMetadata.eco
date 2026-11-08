@@ -1,0 +1,20 @@
+namespace nexus::oauth;
+
+/**
+ * Authorization server metadata (RFC 8414): the endpoints, PKCE with S256
+ * and public clients only.
+ */
+public class ServerMetadata : nexus::Action
+{
+    private OAuthConfig $config;
+
+    public constructor(OAuthConfig $config)
+    {
+        $this->config = $config;
+    }
+
+    public function handle(nexus::Payload& $payload) : nexus::Response
+    {
+        return nexus::Response(json: Metadata::ofServer($this->config, $payload->request));
+    }
+}

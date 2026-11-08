@@ -1,0 +1,81 @@
+namespace nexus::work;
+
+/**
+ * Every task type of the program by name: the generated tables of every
+ * module plus the ones an extension adds by hand. Filled at boot, read
+ * afterwards.
+ */
+#[atomic]
+public class Kinds
+{
+    internal ordered_map<string, Kind> $byName = ordered_map<string, Kind>();
+    internal map<type_id, string> $byType = map<type_id, string>();
+
+    public function add(Kind $k) : void
+    {
+        $this->byName[$k->name] = $k;
+    }
+
+    /**
+     * Adds `$k` as the kind of task type `T`, for its generated `push`.
+     */
+    public function bind<T>(Kind $k) : void
+    {
+        $this->byType[type_id<T>()] = $k->name;
+        $this->add($k);
+    }
+
+    /**
+     * The kind task type `T` was bound as, or null.
+     */
+    public const function of<T>() : Kind?
+    {
+        type_id $id = type_id<T>();
+        if (!$this->byType->has($id)) {
+            return null;
+        }
+        return $this->find($this->byType->get($id));
+    }
+
+    public const function find(const string& $name) : Kind?
+    {
+        if (!$this->byName->has($name)) {
+            return null;
+        }
+        return $this->byName->get($name);
+    }
+
+    public const function all() : array<Kind>
+    {
+        array<Kind> $out = [];
+        foreach ($this->byName as $name => const &$k) {
+            $out[] = $k;
+        }
+        return $out;
+    }
+
+    public const function count() : usize
+    {
+        return $this->byName->count();
+    }
+
+    /**
+     * Every queue a task names, `default` first.
+     */
+    public const function queues() : array<string>
+    {
+        array<string> $out = ['default'];
+        foreach ($this->byName as $name => const &$k) {
+            bool $seen = false;
+            foreach ($out as const &$q) {
+                if ($q == $k->queue) {
+                    $seen = true;
+                }
+            }
+            if (!$seen) {
+                $out[] = $k->queue;
+            }
+        }
+        return $out;
+    }
+}

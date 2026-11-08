@@ -1,0 +1,36 @@
+namespace nexus::mcp;
+
+/**
+ * Marks a class as an MCP tool. The app offers it under a name (with an
+ * optional title, description and hints) where it is wired; the docblock
+ * describes it to the model unless the offer does. Its `handle()` takes
+ * `nexus::Payload&` and at most one `#[nexus::input]` struct, whose fields
+ * are the tool's arguments; it returns what an action returns, usually the
+ * `nexus::Response` a transformer builds. The middleware it names in
+ * `#[nexus::through]` runs around every call, as around an action's
+ * routes, and leaves what it learned in the payload:
+ *
+ * ```echo
+ * #[nexus::through: ["blog::RequireUser"]]
+ * public class CreatePostTool : nexus::mcp::Tool
+ * {
+ *     public function handle(nexus::Payload& $payload, NewPost $in) : result<nexus::Response, nexus::Problem>
+ *     {
+ *         Caller $me = guard $payload->state<Caller>() else ($p) {
+ *             return .error($p);
+ *         };
+ *         Post $made = guard $this->posts->create($me->user, $in) else ($p) {
+ *             return .error($p);
+ *         };
+ *         return $this->transformer->createResponse($payload, $made);
+ *     }
+ * }
+ * ```
+ *
+ * Offer it with `$app->bindTool<CreatePostTool>(...)->offer('create_post')`
+ * (nexus-app), or bind it and call `nexus::mcp::Tools::offer` by hand; it
+ * is built per call.
+ */
+public interface Tool
+{
+}

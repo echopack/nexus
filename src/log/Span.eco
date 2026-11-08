@@ -1,0 +1,49 @@
+namespace nexus::log;
+
+use std::time;
+
+/**
+ * A named, timed stretch of work. Everything written through its `$log`
+ * carries the span, and when the span goes out of scope it writes
+ * `<name> closed` with how long it was open in `ms`:
+ *
+ *     {
+ *         log::Span $s = $log->span('import', ['file' => $path]);
+ *         $s->log->info('rows read', ['n' => $n]);
+ *     }   // import closed ms=41.2
+ */
+public struct Span
+{
+    /**
+     * The logger inside the span.
+     */
+    public nexus::Logger $log;
+
+    public const string $name;
+    public const string $id;
+    private time::instant $start;
+    private Level $close;
+
+    internal constructor(nexus::Logger $log, string $name, string $id, Level $close)
+    {
+        $this->log = $log;
+        $this->name = $name;
+        $this->id = $id;
+        $this->start = time::instant::now();
+        $this->close = $close;
+    }
+
+    /**
+     * How long the span has been open.
+     */
+    public const function elapsed() : time::duration
+    {
+        return $this->start->elapsed();
+    }
+
+    destructor()
+    {
+        float64 $ms = ($this->start->elapsed()->as_micros() as float64) / 1000.0;
+        $this->log->write($this->close, "{$this->name} closed", ['ms' => $ms]);
+    }
+}

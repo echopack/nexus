@@ -1,0 +1,12 @@
+namespace nexus;
+
+/**
+ * A `handle()` parameter decoded from the request body (JSON or an
+ * urlencoded form), checked by the rules on `T`'s fields and its rule
+ * classes; anything refused is one 422. `T` is an `#[nexus::input]`
+ * struct.
+ */
+public struct Body<T>
+{
+    public T $value;
+}

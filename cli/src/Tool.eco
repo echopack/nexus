@@ -1,0 +1,80 @@
+namespace nexusgen;
+
+/**
+ * A generator a dependency offers that `nexus gen` runs on its own decls
+ * pass: carbongen writes `.carbon/` for carbon models, restgen writes
+ * `.rest/` for rest resources. One runs only when the manifest wires its
+ * directory behind its define, and reads the declarations from the file
+ * nexus gen wrote instead of making a pass of its own.
+ */
+public enum Tool : uint8
+{
+    case carbon = 1;
+    case rest = 2;
+
+    public static function all() : array<Tool>
+    {
+        return [Tool::carbon, Tool::rest];
+    }
+
+    /**
+     * The tool's name, as its module offers it.
+     */
+    public const function program() : string
+    {
+        return match ($this) {
+            Tool::carbon => 'carbongen',
+            Tool::rest => 'restgen',
+        };
+    }
+
+    /**
+     * The library that offers the tool, which the module must depend on
+     * directly to reach it.
+     */
+    public const function library() : string
+    {
+        return match ($this) {
+            Tool::carbon => 'carbon',
+            Tool::rest => 'rest',
+        };
+    }
+
+    /**
+     * What the decls pass defines to leave the tool's output out.
+     */
+    public const function define() : string
+    {
+        return match ($this) {
+            Tool::carbon => 'CARBON_NOGEN',
+            Tool::rest => 'REST_NOGEN',
+        };
+    }
+
+    /**
+     * The directory the tool writes.
+     */
+    public const function dir() : string
+    {
+        return match ($this) {
+            Tool::carbon => '.carbon/',
+            Tool::rest => '.rest/',
+        };
+    }
+
+    /**
+     * The file the tool writes.
+     */
+    public const function target() : string
+    {
+        return "{$this->dir()}models.eco";
+    }
+
+    /**
+     * Whether `$manifest` compiles the tool's directory behind its define.
+     */
+    public const function wired(const string& $manifest) : bool
+    {
+        return $manifest->contains("!{$this->define()}") && $manifest->contains($this->dir());
+    }
+}

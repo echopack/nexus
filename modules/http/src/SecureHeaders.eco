@@ -1,0 +1,34 @@
+namespace nexus::http;
+
+/**
+ * The headers every API response should carry: no MIME sniffing, no
+ * framing, no referrer, and HSTS when the app is served over HTTPS (behind
+ * a proxy that terminates TLS). A header the action set itself is left
+ * alone.
+ */
+#[atomic]
+public class SecureHeaders : nexus::Middleware
+{
+    public bool $hsts = false;
+    public string $frame = 'DENY';
+    public string $referrer = 'no-referrer';
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        nexus::Response $r = $next->run($payload);
+        SecureHeaders::fill($r, 'X-Content-Type-Options', 'nosniff');
+        SecureHeaders::fill($r, 'X-Frame-Options', $this->frame);
+        SecureHeaders::fill($r, 'Referrer-Policy', $this->referrer);
+        if ($this->hsts) {
+            SecureHeaders::fill($r, 'Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        }
+        return $r;
+    }
+
+    internal static function fill(nexus::Response& $r, const string& $name, const string& $value) : void
+    {
+        if (!$r->headers->has($name)) {
+            $r->header($name, $value);
+        }
+    }
+}

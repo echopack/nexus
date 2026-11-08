@@ -1,0 +1,17 @@
+namespace nexus::auth;
+
+/**
+ * Where tokens and sessions are kept.
+ */
+public enum Stores : uint8
+{
+    /**
+     * In the process, gone when it stops: tests, single-process apps.
+     */
+    case memory = 1;
+
+    /**
+     * Bound by another extension, such as nexus-auth-carbon.
+     */
+    case provided = 2;
+}

@@ -1,0 +1,55 @@
+/**
+ * Env sources and typed settings.
+ */
+
+use nexus::{Env, Settings, ConfigError, BootError};
+use std::time;
+use ecotest::expect;
+
+test dotenv_parses_lines
+{
+    map<string, string> $out = map<string, string>();
+    string $text = "# comment\nexport DB_URL=mysql://x\nNAME = 'quoted value'\nEMPTY=\n";
+    guard Env::parse('.env', $text, $out);
+    expect($out->get('DB_URL'))->is('mysql://x');
+    expect($out->get('NAME'))->is('quoted value');
+    expect($out->get('EMPTY'))->is('');
+    map<string, string> $bad = map<string, string>();
+    expect(Env::parse('.env', "JUSTAWORD\n", $bad))->fails();
+}
+
+test settings_read_types_and_collect_errors
+{
+    map<string, string> $vars = ['POOL' => '16', 'DEBUG' => 'yes', 'TIMEOUT' => '5m', 'PORT' => '99999', 'RATIO' => 'x'];
+    Settings $s = Settings(Env(fixed: $vars));
+    expect($s->uint32('POOL', required: true))->some(16);
+    expect($s->bool('DEBUG', required: false))->some(true);
+    expect($s->duration('TIMEOUT', required: true))->some(time::duration::mins(5));
+    expect($s->uint16('PORT', required: true))->none();
+    expect($s->float64('RATIO', required: false))->none();
+    expect($s->string('DB_URL', required: true))->none();
+    expect($s->string('OPTIONAL', required: false))->none();
+    status<BootError> $done = $s->done();
+    array<string> $lines = expect($done)->fails()->lines();
+    expect($lines)->size(3);
+    expect($lines[2])->is('config: DB_URL is required but not set');
+}
+
+test env_overrides_win
+{
+    map<string, string> $vars = ['A' => '1'];
+    Env $e = Env(fixed: $vars);
+    $e->set('A', '2');
+    expect($e->get('A'))->some('2');
+    expect($e->get('B'))->none();
+}
+
+test duration_grammar
+{
+    expect(Settings::span('250ms'))->some(time::duration::millis(250));
+    expect(Settings::span('30'))->some(time::duration::secs(30));
+    expect(Settings::span('2h'))->some(time::duration::hours(2));
+    expect(Settings::span('1d'))->some(time::duration::hours(24));
+    expect(Settings::span('5x'))->none();
+    expect(Settings::span('m'))->none();
+}

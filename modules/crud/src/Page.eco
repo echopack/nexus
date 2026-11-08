@@ -1,0 +1,41 @@
+namespace nexus::crud;
+
+/**
+ * One page of models as a listing read it, with what the answer says
+ * about it: `page` and `size` when it pages, `total_count` and
+ * `filter_count` when the request counted.
+ */
+public struct Page<M>
+{
+    public array<M> $models = [];
+    public bool $paged = false;
+    public Window $window = Window(1, 0);
+    public bool $counted = false;
+
+    /**
+     * Every record the request may see.
+     */
+    public uint64 $total = 0;
+
+    /**
+     * The records left after the request's filters.
+     */
+    public uint64 $matching = 0;
+
+    /**
+     * The keys an answer carries next to `data`.
+     */
+    public const function meta() : nexus::rest::Meta
+    {
+        nexus::rest::Meta $m = nexus::rest::Meta();
+        if ($this->paged) {
+            $m->with('page', json::int($this->window->page as int64));
+            $m->with('size', json::int($this->window->size as int64));
+        }
+        if ($this->counted) {
+            $m->with('total_count', json::int($this->total as int64));
+            $m->with('filter_count', json::int($this->matching as int64));
+        }
+        return $m;
+    }
+}

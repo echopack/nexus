@@ -1,0 +1,542 @@
+namespace nexus;
+
+use std::time;
+
+/**
+ * The fields of one input, read with types by the decoders `nexus gen`
+ * writes for `#[nexus::input]` structs. A read that fails (missing, wrong
+ * type) is refused through `check`, next to every rule that fails, and
+ * `done()` answers with all of them in one 422.
+ *
+ * The source is a JSON object, an urlencoded form or a query string; reads
+ * look the same for all three. Nested inputs are JSON objects, or
+ * bracketed keys in a form: `shipping[city]`, `lines[0][qty]`, `tags[]`.
+ */
+public class Fields
+{
+    /**
+     * Where refusals go, and where this input sits in the whole one.
+     */
+    public Check $check;
+
+    private json::Value $doc;
+    private Query $pairs;
+    private bool $json;
+
+    /**
+     * The bracketed key of this input in the pairs, empty at the top:
+     * `lines[0]`.
+     */
+    private string $base = '';
+
+    /**
+     * Fields of a JSON object.
+     */
+    public constructor(json: json::Value $doc)
+    {
+        $this->doc = $doc;
+        $this->pairs = Query();
+        $this->json = true;
+        $this->check = Check();
+    }
+
+    /**
+     * Fields of decoded name/value pairs (a form or a query string).
+     */
+    public constructor(pairs: Query $pairs)
+    {
+        $this->doc = json::object();
+        $this->pairs = $pairs;
+        $this->json = false;
+        $this->check = Check();
+    }
+
+    /**
+     * A nested input: the JSON object `$doc`, or the pairs under `$base`.
+     */
+    internal constructor(json: json::Value $doc, pairs: const Query& $pairs, base: const string& $base, check: Check $check)
+    {
+        $this->doc = $doc;
+        $this->pairs = $pairs;
+        $this->base = $base;
+        $this->json = $base->empty();
+        $this->check = $check;
+    }
+
+    /**
+     * The request body as fields: JSON when the content type says so, an
+     * urlencoded form when it says that, and an empty input for an empty
+     * body. Anything else is 415; JSON that is not an object is 400.
+     */
+    public static function body(Payload& $payload) : result<Fields, Problem>
+    {
+        string $type = $payload->request->contentType();
+        if ($payload->request->body->empty() && ($type->empty() || $type == 'application/json')) {
+            return .ok(Fields(json: json::object()));
+        }
+        if ($type == 'application/json' || $type->ends('+json')) {
+            json::Value $doc = guard json::parse($payload->request->body) else ($e) {
+                return .error(.badRequest("the body is not valid JSON: {$e->message()}"));
+            };
+            if (!$doc->isObject()) {
+                return .error(.badRequest('the body must be a JSON object'));
+            }
+            return .ok(Fields(json: $doc));
+        }
+        if ($type == 'application/x-www-form-urlencoded') {
+            return .ok(Fields(pairs: Query(parse: $payload->request->body)));
+        }
+        return .error(.unsupportedMedia($type));
+    }
+
+    /**
+     * The query string as fields.
+     */
+    public static function query(Payload& $payload) : Fields
+    {
+        return Fields(pairs: $payload->request->query);
+    }
+
+    /**
+     * Whether the input names `$name` with a non-null value.
+     */
+    public const function has(const string& $name) : bool
+    {
+        if ($this->json) {
+            json::Value? $v = $this->doc->get($name);
+            if ($v == null) {
+                return false;
+            }
+            json::Value $there = guard $v;
+            return !$there->isNull();
+        }
+        string $key = $this->key($name);
+        if ($this->pairs->has($key)) {
+            return true;
+        }
+        string $open = "{$key}[";
+        foreach ($this->pairs->pairs as const &$p) {
+            if ($p->name->starts($open)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Ok when nothing was refused, otherwise one `invalid` problem listing
+     * every refusal.
+     */
+    public const function done() : status<Problem>
+    {
+        return $this->check->done();
+    }
+
+    // scalars ----------------------------------------------------------------
+
+    public function string(const string& $name, required: bool $required) : string?
+    {
+        if (!$this->present($name, $required, 'string')) {
+            return null;
+        }
+        if ($this->json) {
+            json::Value $v = $this->value($name);
+            string? $s = $v->asStr();
+            if ($s == null) {
+                $this->refuse($name, 'type', 'string');
+            }
+            return $s;
+        }
+        return $this->pairs->get($this->key($name));
+    }
+
+    public function bool(const string& $name, required: bool $required) : bool?
+    {
+        if (!$this->present($name, $required, 'boolean')) {
+            return null;
+        }
+        if ($this->json) {
+            json::Value $v = $this->value($name);
+            bool? $b = $v->asBool();
+            if ($b == null) {
+                $this->refuse($name, 'type', 'boolean');
+            }
+            return $b;
+        }
+        string $raw = str::lower($this->pairs->get($this->key($name)) ?? '');
+        if ($raw == 'true' || $raw == '1' || $raw == 'on' || $raw == 'yes') {
+            return true;
+        }
+        if ($raw == 'false' || $raw == '0' || $raw == 'off' || $raw == 'no' || $raw == '') {
+            return false;
+        }
+        $this->refuse($name, 'type', 'boolean');
+        return null;
+    }
+
+    public function int64(const string& $name, required: bool $required) : int64?
+    {
+        if (!$this->present($name, $required, 'integer')) {
+            return null;
+        }
+        int64? $n = null;
+        if ($this->json) {
+            json::Value $v = $this->value($name);
+            $n = $v->asInt();
+        } else {
+            $n = str::int($this->pairs->get($this->key($name)) ?? '');
+        }
+        if ($n == null) {
+            $this->refuse($name, 'type', 'integer');
+        }
+        return $n;
+    }
+
+    public function int32(const string& $name, required: bool $required) : int32?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < (int32::min() as int64) || $n > (int32::max() as int64)) {
+            $this->refuse($name, 'range', 'integer');
+            return null;
+        }
+        return $n as int32;
+    }
+
+    public function uint64(const string& $name, required: bool $required) : uint64?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < 0) {
+            $this->refuse($name, 'range', 'integer');
+            return null;
+        }
+        return $n as uint64;
+    }
+
+    public function uint32(const string& $name, required: bool $required) : uint32?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < 0 || $n > (uint32::max() as int64)) {
+            $this->refuse($name, 'range', 'integer');
+            return null;
+        }
+        return $n as uint32;
+    }
+
+    public function uint16(const string& $name, required: bool $required) : uint16?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < 0 || $n > (uint16::max() as int64)) {
+            $this->refuse($name, 'range', 'integer');
+            return null;
+        }
+        return $n as uint16;
+    }
+
+    public function float64(const string& $name, required: bool $required) : float64?
+    {
+        if (!$this->present($name, $required, 'number')) {
+            return null;
+        }
+        float64? $n = null;
+        if ($this->json) {
+            json::Value $v = $this->value($name);
+            $n = $v->asFloat();
+        } else {
+            $n = str::float($this->pairs->get($this->key($name)) ?? '');
+        }
+        if ($n == null) {
+            $this->refuse($name, 'type', 'number');
+        }
+        return $n;
+    }
+
+    /**
+     * An ISO 8601 calendar date, `2026-10-28`.
+     */
+    public function date(const string& $name, required: bool $required) : calendar::Date?
+    {
+        string $text = guard $this->text($name, $required, 'date') else {
+            return null;
+        };
+        calendar::Date $d = guard calendar::Date::parse($text) else {
+            $this->refuse($name, 'type', 'date');
+            return null;
+        };
+        return $d;
+    }
+
+    /**
+     * An instant in RFC 3339, `2026-10-28T09:30:00Z` or with an offset.
+     */
+    public function timestamp(const string& $name, required: bool $required) : time::timestamp?
+    {
+        string $text = guard $this->text($name, $required, 'timestamp') else {
+            return null;
+        };
+        calendar::Zoned $z = guard calendar::Zoned::parse($text) else {
+            $this->refuse($name, 'type', 'timestamp');
+            return null;
+        };
+        return $z->instant;
+    }
+
+    /**
+     * The raw JSON value of a field, for types the decoders do not know.
+     */
+    public function json(const string& $name, required: bool $required) : json::Value?
+    {
+        if (!$this->present($name, $required, 'json')) {
+            return null;
+        }
+        if ($this->json) {
+            return $this->value($name);
+        }
+        string $s = $this->pairs->get($this->key($name)) ?? '';
+        return json::str($s);
+    }
+
+    // lists ------------------------------------------------------------------
+
+    /**
+     * A list of strings: a JSON array, or every value of a repeated form
+     * field (`tag=a&tag=b`, `tag[]=a`, `tag[0]=a`).
+     */
+    public function strings(const string& $name, required: bool $required) : array<string>?
+    {
+        if (!$this->present($name, $required, 'list')) {
+            return null;
+        }
+        if (!$this->json) {
+            return $this->repeated($name);
+        }
+        json::Value $v = $this->value($name);
+        array<json::Value> $items = guard $v->asArray() else {
+            $this->refuse($name, 'type', 'list');
+            return null;
+        };
+        array<string> $out = [];
+        foreach ($items as const &$item) {
+            string $s = guard $item->asStr() else {
+                $this->refuse($name, 'type', 'list');
+                return null;
+            };
+            $out[] = $s;
+        }
+        return $out;
+    }
+
+    /**
+     * A list of whole numbers.
+     */
+    public function ints(const string& $name, required: bool $required) : array<int64>?
+    {
+        if (!$this->present($name, $required, 'list')) {
+            return null;
+        }
+        array<int64> $out = [];
+        if (!$this->json) {
+            foreach ($this->repeated($name) as const &$raw) {
+                int64 $n = guard str::int($raw) else {
+                    $this->refuse($name, 'type', 'list');
+                    return null;
+                };
+                $out[] = $n;
+            }
+            return $out;
+        }
+        json::Value $v = $this->value($name);
+        array<json::Value> $items = guard $v->asArray() else {
+            $this->refuse($name, 'type', 'list');
+            return null;
+        };
+        foreach ($items as const &$item) {
+            int64 $n = guard $item->asInt() else {
+                $this->refuse($name, 'type', 'list');
+                return null;
+            };
+            $out[] = $n;
+        }
+        return $out;
+    }
+
+    // nested inputs ----------------------------------------------------------
+
+    /**
+     * The nested input `$name`: a JSON object, or the form keys
+     * `name[...]`. Its refusals land under `name.`.
+     */
+    public function object(const string& $name, required: bool $required) : Fields?
+    {
+        if (!$this->present($name, $required, 'object')) {
+            return null;
+        }
+        Check $inner = $this->check->child($name);
+        if (!$this->json) {
+            return Fields(json: json::nil(), pairs: $this->pairs, base: $this->key($name), check: $inner);
+        }
+        json::Value $v = $this->value($name);
+        if (!$v->isObject()) {
+            $this->refuse($name, 'type', 'object');
+            return null;
+        }
+        Query $none = Query();
+        return Fields(json: $v, pairs: $none, base: '', check: $inner);
+    }
+
+    /**
+     * The list of nested inputs `$name`: a JSON array of objects, or the
+     * form keys `name[0][...]`, `name[1][...]` in index order. Each one's
+     * refusals land under `name.<i>.`.
+     */
+    public function objects(const string& $name, required: bool $required) : array<Fields>?
+    {
+        if (!$this->present($name, $required, 'list')) {
+            return null;
+        }
+        array<Fields> $out = [];
+        if (!$this->json) {
+            string $key = $this->key($name);
+            foreach ($this->indices($key) as $i) {
+                Check $inner = $this->check->child("{$name}.{$i}");
+                $out[] = Fields(json: json::nil(), pairs: $this->pairs, base: "{$key}[{$i}]", check: $inner);
+            }
+            return $out;
+        }
+        json::Value $v = $this->value($name);
+        array<json::Value> $items = guard $v->asArray() else {
+            $this->refuse($name, 'type', 'list');
+            return null;
+        };
+        Query $none = Query();
+        int64 $i = 0;
+        foreach ($items as const &$item) {
+            if (!$item->isObject()) {
+                $this->refuse("{$name}.{$i}", 'type', 'object');
+                return null;
+            }
+            Check $inner = $this->check->child("{$name}.{$i}");
+            $out[] = Fields(json: $item->clone(), pairs: $none, base: '', check: $inner);
+            $i = $i + 1;
+        }
+        return $out;
+    }
+
+    // inside -----------------------------------------------------------------
+
+    private function refuse(const string& $name, const string& $code, const string& $kind) : void
+    {
+        ordered_map<string, string> $none = ordered_map<string, string>();
+        $this->check->refuse($name, $code, $kind, $none);
+    }
+
+    private function present(const string& $name, bool $required, const string& $kind) : bool
+    {
+        if ($this->has($name)) {
+            return true;
+        }
+        if ($required) {
+            $this->refuse($name, 'required', $kind);
+        }
+        return false;
+    }
+
+    /**
+     * A field read as text, for the readers that parse it.
+     */
+    private function text(const string& $name, bool $required, const string& $kind) : string?
+    {
+        if (!$this->present($name, $required, $kind)) {
+            return null;
+        }
+        if (!$this->json) {
+            return $this->pairs->get($this->key($name));
+        }
+        json::Value $v = $this->value($name);
+        string? $s = $v->asStr();
+        if ($s == null) {
+            $this->refuse($name, 'type', $kind);
+        }
+        return $s;
+    }
+
+    private function value(const string& $name) : json::Value
+    {
+        json::Value? $v = $this->doc->get($name);
+        if ($v == null) {
+            return json::nil();
+        }
+        json::Value $there = guard $v;
+        return $there;
+    }
+
+    /**
+     * The pair key of field `$name`: itself at the top, `base[name]`
+     * inside a nested input.
+     */
+    private const function key(const string& $name) : string
+    {
+        if ($this->base->empty()) {
+            return $name;
+        }
+        return "{$this->base}[{$name}]";
+    }
+
+    /**
+     * Every value of a repeated pair: `key`, `key[]`, then `key[0]`,
+     * `key[1]`, ... in index order.
+     */
+    private const function repeated(const string& $name) : array<string>
+    {
+        string $key = $this->key($name);
+        array<string> $out = $this->pairs->all($key);
+        foreach ($this->pairs->all("{$key}[]") as const &$v) {
+            $out[] = $v;
+        }
+        foreach ($this->indices($key) as $i) {
+            string? $one = $this->pairs->get("{$key}[{$i}]");
+            if ($one != null) {
+                string $v = guard $one;
+                $out[] = $v;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * The numeric indices used under `key[`, ascending, each once.
+     */
+    private const function indices(const string& $key) : array<int64>
+    {
+        string $open = "{$key}[";
+        map<int64, bool> $seen = [];
+        array<int64> $out = [];
+        foreach ($this->pairs->pairs as const &$p) {
+            if (!$p->name->starts($open)) {
+                continue;
+            }
+            usize $from = $open->size();
+            usize $close = $p->name->find(']', $from);
+            if ($close >= $p->name->size() || $close == $from) {
+                continue;
+            }
+            int64 $i = guard str::int($p->name->sub($from, $close - $from)) else {
+                continue;
+            };
+            if ($i < 0 || $seen->has($i)) {
+                continue;
+            }
+            $seen[$i] = true;
+            $out[] = $i;
+        }
+        $out->sort();
+        return $out;
+    }
+}

@@ -1,0 +1,253 @@
+namespace nexus::work;
+
+/**
+ * A task's fields as a JSON object: written by the generated `encode`,
+ * read back by the generated `decode`, which notes every missing or
+ * mistyped field and answers them together from `done()`.
+ */
+public struct TaskData
+{
+    internal json::Value $object = json::Value::object();
+    internal array<string> $errors = [];
+
+    /**
+     * Reads a task's data; it must be a JSON object.
+     */
+    public static function parse(const string& $text) : result<TaskData, string>
+    {
+        json::Value $v = guard json::parse($text) else ($e) {
+            return .error('the task data is not JSON');
+        };
+        if (!$v->isObject()) {
+            return .error('the task data is not a JSON object');
+        }
+        TaskData $p = TaskData();
+        $p->object = $v;
+        return .ok($p);
+    }
+
+    public function put(const string& $name, int64 $value) : void
+    {
+        $this->object[$name] = json::Value::int($value);
+    }
+
+    public function put(const string& $name, float64 $value) : void
+    {
+        $this->object[$name] = json::Value::float($value);
+    }
+
+    public function put(const string& $name, bool $value) : void
+    {
+        $this->object[$name] = json::Value::bool($value);
+    }
+
+    public function put(const string& $name, const string& $value) : void
+    {
+        $this->object[$name] = json::Value::str($value);
+    }
+
+    public function put(const string& $name, const array<string>& $value) : void
+    {
+        json::Value $list = json::Value::arr();
+        foreach ($value as const &$s) {
+            $list[] = json::Value::str($s);
+        }
+        $this->object[$name] = $list;
+    }
+
+    public function put(const string& $name, const array<int64>& $value) : void
+    {
+        json::Value $list = json::Value::arr();
+        foreach ($value as const &$n) {
+            $list[] = json::Value::int($n);
+        }
+        $this->object[$name] = $list;
+    }
+
+    public function nil(const string& $name) : void
+    {
+        $this->object[$name] = json::Value::nil();
+    }
+
+    /**
+     * The object as JSON text.
+     */
+    public const function text() : string
+    {
+        return json::dump($this->object);
+    }
+
+    public function string(const string& $name, required: bool $required) : string?
+    {
+        json::Value $v = guard $this->present($name, $required) else {
+            return null;
+        };
+        string? $s = $v->asStr();
+        if ($s == null) {
+            $this->errors[] = "{$name} is not a string";
+        }
+        return $s;
+    }
+
+    public function bool(const string& $name, required: bool $required) : bool?
+    {
+        json::Value $v = guard $this->present($name, $required) else {
+            return null;
+        };
+        bool? $b = $v->asBool();
+        if ($b == null) {
+            $this->errors[] = "{$name} is not true or false";
+        }
+        return $b;
+    }
+
+    public function float64(const string& $name, required: bool $required) : float64?
+    {
+        json::Value $v = guard $this->present($name, $required) else {
+            return null;
+        };
+        float64? $f = $v->asFloat();
+        if ($f == null) {
+            $this->errors[] = "{$name} is not a number";
+        }
+        return $f;
+    }
+
+    public function int64(const string& $name, required: bool $required) : int64?
+    {
+        json::Value $v = guard $this->present($name, $required) else {
+            return null;
+        };
+        int64? $n = $v->asInt();
+        if ($n == null) {
+            $this->errors[] = "{$name} is not an integer";
+        }
+        return $n;
+    }
+
+    public function int32(const string& $name, required: bool $required) : int32?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < -2147483648 || $n > 2147483647) {
+            $this->errors[] = "{$name} does not fit an int32";
+            return null;
+        }
+        int32 $out = $n as int32;
+        return $out;
+    }
+
+    public function uint16(const string& $name, required: bool $required) : uint16?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < 0 || $n > 65535) {
+            $this->errors[] = "{$name} does not fit a uint16";
+            return null;
+        }
+        uint16 $out = $n as uint16;
+        return $out;
+    }
+
+    public function uint32(const string& $name, required: bool $required) : uint32?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < 0 || $n > 4294967295) {
+            $this->errors[] = "{$name} does not fit a uint32";
+            return null;
+        }
+        uint32 $out = $n as uint32;
+        return $out;
+    }
+
+    public function uint64(const string& $name, required: bool $required) : uint64?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < 0) {
+            $this->errors[] = "{$name} is negative";
+            return null;
+        }
+        uint64 $out = $n as uint64;
+        return $out;
+    }
+
+    public function strings(const string& $name, required: bool $required) : array<string>?
+    {
+        json::Value $v = guard $this->present($name, $required) else {
+            return null;
+        };
+        array<json::Value> $items = guard $v->asArray() else {
+            $this->errors[] = "{$name} is not a list";
+            return null;
+        };
+        array<string> $out = [];
+        foreach ($items as const &$item) {
+            string $s = guard $item->asStr() else {
+                $this->errors[] = "{$name} holds something that is not a string";
+                return null;
+            };
+            $out[] = $s;
+        }
+        return $out;
+    }
+
+    public function ints(const string& $name, required: bool $required) : array<int64>?
+    {
+        json::Value $v = guard $this->present($name, $required) else {
+            return null;
+        };
+        array<json::Value> $items = guard $v->asArray() else {
+            $this->errors[] = "{$name} is not a list";
+            return null;
+        };
+        array<int64> $out = [];
+        foreach ($items as const &$item) {
+            int64 $n = guard $item->asInt() else {
+                $this->errors[] = "{$name} holds something that is not an integer";
+                return null;
+            };
+            $out[] = $n;
+        }
+        return $out;
+    }
+
+    /**
+     * Every field problem noted, as one message.
+     */
+    public const function done() : status<string>
+    {
+        if ($this->errors->empty()) {
+            return .ok;
+        }
+        return .error(str::join($this->errors, '; '));
+    }
+
+    /**
+     * The field's value when it is there and not null; notes a missing
+     * required one.
+     */
+    internal function present(const string& $name, bool $required) : json::Value?
+    {
+        json::Value? $found = $this->object->get($name);
+        if ($found == null) {
+            if ($required) {
+                $this->errors[] = "{$name} is missing";
+            }
+            return null;
+        }
+        json::Value $v = guard $found;
+        if ($v->isNull()) {
+            if ($required) {
+                $this->errors[] = "{$name} is missing";
+            }
+            return null;
+        }
+        return $v;
+    }
+}

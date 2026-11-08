@@ -1,0 +1,67 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * A task in the queue: what to run, how often it was tried, and where it
+ * stands.
+ */
+public struct StoredTask
+{
+    public string $id;
+
+    /**
+     * The task type, the struct's qualified name.
+     */
+    public string $name;
+    public string $queue;
+
+    /**
+     * The task's fields as JSON text.
+     */
+    public string $data;
+    public int64 $tries;
+
+    /**
+     * How often it was claimed, this run included.
+     */
+    public int64 $attempts = 0;
+
+    /**
+     * Pushes with the same key are one task, done or not: the scheduler's
+     * `name@slot`. Empty for none.
+     */
+    public string $key = '';
+    public time::timestamp $createdAt;
+    public time::timestamp $availableAt;
+
+    /**
+     * Held by a worker until then.
+     */
+    public time::timestamp? $reservedUntil = null;
+    public time::timestamp? $doneAt = null;
+    public time::timestamp? $failedAt = null;
+
+    /**
+     * Why the last try failed.
+     */
+    public string $error = '';
+
+    /**
+     * Whether a worker may claim it at `$now`.
+     */
+    public const function due(time::timestamp $now) : bool
+    {
+        if ($this->doneAt != null || $this->failedAt != null) {
+            return false;
+        }
+        if ($this->availableAt > $now) {
+            return false;
+        }
+        if ($this->reservedUntil == null) {
+            return true;
+        }
+        time::timestamp $until = guard $this->reservedUntil;
+        return $until < $now;
+    }
+}

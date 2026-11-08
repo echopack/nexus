@@ -1,0 +1,48 @@
+namespace nexus::oauth::carbon;
+
+use std::time;
+
+/**
+ * A row of `oauth_grants`: what a user allowed a client, with the hashes
+ * of its current tokens and of the refresh token spent last.
+ */
+#[carbon::model: 'oauth_grants']
+public class GrantRow : carbon::Model<GrantRow, GrantRowRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $id;
+
+    public string $client;
+    public string $subject;
+    public string $scope;
+    public string $accessHash;
+    public time::timestamp $accessExpiresAt;
+    public string $refreshHash;
+    public time::timestamp $refreshExpiresAt;
+    public string $previousHash = '';
+    public time::timestamp $createdAt;
+    public time::timestamp $usedAt;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    public static function of(const nexus::oauth::Grant& $g) : GrantRow
+    {
+        return GrantRow($id: $g->id, $client: $g->client, $subject: $g->subject, $scope: $g->scope,
+            $accessHash: $g->accessHash, $accessExpiresAt: $g->accessExpiresAt,
+            $refreshHash: $g->refreshHash, $refreshExpiresAt: $g->refreshExpiresAt,
+            $previousHash: $g->previousHash, $createdAt: $g->createdAt, $usedAt: $g->usedAt);
+    }
+
+    public const function grant() : nexus::oauth::Grant
+    {
+        return nexus::oauth::Grant($id: $this->id, $client: $this->client, $subject: $this->subject, $scope: $this->scope,
+            $accessHash: $this->accessHash, $accessExpiresAt: $this->accessExpiresAt,
+            $refreshHash: $this->refreshHash, $refreshExpiresAt: $this->refreshExpiresAt,
+            $previousHash: $this->previousHash, $createdAt: $this->createdAt, $usedAt: $this->usedAt);
+    }
+}

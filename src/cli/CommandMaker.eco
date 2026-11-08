@@ -1,0 +1,12 @@
+namespace nexus;
+
+/**
+ * The generated command for a `nexus::Cli` class, made under the name
+ * the app gives it: the options its input brings and the code that runs
+ * it.
+ */
+public struct CommandMaker
+{
+    public string $owner;
+    public function<Command(const string&)> $make;
+}

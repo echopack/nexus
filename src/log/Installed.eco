@@ -1,0 +1,7 @@
+namespace nexus::log;
+
+// the process logger, set once by Logger::install before threads start
+internal class Installed
+{
+    public static nexus::Logger? $logger = null;
+}

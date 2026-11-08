@@ -1,0 +1,41 @@
+/*
+ * nexus-work: tasks, a queue, workers and a scheduler for nexus apps.
+ *
+ * A task is a struct conforming to `nexus::work::Task`: its fields are its
+ * data, its `handle(nexus::Payload&)` the work. `nexus gen` writes a
+ * companion per task, `SendWelcomeTask::push($payload, SendWelcome(...))`,
+ * and a table of codecs the extension finds at boot; the app binds each
+ * task with its queue, tries and schedule (`Tasks::bind`, or `$app->bindTask` in
+ * nexus-app). Workers claim due tasks with a lease, so a task whose process
+ * died runs again once the lease has passed; a task is run at least once.
+ * A failed try retries with backoff until its tries run out, then it is
+ * kept with the failed ones. `every:` and `cron:` make a task scheduled:
+ * the scheduler pushes it once per slot under a key, so several processes
+ * push it once.
+ *
+ * The queue here is kept in memory; nexus-work-carbon keeps it in the
+ * app's database.
+ */
+
+#[module: "nexus-work"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "Tasks, queues, workers and a scheduler for nexus apps"]
+
+#[depends: "../.."]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+}

@@ -1,0 +1,179 @@
+namespace nexus;
+
+use std::time;
+
+/**
+ * Typed reads of configuration variables for the generated config loaders.
+ * Every read that fails is remembered; `done()` reports them all at once,
+ * so a broken deploy shows every bad variable in one go.
+ */
+public class Settings
+{
+    private Env $env;
+    private array<ConfigError> $errors = [];
+
+    public constructor(Env $env)
+    {
+        $this->env = $env;
+    }
+
+    public function string(const string& $name, required: bool $required) : string?
+    {
+        string? $v = $this->env->get($name);
+        if ($v == null && $required) {
+            $this->errors[] = ConfigError::missing($name);
+        }
+        return $v;
+    }
+
+    public function bool(const string& $name, required: bool $required) : bool?
+    {
+        string $raw = guard $this->raw($name, $required) else {
+            return null;
+        };
+        string $v = str::lower($raw);
+        if ($v == 'true' || $v == '1' || $v == 'yes' || $v == 'on') {
+            return true;
+        }
+        if ($v == 'false' || $v == '0' || $v == 'no' || $v == 'off') {
+            return false;
+        }
+        $this->errors[] = ConfigError::invalid($name, "'{$raw}' is not a boolean");
+        return null;
+    }
+
+    public function int64(const string& $name, required: bool $required) : int64?
+    {
+        string $raw = guard $this->raw($name, $required) else {
+            return null;
+        };
+        int64? $n = str::int($raw);
+        if ($n == null) {
+            $this->errors[] = ConfigError::invalid($name, "'{$raw}' is not an integer");
+        }
+        return $n;
+    }
+
+    public function int32(const string& $name, required: bool $required) : int32?
+    {
+        int64 $n = guard $this->int64($name, required: $required) else {
+            return null;
+        };
+        if ($n < (int32::min() as int64) || $n > (int32::max() as int64)) {
+            $this->errors[] = ConfigError::invalid($name, 'out of range');
+            return null;
+        }
+        return $n as int32;
+    }
+
+    public function uint64(const string& $name, required: bool $required) : uint64?
+    {
+        string $raw = guard $this->raw($name, $required) else {
+            return null;
+        };
+        uint64? $n = str::uint($raw);
+        if ($n == null) {
+            $this->errors[] = ConfigError::invalid($name, "'{$raw}' is not a non-negative integer");
+        }
+        return $n;
+    }
+
+    public function uint32(const string& $name, required: bool $required) : uint32?
+    {
+        uint64 $n = guard $this->uint64($name, required: $required) else {
+            return null;
+        };
+        if ($n > (uint32::max() as uint64)) {
+            $this->errors[] = ConfigError::invalid($name, 'out of range');
+            return null;
+        }
+        return $n as uint32;
+    }
+
+    public function uint16(const string& $name, required: bool $required) : uint16?
+    {
+        uint64 $n = guard $this->uint64($name, required: $required) else {
+            return null;
+        };
+        if ($n > (uint16::max() as uint64)) {
+            $this->errors[] = ConfigError::invalid($name, 'out of range');
+            return null;
+        }
+        return $n as uint16;
+    }
+
+    public function float64(const string& $name, required: bool $required) : float64?
+    {
+        string $raw = guard $this->raw($name, $required) else {
+            return null;
+        };
+        float64? $n = str::float($raw);
+        if ($n == null) {
+            $this->errors[] = ConfigError::invalid($name, "'{$raw}' is not a number");
+        }
+        return $n;
+    }
+
+    /**
+     * A duration: `250ms`, `30s`, `5m`, `2h`, `1d`, or bare seconds.
+     */
+    public function duration(const string& $name, required: bool $required) : time::duration?
+    {
+        string $raw = guard $this->raw($name, $required) else {
+            return null;
+        };
+        time::duration? $d = Settings::span($raw);
+        if ($d == null) {
+            $this->errors[] = ConfigError::invalid($name, "'{$raw}' is not a duration like 30s, 5m or 2h");
+        }
+        return $d;
+    }
+
+    /**
+     * Every failed read, as one boot error, or ok.
+     */
+    public function done() : status<BootError>
+    {
+        if ($this->errors->empty()) {
+            return .ok;
+        }
+        return .error(.config($this->errors));
+    }
+
+    /**
+     * Parses the duration grammar `done`'s `duration` reads.
+     */
+    public static function span(const string& $text) : time::duration?
+    {
+        string $t = str::trim($text);
+        if ($t->empty()) {
+            return null;
+        }
+        usize $i = 0;
+        while ($i < $t->size() && $t->byte($i) >= 48 && $t->byte($i) <= 57) {
+            $i = $i + 1;
+        }
+        if ($i == 0) {
+            return null;
+        }
+        int64 $n = guard str::int($t->sub(0, $i)) else {
+            return null;
+        };
+        string $unit = $t->sub($i, $t->size() - $i);
+        if ($unit == '' || $unit == 's') { return time::duration::secs($n); }
+        if ($unit == 'ms') { return time::duration::millis($n); }
+        if ($unit == 'm') { return time::duration::mins($n); }
+        if ($unit == 'h') { return time::duration::hours($n); }
+        if ($unit == 'd') { return time::duration::hours($n * 24); }
+        return null;
+    }
+
+    private function raw(const string& $name, bool $required) : string?
+    {
+        string? $v = $this->env->get($name);
+        if ($v == null && $required) {
+            $this->errors[] = ConfigError::missing($name);
+        }
+        return $v;
+    }
+}

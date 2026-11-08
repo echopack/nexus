@@ -1,0 +1,88 @@
+namespace nexus;
+
+/**
+ * A piece of an app: a library (nexus-http, nexus-carbon) or the app
+ * itself. Extensions are listed in `main.eco`, in order; the app comes
+ * last so its bindings may replace anything earlier.
+ *
+ * Every hook has a default, so an extension writes only what it needs.
+ */
+public interface Extension
+{
+    /**
+     * A short name for logs and errors.
+     */
+    function name() : string;
+
+    /**
+     * Wires the app, by hand: services into the container, actions onto
+     * routes, listeners onto events. Runs before the container is sealed,
+     * after every #[nexus::config] struct is bound, so
+     * `$s->get<DatabaseConfig>()` reads one. An error stops the boot:
+     * the place for work that can fail, such as opening a database.
+     */
+    function services(Services& $s) : status<BootError>
+    {
+        return .ok;
+    }
+
+    /**
+     * The commands this extension adds to the app binary, next to
+     * `serve`, `routes` and `doctor`. Runs before the app boots, so it
+     * only records.
+     */
+    function commands(Commands& $cmds) : void
+    {
+    }
+
+    /**
+     * Adds global middleware. Runs after the container is sealed, so
+     * middleware can come from it.
+     */
+    function middleware(Pipeline& $p, container::Container $services) : void
+    {
+    }
+
+    /**
+     * Runs once the kernel is ready, before the first request.
+     */
+    function boot(Kernel $kernel) : status<BootError>
+    {
+        return .ok;
+    }
+
+    /**
+     * The transport this extension provides, if any. `serve` uses the
+     * first one it finds.
+     */
+    function transport() : Transport?
+    {
+        return null;
+    }
+
+    /**
+     * Runs when `serve` (or a command that serves, like `work`) starts,
+     * before the transport listens: the place to start background work,
+     * such as task workers. `$options` says what was asked for.
+     */
+    function start(Kernel $kernel, const Serve& $options) : status<BootError>
+    {
+        return .ok;
+    }
+
+    /**
+     * Runs when serving stops, in reverse order, after the transport has
+     * let its last request finish: stop what `start` started and wait for
+     * it, within its grace.
+     */
+    function drain(Kernel $kernel) : void
+    {
+    }
+
+    /**
+     * Runs when the process stops cleanly, in reverse order.
+     */
+    function shutdown(Kernel $kernel) : void
+    {
+    }
+}

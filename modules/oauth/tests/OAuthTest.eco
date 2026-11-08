@@ -1,0 +1,365 @@
+/**
+ * nexus-oauth end to end in process: registration, the authorize hop to
+ * the consent page, approval by a signed in user, the code traded with
+ * PKCE, the access token on the MCP endpoint (and nowhere else), refresh
+ * rotation with reuse detection, revocation and the grants list, on memory
+ * stores and a clock the tests move.
+ */
+
+use nexus::oauth::{Pkce, Register};
+use nexus::mcp::{ToolSpec, Schema};
+use nexus::testing::{TestApp, TestResponse};
+use std::time;
+use ecotest::expect;
+
+const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+const START = 1700000000;
+const VERIFIER = 'a-verifier-of-at-least-forty-three-characters-0123456789';
+const REDIRECT = 'http://127.0.0.1:33418/callback';
+
+/**
+ * A tool that says who calls.
+ */
+struct TWhoMcp
+{
+    public static function spec() : ToolSpec
+    {
+        function<nexus::Response(nexus::Payload&, nexus::Fields&)> $run = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            nexus::auth::Identity $me = guard $payload->state<nexus::auth::Identity>() else ($p) {
+                return nexus::Reply::problem($payload, $p);
+            };
+            json::Value $o = json::object();
+            $o['subject'] = json::str($me->subject);
+            $o['via'] = json::str($me->via);
+            return nexus::Response(json: $o);
+        };
+        function<bool(container::Container)> $bound = function(container::Container $services) : bool {
+            return true;
+        };
+        ToolSpec $t = ToolSpec('who', 'TWho', Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), $run, $bound);
+        $t->through = [nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')];
+        return $t;
+    }
+}
+
+class Rig
+{
+    public TestApp $app;
+    public calendar::ManualClock $clock;
+    public string $user;
+
+    public constructor()
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        $this->app = TestApp::boot(Rig::extensions($this->clock), Rig::vars('/consent'));
+        $this->user = Rig::signIn($this->app);
+    }
+
+    /**
+     * A rig whose consent page is `$consent`.
+     */
+    public constructor(consent: const string& $consent)
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        $this->app = TestApp::boot(Rig::extensions($this->clock), Rig::vars($consent));
+        $this->user = Rig::signIn($this->app);
+    }
+
+    public static function vars(const string& $consent) : map<string, string>
+    {
+        map<string, string> $vars = ['AUTH_KEY' => KEY, 'OAUTH_CONSENT' => $consent, 'OAUTH_NAME' => 'Tests'];
+        return $vars;
+    }
+
+    public static function extensions(calendar::ManualClock $clock) : array<nexus::Extension>
+    {
+        array<ToolSpec> $tools = [TWhoMcp::spec()];
+        array<nexus::Extension> $exts = [
+            nexus::auth::Extension('test', clock: $clock, cost: crypto::PasswordCost(8, 1)),
+            nexus::oauth::Extension(clock: $clock),
+            nexus::mcp::Extension(tools: $tools),
+        ];
+        return $exts;
+    }
+
+    internal static function signIn(TestApp $app) : string
+    {
+        nexus::Payload $payload = $app->kernel->background('issue', 'test');
+        nexus::auth::Issued $issued = guard $payload->get<nexus::auth::Tokens>()->issue('7');
+        nexus::Kernel::finish($payload);
+        return $issued->token;
+    }
+
+    public function register() : string
+    {
+        json::Value $uris = json::arr();
+        $uris[] = json::str(REDIRECT);
+        json::Value $o = json::object();
+        $o['client_name'] = json::str('Test client');
+        $o['redirect_uris'] = $uris;
+        TestResponse $res = $this->app->client()->post('/oauth/register', json: $o);
+        $res->assertStatus(201);
+        json::Value $id = guard TestResponse::walk($res->json(), ['client_id']);
+        return $id->asStr() ?? '';
+    }
+
+    public function query(const string& $client) : string
+    {
+        string $challenge = Pkce::challenge(VERIFIER);
+        string $redirect = nexus::Percent::encode(REDIRECT);
+        return "response_type=code&client_id={$client}&redirect_uri={$redirect}&code_challenge={$challenge}&code_challenge_method=S256&state=s1&resource=http%3A%2F%2Flocalhost%2Fmcp";
+    }
+
+    /**
+     * The consent page's answer for user 7, and where it sends the browser.
+     */
+    public function approve(const string& $query, bool $allow) : string
+    {
+        json::Value $o = json::object();
+        $o['query'] = json::str($query);
+        $o['allow'] = json::bool($allow);
+        TestResponse $res = $this->app->client()->with('Authorization', "Bearer {$this->user}")->post('/oauth/approve', json: $o);
+        $res->assertStatus(200);
+        json::Value $to = guard TestResponse::walk($res->json(), ['redirect']);
+        return $to->asStr() ?? '';
+    }
+
+    public function token(const string& $form) : TestResponse
+    {
+        return $this->app->client()->post('/oauth/token', form: $form);
+    }
+
+    /**
+     * Registers, approves and trades the code: the token answer.
+     */
+    public function connect() : TestResponse
+    {
+        string $client = $this->register();
+        string $back = $this->approve($this->query($client), true);
+        string $code = Rig::param($back, 'code');
+        string $redirect = nexus::Percent::encode(REDIRECT);
+        string $verifier = VERIFIER;
+        return $this->token("grant_type=authorization_code&client_id={$client}&code={$code}&redirect_uri={$redirect}&code_verifier={$verifier}");
+    }
+
+    public function who(const string& $token) : TestResponse
+    {
+        json::Value $p = json::object();
+        $p['name'] = json::str('who');
+        $p['arguments'] = json::object();
+        json::Value $o = json::object();
+        $o['jsonrpc'] = json::str('2.0');
+        $o['id'] = json::int(1);
+        $o['method'] = json::str('tools/call');
+        $o['params'] = $p;
+        return $this->app->client()->with('Authorization', "Bearer {$token}")->post('/mcp', json: $o);
+    }
+
+    public static function field(const TestResponse& $res, const string& $key) : string
+    {
+        json::Value $v = guard TestResponse::walk($res->json(), [$key]);
+        return $v->asStr() ?? '';
+    }
+
+    /**
+     * Query parameter `$name` of URL `$url`, decoded.
+     */
+    public static function param(const string& $url, const string& $name) : string
+    {
+        usize $q = $url->find('?');
+        if ($q >= $url->size()) {
+            return '';
+        }
+        nexus::Query $pairs = nexus::Query(parse: $url->sub($q + 1, $url->size() - $q - 1));
+        return $pairs->get($name) ?? '';
+    }
+}
+
+test the_metadata_names_the_endpoints
+{
+    Rig $r = Rig();
+    TestResponse $server = $r->app->client()->with('Host', 'blog.test')->get('/.well-known/oauth-authorization-server');
+    $server->assertStatus(200);
+    $server->assertJson(['issuer'], 'http://blog.test');
+    $server->assertJson(['token_endpoint'], 'http://blog.test/oauth/token');
+    $server->assertJson(['code_challenge_methods_supported', '0'], 'S256');
+    TestResponse $resource = $r->app->client()->with('Host', 'blog.test')->get('/.well-known/oauth-protected-resource/mcp');
+    $resource->assertJson(['resource'], 'http://blog.test/mcp');
+    $resource->assertJson(['authorization_servers', '0'], 'http://blog.test');
+    $resource->assertJson(['resource_name'], 'Tests');
+}
+
+test registration_checks_what_a_client_asks_for
+{
+    Rig $r = Rig();
+    string $id = $r->register();
+    expect($id)->length(32);
+
+    json::Value $far = json::arr();
+    $far[] = json::str('http://evil.example/cb');
+    json::Value $o = json::object();
+    $o['redirect_uris'] = $far;
+    $r->app->client()->post('/oauth/register', json: $o)->assertStatus(400)->assertJson(['error'], 'invalid_redirect_uri');
+
+    json::Value $ok = json::arr();
+    $ok[] = json::str('https://app.example/cb');
+    json::Value $secret = json::object();
+    $secret['redirect_uris'] = $ok;
+    $secret['token_endpoint_auth_method'] = json::str('client_secret_basic');
+    $r->app->client()->post('/oauth/register', json: $secret)->assertJson(['error'], 'invalid_client_metadata');
+
+    expect(Register::clean("Evil\u{202E}txt.exe"))->is('Eviltxt.exe');
+    expect(Register::clean("\n\t"))->is('MCP client');
+}
+
+test authorize_hands_the_browser_to_the_consent_page
+{
+    Rig $r = Rig();
+    string $client = $r->register();
+    string $query = $r->query($client);
+    TestResponse $res = $r->app->client()->get("/oauth/authorize?{$query}");
+    $res->assertStatus(302);
+    string $location = $res->header('Location') ?? '';
+    expect($location)->is("http://localhost/consent?{$query}");
+
+    $r->app->client()->get('/oauth/authorize?response_type=code&client_id=nobody')->assertStatus(400);
+    string $redirect = nexus::Percent::encode(REDIRECT);
+    TestResponse $plain = $r->app->client()->get("/oauth/authorize?response_type=code&client_id={$client}&redirect_uri={$redirect}&state=s9");
+    $plain->assertStatus(302);
+    string $back = $plain->header('Location') ?? '';
+    expect($back)->starts(REDIRECT);
+    expect(Rig::param($back, 'error'))->is('invalid_request');
+    expect(Rig::param($back, 'state'))->is('s9');
+
+    json::Value $pending = expect(TestResponse::walk($r->app->client()->with('Authorization', "Bearer {$r->user}")->get("/oauth/request?{$query}")->json(), ['client', 'name']))->some();
+    expect($pending->asStr())->some('Test client');
+    $r->app->client()->get("/oauth/request?{$query}")->assertStatus(401);
+}
+
+test the_consent_page_keeps_its_own_query_and_origin
+{
+    Rig $r = Rig(consent: '/consent?step=1');
+    string $client = $r->register();
+    string $query = $r->query($client);
+    string $location = $r->app->client()->get("/oauth/authorize?{$query}")->header('Location') ?? '';
+    expect($location)->is("http://localhost/consent?step=1&{$query}");
+
+    Rig $far = Rig(consent: 'https://app.example.com/approve');
+    string $other = $far->register();
+    string $asks = $far->query($other);
+    string $there = $far->app->client()->get("/oauth/authorize?{$asks}")->header('Location') ?? '';
+    expect($there)->is("https://app.example.com/approve?{$asks}");
+}
+
+test a_consent_page_or_issuer_that_is_no_url_stops_the_boot
+{
+    calendar::ManualClock $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+    result<TestApp, nexus::BootError> $broken = TestApp::attempt(Rig::extensions($clock), Rig::vars('consent page'));
+    nexus::BootError $consent = expect($broken)->fails();
+    expect($consent->lines()[0])->has('OAUTH_CONSENT');
+    map<string, string> $relative = Rig::vars('/consent');
+    $relative['OAUTH_ISSUER'] = '/blog';
+    result<TestApp, nexus::BootError> $again = TestApp::attempt(Rig::extensions($clock), $relative);
+    nexus::BootError $issuer = expect($again)->fails();
+    expect($issuer->lines()[0])->has('OAUTH_ISSUER');
+}
+
+test a_denied_request_goes_back_with_access_denied
+{
+    Rig $r = Rig();
+    string $client = $r->register();
+    string $back = $r->approve($r->query($client), false);
+    expect(Rig::param($back, 'error'))->is('access_denied');
+    expect(Rig::param($back, 'state'))->is('s1');
+    expect(Rig::param($back, 'iss'))->is('http://localhost');
+}
+
+test the_code_is_traded_once_with_its_verifier
+{
+    Rig $r = Rig();
+    string $client = $r->register();
+    string $back = $r->approve($r->query($client), true);
+    string $code = Rig::param($back, 'code');
+    expect($code)->length(64);
+    expect(Rig::param($back, 'iss'))->is('http://localhost');
+    string $redirect = nexus::Percent::encode(REDIRECT);
+    string $verifier = VERIFIER;
+    $r->token("grant_type=authorization_code&client_id={$client}&code={$code}&redirect_uri={$redirect}&code_verifier=wrong-verifier-wrong-verifier-wrong-verifier-wrong")->assertStatus(400)->assertJson(['error'], 'invalid_grant');
+    // the failed try spent it
+    $r->token("grant_type=authorization_code&client_id={$client}&code={$code}&redirect_uri={$redirect}&code_verifier={$verifier}")->assertJson(['error'], 'invalid_grant');
+
+    TestResponse $pair = $r->connect();
+    $pair->assertStatus(200);
+    $pair->assertJson(['token_type'], 'Bearer');
+    $pair->assertJson(['expires_in'], 3600);
+    $pair->assertHeader('Cache-Control', 'no-store');
+    expect(Rig::field($pair, 'access_token'))->starts('nxo_');
+    expect(Rig::field($pair, 'refresh_token'))->starts('nxr_');
+}
+
+test an_access_token_opens_mcp_and_nothing_else
+{
+    Rig $r = Rig();
+    TestResponse $pair = $r->connect();
+    string $access = Rig::field($pair, 'access_token');
+    TestResponse $res = $r->who($access);
+    $res->assertJson(['result', 'structuredContent', 'subject'], '7');
+    $res->assertJson(['result', 'structuredContent', 'via'], 'oauth');
+    $r->app->client()->with('Authorization', "Bearer {$access}")->get('/oauth/grants')->assertStatus(401);
+
+    $r->clock->advance(time::duration::mins(61));
+    $r->who($access)->assertStatus(401);
+}
+
+test refresh_rotates_and_a_reused_token_ends_the_grant
+{
+    Rig $r = Rig();
+    TestResponse $pair = $r->connect();
+    string $client = Rig::param("x?{$r->query($r->register())}", 'client_id');
+    string $firstAccess = Rig::field($pair, 'access_token');
+    string $firstRefresh = Rig::field($pair, 'refresh_token');
+    json::Value $grants = $r->app->client()->with('Authorization', "Bearer {$r->user}")->get('/oauth/grants')->json();
+    json::Value $owner = expect(TestResponse::walk($grants, ['items', '0', 'client']))->some();
+    string $holder = $owner->asStr() ?? '';
+    expect($client)->isNot($holder);
+
+    $r->token("grant_type=refresh_token&client_id={$client}&refresh_token={$firstRefresh}")->assertJson(['error'], 'invalid_grant');
+    TestResponse $second = $r->token("grant_type=refresh_token&client_id={$holder}&refresh_token={$firstRefresh}");
+    $second->assertStatus(200);
+    string $secondAccess = Rig::field($second, 'access_token');
+    string $secondRefresh = Rig::field($second, 'refresh_token');
+    expect($secondRefresh)->isNot($firstRefresh);
+    $r->who($firstAccess)->assertStatus(401);
+    $r->who($secondAccess)->assertJson(['result', 'structuredContent', 'subject'], '7');
+
+    // the spent one comes back: someone holds a copy, so the grant ends
+    $r->token("grant_type=refresh_token&client_id={$holder}&refresh_token={$firstRefresh}")->assertJson(['error'], 'invalid_grant');
+    $r->who($secondAccess)->assertStatus(401);
+    $r->token("grant_type=refresh_token&client_id={$holder}&refresh_token={$secondRefresh}")->assertJson(['error'], 'invalid_grant');
+}
+
+test revoking_and_disconnecting_end_the_grant
+{
+    Rig $r = Rig();
+    string $access = Rig::field($r->connect(), 'access_token');
+    $r->app->client()->post('/oauth/revoke', form: "token={$access}")->assertStatus(200);
+    $r->who($access)->assertStatus(401);
+    $r->app->client()->post('/oauth/revoke', form: 'token=nonsense')->assertStatus(200);
+
+    string $again = Rig::field($r->connect(), 'access_token');
+    TestResponse $list = $r->app->client()->with('Authorization', "Bearer {$r->user}")->get('/oauth/grants');
+    $list->assertCount(['items'], 1);
+    $list->assertJson(['items', '0', 'name'], 'Test client');
+    json::Value $id = expect(TestResponse::walk($list->json(), ['items', '0', 'id']))->some();
+    string $grant = $id->asStr() ?? '';
+    $r->app->client()->with('Authorization', "Bearer {$r->user}")->delete("/oauth/grants/{$grant}")->assertStatus(204);
+    $r->who($again)->assertStatus(401);
+}
+
+test boot_needs_nexus_auth_first
+{
+    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    array<nexus::Extension> $exts = [nexus::oauth::Extension(), nexus::auth::Extension('test')];
+    result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
+    expect($r)->fails();
+}

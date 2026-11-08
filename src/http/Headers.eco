@@ -1,0 +1,91 @@
+namespace nexus;
+
+/**
+ * The headers of a request or response, in order. Names compare without
+ * regard to case; a name may repeat (`Set-Cookie`).
+ */
+public struct Headers
+{
+    public array<Header> $items = [];
+
+    /**
+     * The first value of `$name`, or null.
+     */
+    public const function get(const string& $name) : string?
+    {
+        foreach ($this->items as const &$h) {
+            if (Headers::same($h->name, $name)) {
+                string $v = $h->value;
+                return $v;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Every value of `$name`, in order.
+     */
+    public const function all(const string& $name) : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->items as const &$h) {
+            if (Headers::same($h->name, $name)) {
+                $out[] = $h->value;
+            }
+        }
+        return $out;
+    }
+
+    public const function has(const string& $name) : bool
+    {
+        return $this->get($name) != null;
+    }
+
+    /**
+     * Appends a line, keeping any earlier ones of the same name.
+     */
+    public function add(const string& $name, const string& $value) : void
+    {
+        $this->items[] = Header($name, $value);
+    }
+
+    /**
+     * Replaces every line of `$name` with one.
+     */
+    public function set(const string& $name, const string& $value) : void
+    {
+        $this->remove($name);
+        $this->items[] = Header($name, $value);
+    }
+
+    /**
+     * Drops every line of `$name` and says how many went.
+     */
+    public function remove(const string& $name) : usize
+    {
+        array<Header> $kept = [];
+        usize $gone = 0;
+        foreach ($this->items as const &$h) {
+            if (Headers::same($h->name, $name)) {
+                $gone = $gone + 1;
+            } else {
+                $kept[] = $h;
+            }
+        }
+        $this->items = mv $kept;
+        return $gone;
+    }
+
+    public const function count() : usize
+    {
+        return $this->items->count();
+    }
+
+    /**
+     * Header names compare ASCII case-insensitively.
+     */
+    public static function same(const string& $a, const string& $b) : bool
+    {
+        return str::iequals($a->view(), $b->view());
+    }
+}

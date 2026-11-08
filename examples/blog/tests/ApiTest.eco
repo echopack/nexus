@@ -1,0 +1,681 @@
+/**
+ * The blog's API end to end, in process, through the generated routes, on
+ * carbon's fake driver: each test queues what the database answers and
+ * reads back what was sent.
+ */
+
+use nexus::testing::{TestApp, Client, TestResponse};
+use blog::{Post, PostTable, User, UserTable, Role};
+use carbon::fake;
+use hydrahon::{Value, Mysql};
+use std::time;
+use ecotest::expect;
+
+/**
+ * The blog booted on a fake MySQL, on a fixed clock.
+ */
+class Rig
+{
+    public fake::Driver<Mysql> $fake;
+    public TestApp $app;
+
+    /**
+     * The workers' clock, from 2026-11-02T02:59:30Z.
+     */
+    public calendar::ManualClock $clock;
+
+    public constructor(map<string, string> $vars)
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(1793588370));
+        fake::Driver<Mysql> $driver = fake::Driver<Mysql>();
+        $this->fake = $driver;
+        nexus::carbon::Extension $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+            carbon::DB $made = carbon::DB($driver, clock: calendar::FixedClock(time::timestamp::from_unix_secs(1700000000)));
+            return blog::Database::wire($made);
+        });
+        calendar::FixedClock $clock = calendar::FixedClock(time::timestamp::from_unix_secs(1700000000));
+        nexus::auth::Extension $auth = nexus::auth::Extension('blog', clock: $clock, cost: crypto::PasswordCost(8, 1));
+        nexus::work::Extension $work = nexus::work::Extension(clock: $this->clock);
+        array<nexus::Extension> $exts = [$db, $auth, nexus::oauth::Extension(clock: $clock), nexus::mcp::Extension(), $work, blog::App()];
+        $vars['AUTH_KEY'] = 'a-test-key-of-at-least-thirty-two-chars';
+        $this->app = TestApp::boot($exts, $vars);
+    }
+
+    public function client() : Client
+    {
+        return $this->app->client();
+    }
+
+    /**
+     * A client signed in as the editor, user 1, with a bearer token.
+     */
+    public function authed() : Client
+    {
+        nexus::auth::Issued $t = guard $this->app->kernel->services->child()->get<nexus::auth::Tokens>()->issue('1') else ($p) {
+            die('no token');
+        };
+        return $this->app->client()->with('Authorization', "Bearer {$t->token}");
+    }
+
+    /**
+     * The hash of `$plain` at the test cost.
+     */
+    public function hash(const string& $plain) : string
+    {
+        string $h = guard $this->app->kernel->services->get<nexus::auth::Passwords>()->hash($plain) else ($p) {
+            die('no hash');
+        };
+        return $h;
+    }
+}
+
+function queued(Rig $r) : array<nexus::work::StoredTask>
+{
+    return $r->app->kernel->services->get<nexus::work::MemoryQueue>()->all();
+}
+
+function runTask(Rig $r) : bool
+{
+    return nexus::work::Runner::step($r->app->kernel, $r->app->kernel->services->get<nexus::work::Work>());
+}
+
+function rig() : Rig
+{
+    map<string, string> $vars = ['BLOG_PAGE_SIZE' => '2'];
+    return Rig($vars);
+}
+
+function postRow(int64 $id, const string& $title) : array<Value>
+{
+    return postBy($id, $title, 1);
+}
+
+function postBy(int64 $id, const string& $title, int64 $author) : array<Value>
+{
+    return PostTable()->row(Post($id: $id, $authorId: $author, $title: $title, $body: 'Body', $tags: ['echo', 'nexus'], $createdAt: time::timestamp::from_unix_secs(1700000000)));
+}
+
+function editorRow() : array<Value>
+{
+    return UserTable()->row(User($id: 1, $email: 'editor@example.com', $name: 'The editor'));
+}
+
+/**
+ * The editor as the seed makes them: the blog's admin.
+ */
+function adminRow() : array<Value>
+{
+    return UserTable()->row(User($id: 1, $email: 'editor@example.com', $name: 'The editor', $role: Role::admin));
+}
+
+function authorRow(int64 $id) : array<Value>
+{
+    return UserTable()->row(User($id: $id, $email: "author{$id}@example.com", $name: 'An author'));
+}
+
+function editorWith(const string& $hash) : array<Value>
+{
+    return UserTable()->row(User($id: 1, $email: 'editor@example.com', $name: 'The editor', $passwordHash: $hash));
+}
+
+function credentials(const string& $email, const string& $password) : json::Value
+{
+    json::Value $doc = json::object();
+    $doc['email'] = json::str($email);
+    $doc['password'] = json::str($password);
+    $doc['passwordConfirmation'] = json::str($password);
+    return $doc;
+}
+
+function newPost(const string& $title) : json::Value
+{
+    json::Value $doc = json::object();
+    $doc['title'] = json::str($title);
+    $doc['body'] = 'Body text';
+    return $doc;
+}
+
+test health_reports_the_configured_title
+{
+    map<string, string> $vars = ['BLOG_TITLE' => 'Testing blog'];
+    Rig $r = Rig($vars);
+    array<string> $title = ['title'];
+    $r->client()->get('/health')->assertStatus(200)->assertJson($title, 'Testing blog');
+}
+
+test every_answer_says_how_long_it_took
+{
+    Rig $r = rig();
+    TestResponse $found = $r->client()->get('/health');
+    expect($found->header('Server-Timing') ?? '')->starts('app;dur=');
+    TestResponse $missing = $r->client()->get('/nowhere');
+    $missing->assertStatus(404);
+    expect($missing->header('Server-Timing') ?? '')->starts('app;dur=');
+}
+
+test list_pages_newest_first
+{
+    Rig $r = rig();
+    $r->fake->rows([postRow(2, 'Second'), postRow(1, 'First')]);
+    TestResponse $res = $r->client()->get('/v1/posts');
+    array<string> $data = ['data'];
+    array<string> $title = ['data', '0', 'title'];
+    array<string> $url = ['data', '0', 'url'];
+    array<string> $tag = ['data', '0', 'tags', '1'];
+    array<string> $size = ['size'];
+    $res->assertStatus(200)->assertCount($data, 2)->assertJson($title, 'Second')->assertJson($url, '/v1/posts/2');
+    $res->assertJson($tag, 'nexus')->assertJson($size, 2);
+    expect($r->fake->last())->has('ORDER BY `posts`.`created_at` DESC LIMIT 2');
+}
+
+test list_conventions_reach_the_query
+{
+    Rig $r = rig();
+    $r->fake->rows([[Value::from(7)]])->rows([[Value::from(1)]])->rows([postRow(4, 'Tagged')]);
+    TestResponse $res = $r->client()->get('/v1/posts?order=title&tag=echo&count=1&page=2');
+    array<string> $total = ['total_count'];
+    array<string> $filtered = ['filter_count'];
+    $res->assertStatus(200)->assertJson($total, 7)->assertJson($filtered, 1);
+    array<string> $sql = $r->fake->texts();
+    expect($sql[0])->lacks('LIKE');
+    expect($sql[1])->has('`posts`.`tags` LIKE ?');
+    expect($sql[2])->has('ORDER BY `posts`.`title` ASC LIMIT 2 OFFSET 2');
+}
+
+test bad_list_parameters_are_named
+{
+    Rig $r = rig();
+    $r->client()->get('/v1/posts?order=views')->assertInvalid('order', 'unknown');
+    $r->client()->get('/v1/posts?size=1000')->assertInvalid('size', 'range');
+    $r->client()->get('/v1/posts?include=secrets')->assertProblem(400);
+    expect($r->fake->count())->is(0);
+}
+
+test lists_answer_xml_when_asked
+{
+    Rig $r = rig();
+    $r->fake->rows([postRow(3, 'In XML')]);
+    $r->client()->with('Accept', 'application/xml')->get('/v1/posts')->assertStatus(200)->assertBodyContains('<title>In XML</title>');
+}
+
+test show_with_its_author
+{
+    Rig $r = rig();
+    $r->fake->rows([postRow(5, 'Hello')])->rows([editorRow()]);
+    array<string> $name = ['data', 'author', 'name'];
+    array<string> $id = ['data', 'id'];
+    string $target = $r->app->kernel->router->url<blog::ShowPost>(['id' => '5'])->text();
+    TestResponse $res = $r->client()->get("{$target}?include=author");
+    $res->assertStatus(200)->assertJson($id, 5)->assertJson($name, 'The editor');
+    // the hook's url before the include, which is written last
+    $res->assertBodyContains('/v1/posts/5","author":{"id":1,"name":"The editor","welcomed_at":null}}');
+    // nobody signed in: the author's email stays hidden
+    expect($res->body())->lacks('email');
+    expect($r->fake->texts()[1])->has('FROM `users`');
+}
+
+test show_missing_and_malformed
+{
+    Rig $r = rig();
+    $r->fake->rows([]);
+    $r->client()->get('/v1/posts/404')->assertProblem(404)->assertBodyContains('the post');
+    $r->client()->get('/v1/posts/abc')->assertProblem(404);
+}
+
+test writes_need_a_signed_in_author
+{
+    Rig $r = rig();
+    $r->client()->post('/v1/posts', json: newPost('A new post'))->assertProblem(401);
+    $r->client()->with('Authorization', 'Bearer blog_000000000000_0000000000000000000000000000000000000000000000000000000000000000')->delete('/v1/posts/1')->assertProblem(401);
+    $r->client()->with('Authorization', 'Bearer nonsense')->delete('/v1/posts/1')->assertProblem(401);
+    expect($r->fake->count())->is(0);
+}
+
+test create_validates_every_field
+{
+    Rig $r = rig();
+    json::Value $doc = json::object();
+    $doc['title'] = 'No';
+    // RequireUser loads the caller before the body is read
+    $r->fake->rows([editorRow()]);
+    $r->authed()->post('/v1/posts', json: $doc)->assertInvalid('title', 'min')->assertInvalid('body', 'required');
+    $r->fake->rows([editorRow()]);
+    $r->authed()->post('/v1/posts', body: 'not json', type: 'application/json')->assertProblem(400);
+    // nobody signed in hears so before the body is looked at
+    $r->client()->post('/v1/posts', body: 'not json', type: 'application/json')->assertProblem(401);
+}
+
+test create_inserts_and_answers_201
+{
+    Rig $r = rig();
+    $r->fake->rows([editorRow()])->written($insertId: 12);
+    array<string> $id = ['data', 'id'];
+    array<string> $url = ['data', 'url'];
+    array<string> $title = ['data', 'title'];
+    TestResponse $res = $r->authed()->post('/v1/posts', json: newPost('  A new post '));
+    $res->assertStatus(201)->assertJson($id, 12)->assertJson($url, '/v1/posts/12')->assertJson($title, 'A new post');
+    expect($r->fake->last())->starts('INSERT INTO `posts`');
+}
+
+test a_broken_reference_is_a_conflict
+{
+    Rig $r = rig();
+    $r->fake->rows([editorRow()])->fails(carbon::Error::driver(carbon::Failure($fault: carbon::Fault::reference, $message: 'foreign key')));
+    $r->authed()->post('/v1/posts', json: newPost('Orphan'))->assertProblem(409);
+}
+
+test update_changes_what_is_given
+{
+    Rig $r = rig();
+    $r->fake->rows([editorRow()])->rows([postRow(3, 'Old title')])->written();
+    json::Value $doc = json::object();
+    $doc['title'] = 'New title';
+    array<string> $title = ['data', 'title'];
+    array<string> $body = ['data', 'body'];
+    $r->authed()->patch('/v1/posts/3', json: $doc)->assertStatus(200)->assertJson($title, 'New title')->assertJson($body, 'Body');
+    expect($r->fake->last())->starts('UPDATE `posts` SET `title` = ?');
+}
+
+test update_validates_and_finds
+{
+    Rig $r = rig();
+    json::Value $short = json::object();
+    $short['title'] = 'x';
+    $r->fake->rows([editorRow()]);
+    $r->authed()->patch('/v1/posts/3', json: $short)->assertInvalid('title', 'min');
+    $r->fake->rows([editorRow()])->rows([]);
+    $r->authed()->patch('/v1/posts/9', json: json::object())->assertProblem(404);
+}
+
+test delete_answers_204
+{
+    Rig $r = rig();
+    $r->fake->rows([editorRow()])->rows([postRow(3, 'Gone')])->written();
+    $r->authed()->delete('/v1/posts/3')->assertStatus(204);
+    expect($r->fake->last())->is('DELETE FROM `posts` WHERE `posts`.`id` = ?');
+}
+
+test only_its_author_changes_a_post
+{
+    Rig $r = rig();
+    $r->fake->rows([editorRow()])->rows([postBy(3, 'Not mine', 2)]);
+    $r->authed()->delete('/v1/posts/3')->assertProblem(403);
+    $r->fake->rows([editorRow()])->rows([postBy(3, 'Not mine', 2)]);
+    json::Value $doc = json::object();
+    $doc['title'] = 'Taken over';
+    $r->authed()->patch('/v1/posts/3', json: $doc)->assertProblem(403);
+    expect($r->fake->last()->starts('UPDATE'))->no(says: 'the last statement is an UPDATE');
+}
+
+test an_admin_changes_anyones_post
+{
+    Rig $r = rig();
+    $r->fake->rows([adminRow()])->rows([postBy(3, 'Not mine', 2)])->written();
+    $r->authed()->delete('/v1/posts/3')->assertStatus(204);
+    $r->fake->rows([adminRow()])->rows([postBy(4, 'Not mine', 2)])->written();
+    json::Value $doc = json::object();
+    $doc['title'] = 'Edited by the admin';
+    array<string> $title = ['data', 'title'];
+    $r->authed()->patch('/v1/posts/4', json: $doc)->assertStatus(200)->assertJson($title, 'Edited by the admin');
+    expect($r->fake->last())->starts('UPDATE `posts` SET `title` = ?');
+}
+
+test listing_users_needs_an_admin
+{
+    Rig $r = rig();
+    $r->client()->get('/v1/users')->assertProblem(401);
+    $r->fake->rows([editorRow()]);
+    $r->authed()->get('/v1/users')->assertProblem(403);
+    expect($r->fake->count())->is(1);
+    $r->fake->rows([adminRow()])->rows([adminRow(), authorRow(2)]);
+    array<string> $data = ['data'];
+    array<string> $own = ['data', '0', 'email'];
+    array<string> $other = ['data', '1', 'name'];
+    // the admin shape: everyone's email and role
+    array<string> $otherEmail = ['data', '1', 'email'];
+    array<string> $role = ['data', '0', 'role'];
+    $r->authed()->get('/v1/users')->assertStatus(200)->assertCount($data, 2)->assertJson($own, 'editor@example.com')->assertJson($other, 'An author')->assertJson($otherEmail, 'author2@example.com')->assertJson($role, 2);
+    expect($r->fake->last())->has('ORDER BY `users`.`id`');
+}
+
+test login_answers_a_token_that_signs_in
+{
+    Rig $r = rig();
+    $r->fake->rows([editorWith($r->hash('the right password'))]);
+    TestResponse $res = $r->client()->post('/v1/auth/token', json: credentials('editor@example.com', 'the right password'));
+    $res->assertStatus(201);
+    string $token = TestResponse::walk($res->json(), ['token'])?->asStr() ?? '';
+    expect($token)->starts('blog_');
+    expect($r->fake->last())->has('WHERE `users`.`email` = ?');
+    $r->fake->rows([editorRow()]);
+    array<string> $name = ['data', 'name'];
+    array<string> $email = ['data', 'email'];
+    $r->client()->with('Authorization', "Bearer {$token}")->get('/v1/me')->assertStatus(200)->assertJson($name, 'The editor')->assertJson($email, 'editor@example.com');
+    $r->client()->with('Authorization', "Bearer {$token}")->delete('/v1/auth')->assertStatus(204);
+    $r->client()->with('Authorization', "Bearer {$token}")->get('/v1/me')->assertProblem(401);
+}
+
+test a_wrong_password_and_an_unknown_email_look_alike
+{
+    Rig $r = rig();
+    $r->fake->rows([editorWith($r->hash('the right password'))]);
+    TestResponse $wrong = $r->client()->post('/v1/auth/token', json: credentials('editor@example.com', 'a wrong password'));
+    $r->fake->rows([]);
+    TestResponse $unknown = $r->client()->post('/v1/auth/token', json: credentials('nobody@example.com', 'a wrong password'));
+    $wrong->assertProblem(401)->assertBodyContains('the email or the password is wrong');
+    $unknown->assertProblem(401)->assertBodyContains('the email or the password is wrong');
+    $r->client()->post('/v1/auth/token', json: credentials('not an email', 'x'))->assertInvalid('email', 'email');
+}
+
+test logins_are_throttled
+{
+    Rig $r = rig();
+    foreach (0 .. 10 as $i) {
+        $r->fake->rows([]);
+        $r->client()->post('/v1/auth/token', json: credentials('editor@example.com', 'guess'))->assertProblem(401);
+    }
+    usize $before = $r->fake->count();
+    $r->client()->post('/v1/auth/token', json: credentials('editor@example.com', 'guess'))->assertProblem(429)->assertHeader('Retry-After', '900');
+    expect($r->fake->count())->is($before);
+}
+
+test a_signed_session_signs_each_request
+{
+    Rig $r = rig();
+    $r->fake->rows([editorWith($r->hash('the right password'))]);
+    TestResponse $res = $r->client()->post('/v1/auth/session', json: credentials('editor@example.com', 'the right password'));
+    $res->assertStatus(201);
+    string $id = TestResponse::walk($res->json(), ['id'])?->asStr() ?? '';
+    string $secret = TestResponse::walk($res->json(), ['secret'])?->asStr() ?? '';
+    nexus::auth::Signer $s = nexus::auth::Signer($id, $secret);
+    $r->fake->rows([editorRow()]);
+    array<string> $name = ['data', 'name'];
+    $r->client()->with('Authorization', $s->header('GET', '/v1/me', 1700000000, ''))->get('/v1/me')->assertStatus(200)->assertJson($name, 'The editor');
+    // the same signature on another path
+    $r->client()->with('Authorization', $s->header('GET', '/v1/me', 1700000000, ''))->get('/v1/me?x=1')->assertProblem(401);
+    // too old
+    $r->client()->with('Authorization', $s->header('GET', '/v1/me', 1700000000 - 600, ''))->get('/v1/me')->assertProblem(401);
+}
+
+function registration(const string& $email, const string& $password) : json::Value
+{
+    json::Value $doc = json::object();
+    $doc['name'] = json::str(' A reader ');
+    $doc['email'] = json::str($email);
+    $doc['password'] = json::str($password);
+    $doc['passwordConfirmation'] = json::str($password);
+    return $doc;
+}
+
+test signing_up_queues_a_welcome
+{
+    Rig $r = rig();
+    // nobody has the address yet, then the insert
+    $r->fake->rows([])->written($insertId: 7);
+    array<string> $id = ['data', 'id'];
+    array<string> $name = ['data', 'name'];
+    $r->client()->post('/v1/users', json: registration(' Reader@Example.com ', 'a long password'))->assertStatus(201)->assertJson($id, 7)->assertJson($name, 'A reader');
+    array<string> $sql = $r->fake->texts();
+    expect($sql[0])->has('WHERE `users`.`email` = ?');
+    expect($r->fake->last())->starts('INSERT INTO `users`');
+    array<nexus::work::StoredTask> $tasks = queued($r);
+    expect($tasks)->size(1);
+    expect($tasks[0]->name)->is('blog::SendWelcome');
+    expect($tasks[0]->queue)->is('mail');
+    expect($tasks[0]->tries)->is(5);
+    expect($tasks[0]->data)->is('{"user":7}');
+
+    // a worker welcomes them
+    $r->fake->rows([UserTable()->row(User($id: 7, $email: 'reader@example.com', $name: 'A reader'))])->written();
+    expect(runTask($r))->yes(says: 'a worker ran the welcome task');
+    expect($r->fake->last())->starts('UPDATE `users` SET')->has('`welcomed_at` = ?');
+    expect($r->app->logged('welcome'))->yes(says: 'the welcome was logged');
+    expect(queued($r))->empty();
+}
+
+test a_taken_email_or_a_short_password_queues_nothing
+{
+    Rig $r = rig();
+    // the address is taken: a 422 before anything is written
+    $r->fake->rows([editorRow()]);
+    array<string> $message = ['errors', '0', 'message'];
+    $r->client()->post('/v1/users', json: registration('Editor@Example.com', 'a long password'))->assertInvalid('email', 'unique')->assertJson($message, 'Someone already signed up with that e-mail address.');
+    // two sign-ups racing past the check: the insert still answers a 409
+    $r->fake->rows([])->fails(carbon::Error::driver(carbon::Failure($fault: carbon::Fault::duplicate, $message: 'Duplicate entry')));
+    $r->client()->post('/v1/users', json: registration('editor@example.com', 'a long password'))->assertProblem(409)->assertBodyContains('that email is taken');
+    $r->fake->rows([]);
+    $r->client()->post('/v1/users', json: registration('new@example.com', 'short'))->assertInvalid('password', 'min');
+    expect(queued($r))->empty();
+}
+
+test the_welcome_gives_up_when_the_user_is_gone
+{
+    Rig $r = rig();
+    nexus::Payload $payload = $r->app->kernel->background('test', 't');
+    guard blog::SendWelcomeTask::push($payload, blog::SendWelcome($user: 9));
+    nexus::Kernel::finish($payload);
+    $r->fake->rows([]);
+    expect(runTask($r))->yes(says: 'a worker ran the welcome task');
+    nexus::work::StoredTask $j = queued($r)[0];
+    expect($j->failedAt)->some();
+    expect($j->error)->is('user 9 is gone');
+}
+
+test auth_is_pruned_nightly_at_three
+{
+    Rig $r = rig();
+    nexus::work::Work $w = $r->app->kernel->services->get<nexus::work::Work>();
+    expect($w->planned)->size(1);
+    expect($w->planned[0]->kind->name)->is('blog::PruneAuth');
+    nexus::work::Scheduler $s = nexus::work::Scheduler($w, $r->clock->now() - time::duration::mins(1));
+    expect($s->tick($r->app->kernel, $r->clock->now()))->is(0);
+    $r->clock->advance(time::duration::secs(35));
+    expect($s->tick($r->app->kernel, $r->clock->now()))->is(1);
+    expect(queued($r)[0]->key)->is('blog::PruneAuth@1793588400');
+    $r->fake->written(2)->written(1);
+    expect(runTask($r))->yes(says: 'a worker ran the prune task');
+    expect($r->fake->texts()[0])->is('DELETE FROM `auth_tokens` WHERE `auth_tokens`.`expires_at` < ?');
+    expect($r->fake->last())->is('DELETE FROM `auth_sessions` WHERE `auth_sessions`.`expires_at` < ?');
+    expect($r->app->logged('pruned'))->yes(says: 'the prune was logged');
+    // the next one is tomorrow
+    std::time::timestamp $next = expect($w->planned[0]->schedule->next($r->clock->now(), $w->zone))->some();
+    expect($next->unix_secs())->is(1793588400 + 86400);
+}
+
+/**
+ * Runs command `$cmd` as the command line would, with `$in` filled in.
+ */
+function command(Rig $r, nexus::Command $cmd, nexus::Invocation& $in) : int32
+{
+    return $cmd->run($r->app->kernel, $in);
+}
+
+function printed(const nexus::Invocation& $in) : string
+{
+    return str::join($in->out->page->rows, "\n");
+}
+
+/**
+ * One JSON-RPC message to the MCP endpoint, as the editor.
+ */
+function rpc(Rig $r, const string& $method, json::Value $params) : TestResponse
+{
+    json::Value $o = json::object();
+    $o['jsonrpc'] = json::str('2.0');
+    $o['id'] = json::int(1);
+    $o['method'] = json::str($method);
+    $o['params'] = $params;
+    return $r->authed()->post('/mcp', json: $o);
+}
+
+function toolCall(Rig $r, const string& $tool, json::Value $args) : TestResponse
+{
+    json::Value $p = json::object();
+    $p['name'] = json::str($tool);
+    $p['arguments'] = $args;
+    return rpc($r, 'tools/call', $p);
+}
+
+test posts_show_prints_a_post_from_the_service
+{
+    Rig $r = rig();
+    $r->fake->rows([postRow(3, 'Hello')])->rows([editorRow()]);
+    nexus::Invocation $in = nexus::Invocation(nexus::Mode::testing);
+    $in->positionals = ['3'];
+    expect(command($r, blog::ShowPostCommandCli('posts:show'), $in))->is(0);
+    string $text = printed($in);
+    expect($text)->has('#3  Hello')->has('by The editor <editor@example.com>')->has('tags: echo, nexus');
+
+    $r->fake->rows([]);
+    nexus::Invocation $missing = nexus::Invocation(nexus::Mode::testing);
+    $missing->positionals = ['9'];
+    expect(command($r, blog::ShowPostCommandCli('posts:show'), $missing))->is(1);
+    expect(printed($missing))->has('error: Not Found');
+
+    nexus::Invocation $bad = nexus::Invocation(nexus::Mode::testing);
+    $bad->positionals = ['nine'];
+    expect(command($r, blog::ShowPostCommandCli('posts:show'), $bad))->is(1);
+    expect(printed($bad))->has('error: id:');
+}
+
+test posts_create_keeps_the_api_rules
+{
+    Rig $r = rig();
+    $r->fake->rows([editorRow()])->written($insertId: 5);
+    nexus::Invocation $in = nexus::Invocation(nexus::Mode::testing);
+    $in->values['author'] = '1';
+    $in->given['author'] = true;
+    $in->values['title'] = 'From the shell';
+    $in->given['title'] = true;
+    $in->values['body'] = 'Typed in a terminal';
+    $in->given['body'] = true;
+    $in->lists['tags'] = ['Echo', ' echo', 'CLI'];
+    expect(command($r, blog::CreatePostCommandCli('posts:create'), $in))->is(0);
+    expect(printed($in))->has('published post #5 by The editor');
+    expect($r->fake->last())->starts('INSERT INTO `posts`');
+
+    nexus::Invocation $short = nexus::Invocation(nexus::Mode::testing);
+    $short->values['author'] = '1';
+    $short->given['author'] = true;
+    $short->values['title'] = 'No';
+    $short->given['title'] = true;
+    usize $sent = $r->fake->count();
+    expect(command($r, blog::CreatePostCommandCli('posts:create'), $short))->is(1);
+    expect(printed($short))->has('title:')->has('body:');
+    expect($r->fake->count())->is($sent);
+    expect(str::join(blog::PostService::tags(['Echo', ' echo', '', 'CLI']), ','))->is('echo,cli');
+}
+
+test the_post_tools_are_listed_with_their_schemas
+{
+    Rig $r = rig();
+    TestResponse $res = rpc($r, 'tools/list', json::object());
+    $res->assertStatus(200);
+    $res->assertCount(['result', 'tools'], 2);
+    $res->assertJson(['result', 'tools', '0', 'name'], 'show_post');
+    $res->assertJson(['result', 'tools', '0', 'inputSchema', 'properties', 'post', 'type'], 'integer');
+    $res->assertJson(['result', 'tools', '0', 'inputSchema', 'required', '0'], 'post');
+    $res->assertJson(['result', 'tools', '1', 'name'], 'create_post');
+    $res->assertJson(['result', 'tools', '1', 'inputSchema', 'properties', 'title', 'maxLength'], 120);
+    $res->assertJson(['result', 'tools', '1', 'inputSchema', 'properties', 'body', 'minLength'], 1);
+    $res->assertJson(['result', 'tools', '1', 'description'], 'Publishes a post by the signed in user: a title of 3 to 120 characters, a body, and up to five tags. Answers the post as the API does.');
+}
+
+test the_post_tools_run_the_action_and_the_service
+{
+    Rig $r = rig();
+    $r->fake->rows([postRow(3, 'Hello')]);
+    json::Value $show = json::object();
+    $show['post'] = json::int(3);
+    TestResponse $shown = toolCall($r, 'show_post', $show);
+    $shown->assertJson(['result', 'structuredContent', 'data', 'title'], 'Hello');
+
+    $r->fake->rows([editorRow()])->written($insertId: 13);
+    json::Value $made = json::object();
+    $made['title'] = json::str('Over MCP');
+    $made['body'] = json::str('Written by a model');
+    TestResponse $created = toolCall($r, 'create_post', $made);
+    $created->assertJson(['result', 'structuredContent', 'data', 'id'], 13);
+
+    $r->fake->rows([editorRow()]);
+    json::Value $short = json::object();
+    $short['title'] = json::str('No');
+    TestResponse $refused = toolCall($r, 'create_post', $short);
+    json::Value $failed = expect(TestResponse::walk($refused->json(), ['result', 'isError']))->some();
+    expect($failed->asBool())->some(true);
+    $refused->assertBodyContains('title');
+}
+
+test sign_up_rules_normalise_compare_and_speak_german
+{
+    Rig $r = rig();
+    json::Value $doc = registration('not an address', 'a long password');
+    $doc['passwordConfirmation'] = json::str('something else');
+    $doc['name'] = json::str('   ');
+    array<string> $first = ['errors', '0', 'message'];
+    TestResponse $en = $r->client()->post('/v1/users', json: $doc);
+    $en->assertInvalid('name', 'notBlank')->assertInvalid('email', 'email')->assertInvalid('password', 'confirmed');
+    $en->assertHeader('Content-Language', 'en')->assertJson($first, 'The name field must not be blank.');
+    TestResponse $de = $r->client()->with('Accept-Language', 'de-CH, en;q=0.5')->post('/v1/users', json: $doc);
+    $de->assertHeader('Content-Language', 'de');
+    $de->assertJson($first, 'Das Feld Name darf nicht leer sein.');
+    $de->assertBodyContains('Das Feld E-Mail-Adresse muss eine gültige E-Mail-Adresse sein.');
+    $de->assertBodyContains('Die Bestätigung von Passwort stimmt nicht überein.');
+    // nothing was asked of the database
+    expect($r->fake->count())->is(0);
+}
+
+function batchPost(const string& $title) : json::Value
+{
+    json::Value $p = json::object();
+    $p['title'] = json::str($title);
+    $p['body'] = json::str('Text');
+    json::Value $tags = json::arr();
+    $tags[] = json::str(' Echo ');
+    $p['tags'] = $tags;
+    return $p;
+}
+
+test a_batch_checks_every_post_by_its_own_rules
+{
+    Rig $r = rig();
+    json::Value $doc = json::object();
+    json::Value $posts = json::arr();
+    $posts[] = batchPost('A fine title');
+    $posts[] = batchPost('No');
+    json::Value $third = batchPost('Third post');
+    json::Value $twice = json::arr();
+    $twice[] = json::str('echo');
+    $twice[] = json::str('ECHO ');
+    $third['tags'] = $twice;
+    $posts[] = $third;
+    $doc['posts'] = $posts;
+    $r->fake->rows([editorRow()]);
+    TestResponse $res = $r->authed()->post('/v1/posts/batch', json: $doc);
+    $res->assertInvalid('posts.1.title', 'min')->assertInvalid('posts.2.tags', 'distinct');
+    json::Value $none = json::object();
+    $none['posts'] = json::arr();
+    $r->fake->rows([editorRow()]);
+    $r->authed()->post('/v1/posts/batch', json: $none)->assertInvalid('posts', 'min');
+}
+
+test a_batch_publishes_all_at_once
+{
+    Rig $r = rig();
+    $r->fake->rows([editorRow()])->written($insertId: 21)->written($insertId: 22);
+    json::Value $doc = json::object();
+    json::Value $posts = json::arr();
+    $posts[] = batchPost('First of two');
+    $posts[] = batchPost('Second of two');
+    $doc['posts'] = $posts;
+    array<string> $second = ['data', '1', 'id'];
+    array<string> $tag = ['data', '0', 'tags', '0'];
+    $r->authed()->post('/v1/posts/batch', json: $doc)->assertStatus(201)->assertCount(['data'], 2)->assertJson($second, 22)->assertJson($tag, 'echo');
+}
+
+test a_batch_reads_bracketed_form_keys
+{
+    Rig $r = rig();
+    $r->fake->rows([editorRow()]);
+    $r->authed()->post('/v1/posts/batch', form: 'posts%5B0%5D%5Btitle%5D=Okay+title&posts%5B0%5D%5Bbody%5D=x&posts%5B1%5D%5Btitle%5D=No&posts%5B1%5D%5Bbody%5D=y')->assertInvalid('posts.1.title', 'min');
+}

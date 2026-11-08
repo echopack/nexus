@@ -1,0 +1,264 @@
+/**
+ * nexus-mcp through its extension: the endpoint's handshake, the tool
+ * list and calls of a hand-written tool, and what is refused on the way,
+ * with nexus-auth's memory tokens saying who calls.
+ */
+
+use nexus::mcp::{ToolSpec, Tools, Schema};
+use ecotest::expect;
+use nexus::testing::{TestApp, TestResponse};
+
+const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+
+/**
+ * Says back what it is given.
+ */
+class TEcho
+{
+    public function handle(nexus::Payload& $payload, const string& $text) : nexus::Response
+    {
+        json::Value $o = json::object();
+        $o['said'] = json::str($text);
+        $o['by'] = json::str($payload->door->name());
+        nexus::auth::Identity $id = guard $payload->state<nexus::auth::Identity>() else ($p) {
+            return nexus::Response(json: $o);
+        };
+        $o['who'] = json::str($id->subject);
+        return nexus::Response(json: $o);
+    }
+}
+
+/**
+ * What `nexus gen` would write for a tool `echo_text` taking `text`.
+ */
+struct TEchoMcp
+{
+    public static function spec() : ToolSpec
+    {
+        function<nexus::Response(nexus::Payload&, nexus::Fields&)> $run = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return TEchoMcp::call($payload, $args);
+        };
+        function<bool(container::Container)> $bound = function(container::Container $services) : bool {
+            return $services->find<TEcho>() != null;
+        };
+        ToolSpec $t = ToolSpec('echo_text', 'TEcho', Schema::of('{"type":"object","properties":{"text":{"type":"string","minLength":1}},"required":["text"],"additionalProperties":false}'), $run, $bound);
+        $t->title = 'Echo';
+        $t->description = 'Says the text back.';
+        $t->annotations = Schema::of('{"readOnlyHint":true}');
+        $t->through = [nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')];
+        return $t;
+    }
+
+    /**
+     * The same tool behind a middleware that refuses everyone.
+     */
+    public static function locked() : ToolSpec
+    {
+        ToolSpec $t = TEchoMcp::spec();
+        $t->name = 'locked_echo';
+        $t->through = [nexus::MiddlewareRef::of<TLocked>('TLocked')];
+        return $t;
+    }
+
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        $args->check->at('text', 'string', '');
+        string? $text = $args->string('text', required: true);
+        if ($text != null) {
+            string $t = guard $text;
+            $args->check->minLength($t, 1);
+        }
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        string $said = guard $text;
+        TEcho $tool = $payload->get<TEcho>();
+        return $tool->handle($payload, $said);
+    }
+}
+
+#[atomic]
+class TLocked : nexus::Middleware
+{
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        return $payload->fail(nexus::Problem::forbidden('this one is locked'));
+    }
+}
+
+class TExt : nexus::Extension
+{
+    public bool $binds;
+
+    public constructor(bool $binds)
+    {
+        $this->binds = $binds;
+    }
+
+    public function name() : string
+    {
+        return 'test';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        if ($this->binds) {
+            $s->bind<TEcho>(scope: function() : TEcho {
+                return TEcho();
+            });
+            $s->bind<TLocked>(once: () => TLocked());
+        }
+        return .ok;
+    }
+}
+
+class Rig
+{
+    public TestApp $app;
+    public string $token;
+
+    public constructor()
+    {
+        map<string, string> $vars = ['AUTH_KEY' => KEY, 'MCP_NAME' => 'tests', 'MCP_INSTRUCTIONS' => 'Call echo_text.'];
+        array<ToolSpec> $tools = [TEchoMcp::spec(), TEchoMcp::locked()];
+        array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::mcp::Extension(tools: $tools), TExt(true)];
+        $this->app = TestApp::boot($exts, $vars);
+        nexus::Payload $payload = $this->app->kernel->background('issue', 'test');
+        nexus::auth::Issued $issued = guard $payload->get<nexus::auth::Tokens>()->issue('7');
+        nexus::Kernel::finish($payload);
+        $this->token = $issued->token;
+    }
+
+    /**
+     * Posts one JSON-RPC message with the test token.
+     */
+    public function rpc(const string& $method, json::Value $params) : TestResponse
+    {
+        json::Value $o = json::object();
+        $o['jsonrpc'] = json::str('2.0');
+        $o['id'] = json::int(1);
+        $o['method'] = json::str($method);
+        $o['params'] = $params;
+        return $this->app->client()->with('Authorization', "Bearer {$this->token}")->post('/mcp', json: $o);
+    }
+
+    public function call(const string& $tool, json::Value $args) : TestResponse
+    {
+        json::Value $p = json::object();
+        $p['name'] = json::str($tool);
+        $p['arguments'] = $args;
+        return $this->rpc('tools/call', $p);
+    }
+}
+
+test a_caller_without_a_credential_is_pointed_at_oauth
+{
+    Rig $r = Rig();
+    json::Value $o = json::object();
+    $o['jsonrpc'] = json::str('2.0');
+    $o['id'] = json::int(1);
+    $o['method'] = json::str('ping');
+    TestResponse $res = $r->app->client()->with('Host', 'blog.test')->post('/mcp', json: $o);
+    $res->assertStatus(401);
+    expect($res->header('WWW-Authenticate'))->some('Bearer resource_metadata="http://blog.test/.well-known/oauth-protected-resource/mcp"');
+}
+
+test initialize_answers_the_asked_revision_and_the_server
+{
+    Rig $r = Rig();
+    json::Value $p = json::object();
+    $p['protocolVersion'] = json::str('2025-06-18');
+    TestResponse $res = $r->rpc('initialize', $p);
+    $res->assertStatus(200);
+    $res->assertJson(['result', 'protocolVersion'], '2025-06-18');
+    $res->assertJson(['result', 'serverInfo', 'name'], 'tests');
+    $res->assertJson(['result', 'instructions'], 'Call echo_text.');
+
+    json::Value $q = json::object();
+    $q['protocolVersion'] = json::str('1999-01-01');
+    $r->rpc('initialize', $q)->assertJson(['result', 'protocolVersion'], '2025-11-25');
+}
+
+test tools_are_listed_with_their_schema
+{
+    Rig $r = Rig();
+    TestResponse $res = $r->rpc('tools/list', json::object());
+    $res->assertCount(['result', 'tools'], 2);
+    $res->assertJson(['result', 'tools', '0', 'name'], 'echo_text');
+    $res->assertJson(['result', 'tools', '0', 'title'], 'Echo');
+    $res->assertJson(['result', 'tools', '0', 'inputSchema', 'required', '0'], 'text');
+    json::Value $hint = expect(TestResponse::walk($res->json(), ['result', 'tools', '0', 'annotations', 'readOnlyHint']))->some();
+    expect($hint->asBool())->some(true);
+}
+
+test a_call_runs_the_tool_on_the_mcp_door
+{
+    Rig $r = Rig();
+    json::Value $args = json::object();
+    $args['text'] = json::str('hello');
+    TestResponse $res = $r->call('echo_text', $args);
+    $res->assertStatus(200);
+    $res->assertJson(['result', 'structuredContent', 'said'], 'hello');
+    $res->assertJson(['result', 'structuredContent', 'by'], 'mcp');
+    json::Value $failed = expect(TestResponse::walk($res->json(), ['result', 'isError']))->some();
+    expect($failed->asBool())->some(false);
+}
+
+test bad_arguments_are_a_tool_error_the_model_reads
+{
+    Rig $r = Rig();
+    json::Value $unknown = json::object();
+    $unknown['text'] = json::str('hi');
+    $unknown['loud'] = json::bool(true);
+    TestResponse $res = $r->call('echo_text', $unknown);
+    json::Value $failed = expect(TestResponse::walk($res->json(), ['result', 'isError']))->some();
+    expect($failed->asBool())->some(true);
+    $res->assertBodyContains('echo_text takes no loud');
+
+    TestResponse $missing = $r->call('echo_text', json::object());
+    json::Value $alsoFailed = expect(TestResponse::walk($missing->json(), ['result', 'isError']))->some();
+    expect($alsoFailed->asBool())->some(true);
+    $missing->assertBodyContains('is required');
+
+    $r->call('no_such_tool', json::object())->assertJson(['error', 'code'], -32602);
+}
+
+test a_tools_middleware_answers_for_it
+{
+    Rig $r = Rig();
+    json::Value $args = json::object();
+    $args['text'] = json::str('hello');
+    TestResponse $res = $r->call('locked_echo', $args);
+    $res->assertStatus(200);
+    json::Value $failed = expect(TestResponse::walk($res->json(), ['result', 'isError']))->some();
+    expect($failed->asBool())->some(true);
+    $res->assertBodyContains('this one is locked');
+}
+
+test the_endpoint_refuses_what_it_does_not_speak
+{
+    Rig $r = Rig();
+    $r->rpc('resources/list', json::object())->assertJson(['error', 'code'], -32601);
+    $r->app->client()->get('/mcp')->assertStatus(405)->assertHeader('Allow', 'POST');
+    $r->app->client()->with('Authorization', "Bearer {$r->token}")->post('/mcp', body: '{}', type: 'text/plain')->assertStatus(415);
+    $r->app->client()->with('Authorization', "Bearer {$r->token}")->with('MCP-Protocol-Version', '2024-01-01')->post('/mcp', json: json::object())->assertStatus(400);
+    $r->app->client()->with('Authorization', "Bearer {$r->token}")->post('/mcp', body: '{"jsonrpc":"2.0","method":"notifications/initialized"}', type: 'application/json')->assertStatus(202);
+    $r->app->client()->with('Authorization', "Bearer {$r->token}")->post('/mcp', body: 'nope', type: 'application/json')->assertJson(['error', 'code'], -32700);
+}
+
+test boot_refuses_a_tool_without_a_binding
+{
+    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    array<ToolSpec> $tools = [TEchoMcp::spec()];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test'), nexus::mcp::Extension(tools: $tools), TExt(false)];
+    result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
+    expect($r)->fails();
+}
+
+test boot_needs_nexus_auth
+{
+    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    array<nexus::Extension> $exts = [nexus::mcp::Extension(), TExt(true)];
+    result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
+    expect($r)->fails();
+}

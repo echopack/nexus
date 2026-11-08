@@ -1,0 +1,45 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * How a process works the queue. Read from `WORK_WORKERS`,
+ * `WORK_QUEUES`, `WORK_POLL`, `WORK_LEASE`, `WORK_GRACE` and `WORK_KEEP`.
+ */
+#[nexus::config: "work"]
+public struct WorkConfig
+{
+    /**
+     * Task worker threads in a process that runs workers.
+     */
+    public uint32 $workers = 2;
+
+    /**
+     * The queues the workers take from, comma separated. Empty takes every
+     * queue a task of the program names.
+     */
+    public string $queues = '';
+
+    /**
+     * How long an idle worker waits before it looks again.
+     */
+    public time::duration $poll = std::time::duration::secs(1);
+
+    /**
+     * How long a claimed task is held. A task still running after it may be
+     * claimed again by another worker, so it must outlast the slowest task.
+     */
+    public time::duration $lease = std::time::duration::mins(5);
+
+    /**
+     * How long a stopping process waits for running tasks to finish. The
+     * ones still running then run again once their lease has passed.
+     */
+    public time::duration $grace = std::time::duration::secs(30);
+
+    /**
+     * How long a done scheduled run is kept, so its slot is not pushed
+     * again.
+     */
+    public time::duration $keep = std::time::duration::hours(24);
+}

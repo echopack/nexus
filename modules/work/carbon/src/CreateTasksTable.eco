@@ -1,0 +1,34 @@
+namespace nexus::work::carbon;
+
+/**
+ * `nexus_tasks`. Add it to the app's migrations with
+ * `nexus::work::carbon::Tables::migrations()`.
+ */
+#[carbon::migration: '20261102000500_create_nexus_tasks']
+public class CreateTasksTable : carbon::Migration
+{
+    public function up(carbon::Migrating $m) : status<carbon::Error>
+    {
+        return $m->create(carbon::ddl::Table('nexus_tasks')
+            ->string('id', 32)
+            ->string('name', 190)
+            ->string('queue', 64)
+            ->text('data')
+            ->bigint('tries')
+            ->bigint('attempts')
+            ->string('unique_key', 190, $nullable: true, $unique: true)
+            ->datetime('created_at')
+            ->datetime('available_at')
+            ->datetime('reserved_until', $nullable: true)
+            ->datetime('done_at', $nullable: true)
+            ->datetime('failed_at', $nullable: true)
+            ->text('error')
+            ->index(['queue', 'available_at'])
+            ->primary(['id']));
+    }
+
+    public function down(carbon::Migrating $m) : status<carbon::Error>
+    {
+        return $m->drop('nexus_tasks');
+    }
+}

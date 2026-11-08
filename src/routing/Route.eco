@@ -1,0 +1,22 @@
+namespace nexus;
+
+/**
+ * One endpoint: the methods and path it answers, the action behind it and
+ * the generated code that runs it. `nexus gen` writes these; the kernel
+ * collects them at boot.
+ */
+public struct Route
+{
+    public array<Method> $methods;
+    public string $path;
+    public string $action;
+    public function<Response(Payload&)> $dispatch;
+    public function<bool(container::Container)> $bound;
+    public array<MiddlewareRef> $middleware = [];
+
+    /**
+     * The action's type, what the router finds links by. A route built
+     * by hand keeps `Route`'s own and is never linked to.
+     */
+    public type_id $type = type_id<Route>();
+}

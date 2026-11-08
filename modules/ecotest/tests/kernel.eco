@@ -1,0 +1,122 @@
+/**
+ * The ecotest-http checks against a tiny nexus app, in process.
+ */
+
+use ecotest::expect;
+use ecotest::http::Api;
+use nexus::testing::{KernelTransport, TestApp};
+use container::Container;
+
+internal class KEcho : nexus::Action
+{
+    public function handle(nexus::Payload& $payload) : nexus::Response
+    {
+        $o = json::object();
+        $o['method'] = json::str($payload->request->method->verb());
+        $o['target'] = json::str($payload->request->target);
+        $o['body'] = json::str($payload->request->body);
+        $o['who'] = json::str($payload->request->header('X-Who') ?? '');
+        $o['host'] = json::str($payload->request->header('Host') ?? '');
+        $o['accept'] = json::str($payload->request->header('Accept') ?? '');
+        $o['length'] = json::str($payload->request->header('Content-Length') ?? '');
+        return nexus::Response(json: $o);
+    }
+}
+
+internal class KApp : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'kapp';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<KEcho>(scope: function() : KEcho {
+            return KEcho();
+        });
+
+        array<nexus::Method> $m = [.get, .post];
+        array<nexus::MiddlewareRef> $w = [];
+        $d = function(nexus::Payload& $payload) : nexus::Response {
+            $a = $payload->get<KEcho>();
+            return $a->handle($payload);
+        };
+        $b = function(Container $services) : bool {
+            return $services->has<KEcho>();
+        };
+        $s->route(nexus::Route($m, '/echo', 'KEcho', $d, $b, $w));
+        return .ok;
+    }
+}
+
+/**
+ * An `Api` on a fresh kernel running `KApp`, with `$base` as its base URL.
+ */
+internal function kernelApi(const string& $base) : Api
+{
+    array<nexus::Extension> $exts = [KApp()];
+    $app = TestApp::boot($exts);
+    return Api(transport: KernelTransport($app->kernel), base: $base);
+}
+
+test an_api_runs_against_the_kernel_in_process
+{
+    $api = kernelApi('http://app');
+
+    $api->with('X-Who', 'tester')->get('/echo')->ok()->json('$.method', 'GET')->json('$.who', 'tester');
+    $api->post('/echo', json: '{"a":1}')->ok()->json('$.method', 'POST')->json('$.body', '{"a":1}');
+    $api->get('/missing')->status(404);
+}
+
+test every_verb_and_any_url_shape_reaches_the_kernel
+{
+    $api = kernelApi('');
+
+    $api->get('/echo')->ok();
+    $api->get('http://host')->status(404);
+    $api->head('http://host/echo')->ok()->body('');
+    $api->put('/echo', json: '{}')->status(405);
+    $api->patch('/echo', json: '{}')->status(405);
+    $api->delete('/echo')->status(405);
+}
+
+test a_target_is_the_path_and_query_of_any_url
+{
+    expect(KernelTransport::target(''))->is('/');
+    expect(KernelTransport::target('/'))->is('/');
+    expect(KernelTransport::target('/a/b?x=1'))->is('/a/b?x=1');
+    expect(KernelTransport::target('/a#frag'))->is('/a');
+    expect(KernelTransport::target('/login?next=https://other/x'))->is('/login?next=https://other/x');
+    expect(KernelTransport::target('http://app'))->is('/');
+    expect(KernelTransport::target('http://app?x=1'))->is('/?x=1');
+    expect(KernelTransport::target('http://app/a/b?x=1#frag'))->is('/a/b?x=1');
+    expect(KernelTransport::target('https://app:8080/a?next=http://b/c'))->is('/a?next=http://b/c');
+    expect(KernelTransport::target('echo'))->is('/echo');
+    expect(KernelTransport::target('echo?next=http://b/c'))->is('/echo?next=http://b/c');
+
+    expect(KernelTransport::host('http://app:8080/a'))->is('app:8080');
+    expect(KernelTransport::host('http://app?x=1'))->is('app');
+    expect(KernelTransport::host('http://app#f'))->is('app');
+    expect(KernelTransport::host('/a?next=http://b'))->is('localhost');
+}
+
+test the_kernel_sees_what_a_socket_server_would
+{
+    $api = kernelApi('http://app:8080');
+
+    $api->get('/echo?x=1#frag')->ok()
+        ->json('$.target', '/echo?x=1')
+        ->json('$.host', 'app:8080')
+        ->json('$.accept', '*/*')
+        ->json('$.length', '');
+
+    $api->post('/echo', json: '{"a":1}')->ok()->json('$.length', '7');
+    $api->with('Accept', 'application/json')->with('Host', 'other')->get('/echo')
+        ->json('$.accept', 'application/json')
+        ->json('$.host', 'other');
+
+    ordered_map<string, string> $query = ['q' => 'a b'];
+    $api->get('/echo', query: $query)->json('$.target', '/echo?q=a%20b');
+    $api->head('/echo')->ok()->body('');
+}

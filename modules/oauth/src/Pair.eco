@@ -1,0 +1,26 @@
+namespace nexus::oauth;
+
+/**
+ * A fresh access and refresh token, as the token endpoint answers them.
+ */
+public struct Pair
+{
+    public string $access;
+    public string $refresh;
+    public int64 $expiresIn;
+    public string $scope;
+
+    public const function response() : nexus::Response
+    {
+        json::Value $o = json::object();
+        $o['access_token'] = json::str($this->access);
+        $o['token_type'] = json::str('Bearer');
+        $o['expires_in'] = json::int($this->expiresIn);
+        $o['refresh_token'] = json::str($this->refresh);
+        $o['scope'] = json::str($this->scope);
+        nexus::Response $res = nexus::Response(json: $o);
+        $res->header('Cache-Control', 'no-store');
+        $res->header('Pragma', 'no-cache');
+        return $res;
+    }
+}

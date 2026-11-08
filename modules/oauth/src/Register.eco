@@ -1,0 +1,148 @@
+namespace nexus::oauth;
+
+use std::time;
+
+/**
+ * Dynamic client registration (RFC 7591). Anyone may register, since
+ * registering grants nothing: ten tries per address in fifteen minutes,
+ * at most `OAUTH_CLIENTS` clients, and clients never used are swept after
+ * an hour.
+ */
+public class Register : nexus::Action
+{
+    private OAuthStore $store;
+    private OAuthConfig $config;
+    private calendar::Clock $clock;
+    private nexus::auth::Throttle $throttle;
+
+    public constructor(OAuthStore $store, OAuthConfig $config, calendar::Clock $clock, nexus::auth::Throttle $throttle)
+    {
+        $this->store = $store;
+        $this->config = $config;
+        $this->clock = $clock;
+        $this->throttle = $throttle;
+    }
+
+    public function handle(nexus::Payload& $payload) : nexus::Response
+    {
+        time::timestamp $now = $this->clock->now();
+        if (!$this->throttle->take($payload->request->peer, $now)) {
+            return OAuthError('slow_down', 'too many registrations from this address; try again later', 429)->response();
+        }
+        json::Value $body = guard json::parse($payload->request->body) else {
+            return Register::refuse('the body is not JSON');
+        };
+        if (!$body->isObject()) {
+            return Register::refuse('the body is a JSON object');
+        }
+        string $method = Register::text($body, 'token_endpoint_auth_method');
+        if (!$method->empty() && $method != 'none') {
+            return Register::refuse('only public clients register here: token_endpoint_auth_method none');
+        }
+        foreach (Register::texts($body, 'grant_types') as const &$g) {
+            if ($g != 'authorization_code' && $g != 'refresh_token') {
+                return Register::refuse("grant type {$g} is not offered");
+            }
+        }
+        foreach (Register::texts($body, 'response_types') as const &$r) {
+            if ($r != 'code') {
+                return Register::refuse("response type {$r} is not offered");
+            }
+        }
+        array<string> $uris = Register::texts($body, 'redirect_uris');
+        if ($uris->empty() || $uris->count() > 10) {
+            return OAuthError('invalid_redirect_uri', 'redirect_uris needs one to ten URIs')->response();
+        }
+        foreach ($uris as const &$u) {
+            RedirectUri $checked = guard RedirectUri::parse($u) else ($e) {
+                return OAuthError('invalid_redirect_uri', $e)->response();
+            };
+        }
+        guard $this->store->sweep($now - time::duration::hours(1)) else ($p) {
+            return OAuthError::of($p)->response();
+        };
+        uint64 $count = guard $this->store->clients() else ($p) {
+            return OAuthError::of($p)->response();
+        };
+        if ($count >= $this->config->clients as uint64) {
+            return OAuthError('temporarily_unavailable', 'too many clients are registered right now; try again later', 503)->response();
+        }
+        Client $client = Client($id: nexus::auth::Secrets::hex(16), $name: Register::clean(Register::text($body, 'client_name')),
+            $redirects: $uris, $createdAt: $now);
+        guard $this->store->register($client) else ($p) {
+            return OAuthError::of($p)->response();
+        };
+        $this->throttle->refund($payload->request->peer);
+        nexus::Response $res = nexus::Response(json: $client->json(), status: 201);
+        $res->header('Cache-Control', 'no-store');
+        return $res;
+    }
+
+    /**
+     * A name the consent page can show: no control characters and nothing
+     * that turns the text around it, at most 100 bytes, `MCP client` when
+     * nothing is left.
+     */
+    public static function clean(const string& $raw) : string
+    {
+        string $out = '';
+        usize $i = 0;
+        while ($i < $raw->size()) {
+            uint8 $b = $raw->byte($i);
+            // U+202A..U+202E and U+2066..U+2069, the bidi overrides and isolates
+            if ($b == 226 && $i + 2 < $raw->size()) {
+                uint8 $b1 = $raw->byte($i + 1);
+                uint8 $b2 = $raw->byte($i + 2);
+                if (($b1 == 128 && $b2 >= 170 && $b2 <= 174) || ($b1 == 129 && $b2 >= 166 && $b2 <= 169)) {
+                    $i = $i + 3;
+                    continue;
+                }
+            }
+            if ($b >= 32 && $b != 127) {
+                $out->push($b);
+            }
+            $i = $i + 1;
+        }
+        $out = str::trim($out);
+        if ($out->size() > 100) {
+            usize $cut = 100;
+            while ($cut > 0 && $out->byte($cut) >= 128 && $out->byte($cut) < 192) {
+                $cut = $cut - 1;
+            }
+            $out = $out->sub(0, $cut);
+        }
+        if ($out->empty()) {
+            return 'MCP client';
+        }
+        return $out;
+    }
+
+    internal static function refuse(const string& $why) : nexus::Response
+    {
+        return OAuthError('invalid_client_metadata', $why)->response();
+    }
+
+    internal static function text(const json::Value& $o, const string& $key) : string
+    {
+        json::Value? $v = $o->get($key);
+        if ($v == null) {
+            return '';
+        }
+        json::Value $there = guard $v;
+        return $there->asStr() ?? '';
+    }
+
+    internal static function texts(const json::Value& $o, const string& $key) : array<string>
+    {
+        array<string> $out = [];
+        json::Value? $v = $o->get($key);
+        if ($v == null) {
+            return $out;
+        }
+        json::Value $there = guard $v;
+        foreach ($there->asArray() ?? array<json::Value>() as const &$item) {
+            $out[] = $item->asStr() ?? '';
+        }
+        return $out;
+    }
+}
