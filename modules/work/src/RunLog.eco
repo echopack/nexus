@@ -1,0 +1,69 @@
+namespace nexus::work;
+
+/**
+ * Where a task run logs. A task's `log()` says it for itself; `.inherit` leaves it to the queue,
+ * whose own choice is `.app` unless it was given another.
+ *
+ * ```echo
+ * public const function log(const nexus::work::Run& $run) : nexus::work::RunLog
+ * {
+ *     return .also(nexus::log::File("var/tasks/{$run->id}.log", .json));
+ * }
+ * ```
+ */
+public enum RunLog
+{
+    case inherit;
+
+    /**
+     * The app's log only.
+     */
+    case app;
+
+    /**
+     * The app's log and `$sink`.
+     */
+    case also(nexus::log::Sink $sink);
+
+    /**
+     * `$sink` only.
+     */
+    case only(nexus::log::Sink $sink);
+
+    /**
+     * Nowhere.
+     */
+    case silent;
+
+    /**
+     * The logger a run writes to, from `$app`, the log the run would have.
+     */
+    public const function logger(nexus::Logger $app) : nexus::Logger
+    {
+        return match ($this) {
+            RunLog::inherit => $app,
+            RunLog::app => $app,
+            RunLog::also($sink) => $app->also($sink),
+            RunLog::only($sink) => RunLog::alone($app, $sink),
+            RunLog::silent => nexus::Logger::silent(),
+        };
+    }
+
+    /**
+     * Whether the run brings a sink of its own, which is flushed when the run ends.
+     */
+    public const function owns() : bool
+    {
+        return match ($this) {
+            RunLog::also($sink) => true,
+            RunLog::only($sink) => true,
+            else => false,
+        };
+    }
+
+    internal static function alone(nexus::Logger $app, nexus::log::Sink $sink) : nexus::Logger
+    {
+        array<nexus::log::Sink> $sinks = [$sink];
+        return $app->only(mv $sinks);
+    }
+}

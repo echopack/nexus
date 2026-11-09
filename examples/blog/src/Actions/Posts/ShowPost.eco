@@ -1,0 +1,22 @@
+namespace Blog::Actions::Posts;
+
+use Blog::Types::PostCrud;
+
+/**
+ * One post; `?include=author` adds its author.
+ */
+#[nexus::answers: { response: "Blog::Transformers::PostTransformer" }]
+public class ShowPost : nexus::Action
+{
+    private PostCrud $crud;
+
+    public constructor(PostCrud $crud)
+    {
+        $this->crud = $crud;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id) : result<nexus::Response, nexus::Problem>
+    {
+        return $this->crud->show($payload, $id);
+    }
+}

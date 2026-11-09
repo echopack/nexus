@@ -1,0 +1,21 @@
+namespace Blog::Tasks;
+
+/**
+ * Every night at three (UTC), deletes the tokens and sessions that have expired: what `auth:prune`
+ * does by hand.
+ */
+public struct PruneAuth : nexus::work::Task
+{
+    public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
+    {
+        $db = $payload->get<carbon::DB>();
+        uint64 $tokens = guard nexus::auth::carbon::PruneCommand::tokens($db) else ($e) {
+            return .error(.retry("pruning tokens: {$e}"));
+        };
+        uint64 $sessions = guard nexus::auth::carbon::PruneCommand::sessions($db) else ($e) {
+            return .error(.retry("pruning sessions: {$e}"));
+        };
+        $payload->log->info('pruned', ['tokens' => $tokens as int64, 'sessions' => $sessions as int64]);
+        return .ok;
+    }
+}

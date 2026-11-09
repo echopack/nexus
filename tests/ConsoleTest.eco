@@ -1,0 +1,85 @@
+/**
+ * The command line: every command describes itself the same way, and the app boots only for a
+ * command that asks.
+ */
+
+use nexus::{Console, Extension, Services, Commands, Command, Invocation, BootError};
+use ecotest::expect;
+
+/**
+ * An app that cannot boot, with one command of its own.
+ */
+internal class CBroken : Extension
+{
+    public string $named = 'billing';
+
+    public function name() : string
+    {
+        return 'shop';
+    }
+
+    public function services(Services& $s) : status<BootError>
+    {
+        return .error(.extension('shop', 'the database is down'));
+    }
+
+    public function commands(Commands& $cmds) : void
+    {
+        $cmds->add(CBill($this->named));
+    }
+}
+
+internal class CBill : Command
+{
+    public string $named;
+
+    public constructor(const string& $named)
+    {
+        $this->named = $named;
+    }
+
+    public const function name() : string
+    {
+        return $this->named;
+    }
+
+    public const function summary() : string
+    {
+        return 'send the bills';
+    }
+
+    public function run(Invocation& $in) : int32
+    {
+        guard $in->kernel() else {
+            return 7;
+        };
+        return 0;
+    }
+}
+
+test env_runs_without_booting_the_app
+{
+    array<Extension> $exts = [CBroken()];
+    expect(Console::run($exts, ['shop', 'env', '--env-file', 'no-such.env']))->is(0);
+}
+
+test a_command_that_asks_for_the_app_boots_it
+{
+    array<Extension> $exts = [CBroken()];
+    expect(Console::run($exts, ['shop', 'billing', '--env-file', 'no-such.env']))->is(7);
+}
+
+test no_command_is_the_help_and_a_failure
+{
+    array<Extension> $exts = [CBroken()];
+    expect(Console::run($exts, ['shop']))->is(1);
+    expect(Console::run($exts, ['shop', '--help']))->is(0);
+}
+
+test a_command_name_is_taken_once
+{
+    $taken = CBroken();
+    $taken->named = 'serve';
+    array<Extension> $exts = [$taken];
+    expect(Console::run($exts, ['shop', 'serve', '--env-file', 'no-such.env']))->is(1);
+}

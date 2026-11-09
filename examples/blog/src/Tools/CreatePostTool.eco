@@ -1,0 +1,31 @@
+namespace Blog::Tools;
+
+use Blog::Inputs::NewPost;
+use Blog::Services::PostService;
+use Blog::Transformers::PostTransformer;
+use Blog::Types::Caller;
+
+/**
+ * Publishes a post by the signed in user: a title of 3 to 120 characters, a body, and up to five
+ * tags. Answers the post as the API does.
+ */
+#[nexus::answers: { response: "Blog::Transformers::PostTransformer" }]
+#[nexus::through: ["Blog::Middleware::RequireUser"]]
+public class CreatePostTool : nexus::mcp::Tool
+{
+    private PostService $posts;
+    private PostTransformer $transformer;
+
+    public constructor(PostService $posts, PostTransformer $transformer)
+    {
+        $this->posts = $posts;
+        $this->transformer = $transformer;
+    }
+
+    public function handle(nexus::Payload& $payload, NewPost $in) : result<nexus::Response, nexus::Problem>
+    {
+        $me = try $payload->state<Caller>();
+        $made = try $this->posts->create($me->user, $in);
+        return $this->transformer->createResponse($payload, $made);
+    }
+}

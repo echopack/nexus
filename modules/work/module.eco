@@ -1,26 +1,37 @@
 /*
- * nexus-work: tasks, a queue, workers and a scheduler for nexus apps.
+ * nexus-work: tasks, async and distributed queues, pipelines and a
+ * scheduler for nexus apps.
  *
  * A task is a struct conforming to `nexus::work::Task`: its fields are its
- * data, its `handle(nexus::Payload&)` the work. `nexus gen` writes a
- * companion per task, `SendWelcomeTask::push($payload, $user: ...)`,
- * and a table of codecs the extension finds at boot; the app binds each
- * task with its queue, tries and schedule (`Tasks::bind`, or `$app->bindTask` in
- * nexus-app). Workers claim due tasks with a lease, so a task whose process
- * died runs again once the lease has passed; a task is run at least once.
- * A failed try retries with backoff until its tries run out, then it is
- * kept with the failed ones. `every:` and `cron:` make a task scheduled:
- * the scheduler pushes it once per slot under a key, so several processes
- * push it once.
+ * data, its `handle(nexus::Payload&)` the work, and it says for itself how
+ * often it is tried, whether it is exclusive (`.running` or `.unique`, on a
+ * key), whether the tasks after it may go on when it fails, its priority,
+ * its expiry and where its runs log. The same value runs inline on the
+ * caller's payload (`Inline::run`), on an async queue (threads in this
+ * process, kept in memory), or on a distributed queue (stored where every
+ * server reaches it, claimed under a lease and fed into an async queue).
+ * Tasks pushed together as a `Pipeline` wait for the ones they name; a task
+ * may spawn more while it runs. `nexus gen` writes a codec per task, so a
+ * distributed queue can store it. The scheduler pushes task values on an
+ * `every` or `cron` schedule into a lane, once per slot across servers.
  *
- * The queue here is kept in memory; nexus-work-carbon keeps it in the
- * app's database.
+ * A queue is named by a lane, an empty struct, and bound with nexus-app:
+ *
+ *   public struct WorkersLane : nexus::work::Lane {}
+ *   public type WorkersQueue = nexus::work::AsyncQueue<WorkersLane>;
+ *
+ *   $app->bindAsyncQueue<WorkersLane>();   // NEXUS_WORK_THREADS threads, or threads: 4
+ *   $app->bindDistributedQueue<JobsLane>(store: nexus::work::MemoryStore())->into<WorkersLane>();
+ *   $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
+ *
+ * The store here is kept in memory (`MemoryStore`); nexus-work-carbon keeps
+ * it in the app's database.
  */
 
 #[module: "nexus-work"]
 #[version: "0.1.0"]
 #[epm::license: "MIT"]
-#[epm::description: "Tasks, queues, workers and a scheduler for nexus apps"]
+#[epm::description: "Tasks, async and distributed queues, pipelines and a scheduler for nexus apps"]
 
 #[depends: "../.."]
 #[depends: "../../../container"]

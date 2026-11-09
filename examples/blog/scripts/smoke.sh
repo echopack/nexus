@@ -3,8 +3,10 @@
 # editor's password, serves the blog on its own port and checks every route
 # over a real socket (bearer tokens and signed sessions, signed here with
 # openssl), stops it with SIGTERM, then rolls the migrations back. Tasks: a
-# sign-up is welcomed by serve's own workers; a second one, queued while no
-# worker runs, outlives a kill -9 and is welcomed by `blog work`. Doors:
+# sign-up stores a pipeline (welcome, then count the users) that serve's own
+# workers run; a second one, stored while no worker runs, outlives a kill -9
+# and is run by `blog work`. nexus-work-carbon's live test runs against the
+# same server. Doors:
 # `posts:show` and `posts:create` on the command line, and an MCP client
 # that registers, is allowed by the editor, trades its code with PKCE,
 # calls the post tools and refreshes its token.
@@ -28,8 +30,8 @@ docker run -d --rm --name "${name}" \
     -p "127.0.0.1:${db_port}:3306" "${image}" >/dev/null || { echo "docker run failed"; exit 1; }
 trap 'docker rm -f -v "${name}" >/dev/null 2>&1 || true' EXIT
 
-export DATABASE_URL="mysql://app:secret@127.0.0.1:${db_port}/blog?fetchServerKey=true"
-export AUTH_KEY=smoke-auth-key-of-at-least-32-characters
+export NEXUS_DATABASE_URL="mysql://app:secret@127.0.0.1:${db_port}/blog?fetchServerKey=true"
+export NEXUS_AUTH_KEY=smoke-auth-key-of-at-least-32-characters
 
 failed=0
 check() {
@@ -57,9 +59,14 @@ check "migrate:status"    6 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^r
 check "password, nobody"  1 "$(./ecobuild/blog user:password --email nobody@example.com --password smoke-password-1 >/dev/null 2>&1; echo $?)"
 check "password, short"   1 "$(./ecobuild/blog user:password --email editor@example.com --password short >/dev/null 2>&1; echo $?)"
 check "password"          "password set for editor@example.com" "$(./ecobuild/blog user:password --email editor@example.com --password smoke-password-1 2>&1)"
-check "work:schedule"     1 "$(./ecobuild/blog work:schedule 2>&1 | grep -c '^blog::PruneAuth  0 3 \* \* \*  next ')"
+check "work:schedule"     1 "$(./ecobuild/blog work:schedule 2>&1 | grep -c '^Blog::Tasks::PruneAuth  0 3 \* \* \*  into Blog::Queues::JobsLane  next ')"
 check "work:failed"       "no failed tasks" "$(./ecobuild/blog work:failed 2>&1)"
 check "doctor"            1 "$(./ecobuild/blog doctor 2>&1 | grep -c '^ok: .* routes, .* commands')"
+
+# nexus-work-carbon's live test on this server: two servers settling at once both count down the
+# task that waits for them (it only runs when WORK_LIVE_URL is set)
+live="$(cd "${here}/../../modules/work/carbon" && WORK_LIVE_URL="${NEXUS_DATABASE_URL}" epm run -m "${here}/../.." ecotest --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
+check "work store, live"  1 "$(printf '%s\n' "${live}" | grep -c '^ok .*LiveTest.eco::dependencies_finishing_at_once_on_two_servers_all_count')"
 
 log="$(mktemp)"
 ./ecobuild/blog serve --listen "127.0.0.1:${port}" >"${log}" 2>&1 &
@@ -210,6 +217,11 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 check "welcomed by serve" 1 "${welcomed}"
+# then the next step of the sign-up's pipeline counts the users
+for _ in $(seq 1 50); do
+    grep -q 'users counted' "${log}" && break
+    sleep 0.1
+done
 # the editor is the blog's admin; a reader is an author of their own posts only
 check "users, no token"   401 "$(code "${base}/v1/users")"
 check "users, a reader"   403 "$(code -H "Authorization: Bearer ${first}" "${base}/v1/users")"
@@ -223,7 +235,8 @@ kill -TERM "${pid}"
 wait "${pid}"
 check "clean stop"        0 "$?"
 check "logged stop"       1 "$(grep -c 'stopping' "${log}")"
-check "workers started"   1 "$(grep -c 'working default, mail with 2 workers' "${log}")"
+check "workers started"   1 "$(grep -c 'working Blog::Queues::WorkersLane (2 threads), Blog::Queues::JobsLane into Blog::Queues::WorkersLane' "${log}")"
+check "pipeline ran"      1 "$(grep -c 'users counted' "${log}")"
 check "scheduler started" 1 "$(grep -c 'scheduling 1 tasks' "${log}")"
 check "workers drained"   1 "$(grep -c 'workers stopped' "${log}")"
 rm -f "${log}"
@@ -240,7 +253,7 @@ serve() {
 }
 # no workers this time: what is pushed stays queued
 serve --no-work
-# the session lives in the database and its secret comes from AUTH_KEY, so it outlives the restart
+# the session lives in the database and its secret comes from NEXUS_AUTH_KEY, so it outlives the restart
 check "delete, restarted" 204 "$(code -X DELETE -H "Authorization: $(signed DELETE /v1/posts/1 '')" "${base}/v1/posts/1")"
 check "delete the signed" 204 "$(code -X DELETE -H "Authorization: $(signed DELETE /v1/posts/3 '')" "${base}/v1/posts/3")"
 check "delete cli post"   204 "$(code -X DELETE -H "Authorization: $(signed DELETE /v1/posts/4 '')" "${base}/v1/posts/4")"
@@ -256,13 +269,13 @@ worklog="$(mktemp)"
 ./ecobuild/blog work >"${worklog}" 2>&1 &
 wpid=$!
 for _ in $(seq 1 50); do
-    grep -q 'task done' "${worklog}" && break
+    grep -q 'users counted' "${worklog}" && break
     sleep 0.1
 done
 kill -TERM "${wpid}"
 wait "${wpid}"
 check "work, clean stop"  0 "$?"
-check "work ran the task"  1 "$(grep -c 'task done' "${worklog}")"
+check "work ran the tasks" 2 "$(grep -c 'task done' "${worklog}")"
 check "work drained"      1 "$(grep -c 'workers stopped' "${worklog}")"
 rm -f "${worklog}"
 

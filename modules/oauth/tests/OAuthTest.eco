@@ -50,7 +50,7 @@ internal class Rig
     public constructor()
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
-        $this->app = TestApp(Rig::extensions($this->clock), Rig::vars('/consent'));
+        $this->app = TestApp(Rig::extensions($this->clock, '/consent'), Rig::vars());
         $this->user = Rig::signIn($this->app);
     }
 
@@ -60,22 +60,22 @@ internal class Rig
     public constructor(consent: const string& $consent)
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
-        $this->app = TestApp(Rig::extensions($this->clock), Rig::vars($consent));
+        $this->app = TestApp(Rig::extensions($this->clock, $consent), Rig::vars());
         $this->user = Rig::signIn($this->app);
     }
 
-    public static function vars(const string& $consent) : map<string, string>
+    public static function vars() : map<string, string>
     {
-        map<string, string> $vars = ['AUTH_KEY' => KEY, 'OAUTH_CONSENT' => $consent, 'OAUTH_NAME' => 'Tests'];
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
         return $vars;
     }
 
-    public static function extensions(calendar::ManualClock $clock) : array<nexus::Extension>
+    public static function extensions(calendar::ManualClock $clock, const string& $consent) : array<nexus::Extension>
     {
         array<ToolSpec> $tools = [TWhoMcp::spec()];
         array<nexus::Extension> $exts = [
             nexus::auth::Extension('test', clock: $clock, cost: crypto::PasswordCost(8, 1)),
-            nexus::oauth::Extension(clock: $clock),
+            nexus::oauth::Extension(clock: $clock, consent: $consent, name: 'Tests'),
             nexus::mcp::Extension(tools: $tools),
         ];
         return $exts;
@@ -253,14 +253,14 @@ test the_consent_page_keeps_its_own_query_and_origin
 test a_consent_page_or_issuer_that_is_no_url_stops_the_boot
 {
     $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
-    result<TestApp, nexus::BootError> $broken = TestApp::attempt(Rig::extensions($clock), Rig::vars('consent page'));
+    result<TestApp, nexus::BootError> $broken = TestApp::attempt(Rig::extensions($clock, 'consent page'), Rig::vars());
     nexus::BootError $consent = expect($broken)->fails();
-    expect($consent->lines()[0])->has('OAUTH_CONSENT');
-    map<string, string> $relative = Rig::vars('/consent');
-    $relative['OAUTH_ISSUER'] = '/blog';
-    result<TestApp, nexus::BootError> $again = TestApp::attempt(Rig::extensions($clock), $relative);
+    expect($consent->lines()[0])->has("consent: 'consent page' is no URL");
+    map<string, string> $relative = Rig::vars();
+    $relative['NEXUS_OAUTH_ISSUER'] = '/blog';
+    result<TestApp, nexus::BootError> $again = TestApp::attempt(Rig::extensions($clock, '/consent'), $relative);
     nexus::BootError $issuer = expect($again)->fails();
-    expect($issuer->lines()[0])->has('OAUTH_ISSUER');
+    expect($issuer->lines()[0])->has('NEXUS_OAUTH_ISSUER');
 }
 
 test a_denied_request_goes_back_with_access_denied
@@ -357,7 +357,7 @@ test revoking_and_disconnecting_end_the_grant
 
 test boot_needs_nexus_auth_first
 {
-    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
     array<nexus::Extension> $exts = [nexus::oauth::Extension(), nexus::auth::Extension('test')];
     result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
     expect($r)->fails();

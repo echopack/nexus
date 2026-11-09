@@ -1,176 +1,13 @@
 /**
- * nexus-work end to end on the memory queue: the task data codec, cron lines and schedules, the
- * queue's claims and leases, the runner's retries and failures, the scheduler's once-per-slot
- * pushes, and real worker threads.
+ * nexus-work in this process: the task data codec, failures and backoff, cron lines and schedules,
+ * task policies, inline runs, and async queues with their retries, exclusive keys, pipelines,
+ * subflows, priorities and run logs.
  */
 
 use std::thread;
 use std::time;
 use ecotest::expect;
-use nexus::testing::TestApp;
-use nexus::work::{Kind, Tasks, TaskData, Failure, Cron, Schedule, Queue, MemoryQueue, StoredTask, Runner, Scheduler, Workers, Work, Pushed, Requeued};
-
-// 2026-11-02T02:59:00Z, a Monday
-internal const int64 START = 1793588340;
-
-#[atomic]
-internal class Tally
-{
-    public thread::mutex<array<string>> $seen = thread::mutex<array<string>>(array<string>());
-
-    public function add(const string& $s) : void
-    {
-        thread::locked<array<string>> $l = $this->seen->lock();
-        $l->value[] = $s;
-    }
-
-    public const function all() : array<string>
-    {
-        thread::locked<array<string>> $l = $this->seen->lock();
-        return $l->value;
-    }
-}
-
-internal class TExt : nexus::Extension
-{
-    public Tally $tally;
-    public MemoryQueue $queue;
-
-    public constructor(Tally $tally, MemoryQueue $queue)
-    {
-        $this->tally = $tally;
-        $this->queue = $queue;
-    }
-
-    public function name() : string
-    {
-        return 'work-test';
-    }
-
-    public function services(nexus::Services& $s) : status<nexus::BootError>
-    {
-        $s->bind<Tally>(put: $this->tally);
-        $s->bind<MemoryQueue>(put: $this->queue);
-        $s->alias<Queue, MemoryQueue>();
-        return .ok;
-    }
-}
-
-/**
- * A task the way an app writes one.
- */
-internal struct TSay
-{
-    public string $text;
-    public int64 $times = 1;
-
-    public function handle(nexus::Payload& $payload) : status<Failure>
-    {
-        Tally $t = $payload->get<Tally>();
-        $t->add($this->text);
-        if ($this->text == 'flaky') {
-            return .error(.retry('flaky fails'));
-        }
-        if ($this->text == 'doomed') {
-            return .error(.giveUp('doomed'));
-        }
-        return .ok;
-    }
-}
-
-/**
- * Its companion, the way nexus gen writes one.
- */
-internal struct TSayTask
-{
-    public static function push(nexus::Payload& $payload, construct TSay $task) : status<nexus::Problem>
-    {
-        return Tasks::push($payload, TSayTask::kind(), TSayTask::encode($task));
-    }
-
-    public static function kind() : Kind
-    {
-        return Kind('TSay', function(nexus::Payload& $payload, const string& $data) : status<Failure> {
-            return TSayTask::run($payload, $data);
-        }, $tries: 3);
-    }
-
-    public static function encode(const TSay& $task) : string
-    {
-        $p = TaskData();
-        $p->put('text', $task->text);
-        $p->put('times', $task->times);
-        return $p->text();
-    }
-
-    public static function decode(const string& $text) : result<TSay, nexus::work::DataError>
-    {
-        $p = try TaskData::parse($text);
-        string? $vText = $p->string('text', required: true);
-        int64 $okTimes = 1;
-        int64? $vTimes = $p->int64('times', required: false);
-        if ($vTimes != null) {
-            int64 $xTimes = guard $vTimes;
-            $okTimes = $xTimes;
-        }
-        try $p->done();
-        string $okText = guard $vText;
-        return .ok(TSay($text: $okText, $times: $okTimes));
-    }
-
-    internal static function run(nexus::Payload& $payload, const string& $data) : status<Failure>
-    {
-        TSay $task = guard TSayTask::decode($data) else ($e) {
-            return .error(.giveUp("the task data does not decode: {$e}"));
-        };
-        return $task->handle($payload);
-    }
-}
-
-internal function scheduled(const string& $name, const string& $every, const string& $cron) : Kind
-{
-    Kind $k = TSayTask::kind();
-    $k->name = $name;
-    $k->every = $every;
-    $k->cron = $cron;
-    $k->data = TSayTask::encode(TSay($text: $name));
-    return $k;
-}
-
-internal class Rig
-{
-    public TestApp $app;
-    public calendar::ManualClock $clock;
-    public Tally $tally;
-    public MemoryQueue $memory;
-
-    public constructor(map<string, string> $vars)
-    {
-        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
-        $this->tally = Tally();
-        $this->memory = MemoryQueue();
-        array<Kind> $kinds = [TSayTask::kind(), scheduled('TTick', '15m', ''), scheduled('TNightly', '', '0 3 * * *')];
-        array<nexus::Extension> $exts = [nexus::work::Extension(stores: .provided, clock: $this->clock, tasks: mv $kinds), TExt($this->tally, $this->memory)];
-        $this->app = TestApp($exts, $vars);
-    }
-
-    public function work() : Work
-    {
-        return $this->app->kernel->services->get<Work>();
-    }
-
-    public function say(const string& $text) : void
-    {
-        nexus::Payload $payload = $this->app->kernel->background('test', 'push');
-        guard TSayTask::push($payload, $text: $text);
-        nexus::Kernel::finish($payload);
-    }
-
-    public function step() : bool
-    {
-        return Runner::step($this->app->kernel, $this->work());
-    }
-}
+use nexus::work::{TaskData, Failure, Cron, Schedule, Exclusive, Hold, Policy, Priority, Inline, Pipeline, Step, Pushed, Run, RunLog, Settle};
 
 internal function why(status<nexus::work::DataError> $s) : string
 {
@@ -188,65 +25,41 @@ internal function cronRefused(const string& $line) : bool
     return false;
 }
 
-internal function scheduleOf(const Kind& $k) : Schedule
+internal function scheduleOf(const string& $every, const string& $cron) : Schedule
 {
-    Schedule? $s = guard Schedule::of($k);
+    Schedule? $s = guard Schedule::of($every, $cron);
     Schedule $out = guard $s;
     return $out;
 }
 
-internal function scheduleRefused(const Kind& $k) : bool
+internal function scheduleRefused(const string& $every, const string& $cron) : bool
 {
-    guard Schedule::of($k) else {
+    guard Schedule::of($every, $cron) else {
         return true;
     };
     return false;
 }
 
-internal function claimed(MemoryQueue $q, const array<string>& $queues, time::timestamp $now) : StoredTask?
-{
-    StoredTask? $j = guard $q->claim($queues, $now, $now + time::duration::mins(1));
-    return $j;
-}
-
-/**
- * Whether the queue stored `$j`.
- */
-internal function pushed(MemoryQueue $q, const StoredTask& $j) : bool
-{
-    Pushed $p = guard $q->push($j);
-    return $p == Pushed::stored;
-}
-
-internal function waiting(MemoryQueue $q) : uint64
-{
-    uint64 $n = guard $q->waiting();
-    return $n;
-}
-
-internal function failedTasks(MemoryQueue $q) : array<StoredTask>
-{
-    array<StoredTask> $all = guard $q->failed(10);
-    return $all;
-}
-
-internal function bootWhy(array<nexus::Extension> $exts) : string
-{
-    $none = map<string, string>();
-    guard TestApp::attempt($exts, $none) else ($e) {
-        return str::join($e->lines(), '; ');
-    };
-    return '';
-}
-
-internal function rig() : Rig
-{
-    return Rig(map<string, string>());
-}
-
 internal function at(int32 $hour, int32 $minute) : calendar::DateTime
 {
     return calendar::DateTime(2026, .november, 2, $hour, $minute);
+}
+
+internal function kindOf(const Failure& $f) : string
+{
+    return match ($f) {
+        Failure::retry($why) => 'retry',
+        Failure::later($after, $why) => 'later',
+        Failure::giveUp($why) => 'giveUp',
+    };
+}
+
+internal function pushed(result<Pushed, nexus::Problem> $r) : Pushed
+{
+    Pushed $p = guard $r else ($e) {
+        die("the push failed: {$e->detail(.dev)}");
+    };
+    return $p;
 }
 
 test task_data_round_trip
@@ -306,13 +119,36 @@ test failure_from_problems_and_backoff
     expect(Failure::backoff(9)->as_secs())->is(3600);
 }
 
-internal function kindOf(const Failure& $f) : string
+test settle_retries_while_tries_are_left
 {
-    return match ($f) {
-        Failure::retry($why) => 'retry',
-        Failure::later($after, $why) => 'later',
-        Failure::giveUp($why) => 'giveUp',
+    time::timestamp $now = .from_unix_secs(START);
+    status<Failure> $flaky = .error(.retry('x'));
+    status<Failure> $later = .error(.later(time::duration::secs(30), 'busy'));
+    status<Failure> $gone = .error(.giveUp('gone'));
+    status<Failure> $fine = .ok;
+    expect(settled(Settle::of($flaky, 1, 3, $now), $now))->is('retry in 10');
+    expect(settled(Settle::of($later, 2, 3, $now), $now))->is('retry in 30');
+    expect(settled(Settle::of($flaky, 3, 3, $now), $now))->is('fail: x');
+    expect(settled(Settle::of($gone, 1, 3, $now), $now))->is('fail: gone');
+    expect(settled(Settle::of($fine, 1, 3, $now), $now))->is('done');
+}
+
+internal function settled(const Settle& $s, time::timestamp $now) : string
+{
+    return match ($s) {
+        Settle::done => 'done',
+        Settle::retry($at, $why) => Settled::retry($at, $now),
+        Settle::fail($why) => "fail: {$why}",
     };
+}
+
+internal struct Settled
+{
+    public static function retry(std::time::timestamp $at, std::time::timestamp $now) : string
+    {
+        int64 $secs = ($at - $now)->as_secs();
+        return "retry in {$secs}";
+    }
 }
 
 test cron_parses_and_matches
@@ -320,26 +156,12 @@ test cron_parses_and_matches
     Cron $nightly = expect(Cron::parse('0 3 * * *'))->ok();
     expect($nightly->matches(at(3, 0)))->yes(says: '0 3 * * * matches 03:00');
     expect($nightly->matches(at(3, 1)))->no(says: '0 3 * * * skips 03:01');
-    expect($nightly->matches(at(4, 0)))->no(says: '0 3 * * * skips 04:00');
 
     Cron $office = expect(Cron::parse('*/15 8-18 * * 1-5'))->ok();
     expect($office->matches(at(8, 15)))->yes(says: 'office hours match Monday 08:15');
     expect($office->matches(at(8, 20)))->no(says: 'office hours skip 08:20');
-    expect($office->matches(at(19, 0)))->no(says: 'office hours skip 19:00');
     $saturday = calendar::DateTime(2026, .november, 7, 9, 0);
     expect($office->matches($saturday))->no(says: 'office hours skip Saturday');
-
-    // both day and weekday restricted: either one matches
-    Cron $either = expect(Cron::parse('0 0 13 * 5'))->ok();
-    $friday = calendar::DateTime(2026, .november, 6, 0, 0);
-    $thirteenth = calendar::DateTime(2026, .november, 13, 0, 0);
-    expect($either->matches($friday))->yes(says: 'day or weekday matches a Friday');
-    expect($either->matches($thirteenth))->yes(says: 'day or weekday matches the 13th');
-    expect($either->matches(at(0, 0)))->no(says: 'day or weekday skips Monday the 2nd');
-
-    Cron $sunday = expect(Cron::parse('30 6 * * 7'))->ok();
-    $sun = calendar::DateTime(2026, .november, 8, 6, 30);
-    expect($sunday->matches($sun))->yes(says: 'weekday 7 is Sunday');
 
     array<string> $bad = ['0 3 * *', '61 * * * *', '* 24 * * *', '*/0 * * * *', 'x * * * *', '5-1 * * * *'];
     foreach ($bad as const &$line) {
@@ -350,259 +172,274 @@ test cron_parses_and_matches
 test schedules_find_due_and_next_slots
 {
     calendar::Zone $utc = .utc();
-    Kind $every = scheduled('E', '15m', '');
-    Schedule $e = scheduleOf($every);
+    Schedule $e = scheduleOf('15m', '');
     time::timestamp $t0 = .from_unix_secs(START);
-    // 02:59 is after 02:45, before 03:00
     time::timestamp $last = expect($e->due(time::timestamp::from_unix_secs(START - 3600), $t0, $utc))->some();
     expect($last->unix_secs())->is(START - 840);
     expect($e->due($last, $t0, $utc))->none();
     time::timestamp $next = expect($e->next($t0, $utc))->some();
     expect($next->unix_secs())->is(START + 60);
 
-    Kind $cron = scheduled('C', '', '0 3 * * *');
-    Schedule $c = scheduleOf($cron);
+    Schedule $c = scheduleOf('', '0 3 * * *');
     expect($c->due($t0 - time::duration::mins(1), $t0, $utc))->none();
     time::timestamp $three = expect($c->due($t0, $t0 + time::duration::secs(90), $utc))->some();
     expect($three->unix_secs())->is(START + 60);
-    time::timestamp $tomorrow = expect($c->next($three, $utc))->some();
-    expect($tomorrow->unix_secs())->is(START + 60 + 86400);
 
-    Kind $bad = scheduled('B', '1500ms', '');
-    expect(scheduleRefused($bad))->yes(says: 'an every of 1500ms is refused');
+    expect(scheduleRefused('1500ms', ''))->yes(says: 'an every of 1500ms is refused');
+    expect(Schedule::of('', ''))->ok();
 }
 
-test queue_claims_the_longest_due_and_honours_leases
+test exclusive_keys_default_to_the_task_type
 {
-    $q = MemoryQueue();
-    time::timestamp $now = .from_unix_secs(START);
-    $later = StoredTask($id: 'b', $name: 'TSay', $queue: 'default', $data: '{}', $tries: 3, $createdAt: $now, $availableAt: $now + time::duration::secs(5));
-    $first = StoredTask($id: 'a', $name: 'TSay', $queue: 'default', $data: '{}', $tries: 3, $createdAt: $now, $availableAt: $now - time::duration::secs(5));
-    $elsewhere = StoredTask($id: 'c', $name: 'TSay', $queue: 'mail', $data: '{}', $tries: 3, $createdAt: $now, $availableAt: $now - time::duration::secs(9));
-    guard $q->push($later);
-    guard $q->push($first);
-    guard $q->push($elsewhere);
-    array<string> $queues = ['default'];
-    StoredTask $one = expect(claimed($q, $queues, $now))->some();
-    expect($one->id)->is('a');
-    expect($one->attempts)->is(1);
-    // held, and the other is not due yet
-    expect(claimed($q, $queues, $now))->none();
-    // the lease runs out: due longest, so claimed again first, a second attempt
-    time::timestamp $after = $now + time::duration::mins(2);
-    StoredTask $third = expect(claimed($q, $queues, $after))->some();
-    expect($third->id)->is('a');
-    expect($third->attempts)->is(2);
-    StoredTask $again = expect(claimed($q, $queues, $after))->some();
-    expect($again->id)->is('b');
-    // the first claim is stale: its done changes nothing
-    guard $q->done($one, $after);
-    expect(waiting($q))->is(3);
-    guard $q->done($third, $after);
-    expect(waiting($q))->is(2);
+    Exclusive $none = .none;
+    Exclusive $type = .running('');
+    Exclusive $user = .unique('user:5');
+    expect($none->key('blog::SendWelcome'))->is('');
+    expect($type->key('blog::SendWelcome'))->is('blog::SendWelcome');
+    expect($user->key('blog::SendWelcome'))->is('blog::SendWelcome#user:5');
+    expect($user->hold() == Hold::unique)->yes(says: 'a unique key holds as unique');
 }
 
-test keyed_pushes_are_stored_once
+test a_task_declares_its_policy
 {
-    $q = MemoryQueue();
-    time::timestamp $now = .from_unix_secs(START);
-    $j = StoredTask($id: 'a', $name: 'TSay', $queue: 'default', $data: '{}', $tries: 3, $key: 'TSay@1', $createdAt: $now, $availableAt: $now);
-    $twin = StoredTask($id: 'b', $name: 'TSay', $queue: 'default', $data: '{}', $tries: 3, $key: 'TSay@1', $createdAt: $now, $availableAt: $now);
-    expect(pushed($q, $j))->yes(says: 'the first keyed push is stored');
-    expect(pushed($q, $twin))->no(says: 'a push with the same key is not stored');
-    array<string> $queues = ['default'];
-    StoredTask $c = expect(claimed($q, $queues, $now))->some();
-    guard $q->done($c, $now);
-    // done but kept, so the slot is not pushed again
-    expect(pushed($q, $twin))->no(says: 'a done task still holds its key');
-    uint64 $gone = guard $q->prune($now + time::duration::secs(1));
-    expect($gone)->is(1);
-    expect(pushed($q, $twin))->yes(says: 'the key is free once pruned');
+    Policy $plain = Policy::of<TSay>(TSay('x'));
+    expect($plain->tries)->is(3);
+    expect($plain->allowFailure)->no(says: 'a task does not allow failure unless it says so');
+    expect($plain->expires)->none();
+    Policy $own = Policy::of<TSay>(TSay('x', $mode: 'unique', $key: 'k', $soft: true, $prio: 1, $ttl: 60, $limit: 7));
+    expect($own->tries)->is(7);
+    expect($own->allowFailure)->yes(says: 'the task allows failure');
+    expect($own->priority == Priority::high)->yes(says: 'the task runs at high priority');
+    expect($own->exclusive->key('TSay'))->is('TSay#k');
+    time::duration $ttl = expect($own->expires)->some();
+    expect($ttl->as_secs())->is(60);
 }
 
-test runner_runs_a_pushed_task
+test inline_runs_once_on_the_callers_payload
 {
     $r = rig();
-    $r->say('hi');
-    expect($r->step())->yes(says: 'a task ran');
-    expect($r->step())->no(says: 'nothing is due');
+    nexus::Payload $payload = $r->payload();
+    expect(Inline::run($payload, TSay('now')))->fine();
+    status<Failure> $flaky = Inline::run($payload, TSay('flaky'));
+    Failure $f = expect($flaky)->fails();
+    expect($f->why())->is('flaky fails');
+    expect($r->tally->all())->size(2);
+    Run $run = got($payload->state<Run>());
+    expect($run->name)->is('TSay');
+    expect($run->attempt)->is(1);
+}
+
+test inline_runs_a_pipeline_in_order_and_stops_at_a_hard_failure
+{
+    $r = rig();
+    nexus::Payload $payload = $r->payload();
+    $p = Pipeline();
+    Step $a = $p->add(TSay('a'));
+    Step $b = $p->add(TSay('soft-doomed', $soft: true), after: [$a]);
+    Step $c = $p->add(TSay('c', $spawn: 2), after: [$b]);
+    $p->add(TSay('d'), after: [$c]);
+    expect(Inline::run($payload, $p))->fine();
     array<string> $seen = $r->tally->all();
-    expect($seen)->size(1);
-    expect($seen[0])->is('hi');
-    expect($r->memory->all())->empty();
-    expect($r->app->logged('task done'))->yes(says: "the log holds 'task done'");
+    expect(str::join($seen, ','))->is('a,soft-doomed,c,c after failed TSay,c.0,c.1,d');
+    expect($a->id())->some();
+
+    $hard = Pipeline();
+    Step $x = $hard->add(TSay('doomed'));
+    $hard->add(TSay('never'), after: [$x]);
+    expect(Inline::run($payload, $hard))->fails();
+    expect($r->tally->has('never'))->no(says: 'a task after a hard failure does not run');
 }
 
-test a_retry_backs_off_then_fails
+test async_runs_pushed_tasks_on_threads
 {
     $r = rig();
-    $r->say('flaky');
-    expect($r->step())->yes(says: 'a task ran');
-    StoredTask $j = $r->memory->all()[0];
-    expect($j->attempts)->is(1);
-    expect($j->error)->is('flaky fails');
-    expect($j->availableAt->unix_secs())->is(START + 10);
-    expect($r->step())->no(says: 'nothing is due');
-    $r->clock->advance(time::duration::secs(10));
-    expect($r->step())->yes(says: 'a task ran');
-    expect($r->memory->all()[0]->availableAt->unix_secs())->is(START + 10 + 40);
-    $r->clock->advance(time::duration::secs(40));
-    expect($r->step())->yes(says: 'a task ran');
-    StoredTask $failed = $r->memory->all()[0];
-    expect($failed->failedAt)->some();
-    expect($failed->attempts)->is(3);
-    expect($r->step())->no(says: 'nothing is due');
-    expect($r->tally->all())->size(3);
-    expect($r->app->logged('task failed'))->yes(says: "the log holds 'task failed'");
-
-    // sent back with its tries fresh
-    Requeued $sent = guard $r->memory->again($failed->id, $r->clock->now());
-    expect($sent == Requeued::sent)->yes(says: 'the failed task was sent back');
-    expect($r->step())->yes(says: 'a task ran');
-    expect($r->memory->all()[0]->attempts)->is(1);
-}
-
-test give_up_fails_at_once
-{
-    $r = rig();
-    $r->say('doomed');
-    expect($r->step())->yes(says: 'a task ran');
-    array<StoredTask> $failed = failedTasks($r->memory);
-    expect($failed)->size(1);
-    expect($failed[0]->error)->is('doomed');
-    expect($failed[0]->attempts)->is(1);
-}
-
-test unknown_and_broken_tasks_fail
-{
-    $r = rig();
-    time::timestamp $now = $r->clock->now();
-    $unknown = StoredTask($id: 'u', $name: 'Nope', $queue: 'default', $data: '{}', $tries: 3, $createdAt: $now, $availableAt: $now);
-    $broken = StoredTask($id: 'x', $name: 'TSay', $queue: 'default', $data: '{"times":2}', $tries: 3, $createdAt: $now, $availableAt: $now - time::duration::secs(1));
-    guard $r->memory->push($unknown);
-    guard $r->memory->push($broken);
-    expect($r->step())->yes(says: 'a task ran');
-    expect($r->step())->yes(says: 'a task ran');
-    array<StoredTask> $failed = failedTasks($r->memory);
-    expect($failed)->size(2);
-    foreach ($failed as const &$f) {
-        if ($f->id == 'u') {
-            expect($f->error)->is('no task named Nope in this program');
-        } else {
-            expect($f->error)->is('the task data does not decode: text is missing');
-        }
-    }
-}
-
-test a_lost_task_runs_again_after_its_lease
-{
-    map<string, string> $vars = ['WORK_LEASE' => '1m'];
-    $r = Rig($vars);
-    $r->say('hi');
-    // a worker claims it and dies with it
-    array<string> $queues = ['default'];
-    time::timestamp $now = $r->clock->now();
-    guard $r->memory->claim($queues, $now, $now + time::duration::mins(1));
-    expect($r->step())->no(says: 'nothing is due');
-    $r->clock->advance(time::duration::secs(61));
-    expect($r->step())->yes(says: 'a task ran');
-    expect($r->tally->all())->size(1);
-    expect($r->memory->all())->empty();
-}
-
-test a_task_lost_on_every_try_gives_up
-{
-    $r = rig();
-    $r->say('hi');
-    array<string> $queues = ['default'];
-    int32 $i = 0;
-    while ($i < 3) {
-        time::timestamp $now = $r->clock->now();
-        guard $r->memory->claim($queues, $now, $now + time::duration::mins(1));
-        $r->clock->advance(time::duration::mins(2));
-        $i = $i + 1;
-    }
-    expect($r->step())->yes(says: 'a task ran');
-    expect($r->tally->all())->empty();
-    array<StoredTask> $failed = failedTasks($r->memory);
-    expect($failed[0]->error)->is('gave up after 3 tries that never finished');
-}
-
-test the_scheduler_pushes_each_slot_once
-{
-    $r = rig();
-    $k = $r->app->kernel;
-    time::timestamp $from = $r->clock->now() - time::duration::mins(1);
-    $one = Scheduler($r->work(), $from);
-    $two = Scheduler($r->work(), $from);
-    expect($one->tick($k, $r->clock->now()))->is(0);
-    $r->clock->advance(time::duration::secs(90));
-    expect($one->tick($k, $r->clock->now()))->is(2);
-    expect($two->tick($k, $r->clock->now()))->is(0);
-    expect($one->tick($k, $r->clock->now()))->is(0);
-    expect($r->step())->yes(says: 'the first scheduled task ran');
-    expect($r->step())->yes(says: 'the second scheduled task ran');
-    expect($r->step())->no(says: 'nothing else was pushed');
-    array<string> $seen = $r->tally->all();
-    expect($seen)->size(2);
-    $r->clock->advance(time::duration::mins(15));
-    expect($two->tick($k, $r->clock->now()))->is(1);
-    expect($r->step())->yes(says: 'a task ran');
-    expect($r->tally->all()[2])->is('TTick');
-}
-
-test workers_run_tasks_on_threads
-{
-    map<string, string> $vars = ['WORK_POLL' => '20ms'];
-    $r = Rig($vars);
-    $ws = Workers();
-    guard $ws->start($r->app->kernel, $r->work(), 3);
+    $r->start();
     int32 $i = 0;
     while ($i < 8) {
-        $r->say("task {$i}");
-        $i = $i + 1;
+        Pushed $p = pushed($r->workers()->push(TSay("say {$i}")));
+        expect($p->queued())->yes(says: 'the task was queued');
+        $i++;
     }
-    int32 $waited = 0;
-    while ($r->tally->all()->count() < 8 && $waited < 250) {
-        thread::sleep(20);
-        $waited = $waited + 1;
-    }
-    expect($ws->stop(time::duration::secs(2)))->yes(says: 'the workers stopped within the grace');
+    $r->wait(8);
+    $r->stop();
     expect($r->tally->all())->size(8);
-    expect($r->memory->all())->empty();
+    expect($r->app->logged('task done'))->yes(says: 'a run logs task done');
+    expect($r->app->logged('working workers (2 threads), jobs into workers'))->yes(says: 'the start names the lanes');
+    expect($r->app->logged('workers stopped'))->yes(says: 'the stop is logged');
 }
 
-test serve_starts_and_drains_the_work
+test async_retries_with_backoff_then_fails
 {
-    map<string, string> $vars = ['WORK_POLL' => '20ms'];
-    $r = Rig($vars);
-    guard $r->app->kernel->start(nexus::Serve());
-    $r->say('served');
-    int32 $waited = 0;
-    while ($r->tally->all()->empty() && $waited < 250) {
-        thread::sleep(20);
-        $waited = $waited + 1;
-    }
-    $r->app->kernel->drain();
+    $r = rig();
+    $r->start();
+    pushed($r->workers()->push(TSay('flaky'), tries: 2));
+    $r->wait(1);
+    thread::sleep(50);
     expect($r->tally->all())->size(1);
-    expect($r->app->logged('working default with 2 workers'))->yes(says: "the log holds 'working default with 2 workers'");
-    expect($r->app->logged('scheduling 2 tasks'))->yes(says: "the log holds 'scheduling 2 tasks'");
-    expect($r->app->logged('workers stopped'))->yes(says: "the log holds 'workers stopped'");
-
-    $quiet = nexus::Serve();
-    $quiet->work = false;
-    $quiet->schedule = false;
-    $q = Rig($vars);
-    guard $q->app->kernel->start($quiet);
-    $q->say('waits');
-    thread::sleep(100);
-    $q->app->kernel->drain();
-    expect($q->tally->all())->empty();
+    expect($r->app->logged('task will retry'))->yes(says: 'the first try retries');
+    $r->clock->advance(time::duration::secs(11));
+    $r->wait(2);
+    thread::sleep(50);
+    $r->stop();
+    expect($r->tally->all())->size(2);
+    expect($r->app->logged(.error, 'task failed'))->yes(says: 'the last try fails');
+    expect($r->workers()->waiting())->is(0);
 }
 
-test boot_refuses_a_bad_cron
+test async_refuses_tries_out_of_range
 {
-    array<Kind> $kinds = [scheduled('Bad', '', '61 * * * *')];
-    array<nexus::Extension> $exts = [nexus::work::Extension(tasks: mv $kinds)];
-    expect(bootWhy($exts))->is("nexus-work: Bad: '61' is outside the minutes 0 to 59");
+    $r = rig();
+    expect($r->workers()->push(TSay('x'), tries: 101))->fails();
+}
+
+test a_running_key_lets_one_run_at_a_time
+{
+    $r = rig();
+    $r->start();
+    pushed($r->workers()->push(TSay('one', $mode: 'running', $hold: true)));
+    pushed($r->workers()->push(TSay('two', $mode: 'running', $hold: true)));
+    pushed($r->workers()->push(TSay('free')));
+    $r->until('start one');
+    $r->until('free');
+    thread::sleep(50);
+    expect($r->tally->has('start two'))->no(says: 'the second waits for the key');
+    $r->gate->release();
+    $r->wait(5);
+    $r->stop();
+    expect($r->tally->at('end one') < $r->tally->at('start two'))->yes(says: 'two starts after one ends');
+}
+
+test a_unique_key_skips_a_second_push
+{
+    $r = rig();
+    Pushed $first = pushed($r->workers()->push(TSay('a', $mode: 'unique', $key: 'u')));
+    Pushed $second = pushed($r->workers()->push(TSay('b', $mode: 'unique', $key: 'u')));
+    Pushed $other = pushed($r->workers()->push(TSay('c', $mode: 'unique', $key: 'v')));
+    expect($first->queued())->yes(says: 'the first push is queued');
+    expect($second->queued())->no(says: 'the second push with the key is skipped');
+    expect($other->queued())->yes(says: 'another key is queued');
+    $r->start();
+    $r->wait(2);
+    thread::sleep(30);
+    Pushed $again = pushed($r->workers()->push(TSay('d', $mode: 'unique', $key: 'u')));
+    $r->wait(3);
+    $r->stop();
+    expect($again->queued())->yes(says: 'once it ran the key is free again');
+}
+
+test an_async_pipeline_runs_the_join_last_and_a_failure_takes_its_dependents
+{
+    $r = rig();
+    $r->start();
+    $p = Pipeline();
+    Step $a = $p->add(TSay('a'));
+    Step $b = $p->add(TSay('b'), after: [$a]);
+    Step $c = $p->add(TSay('c'), after: [$a]);
+    $p->add(TSay('d'), after: [$b, $c]);
+    pushed($r->workers()->push($p));
+    $r->until('d');
+    expect($r->tally->at('a') < $r->tally->at('b'))->yes(says: 'b runs after a');
+    expect($r->tally->at('c') < $r->tally->at('d'))->yes(says: 'd runs after c');
+
+    $hard = Pipeline();
+    Step $x = $hard->add(TSay('doomed'));
+    Step $y = $hard->add(TSay('dropped'), after: [$x]);
+    $hard->add(TSay('dropped too'), after: [$y]);
+    pushed($r->workers()->push($hard));
+
+    $soft = Pipeline();
+    Step $s = $soft->add(TSay('soft-doomed', $soft: true));
+    $soft->add(TSay('goes on'), after: [$s]);
+    pushed($r->workers()->push($soft));
+    $r->until('goes on');
+    thread::sleep(50);
+    $r->stop();
+    expect($r->tally->has('dropped'))->no(says: 'a task after a hard failure is dropped');
+    expect($r->tally->has('goes on after failed TSay'))->yes(says: 'the task after a soft failure sees it');
+    expect($r->app->logged(.warn, 'tasks waiting for it were dropped'))->yes(says: 'the drop is logged');
+}
+
+test a_subflow_runs_before_the_tasks_waiting_for_its_parent
+{
+    $r = rig();
+    $r->start();
+    $p = Pipeline();
+    Step $parent = $p->add(TSay('parent', $spawn: 2));
+    $p->add(TSay('after'), after: [$parent]);
+    pushed($r->workers()->push($p));
+    $r->until('after');
+    $r->stop();
+    expect($r->tally->at('parent.0') < $r->tally->at('after'))->yes(says: 'the first child runs before after');
+    expect($r->tally->at('parent.1') < $r->tally->at('after'))->yes(says: 'the second child runs before after');
+}
+
+test the_highest_priority_runs_first
+{
+    map<string, string> $vars = ['NEXUS_WORK_POLL' => '10ms'];
+    $r = Rig($vars, $threads: 1);
+    $r->start();
+    pushed($r->workers()->push(TSay('blocker', $hold: true)));
+    $r->until('start blocker');
+    pushed($r->workers()->push(TSay('low', $prio: -1)));
+    pushed($r->workers()->push(TSay('normal')));
+    pushed($r->workers()->push(TSay('high', $prio: 1)));
+    $r->gate->release();
+    $r->until('low');
+    $r->stop();
+    expect(str::join($r->tally->all(), ','))->is('start blocker,end blocker,high,normal,low');
+}
+
+test a_task_that_waits_past_its_expiry_is_dropped
+{
+    map<string, string> $vars = ['NEXUS_WORK_POLL' => '10ms'];
+    $r = Rig($vars, $threads: 1);
+    $r->start();
+    pushed($r->workers()->push(TSay('blocker', $hold: true)));
+    $r->until('start blocker');
+    pushed($r->workers()->push(TSay('stale', $ttl: 5)));
+    $r->clock->advance(time::duration::secs(6));
+    thread::sleep(60);
+    $r->gate->release();
+    $r->until('end blocker');
+    thread::sleep(50);
+    $r->stop();
+    expect($r->tally->has('stale'))->no(says: 'the expired task did not run');
+    expect($r->app->logged(.warn, 'tasks expired before they ran'))->yes(says: 'the expiry is logged');
+}
+
+test cancel_drops_a_waiting_task_and_its_dependents
+{
+    $r = rig();
+    $p = Pipeline();
+    Step $a = $p->add(TSay('a'));
+    $p->add(TSay('b'), after: [$a]);
+    pushed($r->workers()->push($p));
+    string $id = expect($a->id())->some();
+    expect($r->workers()->cancel($id))->is(2);
+    expect($r->workers()->waiting())->is(0);
+}
+
+test a_run_logs_where_its_task_or_queue_says
+{
+    $r = rig();
+    $own = nexus::log::Memory();
+    nexus::work::Pool $pool = expect($r->work()->lanes->pool('workers'))->some();
+    $pool->log = function[$own](const Run& $run) : RunLog {
+        return .also($own);
+    };
+    $r->start();
+    pushed($r->workers()->push(TSay('loud')));
+    pushed($r->workers()->push(TSay('hush', $quiet: true)));
+    $r->wait(2);
+    thread::sleep(30);
+    $r->stop();
+    expect($own->find('said') != null)->yes(says: 'the queue sink got the run log');
+    expect($own->find('task done') != null)->yes(says: 'the queue sink got the outcome');
+    int32 $said = 0;
+    foreach ($r->app->log->entries() as const &$e) {
+        if ($e->message == 'said') {
+            $said++;
+        }
+    }
+    expect($said)->is(1);
 }

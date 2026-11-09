@@ -1,0 +1,13 @@
+namespace nexus::work;
+
+/**
+ * Which waiting task runs first; the higher value wins.
+ */
+public enum Priority : int32
+{
+    case critical = 10000;
+    case high = 5000;
+    case medium = 1000;
+    case normal = 0;
+    case low = -1000;
+}

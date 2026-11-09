@@ -73,13 +73,10 @@ public class Kernel
         }
         $b->name<Logger>('nexus::Logger');
         $b->name<Env>('nexus::Env');
-        $b->name<Events>('nexus::Events');
         $b->name<Messages>('nexus::Messages');
         $b->name<Request>('nexus::Request');
         $b->bind<Logger>(put: $log);
         $b->bind<Env>(put: $env);
-        $events = Events();
-        $b->bind<Events>(put: $events);
         $messages = Messages();
         $inputs = Inputs($messages);
         foreach ($tables->inputs as const &$t) {
@@ -100,7 +97,7 @@ public class Kernel
             return .error(.extension('nexus', $p));
         }
         $commands->bindInto($b);
-        $s = Services($b, $generated, $events);
+        $s = Services($b, $generated);
         foreach ($extensions as &$ext) {
             try $ext->services($s);
             foreach ($s->problems as const &$p) {
@@ -114,13 +111,13 @@ public class Kernel
                 return .error(.route($e));
             };
         }
-        string $raw = $env->get('APP_URL') ?? '';
+        string $raw = $env->get('NEXUS_APP_URL') ?? '';
         if (!$raw->empty()) {
             Url $origin = guard Url::parse($raw) else ($e) {
-                return .error(.config([.invalid('APP_URL', $e->message())]));
+                return .error(.config([.invalid('NEXUS_APP_URL', $e->message())]));
             };
             if (!$origin->absolute()) {
-                return .error(.config([.invalid('APP_URL', "'{$raw}' is not absolute; give a scheme and a host")]));
+                return .error(.config([.invalid('NEXUS_APP_URL', "'{$raw}' is not absolute; give a scheme and a host")]));
             }
             $router->origin($origin);
         }

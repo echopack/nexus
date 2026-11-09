@@ -1,0 +1,212 @@
+namespace nexus::work;
+
+use std::thread;
+use std::time;
+
+/**
+ * Pushes scheduled task values into their lanes when they are due. A push into a distributed lane
+ * carries the key `name@slot`, and the store keeps a key once, so every server may schedule and a
+ * slot still runs once; a push into an async lane happens on every process that schedules. Slots
+ * missed while nothing ran are not caught up, except the one a restart lands in within a minute.
+ * Once a minute it fails the stored tasks that expired and deletes the done ones older than
+ * `NEXUS_WORK_KEEP`.
+ *
+ * ```echo
+ * $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
+ * ```
+ */
+#[atomic]
+public class TaskScheduler
+{
+    public array<Planned> $plans = [];
+    internal thread::mutex<map<usize, time::timestamp>> $last = thread::mutex<map<usize, time::timestamp>>(map<usize, time::timestamp>());
+    internal thread::mutex<time::timestamp?> $pruned = thread::mutex<time::timestamp?>(null);
+    internal time::timestamp $from = time::timestamp::from_unix_secs(0);
+    internal nexus::Flag $halt = nexus::Flag();
+    internal thread::mutex<array<thread::handle>> $handles = thread::mutex<array<thread::handle>>(array<thread::handle>());
+
+    /**
+     * Plans `$item`; its schedule and lane are set on what it answers.
+     */
+    public function add(Item $item) : Planned
+    {
+        $p = Planned($item);
+        $this->plans[] = $p;
+        return $p;
+    }
+
+    /**
+     * Checks every plan at boot: a schedule that parses, a lane that is bound, a task nexus gen
+     * wrote a codec for.
+     */
+    public function prepare(const Codecs& $codecs, const Lanes& $lanes) : status<string>
+    {
+        map<string, int32> $seen = map<string, int32>();
+        foreach ($this->plans as $p) {
+            string $name = guard $codecs->name($p->item->type) else {
+                return .error('a scheduled task is one nexus gen wrote nothing for; is it a struct conforming to nexus::work::Task, and did nexus gen run?');
+            };
+            if (!$p->every->empty() && !$p->cron->empty()) {
+                return .error("{$name}: give every or cron, not both");
+            }
+            Schedule? $parsed = guard Schedule::of($p->every, $p->cron) else ($e) {
+                return .error("{$name}: {$e}");
+            };
+            Schedule $schedule = guard $parsed else {
+                return .error("{$name} is scheduled without a schedule; give it ->every() or ->cron()");
+            };
+            if ($p->into->empty()) {
+                return .error("{$name} is scheduled into no lane; give it ->into<Lane>()");
+            }
+            if ($lanes->pool($p->into) == null && $lanes->store($p->into) == null) {
+                return .error("{$name} is scheduled into lane {$p->into}, which is not bound");
+            }
+            int32 $n = 0;
+            if ($seen->has($name)) {
+                $n = $seen->get($name);
+            }
+            $seen[$name] = $n + 1;
+            $p->name = $name;
+            $p->key = $name;
+            if ($n > 0) {
+                $p->key = "{$name}:{$n}";
+            }
+            $p->schedule = $schedule;
+        }
+        return .ok;
+    }
+
+    /**
+     * Pushes every plan due by `$now` that this scheduler has not pushed yet; answers how many were
+     * queued (another server may have stored a slot first).
+     */
+    public function tick(nexus::Kernel $k, Work $w, time::timestamp $now) : uint32
+    {
+        uint32 $queued = 0;
+        foreach ($this->plans as $i => $p) {
+            Schedule $schedule = guard $p->schedule else {
+                continue;
+            };
+            time::timestamp $slot = guard $schedule->due($this->lastOf($i), $now, $w->zone) else {
+                continue;
+            };
+            if ($this->push($k, $w, $p, $slot)) {
+                $queued = $queued + 1;
+            }
+            thread::locked<map<usize, time::timestamp>> $held = $this->last->lock();
+            $held->value[$i] = $slot;
+        }
+        $this->prune($k, $w, $now);
+        return $queued;
+    }
+
+    /**
+     * Ticks every second on a thread of its own until `stop`; slots after a minute ago count as
+     * due.
+     */
+    public function start(nexus::Kernel $k, Work $w) : status<nexus::BootError>
+    {
+        $this->halt = nexus::Flag();
+        $this->from = $w->clock->now() - time::duration::mins(1);
+        TaskScheduler $self = $this;
+        thread::handle $t = guard thread::spawn(function[$self, $k, $w]() : void {
+            while (!$self->halt->raised()) {
+                $self->tick($k, $w, $w->clock->now());
+                Pool::nap($self->halt, time::duration::secs(1));
+            }
+        }) else {
+            return .error(.extension('nexus-work', 'cannot start the scheduler thread'));
+        };
+        thread::locked<array<thread::handle>> $held = $this->handles->lock();
+        $held->value[] = $t;
+        return .ok;
+    }
+
+    public function stop() : void
+    {
+        $this->halt->raise();
+        thread::locked<array<thread::handle>> $held = $this->handles->lock();
+        foreach ($held->value as &$t) {
+            $t->join();
+        }
+        $held->value = array<thread::handle>();
+    }
+
+    /**
+     * Slots after `$from` count as due, for a scheduler ticked by hand.
+     */
+    public function since(time::timestamp $from) : void
+    {
+        $this->from = $from;
+    }
+
+    /**
+     * Pushes `$plan` for `$slot`; true when it was queued.
+     */
+    internal function push(nexus::Kernel $k, Work $w, Planned $plan, time::timestamp $slot) : bool
+    {
+        nexus::Logger $log = $k->log->with(['work' => 'scheduler']);
+        Pushed $out = guard TaskScheduler::send($w, $plan, $slot) else ($e) {
+            $log->error('cannot push a scheduled task', ['task' => $plan->name, 'detail' => $e->detail(.dev)]);
+            return false;
+        };
+        bool $queued = $out->queued();
+        if ($queued) {
+            $log->info('scheduled', ['task' => $plan->name, 'slot' => $slot->unix_secs(), 'lane' => $plan->into]);
+        }
+        return $queued;
+    }
+
+    /**
+     * Pushes `$plan` into its lane: into an async lane as it is, into a distributed one keyed by its
+     * slot.
+     */
+    internal static function send(Work $w, Planned $plan, time::timestamp $slot) : result<Pushed, nexus::Problem>
+    {
+        string $lane = $plan->into;
+        Pool? $pool = $w->lanes->pool($lane);
+        if ($pool != null) {
+            Pool $into = guard $pool;
+            return $into->push(nexus::work::Pipeline::one($plan->item));
+        }
+        Distributed $d = guard $w->lanes->store($lane) else {
+            return .error(.server("lane {$lane} is not bound"));
+        };
+        int64 $secs = $slot->unix_secs();
+        string $key = "{$plan->key}@{$secs}";
+        return Batch::store($d->store, $lane, $w->codecs, nexus::work::Pipeline::one($plan->item), $w->clock->now(), $slot, $key);
+    }
+
+    internal function lastOf(usize $i) : time::timestamp
+    {
+        thread::locked<map<usize, time::timestamp>> $held = $this->last->lock();
+        if ($held->value->has($i)) {
+            return $held->value->get($i);
+        }
+        return $this->from;
+    }
+
+    internal function prune(nexus::Kernel $k, Work $w, time::timestamp $now) : void
+    {
+        {
+            thread::locked<time::timestamp?> $held = $this->pruned->lock();
+            if ($held->value != null) {
+                time::timestamp $last = guard $held->value;
+                if ($now < $last + time::duration::mins(1)) {
+                    return;
+                }
+            }
+            $held->value = $now;
+        }
+        nexus::Logger $log = $k->log->with(['work' => 'scheduler']);
+        foreach ($w->lanes->stores() as $d) {
+            uint64 $gone = guard $d->store->prune($now, $now - $w->config->keep) else ($e) {
+                $log->error('cannot prune the store', ['lane' => $d->lane, 'detail' => $e->detail(.dev)]);
+                continue;
+            };
+            if ($gone > 0) {
+                $log->info('pruned finished tasks', ['lane' => $d->lane, 'count' => $gone as int64]);
+            }
+        }
+    }
+}

@@ -1,0 +1,104 @@
+namespace nexus::work::carbon;
+
+use std::time;
+
+/**
+ * A distributed queue's store in the app's database: `nexus_tasks`, what they wait for in
+ * `nexus_task_edges`, and the `.running` keys held in `nexus_task_locks`. A claim reads a few due
+ * rows, then takes each with an update that only holds while its attempt count is still the one
+ * read: of two servers after the same row, one updates it and the other moves on. Every later
+ * change names the attempt too, so a server whose lease ran out changes nothing. A `.unique` key
+ * lives in a unique column while its task waits or runs; a `.running` key is a lock row its holder
+ * renews with the lease.
+ *
+ * ```echo
+ * $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+ *     ->into<WorkersLane>();
+ * ```
+ *
+ * One store serves the whole process: every call takes a session of its own from the database, so
+ * a push is stored apart from whatever the pushing request writes.
+ */
+#[atomic]
+public class Store : nexus::work::Store
+{
+    internal carbon::DB $db;
+
+    public constructor(carbon::DB $db)
+    {
+        $this->db = $db;
+    }
+
+    public function push(const nexus::work::Batch& $batch) : result<nexus::work::Pushed, nexus::Problem>
+    {
+        return $this->open()->push($batch);
+    }
+
+    public function claim(const string& $lane, time::timestamp $now, time::timestamp $until, uint32 $max) : result<array<nexus::work::StoredTask>, nexus::Problem>
+    {
+        return $this->open()->claim($lane, $now, $until, $max);
+    }
+
+    public function extend(const nexus::work::StoredTask& $task, time::timestamp $until) : status<nexus::Problem>
+    {
+        return $this->open()->extend($task, $until);
+    }
+
+    public function done(const nexus::work::StoredTask& $task, time::timestamp $now, const nexus::work::Batch& $spawned) : status<nexus::Problem>
+    {
+        return $this->open()->done($task, $now, $spawned);
+    }
+
+    public function retry(const nexus::work::StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
+    {
+        return $this->open()->retry($task, $at, $error);
+    }
+
+    public function fail(const nexus::work::StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>
+    {
+        return $this->open()->fail($task, $now, $error);
+    }
+
+    public function upstream(const string& $id) : result<array<nexus::work::Upstream>, nexus::Problem>
+    {
+        return $this->open()->upstream($id);
+    }
+
+    public function failed(const string& $lane, uint64 $limit) : result<array<nexus::work::StoredTask>, nexus::Problem>
+    {
+        return $this->open()->failed($lane, $limit);
+    }
+
+    public function again(const string& $id, time::timestamp $now) : result<nexus::work::Requeued, nexus::Problem>
+    {
+        return $this->open()->again($id, $now);
+    }
+
+    public function cancel(const string& $id, time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        return $this->open()->cancel($id, $now);
+    }
+
+    public function graph(const string& $id, uint32 $depth) : result<nexus::work::Graph, nexus::Problem>
+    {
+        return $this->open()->graph($id, $depth);
+    }
+
+    public function prune(time::timestamp $now, time::timestamp $before) : result<uint64, nexus::Problem>
+    {
+        return $this->open()->prune($now, $before);
+    }
+
+    public function waiting(const string& $lane) : result<uint64, nexus::Problem>
+    {
+        return $this->open()->waiting($lane);
+    }
+
+    /**
+     * The store on a new session of its own.
+     */
+    internal function open() : SessionStore
+    {
+        return SessionStore($this->db->scoped());
+    }
+}

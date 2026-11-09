@@ -1,0 +1,54 @@
+namespace nexus;
+
+use std::io;
+
+/**
+ * `doctor`: boots the app, checks every command of `$all` has its binding, and warns about actions
+ * no route reaches.
+ */
+public class DoctorCommand : Command
+{
+    internal Commands $all;
+
+    public constructor(Commands $all)
+    {
+        $this->all = $all;
+    }
+
+    public const function name() : string
+    {
+        return 'doctor';
+    }
+
+    public const function summary() : string
+    {
+        return 'check that the app boots';
+    }
+
+    public const function help() : string
+    {
+        return 'Reads the config, wires the container, checks every route and command has a binding and warns about actions no route reaches.';
+    }
+
+    public function run(Invocation& $in) : int32
+    {
+        Kernel $k = guard $in->kernel() else {
+            return 1;
+        };
+        array<Command> $commands = $this->all->all();
+        int32 $unbound = 0;
+        foreach ($commands as const &$cmd) {
+            if (!Invocation::bound($in->program, $cmd, $k)) {
+                $unbound = $unbound + 1;
+            }
+        }
+        if ($unbound > 0) {
+            return 1;
+        }
+        foreach (Console::unrouted($k) as const &$action) {
+            io::eprintln("{$in->program}: warning: {$action} is an action no route reaches; route it with bindAction or drop it");
+        }
+        io::println("ok: {$k->router->count()} routes, {$commands->count()} commands, mode {$in->mode->name()}");
+        return 0;
+    }
+}

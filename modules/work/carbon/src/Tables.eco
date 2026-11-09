@@ -1,7 +1,7 @@
 namespace nexus::work::carbon;
 
 /**
- * The tasks table on the app's database: one call in the function that opens it, before it is
+ * The task tables on the app's database: one call in the function that opens it, before it is
  * sealed.
  *
  * ```echo
@@ -13,7 +13,7 @@ namespace nexus::work::carbon;
 public struct Tables
 {
     /**
-     * Registers the tasks repository on `$db` and makes its store.
+     * Registers the task, edge and lock repositories on `$db`.
      */
     public static function wire(carbon::DB $db) : status<carbon::Error>
     {
@@ -22,7 +22,7 @@ public struct Tables
     }
 
     /**
-     * The tasks migration, to add to the app's own.
+     * The migration of the three tables, to add to the app's own.
      */
     public static function migrations() : array<carbon::migrate::Step>
     {

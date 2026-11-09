@@ -1,0 +1,49 @@
+namespace nexus::work;
+
+/**
+ * One run of a task, as its `handle()` reads it with `$payload->state<nexus::work::Run>()` and as a
+ * log factory sees it.
+ */
+public struct Run
+{
+    public string $id;
+
+    /**
+     * The task type, the struct's qualified name.
+     */
+    public string $name;
+
+    /**
+     * The lane of the queue it runs on; empty inline.
+     */
+    public string $lane = '';
+
+    /**
+     * Which try this is, 1 for the first.
+     */
+    public int64 $attempt = 1;
+    public int64 $tries = 1;
+
+    /**
+     * The exclusive key it holds, or empty.
+     */
+    public string $key = '';
+
+    /**
+     * The tasks of its pipeline it waited for.
+     */
+    public array<Upstream> $upstream = [];
+
+    /**
+     * Whether `$id` failed before this run and let it go ahead.
+     */
+    public const function failed(const string& $id) : bool
+    {
+        foreach ($this->upstream as const &$u) {
+            if ($u->id == $id) {
+                return $u->failed;
+            }
+        }
+        return false;
+    }
+}

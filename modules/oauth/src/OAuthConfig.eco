@@ -1,20 +1,49 @@
 namespace nexus::oauth;
 
 /**
- * `OAUTH_ISSUER` is the app's public origin (`https://blog.example.com`); empty takes it from each
- * request. `OAUTH_CONSENT` is the app's page that asks the user, relative to the issuer or
- * absolute. Access tokens last `OAUTH_ACCESS`, refresh tokens `OAUTH_REFRESH` from their last use;
- * at most `OAUTH_CLIENTS` clients are registered at once. `OAUTH_SCOPE` is the one scope granted,
- * `OAUTH_NAME` what the metadata calls the app.
+ * The OAuth server's settings. The deploy's are read from `NEXUS_OAUTH_ISSUER`,
+ * `NEXUS_OAUTH_ACCESS`, `NEXUS_OAUTH_REFRESH` and `NEXUS_OAUTH_CLIENTS`; the app says the rest where
+ * it lists the extension: `nexus::oauth::Extension(consent: '/consent', scope: 'mcp', name: 'Blog')`.
  */
-#[nexus::config: "oauth"]
+#[nexus::config: "NEXUS_OAUTH"]
 public struct OAuthConfig
 {
+    /**
+     * The app's public origin, like `https://blog.example.com`; empty takes it from each request.
+     */
+    #[nexus::env: 'ISSUER']
     public string $issuer = '';
+
+    /**
+     * The app's page that asks the user, relative to the issuer or absolute.
+     */
     public string $consent = '/oauth/consent';
+
+    /**
+     * How long an access token lasts.
+     */
+    #[nexus::env: 'ACCESS']
     public std::time::duration $access = std::time::duration::hours(1);
+
+    /**
+     * How long a refresh token lasts from its last use.
+     */
+    #[nexus::env: 'REFRESH']
     public std::time::duration $refresh = std::time::duration::hours(720);
+
+    /**
+     * How many clients are registered at most at once.
+     */
+    #[nexus::env: 'CLIENTS']
     public uint32 $clients = 1000;
+
+    /**
+     * The one scope granted.
+     */
     public string $scope = 'mcp';
+
+    /**
+     * What the metadata calls the app.
+     */
     public string $name = '';
 }

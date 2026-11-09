@@ -1,0 +1,24 @@
+namespace nexus::work;
+
+/**
+ * A distributed lane as it was bound: its store, shared by the whole process, the async lane its
+ * claimed tasks run on, and where their runs log when a task leaves it to the queue.
+ */
+#[atomic]
+public class Distributed
+{
+    public const string $lane;
+    public Store $store;
+
+    /**
+     * The async lane its tasks run on; it must be bound.
+     */
+    public string $into = '';
+    public function<RunLog(const Run&)>? $log = null;
+
+    public constructor(const string& $lane, Store $store)
+    {
+        $this->lane = $lane;
+        $this->store = $store;
+    }
+}

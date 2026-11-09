@@ -10,13 +10,23 @@ public class QueuedTaskTable : hydrahon::Source, carbon::Schema<nexus::work::car
 {
     public static hydrahon::Term<string> $id = carbon::select::column<string>('nexus_tasks', 'id');
     public static hydrahon::Term<string> $name = carbon::select::column<string>('nexus_tasks', 'name');
-    public static hydrahon::Term<string> $queue = carbon::select::column<string>('nexus_tasks', 'queue');
+    public static hydrahon::Term<string> $lane = carbon::select::column<string>('nexus_tasks', 'lane');
     public static hydrahon::Term<string> $data = carbon::select::column<string>('nexus_tasks', 'data');
     public static hydrahon::Term<int64> $tries = carbon::select::column<int64>('nexus_tasks', 'tries');
     public static hydrahon::Term<int64> $attempts = carbon::select::column<int64>('nexus_tasks', 'attempts');
+    public static hydrahon::Term<int64> $status = carbon::select::column<int64>('nexus_tasks', 'status');
+    public static hydrahon::Term<int64> $hold = carbon::select::column<int64>('nexus_tasks', 'hold');
+    public static hydrahon::Term<string> $holdKey = carbon::select::column<string>('nexus_tasks', 'hold_key');
+    public static hydrahon::Term<string?> $uniqueLive = carbon::select::column<string?>('nexus_tasks', 'unique_live');
+    public static hydrahon::Term<bool> $allowFailure = carbon::select::column<bool>('nexus_tasks', 'allow_failure');
+    public static hydrahon::Term<int64> $priority = carbon::select::column<int64>('nexus_tasks', 'priority');
+    public static hydrahon::Term<int64> $pending = carbon::select::column<int64>('nexus_tasks', 'pending');
+    public static hydrahon::Term<bool> $released = carbon::select::column<bool>('nexus_tasks', 'released');
+    public static hydrahon::Term<string> $parent = carbon::select::column<string>('nexus_tasks', 'parent');
     public static hydrahon::Term<string?> $uniqueKey = carbon::select::column<string?>('nexus_tasks', 'unique_key');
     public static hydrahon::Term<hydrahon::DateTime> $createdAt = carbon::select::column<hydrahon::DateTime>('nexus_tasks', 'created_at');
     public static hydrahon::Term<hydrahon::DateTime> $availableAt = carbon::select::column<hydrahon::DateTime>('nexus_tasks', 'available_at');
+    public static hydrahon::Term<hydrahon::DateTime?> $expiresAt = carbon::select::column<hydrahon::DateTime?>('nexus_tasks', 'expires_at');
     public static hydrahon::Term<hydrahon::DateTime?> $reservedUntil = carbon::select::column<hydrahon::DateTime?>('nexus_tasks', 'reserved_until');
     public static hydrahon::Term<hydrahon::DateTime?> $doneAt = carbon::select::column<hydrahon::DateTime?>('nexus_tasks', 'done_at');
     public static hydrahon::Term<hydrahon::DateTime?> $failedAt = carbon::select::column<hydrahon::DateTime?>('nexus_tasks', 'failed_at');
@@ -45,7 +55,7 @@ public class QueuedTaskTable : hydrahon::Source, carbon::Schema<nexus::work::car
 
     public const function fields() : array<hydrahon::Field>
     {
-        array<hydrahon::Field> $out = [QueuedTaskTable::$id, QueuedTaskTable::$name, QueuedTaskTable::$queue, QueuedTaskTable::$data, QueuedTaskTable::$tries, QueuedTaskTable::$attempts, QueuedTaskTable::$uniqueKey, QueuedTaskTable::$createdAt, QueuedTaskTable::$availableAt, QueuedTaskTable::$reservedUntil, QueuedTaskTable::$doneAt, QueuedTaskTable::$failedAt, QueuedTaskTable::$error];
+        array<hydrahon::Field> $out = [QueuedTaskTable::$id, QueuedTaskTable::$name, QueuedTaskTable::$lane, QueuedTaskTable::$data, QueuedTaskTable::$tries, QueuedTaskTable::$attempts, QueuedTaskTable::$status, QueuedTaskTable::$hold, QueuedTaskTable::$holdKey, QueuedTaskTable::$uniqueLive, QueuedTaskTable::$allowFailure, QueuedTaskTable::$priority, QueuedTaskTable::$pending, QueuedTaskTable::$released, QueuedTaskTable::$parent, QueuedTaskTable::$uniqueKey, QueuedTaskTable::$createdAt, QueuedTaskTable::$availableAt, QueuedTaskTable::$expiresAt, QueuedTaskTable::$reservedUntil, QueuedTaskTable::$doneAt, QueuedTaskTable::$failedAt, QueuedTaskTable::$error];
         return $out;
     }
 
@@ -88,39 +98,58 @@ public class QueuedTaskTable : hydrahon::Source, carbon::Schema<nexus::work::car
     {
         string $c0 = guard $row->text(0) else { return .error(.column('id', carbon::Problem::of($row, 0))); }
         string $c1 = guard $row->text(1) else { return .error(.column('name', carbon::Problem::of($row, 1))); }
-        string $c2 = guard $row->text(2) else { return .error(.column('queue', carbon::Problem::of($row, 2))); }
+        string $c2 = guard $row->text(2) else { return .error(.column('lane', carbon::Problem::of($row, 2))); }
         string $c3 = guard $row->text(3) else { return .error(.column('data', carbon::Problem::of($row, 3))); }
         int64 $c4 = guard $row->int(4) else { return .error(.column('tries', carbon::Problem::of($row, 4))); }
         int64 $c5 = guard $row->int(5) else { return .error(.column('attempts', carbon::Problem::of($row, 5))); }
-        string? $c6 = null;
-        if (!$row->isNull(6)) {
-            string $v6 = guard $row->text(6) else { return .error(.column('unique_key', carbon::Problem::of($row, 6))); }
-            $c6 = $v6;
-        }
-        hydrahon::DateTime $r7 = guard $row->datetime(7) else { return .error(.column('created_at', carbon::Problem::of($row, 7))); }
-        std::time::timestamp $c7 = guard carbon::codec::Instant()->decode($r7) else ($p) { return .error(.column('created_at', $p)); }
-        hydrahon::DateTime $r8 = guard $row->datetime(8) else { return .error(.column('available_at', carbon::Problem::of($row, 8))); }
-        std::time::timestamp $c8 = guard carbon::codec::Instant()->decode($r8) else ($p) { return .error(.column('available_at', $p)); }
-        std::time::timestamp? $c9 = null;
+        int64 $c6 = guard $row->int(6) else { return .error(.column('status', carbon::Problem::of($row, 6))); }
+        int64 $c7 = guard $row->int(7) else { return .error(.column('hold', carbon::Problem::of($row, 7))); }
+        string $c8 = guard $row->text(8) else { return .error(.column('hold_key', carbon::Problem::of($row, 8))); }
+        string? $c9 = null;
         if (!$row->isNull(9)) {
-            hydrahon::DateTime $r9 = guard $row->datetime(9) else { return .error(.column('reserved_until', carbon::Problem::of($row, 9))); }
-            std::time::timestamp $v9 = guard carbon::codec::Instant()->decode($r9) else ($p) { return .error(.column('reserved_until', $p)); }
+            string $v9 = guard $row->text(9) else { return .error(.column('unique_live', carbon::Problem::of($row, 9))); }
             $c9 = $v9;
         }
-        std::time::timestamp? $c10 = null;
-        if (!$row->isNull(10)) {
-            hydrahon::DateTime $r10 = guard $row->datetime(10) else { return .error(.column('done_at', carbon::Problem::of($row, 10))); }
-            std::time::timestamp $v10 = guard carbon::codec::Instant()->decode($r10) else ($p) { return .error(.column('done_at', $p)); }
-            $c10 = $v10;
+        bool $c10 = guard $row->bool(10) else { return .error(.column('allow_failure', carbon::Problem::of($row, 10))); }
+        int64 $c11 = guard $row->int(11) else { return .error(.column('priority', carbon::Problem::of($row, 11))); }
+        int64 $c12 = guard $row->int(12) else { return .error(.column('pending', carbon::Problem::of($row, 12))); }
+        bool $c13 = guard $row->bool(13) else { return .error(.column('released', carbon::Problem::of($row, 13))); }
+        string $c14 = guard $row->text(14) else { return .error(.column('parent', carbon::Problem::of($row, 14))); }
+        string? $c15 = null;
+        if (!$row->isNull(15)) {
+            string $v15 = guard $row->text(15) else { return .error(.column('unique_key', carbon::Problem::of($row, 15))); }
+            $c15 = $v15;
         }
-        std::time::timestamp? $c11 = null;
-        if (!$row->isNull(11)) {
-            hydrahon::DateTime $r11 = guard $row->datetime(11) else { return .error(.column('failed_at', carbon::Problem::of($row, 11))); }
-            std::time::timestamp $v11 = guard carbon::codec::Instant()->decode($r11) else ($p) { return .error(.column('failed_at', $p)); }
-            $c11 = $v11;
+        hydrahon::DateTime $r16 = guard $row->datetime(16) else { return .error(.column('created_at', carbon::Problem::of($row, 16))); }
+        std::time::timestamp $c16 = guard carbon::codec::Instant()->decode($r16) else ($p) { return .error(.column('created_at', $p)); }
+        hydrahon::DateTime $r17 = guard $row->datetime(17) else { return .error(.column('available_at', carbon::Problem::of($row, 17))); }
+        std::time::timestamp $c17 = guard carbon::codec::Instant()->decode($r17) else ($p) { return .error(.column('available_at', $p)); }
+        std::time::timestamp? $c18 = null;
+        if (!$row->isNull(18)) {
+            hydrahon::DateTime $r18 = guard $row->datetime(18) else { return .error(.column('expires_at', carbon::Problem::of($row, 18))); }
+            std::time::timestamp $v18 = guard carbon::codec::Instant()->decode($r18) else ($p) { return .error(.column('expires_at', $p)); }
+            $c18 = $v18;
         }
-        string $c12 = guard $row->text(12) else { return .error(.column('error', carbon::Problem::of($row, 12))); }
-        return .ok(nexus::work::carbon::QueuedTask($id: $c0, $name: $c1, $queue: $c2, $data: $c3, $tries: $c4, $attempts: $c5, $uniqueKey: $c6, $createdAt: $c7, $availableAt: $c8, $reservedUntil: $c9, $doneAt: $c10, $failedAt: $c11, $error: $c12));
+        std::time::timestamp? $c19 = null;
+        if (!$row->isNull(19)) {
+            hydrahon::DateTime $r19 = guard $row->datetime(19) else { return .error(.column('reserved_until', carbon::Problem::of($row, 19))); }
+            std::time::timestamp $v19 = guard carbon::codec::Instant()->decode($r19) else ($p) { return .error(.column('reserved_until', $p)); }
+            $c19 = $v19;
+        }
+        std::time::timestamp? $c20 = null;
+        if (!$row->isNull(20)) {
+            hydrahon::DateTime $r20 = guard $row->datetime(20) else { return .error(.column('done_at', carbon::Problem::of($row, 20))); }
+            std::time::timestamp $v20 = guard carbon::codec::Instant()->decode($r20) else ($p) { return .error(.column('done_at', $p)); }
+            $c20 = $v20;
+        }
+        std::time::timestamp? $c21 = null;
+        if (!$row->isNull(21)) {
+            hydrahon::DateTime $r21 = guard $row->datetime(21) else { return .error(.column('failed_at', carbon::Problem::of($row, 21))); }
+            std::time::timestamp $v21 = guard carbon::codec::Instant()->decode($r21) else ($p) { return .error(.column('failed_at', $p)); }
+            $c21 = $v21;
+        }
+        string $c22 = guard $row->text(22) else { return .error(.column('error', carbon::Problem::of($row, 22))); }
+        return .ok(nexus::work::carbon::QueuedTask($id: $c0, $name: $c1, $lane: $c2, $data: $c3, $tries: $c4, $attempts: $c5, $status: $c6, $hold: $c7, $holdKey: $c8, $uniqueLive: $c9, $allowFailure: $c10, $priority: $c11, $pending: $c12, $released: $c13, $parent: $c14, $uniqueKey: $c15, $createdAt: $c16, $availableAt: $c17, $expiresAt: $c18, $reservedUntil: $c19, $doneAt: $c20, $failedAt: $c21, $error: $c22));
     }
 
     public const function snapshot(const nexus::work::carbon::QueuedTask& $m) : carbon::change::Snapshot
@@ -130,7 +159,7 @@ public class QueuedTaskTable : hydrahon::Source, carbon::Schema<nexus::work::car
         $out->values[] = hydrahon::Value::from($s0);
         string $s1 = $m->name;
         $out->values[] = hydrahon::Value::from($s1);
-        string $s2 = $m->queue;
+        string $s2 = $m->lane;
         $out->values[] = hydrahon::Value::from($s2);
         string $s3 = $m->data;
         $out->values[] = hydrahon::Value::from($s3);
@@ -138,32 +167,56 @@ public class QueuedTaskTable : hydrahon::Source, carbon::Schema<nexus::work::car
         $out->values[] = hydrahon::Value::from($s4);
         int64 $s5 = $m->attempts;
         $out->values[] = hydrahon::Value::from($s5);
-        string? $s6 = $m->uniqueKey;
+        int64 $s6 = $m->status;
         $out->values[] = hydrahon::Value::from($s6);
-        hydrahon::DateTime $s7 = carbon::codec::Instant()->encode($m->createdAt);
+        int64 $s7 = $m->hold;
         $out->values[] = hydrahon::Value::from($s7);
-        hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->availableAt);
+        string $s8 = $m->holdKey;
         $out->values[] = hydrahon::Value::from($s8);
-        hydrahon::DateTime? $s9 = null;
-        if ($m->reservedUntil != null) {
-            std::time::timestamp $x9 = guard $m->reservedUntil;
-            $s9 = carbon::codec::Instant()->encode($x9);
-        }
+        string? $s9 = $m->uniqueLive;
         $out->values[] = hydrahon::Value::from($s9);
-        hydrahon::DateTime? $s10 = null;
-        if ($m->doneAt != null) {
-            std::time::timestamp $x10 = guard $m->doneAt;
-            $s10 = carbon::codec::Instant()->encode($x10);
-        }
+        bool $s10 = $m->allowFailure;
         $out->values[] = hydrahon::Value::from($s10);
-        hydrahon::DateTime? $s11 = null;
-        if ($m->failedAt != null) {
-            std::time::timestamp $x11 = guard $m->failedAt;
-            $s11 = carbon::codec::Instant()->encode($x11);
-        }
+        int64 $s11 = $m->priority;
         $out->values[] = hydrahon::Value::from($s11);
-        string $s12 = $m->error;
+        int64 $s12 = $m->pending;
         $out->values[] = hydrahon::Value::from($s12);
+        bool $s13 = $m->released;
+        $out->values[] = hydrahon::Value::from($s13);
+        string $s14 = $m->parent;
+        $out->values[] = hydrahon::Value::from($s14);
+        string? $s15 = $m->uniqueKey;
+        $out->values[] = hydrahon::Value::from($s15);
+        hydrahon::DateTime $s16 = carbon::codec::Instant()->encode($m->createdAt);
+        $out->values[] = hydrahon::Value::from($s16);
+        hydrahon::DateTime $s17 = carbon::codec::Instant()->encode($m->availableAt);
+        $out->values[] = hydrahon::Value::from($s17);
+        hydrahon::DateTime? $s18 = null;
+        if ($m->expiresAt != null) {
+            std::time::timestamp $x18 = guard $m->expiresAt;
+            $s18 = carbon::codec::Instant()->encode($x18);
+        }
+        $out->values[] = hydrahon::Value::from($s18);
+        hydrahon::DateTime? $s19 = null;
+        if ($m->reservedUntil != null) {
+            std::time::timestamp $x19 = guard $m->reservedUntil;
+            $s19 = carbon::codec::Instant()->encode($x19);
+        }
+        $out->values[] = hydrahon::Value::from($s19);
+        hydrahon::DateTime? $s20 = null;
+        if ($m->doneAt != null) {
+            std::time::timestamp $x20 = guard $m->doneAt;
+            $s20 = carbon::codec::Instant()->encode($x20);
+        }
+        $out->values[] = hydrahon::Value::from($s20);
+        hydrahon::DateTime? $s21 = null;
+        if ($m->failedAt != null) {
+            std::time::timestamp $x21 = guard $m->failedAt;
+            $s21 = carbon::codec::Instant()->encode($x21);
+        }
+        $out->values[] = hydrahon::Value::from($s21);
+        string $s22 = $m->error;
+        $out->values[] = hydrahon::Value::from($s22);
         return $out;
     }
 
@@ -178,8 +231,8 @@ public class QueuedTaskTable : hydrahon::Source, carbon::Schema<nexus::work::car
             $into[QueuedTaskTable::$name] = $s1;
         }
         if ($only->has(2)) {
-            string $s2 = $m->queue;
-            $into[QueuedTaskTable::$queue] = $s2;
+            string $s2 = $m->lane;
+            $into[QueuedTaskTable::$lane] = $s2;
         }
         if ($only->has(3)) {
             string $s3 = $m->data;
@@ -194,44 +247,88 @@ public class QueuedTaskTable : hydrahon::Source, carbon::Schema<nexus::work::car
             $into[QueuedTaskTable::$attempts] = $s5;
         }
         if ($only->has(6)) {
-            string? $s6 = $m->uniqueKey;
-            $into[QueuedTaskTable::$uniqueKey] = $s6;
+            int64 $s6 = $m->status;
+            $into[QueuedTaskTable::$status] = $s6;
         }
         if ($only->has(7)) {
-            hydrahon::DateTime $s7 = carbon::codec::Instant()->encode($m->createdAt);
-            $into[QueuedTaskTable::$createdAt] = $s7;
+            int64 $s7 = $m->hold;
+            $into[QueuedTaskTable::$hold] = $s7;
         }
         if ($only->has(8)) {
-            hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->availableAt);
-            $into[QueuedTaskTable::$availableAt] = $s8;
+            string $s8 = $m->holdKey;
+            $into[QueuedTaskTable::$holdKey] = $s8;
         }
         if ($only->has(9)) {
-            hydrahon::DateTime? $s9 = null;
-            if ($m->reservedUntil != null) {
-                std::time::timestamp $x9 = guard $m->reservedUntil;
-                $s9 = carbon::codec::Instant()->encode($x9);
-            }
-            $into[QueuedTaskTable::$reservedUntil] = $s9;
+            string? $s9 = $m->uniqueLive;
+            $into[QueuedTaskTable::$uniqueLive] = $s9;
         }
         if ($only->has(10)) {
-            hydrahon::DateTime? $s10 = null;
-            if ($m->doneAt != null) {
-                std::time::timestamp $x10 = guard $m->doneAt;
-                $s10 = carbon::codec::Instant()->encode($x10);
-            }
-            $into[QueuedTaskTable::$doneAt] = $s10;
+            bool $s10 = $m->allowFailure;
+            $into[QueuedTaskTable::$allowFailure] = $s10;
         }
         if ($only->has(11)) {
-            hydrahon::DateTime? $s11 = null;
-            if ($m->failedAt != null) {
-                std::time::timestamp $x11 = guard $m->failedAt;
-                $s11 = carbon::codec::Instant()->encode($x11);
-            }
-            $into[QueuedTaskTable::$failedAt] = $s11;
+            int64 $s11 = $m->priority;
+            $into[QueuedTaskTable::$priority] = $s11;
         }
         if ($only->has(12)) {
-            string $s12 = $m->error;
-            $into[QueuedTaskTable::$error] = $s12;
+            int64 $s12 = $m->pending;
+            $into[QueuedTaskTable::$pending] = $s12;
+        }
+        if ($only->has(13)) {
+            bool $s13 = $m->released;
+            $into[QueuedTaskTable::$released] = $s13;
+        }
+        if ($only->has(14)) {
+            string $s14 = $m->parent;
+            $into[QueuedTaskTable::$parent] = $s14;
+        }
+        if ($only->has(15)) {
+            string? $s15 = $m->uniqueKey;
+            $into[QueuedTaskTable::$uniqueKey] = $s15;
+        }
+        if ($only->has(16)) {
+            hydrahon::DateTime $s16 = carbon::codec::Instant()->encode($m->createdAt);
+            $into[QueuedTaskTable::$createdAt] = $s16;
+        }
+        if ($only->has(17)) {
+            hydrahon::DateTime $s17 = carbon::codec::Instant()->encode($m->availableAt);
+            $into[QueuedTaskTable::$availableAt] = $s17;
+        }
+        if ($only->has(18)) {
+            hydrahon::DateTime? $s18 = null;
+            if ($m->expiresAt != null) {
+                std::time::timestamp $x18 = guard $m->expiresAt;
+                $s18 = carbon::codec::Instant()->encode($x18);
+            }
+            $into[QueuedTaskTable::$expiresAt] = $s18;
+        }
+        if ($only->has(19)) {
+            hydrahon::DateTime? $s19 = null;
+            if ($m->reservedUntil != null) {
+                std::time::timestamp $x19 = guard $m->reservedUntil;
+                $s19 = carbon::codec::Instant()->encode($x19);
+            }
+            $into[QueuedTaskTable::$reservedUntil] = $s19;
+        }
+        if ($only->has(20)) {
+            hydrahon::DateTime? $s20 = null;
+            if ($m->doneAt != null) {
+                std::time::timestamp $x20 = guard $m->doneAt;
+                $s20 = carbon::codec::Instant()->encode($x20);
+            }
+            $into[QueuedTaskTable::$doneAt] = $s20;
+        }
+        if ($only->has(21)) {
+            hydrahon::DateTime? $s21 = null;
+            if ($m->failedAt != null) {
+                std::time::timestamp $x21 = guard $m->failedAt;
+                $s21 = carbon::codec::Instant()->encode($x21);
+            }
+            $into[QueuedTaskTable::$failedAt] = $s21;
+        }
+        if ($only->has(22)) {
+            string $s22 = $m->error;
+            $into[QueuedTaskTable::$error] = $s22;
         }
     }
 
@@ -272,13 +369,23 @@ public class QueuedTaskTableAlias : hydrahon::Source
 {
     public const hydrahon::Term<string> $id;
     public const hydrahon::Term<string> $name;
-    public const hydrahon::Term<string> $queue;
+    public const hydrahon::Term<string> $lane;
     public const hydrahon::Term<string> $data;
     public const hydrahon::Term<int64> $tries;
     public const hydrahon::Term<int64> $attempts;
+    public const hydrahon::Term<int64> $status;
+    public const hydrahon::Term<int64> $hold;
+    public const hydrahon::Term<string> $holdKey;
+    public const hydrahon::Term<string?> $uniqueLive;
+    public const hydrahon::Term<bool> $allowFailure;
+    public const hydrahon::Term<int64> $priority;
+    public const hydrahon::Term<int64> $pending;
+    public const hydrahon::Term<bool> $released;
+    public const hydrahon::Term<string> $parent;
     public const hydrahon::Term<string?> $uniqueKey;
     public const hydrahon::Term<hydrahon::DateTime> $createdAt;
     public const hydrahon::Term<hydrahon::DateTime> $availableAt;
+    public const hydrahon::Term<hydrahon::DateTime?> $expiresAt;
     public const hydrahon::Term<hydrahon::DateTime?> $reservedUntil;
     public const hydrahon::Term<hydrahon::DateTime?> $doneAt;
     public const hydrahon::Term<hydrahon::DateTime?> $failedAt;
@@ -294,13 +401,23 @@ public class QueuedTaskTableAlias : hydrahon::Source
     {
         $this->id = $this->carbonTable->column<string>('id');
         $this->name = $this->carbonTable->column<string>('name');
-        $this->queue = $this->carbonTable->column<string>('queue');
+        $this->lane = $this->carbonTable->column<string>('lane');
         $this->data = $this->carbonTable->column<string>('data');
         $this->tries = $this->carbonTable->column<int64>('tries');
         $this->attempts = $this->carbonTable->column<int64>('attempts');
+        $this->status = $this->carbonTable->column<int64>('status');
+        $this->hold = $this->carbonTable->column<int64>('hold');
+        $this->holdKey = $this->carbonTable->column<string>('hold_key');
+        $this->uniqueLive = $this->carbonTable->column<string?>('unique_live');
+        $this->allowFailure = $this->carbonTable->column<bool>('allow_failure');
+        $this->priority = $this->carbonTable->column<int64>('priority');
+        $this->pending = $this->carbonTable->column<int64>('pending');
+        $this->released = $this->carbonTable->column<bool>('released');
+        $this->parent = $this->carbonTable->column<string>('parent');
         $this->uniqueKey = $this->carbonTable->column<string?>('unique_key');
         $this->createdAt = $this->carbonTable->column<hydrahon::DateTime>('created_at');
         $this->availableAt = $this->carbonTable->column<hydrahon::DateTime>('available_at');
+        $this->expiresAt = $this->carbonTable->column<hydrahon::DateTime?>('expires_at');
         $this->reservedUntil = $this->carbonTable->column<hydrahon::DateTime?>('reserved_until');
         $this->doneAt = $this->carbonTable->column<hydrahon::DateTime?>('done_at');
         $this->failedAt = $this->carbonTable->column<hydrahon::DateTime?>('failed_at');
@@ -372,6 +489,455 @@ public interface QueuedTaskWiring
 }
 
 /**
+ * The columns of `nexus_task_edges` and how `TaskEdge` maps onto them.
+ */
+#[atomic]
+public class TaskEdgeTable : hydrahon::Source, carbon::Schema<nexus::work::carbon::TaskEdge, string>
+{
+    public static hydrahon::Term<string> $id = carbon::select::column<string>('nexus_task_edges', 'id');
+    public static hydrahon::Term<string> $taskId = carbon::select::column<string>('nexus_task_edges', 'task_id');
+    public static hydrahon::Term<string> $afterId = carbon::select::column<string>('nexus_task_edges', 'after_id');
+    private hydrahon::Table $carbonTable;
+
+    public constructor()
+    {
+        $this->carbonTable = hydrahon::Table(name: 'nexus_task_edges');
+    }
+
+    /**
+     * The table under `$alias`, to join it, or join it twice: `$p = TaskEdgeTable::alias('p');`, then
+     * `$p->id`. `$schema` names the database for a table that lives in
+     * another one.
+     */
+    public static function alias(string $alias, schema: string? $schema = null) : TaskEdgeTableAlias
+    {
+        return TaskEdgeTableAlias(alias: $alias, schema: $schema);
+    }
+
+    public const function table() : hydrahon::Table
+    {
+        return $this->carbonTable;
+    }
+
+    public const function fields() : array<hydrahon::Field>
+    {
+        array<hydrahon::Field> $out = [TaskEdgeTable::$id, TaskEdgeTable::$taskId, TaskEdgeTable::$afterId];
+        return $out;
+    }
+
+    public const function keyIs(string $key) : hydrahon::Term<bool>
+    {
+        return TaskEdgeTable::$id == $key;
+    }
+
+    public const function keyIn(const array<string>& $keys) : hydrahon::Term<bool>
+    {
+        return TaskEdgeTable::$id in $keys;
+    }
+
+    public const function keyAfter(string $key) : hydrahon::Term<bool>
+    {
+        return TaskEdgeTable::$id > $key;
+    }
+
+    public const function byKey() : hydrahon::Order
+    {
+        return TaskEdgeTable::$id->asc();
+    }
+
+    public const function keyAt() : usize
+    {
+        return 0;
+    }
+
+    public const function generated() : bool
+    {
+        return false;
+    }
+
+    public const function keyOf(const nexus::work::carbon::TaskEdge& $m) : string
+    {
+        return $m->id;
+    }
+
+    public const function read(const carbon::Cursor& $row, const carbon::select::Selected& $extra) : result<nexus::work::carbon::TaskEdge, carbon::Error>
+    {
+        string $c0 = guard $row->text(0) else { return .error(.column('id', carbon::Problem::of($row, 0))); }
+        string $c1 = guard $row->text(1) else { return .error(.column('task_id', carbon::Problem::of($row, 1))); }
+        string $c2 = guard $row->text(2) else { return .error(.column('after_id', carbon::Problem::of($row, 2))); }
+        return .ok(nexus::work::carbon::TaskEdge($id: $c0, $taskId: $c1, $afterId: $c2));
+    }
+
+    public const function snapshot(const nexus::work::carbon::TaskEdge& $m) : carbon::change::Snapshot
+    {
+        carbon::change::Snapshot $out = carbon::change::Snapshot();
+        string $s0 = $m->id;
+        $out->values[] = hydrahon::Value::from($s0);
+        string $s1 = $m->taskId;
+        $out->values[] = hydrahon::Value::from($s1);
+        string $s2 = $m->afterId;
+        $out->values[] = hydrahon::Value::from($s2);
+        return $out;
+    }
+
+    public const function write(const nexus::work::carbon::TaskEdge& $m, const carbon::change::Changes& $only, hydrahon::Values& $into) : void
+    {
+        if ($only->has(0)) {
+            string $s0 = $m->id;
+            $into[TaskEdgeTable::$id] = $s0;
+        }
+        if ($only->has(1)) {
+            string $s1 = $m->taskId;
+            $into[TaskEdgeTable::$taskId] = $s1;
+        }
+        if ($only->has(2)) {
+            string $s2 = $m->afterId;
+            $into[TaskEdgeTable::$afterId] = $s2;
+        }
+    }
+
+    public const function inserted(nexus::work::carbon::TaskEdge& $m, int64 $key) : void
+    {
+    }
+
+    public const function link(nexus::work::carbon::TaskEdge& $m) : carbon::Link&
+    {
+        return $m->link;
+    }
+
+    public const function stamp(nexus::work::carbon::TaskEdge& $m, carbon::Event $event, std::time::timestamp $now) : void
+    {
+    }
+
+    public const function trash(nexus::work::carbon::TaskEdge& $m, std::time::timestamp? $at) : bool
+    {
+        return false;
+    }
+
+    public const function trashed(const nexus::work::carbon::TaskEdge& $m) : std::time::timestamp?
+    {
+        return null;
+    }
+
+    public const function live() : hydrahon::Term<bool>?
+    {
+        return null;
+    }
+}
+
+/**
+ * `nexus_task_edges` under an alias, from `TaskEdgeTable::alias`.
+ */
+#[atomic]
+public class TaskEdgeTableAlias : hydrahon::Source
+{
+    public const hydrahon::Term<string> $id;
+    public const hydrahon::Term<string> $taskId;
+    public const hydrahon::Term<string> $afterId;
+    private hydrahon::Table $carbonTable;
+
+    public constructor(alias: string $alias, schema: string? $schema = null)
+    {
+        $this->carbonTable = hydrahon::Table(name: 'nexus_task_edges', alias: $alias, $schema: $schema);
+    }
+
+    init
+    {
+        $this->id = $this->carbonTable->column<string>('id');
+        $this->taskId = $this->carbonTable->column<string>('task_id');
+        $this->afterId = $this->carbonTable->column<string>('after_id');
+    }
+
+    public const function table() : hydrahon::Table
+    {
+        return $this->carbonTable;
+    }
+}
+
+/**
+ * What a query for `TaskEdge` models gathers: the field a query struct keeps.
+ */
+public type TaskEdgeRows = carbon::Rows<nexus::work::carbon::TaskEdge, string, nexus::work::carbon::TaskEdgeTable>;
+
+/**
+ * A query for `TaskEdge` models. Declare a struct conforming to
+ * `carbon::Query<TaskEdge, …>` in its place to give it scopes of its own.
+ */
+public struct TaskEdgeQuery : carbon::Query<nexus::work::carbon::TaskEdge, TaskEdgeQuery>
+{
+    internal TaskEdgeRows $rows;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->rows = TaskEdgeRows($session);
+    }
+
+    public function rows() : TaskEdgeRows&
+    {
+        return $this->rows;
+    }
+}
+
+/**
+ * The repository of `TaskEdge` models: writes and queries, nothing of its own. Declare a
+ * struct conforming to `carbon::Repository<TaskEdge, …>` in its place for finders and hooks.
+ */
+public struct TaskEdgeRepository : carbon::Repository<nexus::work::carbon::TaskEdge, nexus::work::carbon::TaskEdgeQuery, string>, TaskEdgeWiring
+{
+    public carbon::Session $session;
+}
+
+/**
+ * What a repository of `TaskEdge` models reaches through carbon: its session and the model's
+ * store. A repository written by hand names it and keeps its session in `$session`:
+ * `TaskEdgeRepository : carbon::Repository<TaskEdge, …>, TaskEdgeWiring`.
+ */
+public interface TaskEdgeWiring
+{
+    /**
+     * The session the repository was built for.
+     */
+    function session() : carbon::Session
+    {
+        return $this->session;
+    }
+
+    /**
+     * The store of `TaskEdge` models, shared by every session.
+     */
+    function store() : carbon::Store<nexus::work::carbon::TaskEdge, string, nexus::work::carbon::TaskEdgeTable>
+    {
+        carbon::Session $s = $this->session();
+        return $s->store<nexus::work::carbon::TaskEdge, string, nexus::work::carbon::TaskEdgeTable>();
+    }
+}
+
+/**
+ * The columns of `nexus_task_locks` and how `TaskLock` maps onto them.
+ */
+#[atomic]
+public class TaskLockTable : hydrahon::Source, carbon::Schema<nexus::work::carbon::TaskLock, string>
+{
+    public static hydrahon::Term<string> $lockKey = carbon::select::column<string>('nexus_task_locks', 'lock_key');
+    public static hydrahon::Term<string> $holder = carbon::select::column<string>('nexus_task_locks', 'holder');
+    public static hydrahon::Term<hydrahon::DateTime> $heldUntil = carbon::select::column<hydrahon::DateTime>('nexus_task_locks', 'held_until');
+    private hydrahon::Table $carbonTable;
+
+    public constructor()
+    {
+        $this->carbonTable = hydrahon::Table(name: 'nexus_task_locks');
+    }
+
+    /**
+     * The table under `$alias`, to join it, or join it twice: `$p = TaskLockTable::alias('p');`, then
+     * `$p->lockKey`. `$schema` names the database for a table that lives in
+     * another one.
+     */
+    public static function alias(string $alias, schema: string? $schema = null) : TaskLockTableAlias
+    {
+        return TaskLockTableAlias(alias: $alias, schema: $schema);
+    }
+
+    public const function table() : hydrahon::Table
+    {
+        return $this->carbonTable;
+    }
+
+    public const function fields() : array<hydrahon::Field>
+    {
+        array<hydrahon::Field> $out = [TaskLockTable::$lockKey, TaskLockTable::$holder, TaskLockTable::$heldUntil];
+        return $out;
+    }
+
+    public const function keyIs(string $key) : hydrahon::Term<bool>
+    {
+        return TaskLockTable::$lockKey == $key;
+    }
+
+    public const function keyIn(const array<string>& $keys) : hydrahon::Term<bool>
+    {
+        return TaskLockTable::$lockKey in $keys;
+    }
+
+    public const function keyAfter(string $key) : hydrahon::Term<bool>
+    {
+        return TaskLockTable::$lockKey > $key;
+    }
+
+    public const function byKey() : hydrahon::Order
+    {
+        return TaskLockTable::$lockKey->asc();
+    }
+
+    public const function keyAt() : usize
+    {
+        return 0;
+    }
+
+    public const function generated() : bool
+    {
+        return false;
+    }
+
+    public const function keyOf(const nexus::work::carbon::TaskLock& $m) : string
+    {
+        return $m->lockKey;
+    }
+
+    public const function read(const carbon::Cursor& $row, const carbon::select::Selected& $extra) : result<nexus::work::carbon::TaskLock, carbon::Error>
+    {
+        string $c0 = guard $row->text(0) else { return .error(.column('lock_key', carbon::Problem::of($row, 0))); }
+        string $c1 = guard $row->text(1) else { return .error(.column('holder', carbon::Problem::of($row, 1))); }
+        hydrahon::DateTime $r2 = guard $row->datetime(2) else { return .error(.column('held_until', carbon::Problem::of($row, 2))); }
+        std::time::timestamp $c2 = guard carbon::codec::Instant()->decode($r2) else ($p) { return .error(.column('held_until', $p)); }
+        return .ok(nexus::work::carbon::TaskLock($lockKey: $c0, $holder: $c1, $heldUntil: $c2));
+    }
+
+    public const function snapshot(const nexus::work::carbon::TaskLock& $m) : carbon::change::Snapshot
+    {
+        carbon::change::Snapshot $out = carbon::change::Snapshot();
+        string $s0 = $m->lockKey;
+        $out->values[] = hydrahon::Value::from($s0);
+        string $s1 = $m->holder;
+        $out->values[] = hydrahon::Value::from($s1);
+        hydrahon::DateTime $s2 = carbon::codec::Instant()->encode($m->heldUntil);
+        $out->values[] = hydrahon::Value::from($s2);
+        return $out;
+    }
+
+    public const function write(const nexus::work::carbon::TaskLock& $m, const carbon::change::Changes& $only, hydrahon::Values& $into) : void
+    {
+        if ($only->has(0)) {
+            string $s0 = $m->lockKey;
+            $into[TaskLockTable::$lockKey] = $s0;
+        }
+        if ($only->has(1)) {
+            string $s1 = $m->holder;
+            $into[TaskLockTable::$holder] = $s1;
+        }
+        if ($only->has(2)) {
+            hydrahon::DateTime $s2 = carbon::codec::Instant()->encode($m->heldUntil);
+            $into[TaskLockTable::$heldUntil] = $s2;
+        }
+    }
+
+    public const function inserted(nexus::work::carbon::TaskLock& $m, int64 $key) : void
+    {
+    }
+
+    public const function link(nexus::work::carbon::TaskLock& $m) : carbon::Link&
+    {
+        return $m->link;
+    }
+
+    public const function stamp(nexus::work::carbon::TaskLock& $m, carbon::Event $event, std::time::timestamp $now) : void
+    {
+    }
+
+    public const function trash(nexus::work::carbon::TaskLock& $m, std::time::timestamp? $at) : bool
+    {
+        return false;
+    }
+
+    public const function trashed(const nexus::work::carbon::TaskLock& $m) : std::time::timestamp?
+    {
+        return null;
+    }
+
+    public const function live() : hydrahon::Term<bool>?
+    {
+        return null;
+    }
+}
+
+/**
+ * `nexus_task_locks` under an alias, from `TaskLockTable::alias`.
+ */
+#[atomic]
+public class TaskLockTableAlias : hydrahon::Source
+{
+    public const hydrahon::Term<string> $lockKey;
+    public const hydrahon::Term<string> $holder;
+    public const hydrahon::Term<hydrahon::DateTime> $heldUntil;
+    private hydrahon::Table $carbonTable;
+
+    public constructor(alias: string $alias, schema: string? $schema = null)
+    {
+        $this->carbonTable = hydrahon::Table(name: 'nexus_task_locks', alias: $alias, $schema: $schema);
+    }
+
+    init
+    {
+        $this->lockKey = $this->carbonTable->column<string>('lock_key');
+        $this->holder = $this->carbonTable->column<string>('holder');
+        $this->heldUntil = $this->carbonTable->column<hydrahon::DateTime>('held_until');
+    }
+
+    public const function table() : hydrahon::Table
+    {
+        return $this->carbonTable;
+    }
+}
+
+/**
+ * What a query for `TaskLock` models gathers: the field a query struct keeps.
+ */
+public type TaskLockRows = carbon::Rows<nexus::work::carbon::TaskLock, string, nexus::work::carbon::TaskLockTable>;
+
+/**
+ * A query for `TaskLock` models. Declare a struct conforming to
+ * `carbon::Query<TaskLock, …>` in its place to give it scopes of its own.
+ */
+public struct TaskLockQuery : carbon::Query<nexus::work::carbon::TaskLock, TaskLockQuery>
+{
+    internal TaskLockRows $rows;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->rows = TaskLockRows($session);
+    }
+
+    public function rows() : TaskLockRows&
+    {
+        return $this->rows;
+    }
+}
+
+/**
+ * The repository of `TaskLock` models: writes and queries, nothing of its own. Declare a
+ * struct conforming to `carbon::Repository<TaskLock, …>` in its place for finders and hooks.
+ */
+public struct TaskLockRepository : carbon::Repository<nexus::work::carbon::TaskLock, nexus::work::carbon::TaskLockQuery, string>, TaskLockWiring
+{
+    public carbon::Session $session;
+}
+
+/**
+ * What a repository of `TaskLock` models reaches through carbon: its session and the model's
+ * store. A repository written by hand names it and keeps its session in `$session`:
+ * `TaskLockRepository : carbon::Repository<TaskLock, …>, TaskLockWiring`.
+ */
+public interface TaskLockWiring
+{
+    /**
+     * The session the repository was built for.
+     */
+    function session() : carbon::Session
+    {
+        return $this->session;
+    }
+
+    /**
+     * The store of `TaskLock` models, shared by every session.
+     */
+    function store() : carbon::Store<nexus::work::carbon::TaskLock, string, nexus::work::carbon::TaskLockTable>
+    {
+        carbon::Session $s = $this->session();
+        return $s->store<nexus::work::carbon::TaskLock, string, nexus::work::carbon::TaskLockTable>();
+    }
+}
+
+/**
  * The wiring of the models of this namespace, registered and checked in one go.
  */
 public struct Carbon
@@ -394,6 +960,8 @@ public struct Carbon
     public static function register(carbon::DB $db) : status<carbon::Error>
     {
         guard $db->register<nexus::work::carbon::QueuedTaskRepository>() else ($e) { return .error($e); }
+        guard $db->register<nexus::work::carbon::TaskEdgeRepository>() else ($e) { return .error($e); }
+        guard $db->register<nexus::work::carbon::TaskLockRepository>() else ($e) { return .error($e); }
         return .ok();
     }
 
@@ -410,10 +978,18 @@ public struct Carbon
         if (!$db->has<nexus::work::carbon::QueuedTaskRepository>()) {
             $missing[] = 'nexus::work::carbon::QueuedTaskRepository';
         }
+        if (!$db->has<nexus::work::carbon::TaskEdgeRepository>()) {
+            $missing[] = 'nexus::work::carbon::TaskEdgeRepository';
+        }
+        if (!$db->has<nexus::work::carbon::TaskLockRepository>()) {
+            $missing[] = 'nexus::work::carbon::TaskLockRepository';
+        }
         if ($missing->count() > 0) {
             return .error(.unregistered(str::join($missing, ', ')));
         }
         $db->store<nexus::work::carbon::QueuedTask, string, nexus::work::carbon::QueuedTaskTable>();
+        $db->store<nexus::work::carbon::TaskEdge, string, nexus::work::carbon::TaskEdgeTable>();
+        $db->store<nexus::work::carbon::TaskLock, string, nexus::work::carbon::TaskLockTable>();
         return .ok();
     }
 }

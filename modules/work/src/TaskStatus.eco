@@ -1,0 +1,14 @@
+namespace nexus::work;
+
+/**
+ * Where a stored task stands. A waiting task with tasks before it left to settle is held back; one
+ * whose task before it failed for good stays held back until that one is sent back and done.
+ */
+public enum TaskStatus : uint8
+{
+    case waiting = 0;
+    case running = 1;
+    case done = 2;
+    case failed = 3;
+    case cancelled = 4;
+}

@@ -1,0 +1,86 @@
+/**
+ * Background payloads get a scope of their own, and a failed start drains what already started.
+ */
+
+use nexus::{Kernel, Tables, Extension, ConfigTable, Env, Payload, Serve, BootError};
+use ecotest::expect;
+
+#[atomic]
+internal class LTrace
+{
+    public atomic<int32> $started = atomic<int32>(0);
+    public atomic<int32> $drained = atomic<int32>(0);
+}
+
+internal class LApp : Extension
+{
+    public LTrace $trace;
+    public bool $refuse = false;
+
+    public constructor(LTrace $trace)
+    {
+        $this->trace = $trace;
+    }
+
+    public function name() : string
+    {
+        return 'lifecycle-test';
+    }
+
+    public function start(Kernel $k, const Serve& $o) : status<BootError>
+    {
+        $this->trace->started->add(1);
+        if ($this->refuse) {
+            return .error(.extension('lifecycle-test', 'refused to start'));
+        }
+        return .ok;
+    }
+
+    public function drain(Kernel $k) : void
+    {
+        $this->trace->drained->add(1);
+    }
+}
+
+internal function lBoot(array<Extension> $exts) : Kernel
+{
+    array<ConfigTable> $configs = [];
+    $tables = Tables($configs: $configs);
+    $vars = map<string, string>();
+    Kernel $k = guard Kernel::boot(mv $exts, .testing, .silent(), Env(fixed: $vars), tables: $tables);
+    return $k;
+}
+
+test a_background_payload_has_its_own_scope
+{
+    array<Extension> $exts = [];
+    Kernel $k = lBoot($exts);
+    Payload $payload = $k->background('blog::SendWelcome', 'task1');
+    expect($payload->request->id)->is('task1');
+    expect($payload->action)->is('blog::SendWelcome');
+    expect($payload->request->path)->is('/blog::SendWelcome');
+    Kernel::finish($payload);
+}
+
+test a_failed_start_drains_the_extensions_already_started
+{
+    $trace = LTrace();
+    $ok = LApp($trace);
+    $bad = LApp($trace);
+    $bad->refuse = true;
+    array<Extension> $exts = [$ok, $bad];
+    Kernel $k = lBoot($exts);
+    $o = Serve();
+    status<BootError> $s = $k->start($o);
+    expect(lStarted($s))->no(says: 'the kernel refuses to start when an extension does');
+    expect($trace->started->load())->is(2);
+    expect($trace->drained->load())->is(1);
+}
+
+internal function lStarted(status<BootError> $s) : bool
+{
+    guard $s else {
+        return false;
+    };
+    return true;
+}

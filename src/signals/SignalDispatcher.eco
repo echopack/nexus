@@ -1,0 +1,93 @@
+namespace nexus;
+
+/**
+ * Typed signals and their handlers. A signal is any struct, and it is all a handler is handed. A
+ * handler conforms to `nexus::SignalHandler<S>` and gets what it works with through its
+ * constructor. `send` runs the handlers of a signal in the order they were bound and stops at the
+ * first problem. Work that should not hold up the sender goes to a task the handler pushes.
+ *
+ * A dispatcher is an ordinary object: the app binds one in its container, built with its handlers,
+ * and whatever sends signals takes it through its constructor.
+ *
+ * ```echo
+ * public struct UserRegistered { public int64 $user; }
+ *
+ * $d = nexus::SignalDispatcher()
+ *     ->bind<UserRegistered, WelcomeNewUser>($jobs);
+ *
+ * try $d->send(UserRegistered($user: $u->id));
+ * ```
+ *
+ * With nexus-app, the app binds one for the whole process before its providers register, and each
+ * provider binds its handlers on it with what it already built:
+ *
+ * ```echo
+ * $app->instance(nexus::SignalDispatcher());
+ * $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobsQueue>());
+ * ```
+ */
+#[atomic]
+public class SignalDispatcher
+{
+    internal ordered_map<type_id, erased> $byType = ordered_map<type_id, erased>();
+
+    public constructor()
+    {
+    }
+
+    /**
+     * Runs `$handler` whenever an `S` is sent, after the handlers bound before it. Takes a built
+     * handler (`bind<UserRegistered>(WelcomeNewUser($jobs))`) or the constructor arguments of one
+     * (`bind<UserRegistered, WelcomeNewUser>($jobs)`).
+     */
+    public function bind<S, H : SignalHandler<S>>(construct H $handler) : SignalDispatcher
+    {
+        type_id $id = type_id<S>();
+        if (!$this->byType->has($id)) {
+            $fresh = SignalHandlers<S>();
+            $this->byType[$id] = erased::from($fresh);
+        }
+        $all = $this->handlersOf<S>($id);
+        $all->calls[] = function(const S& $signal) : status<Problem> {
+            return $handler->handle($signal);
+        };
+        return $this;
+    }
+
+    /**
+     * How many handlers signals of type `S` have.
+     */
+    public const function count<S>() : usize
+    {
+        type_id $id = type_id<S>();
+        if (!$this->byType->has($id)) {
+            return 0;
+        }
+        SignalHandlers<S> $all = $this->handlersOf<S>($id);
+        return $all->calls->count();
+    }
+
+    /**
+     * Runs every handler of `S` with `$signal`; the first problem stops the rest and comes back.
+     */
+    public function send<S>(const S& $signal) : status<Problem>
+    {
+        type_id $id = type_id<S>();
+        if (!$this->byType->has($id)) {
+            return .ok;
+        }
+        SignalHandlers<S> $all = $this->handlersOf<S>($id);
+        foreach ($all->calls as const &$call) {
+            try $call($signal);
+        }
+        return .ok;
+    }
+
+    internal const function handlersOf<S>(type_id $id) : SignalHandlers<S>
+    {
+        unsafe {
+            SignalHandlers<S> $all = assume<SignalHandlers<S>>($this->byType->get($id));
+            return $all;
+        }
+    }
+}

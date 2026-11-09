@@ -14,8 +14,8 @@ public interface Extension
     function name() : string;
 
     /**
-     * Wires the app, by hand: services into the container, actions onto routes, listeners onto
-     * events. Runs before the container is sealed, after every #[nexus::config] struct is bound, so
+     * Wires the app, by hand: services into the container (a signal dispatcher with its handlers
+     * among them), actions onto routes. Runs before the container is sealed, after every #[nexus::config] struct is bound, so
      * `$s->get<DatabaseConfig>()` reads one. An error stops the boot: the place for work that can
      * fail, such as opening a database.
      */

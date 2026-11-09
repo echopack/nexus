@@ -1,0 +1,52 @@
+namespace nexus::work;
+
+/**
+ * Whether runs of a task may overlap, and under which key. An empty key is the task type, `.running('')`
+ * one run of the type at a time; a key narrows it, `.unique("user:{$this->user}")` is one per user. A
+ * distributed queue holds the key across every server, an async queue in its process.
+ */
+public enum Exclusive
+{
+    case none;
+
+    /**
+     * One task with the key runs at a time; the others wait their turn.
+     */
+    case running(string $key);
+
+    /**
+     * One task with the key waits or runs at a time; a further push is skipped.
+     */
+    case unique(string $key);
+
+    /**
+     * How the key holds.
+     */
+    public const function hold() : Hold
+    {
+        return match ($this) {
+            Exclusive::none => Hold::none,
+            Exclusive::running($key) => Hold::running,
+            Exclusive::unique($key) => Hold::unique,
+        };
+    }
+
+    /**
+     * The key for task type `$name`: its own key, or the name when it gave none. Empty for `.none`.
+     */
+    public const function key(const string& $name) : string
+    {
+        if ($this->hold() == Hold::none) {
+            return '';
+        }
+        string $given = match ($this) {
+            Exclusive::none => '',
+            Exclusive::running($key) => $key,
+            Exclusive::unique($key) => $key,
+        };
+        if ($given->empty()) {
+            return $name;
+        }
+        return "{$name}#{$given}";
+    }
+}

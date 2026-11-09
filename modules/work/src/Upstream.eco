@@ -1,0 +1,16 @@
+namespace nexus::work;
+
+/**
+ * A task a run waited for in its pipeline, and how it ended.
+ */
+public struct Upstream
+{
+    public string $id;
+    public string $name;
+
+    /**
+     * True when it failed and let the run go ahead anyway, as `allowFailure()` allows.
+     */
+    public bool $failed = false;
+    public string $error = '';
+}

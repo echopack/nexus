@@ -1,0 +1,33 @@
+namespace nexus;
+
+use std::io;
+
+/**
+ * `routes`: boots the app and prints its route table, most specific first.
+ */
+public class RoutesCommand : Command
+{
+    public const function name() : string
+    {
+        return 'routes';
+    }
+
+    public const function summary() : string
+    {
+        return 'list the route table';
+    }
+
+    public const function help() : string
+    {
+        return 'Boots the app and prints every route, most specific first.';
+    }
+
+    public function run(Invocation& $in) : int32
+    {
+        Kernel $k = guard $in->kernel() else {
+            return 1;
+        };
+        io::println(Console::table($k));
+        return 0;
+    }
+}

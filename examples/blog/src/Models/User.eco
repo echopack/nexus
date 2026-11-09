@@ -1,0 +1,53 @@
+namespace Blog::Models;
+
+use std::time;
+use Blog::Types::Role;
+
+/**
+ * Someone who writes posts, and signs in to do it. Everyone sees the default shape (`UserMapping`);
+ * the email (sensitive) and the role are only in the `admin` shape (`UserAdminMapping`), which only
+ * admins get.
+ */
+#[carbon::model: 'users']
+#[nexus::shapes: [{ name: 'admin', sensitive: true }]]
+public class User : carbon::Model<User, UserRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    #[nexus::expose: { attribute: true }]
+    public int64 $id = 0;
+
+    #[nexus::sensitive]
+    #[nexus::expose: { shapes: ['admin'] }]
+    public string $email;
+
+    #[nexus::expose]
+    public string $name;
+
+    /**
+     * Argon2id, empty until `user:password` sets one.
+     */
+    #[nexus::sensitive]
+    public string $passwordHash = '';
+
+    #[nexus::expose: { shapes: ['admin'] }]
+    public Role $role = .author;
+
+    /**
+     * When the welcome went out, by the `SendWelcome` task.
+     */
+    #[nexus::expose]
+    public time::timestamp? $welcomedAt = null;
+
+    #[carbon::created]
+    public time::timestamp? $createdAt = null;
+
+    #[carbon::updated]
+    public time::timestamp? $updatedAt = null;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+}

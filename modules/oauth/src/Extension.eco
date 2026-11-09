@@ -15,18 +15,33 @@ use std::time;
  * nexus::oauth::carbon::Extension(),
  * nexus::mcp::Extension(),
  * ```
+ *
+ * `consent` (the app's page that asks the user), `scope` and `name` are the app's to say; the ones
+ * not given keep `OAuthConfig`'s defaults.
  */
 public class Extension : nexus::Extension
 {
     public const Stores $stores;
     public calendar::Clock $clock;
     internal nexus::auth::Throttle $registrations;
+    internal string? $consent;
+    internal string? $scope;
+    internal string? $named;
 
-    public constructor(stores: Stores $stores = .memory, clock: calendar::Clock $clock = calendar::SystemClock())
+    public constructor(
+        stores: Stores $stores = .memory,
+        clock: calendar::Clock $clock = calendar::SystemClock(),
+        consent: string? $consent = null,
+        scope: string? $scope = null,
+        name: string? $name = null
+    )
     {
         $this->stores = $stores;
         $this->clock = $clock;
         $this->registrations = nexus::auth::Throttle(10, .mins(15));
+        $this->consent = $consent;
+        $this->scope = $scope;
+        $this->named = $name;
     }
 
     public function name() : string
@@ -40,7 +55,12 @@ public class Extension : nexus::Extension
             return .error(.extension('nexus-oauth', 'its tokens are read by a nexus-auth guard; list nexus::auth::Extension() before nexus::oauth::Extension()'));
         };
         $guards->add(OAuthGuard());
+        // what the app gave here, over what the environment and the defaults say
         OAuthConfig $config = $s->get<OAuthConfig>();
+        $config->consent = $this->consent ?? $config->consent;
+        $config->scope = $this->scope ?? $config->scope;
+        $config->name = $this->named ?? $config->name;
+        $s->replace<OAuthConfig>(put: $config);
         try Extension::urls($config);
         if ($this->stores == Stores::memory) {
             $s->bind<MemoryOAuth>(put: MemoryOAuth());
@@ -105,16 +125,16 @@ public class Extension : nexus::Extension
     internal static function urls(const OAuthConfig& $config) : status<nexus::BootError>
     {
         guard nexus::Url::parse($config->consent) else ($e) {
-            return .error(.config([nexus::ConfigError::invalid('OAUTH_CONSENT', $e->message())]));
+            return .error(.extension('nexus-oauth', "consent: '{$config->consent}' is no URL: {$e->message()}"));
         };
         if ($config->issuer->empty()) {
             return .ok;
         }
         nexus::Url $issuer = guard nexus::Url::parse($config->issuer) else ($e) {
-            return .error(.config([nexus::ConfigError::invalid('OAUTH_ISSUER', $e->message())]));
+            return .error(.config([nexus::ConfigError::invalid('NEXUS_OAUTH_ISSUER', $e->message())]));
         };
         if (!$issuer->absolute()) {
-            return .error(.config([nexus::ConfigError::invalid('OAUTH_ISSUER', "'{$config->issuer}' is not absolute; give a scheme and a host")]));
+            return .error(.config([nexus::ConfigError::invalid('NEXUS_OAUTH_ISSUER', "'{$config->issuer}' is not absolute; give a scheme and a host")]));
         }
         return .ok;
     }

@@ -2,7 +2,7 @@ namespace nexus::oauth;
 
 /**
  * Where a client sends the user: the request is checked, then the browser goes to the app's consent
- * page (`OAUTH_CONSENT`) with the same query. A request whose client or redirect is in doubt is a
+ * page (`consent`) with the same query. A request whose client or redirect is in doubt is a
  * 400 here; anything else wrong goes back to the client as an OAuth error.
  */
 public class Authorize : nexus::Action
@@ -24,7 +24,7 @@ public class Authorize : nexus::Action
         };
         // the extension checked the consent page at boot
         nexus::Url $consent = guard nexus::Url::parse($this->config->consent) else ($e) {
-            return .error(.server("OAUTH_CONSENT: {$e->message()}"));
+            return .error(.server("consent: {$e->message()}"));
         };
         if (!$consent->absolute()) {
             nexus::Url $base = guard nexus::Url::parse($issuer) else {

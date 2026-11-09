@@ -1,0 +1,26 @@
+namespace nexus;
+
+/**
+ * Marks a type as a handler of signal `S`: its `handle` runs whenever a dispatcher it is bound to
+ * sends an `S`. It gets what it works with through its constructor; the signal is all it is
+ * handed. One type may handle several signals, one conformance and one `handle` each.
+ *
+ * ```echo
+ * public struct WelcomeNewUser : nexus::SignalHandler<UserRegistered>
+ * {
+ *     public JobsQueue $jobs;
+ *
+ *     public function handle(const UserRegistered& $signal) : status<nexus::Problem>
+ *     {
+ *         guard $this->jobs->push(SendWelcome($user: $signal->user)) else ($p) {
+ *             return .error($p);
+ *         };
+ *         return .ok;
+ *     }
+ * }
+ * ```
+ */
+public interface SignalHandler<S>
+{
+    function handle(const S& $signal) : status<Problem>;
+}

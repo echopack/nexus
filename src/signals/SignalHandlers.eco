@@ -1,0 +1,10 @@
+namespace nexus;
+
+/**
+ * The handlers of one signal type, held type-erased by `SignalDispatcher`.
+ */
+#[atomic]
+internal class SignalHandlers<S>
+{
+    public array<function<status<Problem>(const S&)>> $calls = [];
+}

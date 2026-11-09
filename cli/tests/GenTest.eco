@@ -129,18 +129,47 @@ test rules_must_fit_the_type
     expect($p->problems[0])->has("'email' does not apply to a boolean field, which takes accepted, declined");
 }
 
+internal function genConfig(const string& $prefix, const string& $fields) : string
+{
+    return "\{\"kind\":\"struct\",\"name\":\"DbConfig\",\"qualified\":\"shop::DbConfig\",\"visibility\":\"public\",\"file\":\"src/DbConfig.eco\",\"line\":1,\"tools\":[\{\"namespace\":\"nexus\",\"name\":\"config\",\"value\":\{\"kind\":\"string\",\"text\":\"{$prefix}\"}}],\"conforms\":[],\"fields\":{$fields},\"constructors\":[]}";
+}
+
 test configs_read_env_names
 {
-    string $fields = '[{"name":"url","visibility":"public","static":false,"type":{"kind":"string"},"default":false,"tools":[{"namespace":"nexus","name":"env","value":{"kind":"string","text":"DATABASE_URL"}}]},{"name":"poolSize","visibility":"public","static":false,"type":{"kind":"prim","name":"uint32"},"default":true,"default_value":"16","tools":[]}]';
-    string $config = "\{\"kind\":\"struct\",\"name\":\"DbConfig\",\"qualified\":\"shop::DbConfig\",\"visibility\":\"public\",\"file\":\"src/DbConfig.eco\",\"line\":1,\"tools\":[\{\"namespace\":\"nexus\",\"name\":\"config\",\"value\":\{\"kind\":\"string\",\"text\":\"db\"}}],\"conforms\":[],\"fields\":{$fields},\"constructors\":[]}";
-    $p = Program(genDecls($config));
+    string $fields = '[{"name":"url","visibility":"public","static":false,"type":{"kind":"string"},"default":false,"tools":[{"namespace":"nexus","name":"env","value":{"kind":"string","text":"ADDRESS"}}]},{"name":"poolSize","visibility":"public","static":false,"type":{"kind":"prim","name":"uint32"},"default":true,"default_value":"16","doc":"/**\\n     * Connections at most.\\n     */","tools":[{"namespace":"nexus","name":"env","value":null}]},{"name":"label","visibility":"public","static":false,"type":{"kind":"string"},"default":true,"default_value":"label","tools":[]}]';
+    $p = Program(genDecls(genConfig('DB', $fields)));
     expect($p->problems)->empty();
     $code = emitter::render($p);
     expect($code)
-        ->has("$vC0Url = $s->string('DATABASE_URL', required: true);")
+        ->has("$vC0Url = $s->string('DB_ADDRESS', required: true);")
         ->has("uint32? $vC0PoolSize = $s->uint32('DB_POOL_SIZE', required: false);")
         ->has('try $s->done();')
-        ->has('$b->param<shop::DbConfig>(shop::DbConfig($url: mv $okC0Url, $poolSize: $okC0PoolSize));');
+        // a field without #[nexus::env] keeps its default
+        ->has('$b->param<shop::DbConfig>(shop::DbConfig($url: mv $okC0Url, $poolSize: $okC0PoolSize));')
+        ->lacks('DB_LABEL')
+        ->has("#[nexus::envs: 'shop']")
+        ->has("$all[] = nexus::EnvVar($name: 'DB_ADDRESS', $type: 'string', $fallback: '', $required: true, $secret: false, $doc: '', $owner: 'shop::DbConfig');")
+        ->has('uint32 $d0 = 16;')
+        ->has("$all[] = nexus::EnvVar($name: 'DB_POOL_SIZE', $type: 'uint32', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'Connections at most.', $owner: 'shop::DbConfig');");
+}
+
+test a_config_prefix_is_written_as_it_is_read
+{
+    string $fields = '[{"name":"poolSize","visibility":"public","static":false,"type":{"kind":"prim","name":"uint32"},"default":true,"default_value":"16","tools":[{"namespace":"nexus","name":"env","value":null}]}]';
+    $lower = Program(genDecls(genConfig('db', $fields)));
+    expect($lower->problems[0])->has('#[nexus::config] takes the env prefix as it is read, like #[nexus::config: "BLOG"]');
+    $named = Program(genDecls(genConfig('', $fields)));
+    expect($named->problems)->size(1);
+}
+
+test a_config_field_outside_the_environment_needs_a_default
+{
+    string $fields = '[{"name":"label","visibility":"public","static":false,"type":{"kind":"string"},"default":false,"tools":[]}]';
+    $p = Program(genDecls(genConfig('DB', $fields)));
+    expect($p->problems[0])->has('field $label is not read from the environment and has no default; give it a default or #[nexus::env]');
+    string $badName = '[{"name":"url","visibility":"public","static":false,"type":{"kind":"string"},"default":false,"tools":[{"namespace":"nexus","name":"env","value":{"kind":"string","text":"database_url"}}]}]';
+    $q = Program(genDecls(genConfig('DB', $badName)));
+    expect($q->problems[0])->has('#[nexus::env] on $url takes what follows the prefix as it is read');
 }
 
 test the_module_name_and_its_declarations
@@ -252,43 +281,32 @@ internal function genTaskHandle() : string
     return "\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$ctx}],\"return\":\{\"kind\":\"named\",\"name\":\"status\",\"args\":[\{\"kind\":\"named\",\"name\":\"nexus::work::Failure\"}]}}";
 }
 
-test tasks_get_a_companion_and_a_codec
+test tasks_get_a_codec
 {
     string $fields = '{"name":"user","visibility":"public","static":false,"type":{"kind":"prim","name":"int64"},"default":false,"tools":[]},{"name":"note","visibility":"public","static":false,"type":{"kind":"optional","of":{"kind":"string"}},"default":false,"tools":[]},{"name":"count","visibility":"public","static":false,"type":{"kind":"prim","name":"uint32"},"default":true,"default_value":"1","tools":[]}';
     $p = Program(genDecls(genTask('', $fields, genTaskHandle())));
     expect($p->problems)->empty();
     expect($p->tasks)->size(1);
-    expect($p->tasks[0]->defaults)->no(says: 'a task with a required field has no all-default value');
     $code = emitter::render($p);
     expect($code)
-        ->has('public struct SendMailTask')
-        ->has('public static function push(nexus::Payload& $payload, construct shop::SendMail $task) : status<nexus::Problem>')
-        ->has('return nexus::work::Tasks::push<shop::SendMail>($payload, shop::SendMailTask::encode($task), after: $delay);')
-        ->lacks('function kind()')
+        ->has('internal struct SendMailTaskCodec')
+        ->lacks('public struct SendMailTask')
+        ->lacks('function push(')
         ->has("$p->put('user', $task->user);")
         ->has("$p->nil('note');")
         ->has("$p->put('count', $task->count as int64);")
         ->has("int64? $vUser = $p->int64('user', required: true);")
         ->has("$okNote = $p->string('note', required: false);")
-        ->has('guard $p->done() else ($e) {')
-        ->has('public static function decode(const string& $text) : result<shop::SendMail, nexus::work::Failure>')
-        ->has('$task = try shop::SendMailTask::decode($data);')
+        ->has('try $p->done();')
+        ->has('public static function decode(const string& $text) : result<shop::SendMail, nexus::work::DataError>')
         ->has('return .ok(shop::SendMail($user: $okUser, $note: mv $okNote, $count: $okCount));')
-        ->has('return .error(.giveUp("the task data does not decode: {$e}"));')
         ->has("#[nexus::tasks: 'shop']")
         ->has('public function tasks(nexus::work::Codecs $k) : void')
-        ->has("$k->add<shop::SendMail>(nexus::work::Codec('shop::SendMail', mv $run0, ''));")
+        ->has("$k->add<shop::SendMail>('shop::SendMail', function(const shop::SendMail& $task) : string {")
+        ->has('return shop::SendMailTaskCodec::encode($task);')
+        ->has('function(const string& $text) : result<shop::SendMail, nexus::work::DataError> {')
+        ->has('return shop::SendMailTaskCodec::decode($text);')
         ->has("$g->name<shop::SendMail>('shop::SendMail');");
-}
-
-test tasks_with_every_default_carry_data_to_schedule
-{
-    string $fields = '{"name":"days","visibility":"public","static":false,"type":{"kind":"prim","name":"int64"},"default":true,"default_value":"30","tools":[]}';
-    $p = Program(genDecls(genTask('', $fields, genTaskHandle())));
-    expect($p->problems)->empty();
-    expect($p->tasks[0]->defaults)->yes(says: 'every task field has a default');
-    $code = emitter::render($p);
-    expect($code)->has("$k->add<shop::SendMail>(nexus::work::Codec('shop::SendMail', mv $run0, shop::SendMailTask::encode(shop::SendMail())));");
 }
 
 test tasks_are_checked
@@ -301,20 +319,19 @@ test tasks_are_checked
     expect($noHandle->problems[0])->has('is a task but has no handle()');
 }
 
-internal function genListener(const string& $tools, const string& $conforms) : string
+internal function genHandler(const string& $tools, const string& $conforms) : string
 {
-    $ctx = genPayload();
-    string $ev = '{"name":"e","type":{"kind":"ptr","to":{"kind":"named","name":"shop::Signed","const":true},"borrow":true,"const":false},"default":false}';
-    return "\{\"kind\":\"struct\",\"name\":\"Welcome\",\"qualified\":\"shop::Welcome\",\"visibility\":\"public\",\"file\":\"src/Welcome.eco\",\"line\":2,\"generics\":[],\"tools\":[{$tools}],\"conforms\":[{$conforms}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"static\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$ctx},{$ev}],\"return\":\{\"kind\":\"named\",\"name\":\"status\",\"args\":[\{\"kind\":\"named\",\"name\":\"nexus::Problem\"}]}}]}";
+    string $signal = '{"name":"signal","type":{"kind":"ptr","to":{"kind":"named","name":"shop::Signed","const":true},"borrow":true,"const":false},"default":false}';
+    return "\{\"kind\":\"struct\",\"name\":\"Welcome\",\"qualified\":\"shop::Welcome\",\"visibility\":\"public\",\"file\":\"src/Welcome.eco\",\"line\":2,\"generics\":[],\"tools\":[{$tools}],\"conforms\":[{$conforms}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$signal}],\"return\":\{\"kind\":\"named\",\"name\":\"status\",\"args\":[\{\"kind\":\"named\",\"name\":\"nexus::Problem\"}]}}]}";
 }
 
-test listeners_are_named
+test signal_handlers_are_named
 {
-    string $listener = '{"kind":"named","name":"nexus::Listener","args":[{"kind":"named","name":"shop::Signed"}]}';
-    $p = Program(genDecls(genListener('', $listener)));
+    string $handler = '{"kind":"named","name":"nexus::SignalHandler","args":[{"kind":"named","name":"shop::Signed"}]}';
+    $p = Program(genDecls(genHandler('', $handler)));
     expect($p->problems)->empty();
     $code = emitter::render($p);
-    expect($code)->has("$g->name<shop::Welcome>('shop::Welcome');")->lacks('listeners(');
+    expect($code)->has("$g->name<shop::Welcome>('shop::Welcome');");
 }
 
 internal function genInput(const string& $fields) : string

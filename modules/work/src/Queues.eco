@@ -1,0 +1,107 @@
+namespace nexus::work;
+
+/**
+ * Binds queues and plans while an extension wires the app; nexus-app's `bindAsyncQueue`,
+ * `bindDistributedQueue` and `schedule` call these. A lane is named by `nexus gen` after its type,
+ * unless `name:` gives one. List nexus-work before the extension that binds; a problem stops the
+ * boot.
+ *
+ * ```echo
+ * nexus::work::Queues::bindAsync<WorkersLane>($s);
+ * nexus::work::Queues::bindDistributed<JobsLane>($s, nexus::work::MemoryStore())->into = 'blog::WorkersLane';
+ * ```
+ */
+public struct Queues
+{
+    /**
+     * Binds `AsyncQueue<L>` with as many worker threads as `NEXUS_WORK_THREADS` says; answers its
+     * pool, for its log.
+     */
+    public static function bindAsync<L>(nexus::Services& $s, name: const string& $name = '') : Pool
+    {
+        return Queues::bindAsync<L>($s, threads: $s->get<WorkConfig>()->threads, name: $name);
+    }
+
+    /**
+     * Binds `AsyncQueue<L>` with `$threads` worker threads; answers its pool, for its log.
+     */
+    public static function bindAsync<L>(nexus::Services& $s, threads: uint32 $threads, name: const string& $name = '') : Pool
+    {
+        Work $w = guard Queues::work($s) else {
+            return Pool('', 0, Codecs(), calendar::SystemClock());
+        };
+        string $lane = Queues::lane<L>($s, $name);
+        Pool $p = Pool($lane, $threads, $w->codecs, $w->clock);
+        if ($lane->empty()) {
+            return $p;
+        }
+        if ($threads < 1) {
+            $s->fail(.extension('nexus-work', "{$lane}: an async queue needs at least one thread"));
+            return $p;
+        }
+        guard $w->lanes->async($p) else ($e) {
+            $s->fail(.extension('nexus-work', $e));
+            return $p;
+        };
+        $s->bind<AsyncQueue<L>>(put: AsyncQueue<L>($p));
+        return $p;
+    }
+
+    /**
+     * Binds `DistributedQueue<L>` on `$store`, one queue for the whole process; answers the lane,
+     * whose `into` must name an async lane before boot.
+     */
+    public static function bindDistributed<L>(nexus::Services& $s, Store $store, name: const string& $name = '') : Distributed
+    {
+        string $lane = Queues::lane<L>($s, $name);
+        Distributed $d = Distributed($lane, $store);
+        Work $w = guard Queues::work($s) else {
+            return $d;
+        };
+        if ($lane->empty()) {
+            return $d;
+        }
+        guard $w->lanes->distributed($d) else ($e) {
+            $s->fail(.extension('nexus-work', $e));
+            return $d;
+        };
+        $s->bind<DistributedQueue<L>>(put: DistributedQueue<L>($store, $lane, $w->codecs, $w->clock));
+        return $d;
+    }
+
+    /**
+     * Plans `$task` for the scheduler; its schedule and lane are set on what it answers.
+     */
+    public static function schedule<T>(nexus::Services& $s, T $task) : Planned where T : Task
+    {
+        Item $item = Item::of<T>($task);
+        Work $w = guard Queues::work($s) else {
+            return Planned(mv $item);
+        };
+        return $w->scheduler->add(mv $item);
+    }
+
+    /**
+     * The name of lane `L`: `$given`, or what nexus gen named the type.
+     */
+    public static function lane<L>(nexus::Services& $s, const string& $given) : string
+    {
+        if (!$given->empty()) {
+            return $given;
+        }
+        string $name = $s->generated->nameOf<L>('');
+        if ($name->empty()) {
+            $s->fail(.extension('nexus-work', 'a lane nexus gen knows no name for was bound; is it a struct conforming to nexus::work::Lane, and did nexus gen run?'));
+        }
+        return $name;
+    }
+
+    internal static function work(nexus::Services& $s) : Work?
+    {
+        Work $w = guard $s->find<Work>() else {
+            $s->fail(.extension('nexus-work', 'list nexus::work::Extension() before the extension that binds queues'));
+            return null;
+        };
+        return $w;
+    }
+}

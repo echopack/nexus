@@ -1,0 +1,20 @@
+namespace nexus::work;
+
+/**
+ * Names a queue. A lane is an empty struct; the queue of the lane is its type, given a short name
+ * with an alias:
+ *
+ * ```echo
+ * public struct WorkersLane : nexus::work::Lane {}
+ * public type WorkersQueue = nexus::work::AsyncQueue<WorkersLane>;
+ *
+ * $app->bindAsyncQueue<WorkersLane>(threads: 4);
+ * $app->bind<SignUpService>(scoped: (Container $c) => SignUpService($c->get<WorkersQueue>()));
+ *
+ * // in SignUpService, which was built with the queue
+ * $this->workers->push(SendWelcome($user: 5));
+ * ```
+ */
+public interface Lane
+{
+}

@@ -8,16 +8,16 @@
  * reachable from the command line (`posts:show`, `posts:create`) and over
  * MCP (`show_post`, `create_post`), where clients sign in with OAuth.
  *
- *   DATABASE_URL=mysql://app:secret@127.0.0.1:3306/blog echoc run -- migrate
- *   DATABASE_URL=... echoc run -- user:password --email editor@example.com --password ...
- *   DATABASE_URL=... AUTH_KEY=... echoc run -- serve   (listens on 127.0.0.1:8080, works the queue)
- *   DATABASE_URL=... echoc run -- work                  (works the queue, no HTTP)
- *   DATABASE_URL=... echoc run -- posts:show 1          (the same service as GET /v1/posts/1)
+ *   NEXUS_DATABASE_URL=mysql://app:secret@127.0.0.1:3306/blog echoc run -- migrate
+ *   NEXUS_DATABASE_URL=... echoc run -- user:password --email editor@example.com --password ...
+ *   NEXUS_DATABASE_URL=... NEXUS_AUTH_KEY=... echoc run -- serve   (listens on 127.0.0.1:8080, works the queue)
+ *   NEXUS_DATABASE_URL=... echoc run -- work                  (works the queue, no HTTP)
+ *   NEXUS_DATABASE_URL=... echoc run -- posts:show 1          (the same service as GET /v1/posts/1)
  *   echoc run -- routes
  *   echoc test                                   (on carbon's fake driver)
  *
  * Everything is wired in src/App.eco through nexus-app's builder: the
- * routes, the MCP tools, the listener, the tasks and their schedule. One
+ * routes, the MCP tools, the signal handler, the tasks and their schedule. One
  * hook writes all generated code: `nexus gen` makes one decls pass and
  * runs carbongen (.carbon/) on it before writing .nexus/, which knows how
  * each action, command, tool and task runs but not where it answers.

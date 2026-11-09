@@ -1,7 +1,7 @@
 /*
  * nexus-carbon: a carbon database for a nexus app.
  *
- * The app says how its database opens, from the DATABASE_URL setting, and
+ * The app says how its database opens, from the NEXUS_DATABASE_URL setting, and
  * registers its repositories on it; the extension seals it, binds it, and
  * gives every request a carbon::Session of its own, with a pooled
  * connection that goes back when the request ends. Repositories come from

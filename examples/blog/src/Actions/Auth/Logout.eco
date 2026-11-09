@@ -1,0 +1,21 @@
+namespace Blog::Actions::Auth;
+
+/**
+ * Ends the token or session the request came with.
+ */
+#[nexus::through: ["nexus::auth::Authenticate"]]
+public class Logout : nexus::Action
+{
+    private nexus::auth::Guards $guards;
+
+    public constructor(nexus::auth::Guards $guards)
+    {
+        $this->guards = $guards;
+    }
+
+    public function handle(nexus::Payload& $payload) : status<nexus::Problem>
+    {
+        $me = try $payload->state<nexus::auth::Identity>();
+        return $this->guards->revoke($payload, $me);
+    }
+}

@@ -1,0 +1,418 @@
+/**
+ * nexus-work across processes: the memory store's contract (claims, leases, keys, pipelines,
+ * spawned tasks, failures, cancel, graph, prune), distributed queues fed into async ones by one
+ * or two servers, and the scheduler's once-per-slot pushes.
+ */
+
+use std::thread;
+use std::time;
+use ecotest::expect;
+use nexus::work::{Batch, Edge, StoredTask, TaskStatus, Hold, MemoryStore, Pushed, Requeued, Graph, Upstream, Pipeline, Step, GraphCommand};
+
+internal function task(const string& $id, time::timestamp $at) : StoredTask
+{
+    return StoredTask($id: $id, $name: 'TSay', $lane: 'jobs', $data: '{"text":"x"}', $tries: 3, $createdAt: $at, $availableAt: $at);
+}
+
+internal function one(const StoredTask& $t) : Batch
+{
+    Batch $b = Batch();
+    $b->tasks[] = $t;
+    return $b;
+}
+
+internal function store(MemoryStore $s, const Batch& $b) : Pushed
+{
+    Pushed $p = guard $s->push($b) else ($e) {
+        die("the push failed: {$e->detail(.dev)}");
+    };
+    return $p;
+}
+
+internal function claim(MemoryStore $s, time::timestamp $now, uint32 $max) : array<StoredTask>
+{
+    array<StoredTask> $all = guard $s->claim('jobs', $now, $now + time::duration::mins(1), $max);
+    return $all;
+}
+
+internal function ids(const array<StoredTask>& $tasks) : string
+{
+    array<string> $out = [];
+    foreach ($tasks as const &$t) {
+        $out[] = $t->id;
+    }
+    return str::join($out, ',');
+}
+
+internal function find(MemoryStore $s, const string& $id) : StoredTask
+{
+    foreach ($s->tasks() as const &$t) {
+        if ($t->id == $id) {
+            return $t;
+        }
+    }
+    die("no task {$id}");
+}
+
+internal function chain(time::timestamp $now) : Batch
+{
+    // a before b and c, d after both
+    Batch $b = Batch();
+    $b->tasks[] = task('a', $now);
+    StoredTask $tb = task('b', $now);
+    $tb->pending = 1;
+    $b->tasks[] = $tb;
+    StoredTask $tc = task('c', $now);
+    $tc->pending = 1;
+    $b->tasks[] = $tc;
+    StoredTask $td = task('d', $now);
+    $td->pending = 2;
+    $b->tasks[] = $td;
+    $b->edges[] = Edge('b', 'a');
+    $b->edges[] = Edge('c', 'a');
+    $b->edges[] = Edge('d', 'b');
+    $b->edges[] = Edge('d', 'c');
+    return $b;
+}
+
+test a_store_claims_by_priority_then_age_and_honours_leases
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    StoredTask $old = task('old', $now - time::duration::secs(5));
+    StoredTask $urgent = task('urgent', $now);
+    $urgent->priority = 5000;
+    StoredTask $later = task('later', $now + time::duration::secs(5));
+    StoredTask $other = task('other', $now);
+    $other->lane = 'mail';
+    store($s, one($old));
+    store($s, one($urgent));
+    store($s, one($later));
+    store($s, one($other));
+    array<StoredTask> $first = claim($s, $now, 5);
+    expect(ids($first))->is('urgent,old');
+    expect($first[0]->attempts)->is(1);
+    expect(claim($s, $now, 5))->empty();
+    // the lease ran out: claimed again, a second attempt
+    time::timestamp $after = $now + time::duration::mins(2);
+    array<StoredTask> $again = claim($s, $after, 1);
+    expect(ids($again))->is('urgent');
+    expect($again[0]->attempts)->is(2);
+    // the stale claim changes nothing
+    guard $s->done($first[0], $after, Batch());
+    expect(find($s, 'urgent')->status == TaskStatus::running)->yes(says: 'a stale claim cannot finish the task');
+    guard $s->done($again[0], $after, Batch());
+    expect(find($s, 'urgent')->status == TaskStatus::done)->yes(says: 'the live claim finishes it');
+}
+
+test keys_skip_pushes_and_hold_runs
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    StoredTask $slot = task('s1', $now);
+    $slot->key = 'Tick@60';
+    StoredTask $dup = task('s2', $now);
+    $dup->key = 'Tick@60';
+    expect(store($s, one($slot))->queued())->yes(says: 'the first slot is stored');
+    expect(store($s, one($dup))->queued())->no(says: 'the same slot is skipped');
+
+    StoredTask $u1 = task('u1', $now);
+    $u1->hold = .unique;
+    $u1->holdKey = 'TSay#5';
+    StoredTask $u2 = task('u2', $now);
+    $u2->hold = .unique;
+    $u2->holdKey = 'TSay#5';
+    expect(store($s, one($u1))->queued())->yes(says: 'the first unique task is stored');
+    expect(store($s, one($u2))->queued())->no(says: 'a second unique task is skipped while the first waits');
+
+    StoredTask $r1 = task('r1', $now);
+    $r1->hold = .running;
+    $r1->holdKey = 'TSay';
+    StoredTask $r2 = task('r2', $now);
+    $r2->hold = .running;
+    $r2->holdKey = 'TSay';
+    store($s, one($r1));
+    store($s, one($r2));
+    array<StoredTask> $claimed = claim($s, $now, 10);
+    expect(ids($claimed))->is('s1,u1,r1');
+    guard $s->done($claimed[2], $now, Batch());
+    expect(ids(claim($s, $now, 10)))->is('r2');
+    guard $s->done($claimed[1], $now, Batch());
+    expect(store($s, one($u2))->queued())->yes(says: 'once done the unique key is free');
+}
+
+test a_stored_pipeline_runs_in_order_and_a_hard_failure_holds_it_back
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    store($s, chain($now));
+    array<StoredTask> $a = claim($s, $now, 10);
+    expect(ids($a))->is('a');
+    guard $s->done($a[0], $now, Batch());
+    array<StoredTask> $bc = claim($s, $now, 10);
+    expect(ids($bc))->is('b,c');
+    guard $s->done($bc[0], $now, Batch());
+    guard $s->fail($bc[1], $now, 'broken');
+    expect(claim($s, $now, 10))->empty();
+    array<Upstream> $up = got($s->upstream('d'));
+    expect($up)->size(2);
+    Graph $g = got($s->graph('a', 32));
+    expect($g->tasks)->size(4);
+    expect(str::join(GraphCommand::lines($g), '|'))->is('TSay  done  a|├ TSay  done  b|│ └ TSay  blocked  d|└ TSay  failed  c');
+    got($s->failed('jobs', 10));
+    got($s->again('c', $now));
+    array<StoredTask> $c = claim($s, $now, 10);
+    expect(ids($c))->is('c');
+    guard $s->done($c[0], $now, Batch());
+    expect(ids(claim($s, $now, 10)))->is('d');
+}
+
+test a_soft_failure_lets_the_tasks_after_it_go
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    Batch $b = Batch();
+    StoredTask $first = task('first', $now);
+    $first->allowFailure = true;
+    $b->tasks[] = $first;
+    StoredTask $then = task('then', $now);
+    $then->pending = 1;
+    $b->tasks[] = $then;
+    $b->edges[] = Edge('then', 'first');
+    store($s, $b);
+    array<StoredTask> $f = claim($s, $now, 10);
+    guard $s->fail($f[0], $now, 'meh');
+    array<StoredTask> $t = claim($s, $now, 10);
+    expect(ids($t))->is('then');
+    array<Upstream> $up = got($s->upstream('then'));
+    expect($up[0]->failed)->yes(says: 'the task after it sees the failure');
+    // sent back and done later, it does not let go twice
+    got($s->again('first', $now));
+    array<StoredTask> $again = claim($s, $now, 10);
+    guard $s->done($again[0], $now, Batch());
+    expect(find($s, 'then')->pending)->is(0);
+}
+
+test spawned_tasks_run_before_the_tasks_waiting_for_their_parent
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    Batch $b = Batch();
+    $b->tasks[] = task('parent', $now);
+    StoredTask $after = task('after', $now);
+    $after->pending = 1;
+    $b->tasks[] = $after;
+    $b->edges[] = Edge('after', 'parent');
+    store($s, $b);
+    array<StoredTask> $p = claim($s, $now, 10);
+    Batch $kids = Batch();
+    $kids->tasks[] = task('kid1', $now);
+    $kids->tasks[] = task('kid2', $now);
+    guard $s->done($p[0], $now, $kids);
+    expect(find($s, 'after')->pending)->is(2);
+    expect(find($s, 'kid1')->parent)->is('parent');
+    array<StoredTask> $k = claim($s, $now, 10);
+    expect(ids($k))->is('kid1,kid2');
+    guard $s->done($k[0], $now, Batch());
+    guard $s->done($k[1], $now, Batch());
+    expect(ids(claim($s, $now, 10)))->is('after');
+}
+
+test cancel_prune_and_expiry
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    store($s, chain($now));
+    got($s->cancel('b', $now));
+    expect(find($s, 'd')->status == TaskStatus::cancelled)->yes(says: 'cancel reaches the tasks after it');
+    expect(find($s, 'c')->status == TaskStatus::waiting)->yes(says: 'cancel leaves the others');
+
+    StoredTask $stale = task('stale', $now);
+    $stale->expiresAt = $now + time::duration::secs(5);
+    store($s, one($stale));
+    time::timestamp $later = $now + time::duration::secs(10);
+    expect(ids(claim($s, $later, 10)))->is('a');
+    uint64 $gone = got($s->prune($later, $later + time::duration::secs(1)));
+    expect($gone)->is(2);
+    expect(find($s, 'stale')->status == TaskStatus::failed)->yes(says: 'an expired task fails');
+    expect(find($s, 'stale')->error)->is('expired before it ran');
+}
+
+test a_distributed_queue_runs_its_tasks_on_its_async_queue
+{
+    $r = rig();
+    $r->start();
+    Pushed $p = pushed($r->jobs()->push(TSay('stored')));
+    expect($p->queued())->yes(says: 'the task was stored');
+    $r->until('stored');
+    $r->drained();
+    $r->stop();
+    expect($r->tally->all())->size(1);
+    expect($r->live())->is(0);
+}
+
+test a_delayed_task_waits_for_its_time
+{
+    $r = rig();
+    $r->start();
+    pushed($r->jobs()->push(TSay('later'), in: time::duration::mins(20)));
+    pushed($r->jobs()->push(TSay('at'), at: time::timestamp::from_unix_secs(START + 3600)));
+    thread::sleep(80);
+    expect($r->tally->all())->empty();
+    $r->clock->advance(time::duration::mins(21));
+    $r->until('later');
+    thread::sleep(50);
+    expect($r->tally->has('at'))->no(says: 'the task at an hour waits');
+    $r->clock->advance(time::duration::mins(40));
+    $r->until('at');
+    $r->stop();
+    expect($r->tally->all())->size(2);
+}
+
+test a_distributed_pipeline_with_a_subflow_runs_in_order
+{
+    $r = rig();
+    $r->start();
+    $p = Pipeline();
+    Step $first = $p->add(TSay('first', $spawn: 2));
+    $p->add(TSay('last'), after: [$first]);
+    pushed($r->jobs()->push($p));
+    $r->until('last');
+    $r->drained();
+    $r->stop();
+    expect($r->tally->at('first.1') < $r->tally->at('last'))->yes(says: 'the spawned tasks run before last');
+}
+
+test a_failing_stored_task_retries_then_fails_and_holds_its_dependents
+{
+    $r = rig();
+    $r->start();
+    $p = Pipeline();
+    Step $flaky = $p->add(TSay('flaky', $limit: 2));
+    $p->add(TSay('held'), after: [$flaky]);
+    pushed($r->jobs()->push($p));
+    $r->wait(1);
+    $r->clock->advance(time::duration::secs(11));
+    $r->wait(2);
+    thread::sleep(80);
+    $r->stop();
+    expect($r->tally->has('held'))->no(says: 'the task after a failure is held back');
+    array<StoredTask> $failed = got($r->store->failed('jobs', 10));
+    expect($failed)->size(1);
+    expect($failed[0]->error)->is('flaky fails');
+    expect($failed[0]->attempts)->is(2);
+}
+
+test two_servers_on_one_store_run_each_task_once
+{
+    map<string, string> $vars = ['NEXUS_WORK_POLL' => '5ms'];
+    $shared = MemoryStore();
+    $a = Rig($vars, $store: $shared);
+    $b = Rig($vars, $store: $shared);
+    int32 $i = 0;
+    while ($i < 20) {
+        pushed($a->jobs()->push(TSay("t{$i}")));
+        $i++;
+    }
+    $a->start();
+    $b->start();
+    int32 $waited = 0;
+    while ($a->tally->count() + $b->tally->count() < 20 && $waited < 500) {
+        thread::sleep(10);
+        $waited++;
+    }
+    $a->drained();
+    $a->stop();
+    $b->stop();
+    expect($a->tally->count() + $b->tally->count())->is(20);
+    foreach ($shared->tasks() as const &$t) {
+        expect($t->attempts)->is(1);
+    }
+}
+
+test the_heartbeat_keeps_a_long_task_held
+{
+    map<string, string> $vars = ['NEXUS_WORK_POLL' => '5ms', 'NEXUS_WORK_LEASE' => '300ms'];
+    $shared = MemoryStore();
+    $a = Rig($vars, $store: $shared);
+    $b = Rig($vars, $store: $shared);
+    pushed($a->jobs()->push(TSay('long', $hold: true)));
+    $a->start();
+    $a->until('start long');
+    $b->start();
+    // past the lease on the clock the store reads: only the heartbeat keeps the claim
+    int32 $n = 0;
+    while ($n < 6) {
+        $a->clock->advance(time::duration::millis(100));
+        $b->clock->advance(time::duration::millis(100));
+        thread::sleep(120);
+        $n++;
+    }
+    expect($b->tally->all())->empty();
+    $a->gate->release();
+    $a->until('end long');
+    $a->drained();
+    $a->stop();
+    $b->stop();
+    expect(find($shared, $shared->tasks()[0]->id)->attempts)->is(1);
+}
+
+test the_scheduler_pushes_each_slot_once_across_servers
+{
+    map<string, string> $vars = ['NEXUS_WORK_POLL' => '10ms'];
+    $shared = MemoryStore();
+    $a = Rig($vars, $store: $shared, $plans: true);
+    $b = Rig($vars, $store: $shared, $plans: true);
+    time::timestamp $from = .from_unix_secs(START - 60);
+    $a->work()->scheduler->since($from);
+    $b->work()->scheduler->since($from);
+    time::timestamp $now = .from_unix_secs(START + 90);
+    uint32 $first = $a->work()->scheduler->tick($a->app->kernel, $a->work(), $now);
+    uint32 $second = $b->work()->scheduler->tick($b->app->kernel, $b->work(), $now);
+    expect($first)->is(2 as uint32);
+    expect($second)->is(0 as uint32);
+    expect($a->work()->scheduler->tick($a->app->kernel, $a->work(), $now))->is(0 as uint32);
+    expect($shared->tasks())->size(2);
+    expect($shared->tasks()[0]->key)->is('TSay@1793588400');
+    expect($shared->tasks()[1]->key)->is('TSay:1@1793588400');
+}
+
+internal class BadPlan : nexus::Extension
+{
+    public string $every;
+    public string $into;
+
+    public constructor(const string& $every, const string& $into)
+    {
+        $this->every = $every;
+        $this->into = $into;
+    }
+
+    public function name() : string
+    {
+        return 'bad-plan';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::work::Work? $found = $s->find<nexus::work::Work>();
+        if ($found != null) {
+            nexus::work::Work $w = guard $found;
+            $w->codecs->add<TSay>('TSay', (const TSay& $t) => TSayTaskCodec::encode($t), (const string& $text) => TSayTaskCodec::decode($text));
+        }
+        nexus::work::Planned $p = nexus::work::Queues::schedule<TSay>($s, TSay('x'));
+        $p->every = $this->every;
+        $p->into = $this->into;
+        return .ok;
+    }
+}
+
+test boot_refuses_bad_plans_and_lanes
+{
+    array<nexus::Extension> $bad = [nexus::work::Extension(), BadPlan('1500ms', 'nowhere')];
+    expect(bootWhy($bad))->is("nexus-work: TSay: '1500ms' must be whole seconds, at least one");
+    array<nexus::Extension> $lost = [nexus::work::Extension(), BadPlan('15m', 'nowhere')];
+    expect(bootWhy($lost))->is('nexus-work: TSay is scheduled into lane nowhere, which is not bound');
+    array<nexus::Extension> $first = [BadPlan('15m', 'x'), nexus::work::Extension()];
+    expect(bootWhy($first))->has('list nexus::work::Extension() before the extension that binds queues');
+}

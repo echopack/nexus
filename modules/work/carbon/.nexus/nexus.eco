@@ -11,11 +11,14 @@ namespace nexusgen::nexus_work_carbon;
 #[nexus::generated: 'nexus-work-carbon']
 public function generated(nexus::Generated $g) : void
 {
-    $g->name<nexus::work::carbon::CarbonQueue>('nexus::work::carbon::CarbonQueue');
     $g->name<nexus::work::carbon::CreateTasksTable>('nexus::work::carbon::CreateTasksTable');
     $g->name<nexus::work::carbon::Extension>('nexus::work::carbon::Extension');
     $g->name<nexus::work::carbon::QueuedTask>('nexus::work::carbon::QueuedTask');
+    $g->name<nexus::work::carbon::SessionStore>('nexus::work::carbon::SessionStore');
+    $g->name<nexus::work::carbon::Store>('nexus::work::carbon::Store');
     $g->name<nexus::work::carbon::Tables>('nexus::work::carbon::Tables');
+    $g->name<nexus::work::carbon::TaskEdge>('nexus::work::carbon::TaskEdge');
+    $g->name<nexus::work::carbon::TaskLock>('nexus::work::carbon::TaskLock');
 }
 
 /**
@@ -25,4 +28,14 @@ public function generated(nexus::Generated $g) : void
 public function configs(nexus::Env $env, container::Builder& $b) : status<nexus::BootError>
 {
     return .ok;
+}
+
+/**
+ * Every environment variable the #[nexus::config] structs of module nexus-work-carbon read.
+ */
+#[nexus::envs: 'nexus-work-carbon']
+public function envs() : array<nexus::EnvVar>
+{
+    array<nexus::EnvVar> $all = [];
+    return $all;
 }

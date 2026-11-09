@@ -18,45 +18,33 @@ public struct Console
     {
         string $name = Console::program($argv);
         $app = command::Command($name, '', 'a nexus app');
-        command::Subcommand $serve = $app->command('serve', 'answer requests until stopped', 'Boots the app and serves it through its transport. SIGINT or SIGTERM stops it cleanly.');
-        command::Subcommand $routes = $app->command('routes', 'list the route table', 'Boots the app and prints every route, most specific first.');
-        command::Subcommand $doctor = $app->command('doctor', 'check that the app boots', 'Reads the config, wires the container, checks every route and command has a binding and warns about actions no route reaches.');
-
         command::Arg $mode = $app->arg('mode', '', '<dev|test|prod>', 'what the process is for');
-        $app->fallback($mode, string::from(env::var('NEXUS_MODE', 'dev')));
+        $app->fallback($mode, string::from(env::var('NEXUS_MODE', EnvList::MODE)));
         command::Arg $envFile = $app->arg('env-file', '', '<path>', 'a .env file to read');
         $app->fallback($envFile, '.env');
-        command::Arg $listen = $app->arg('listen', '', '<host:port>', 'where to listen');
-        $app->fallback($listen, string::from(env::var('NEXUS_LISTEN', '127.0.0.1:8080')));
-        command::Arg $workers = $app->arg('workers', '', '<n>', 'worker threads, 0 for one per core');
-        $app->fallback($workers, '0');
-        array<command::Subcommand> $all = [$serve, $routes, $doctor];
-        foreach ($all as const &$sub) {
-            $app->accept($mode, $sub);
-            $app->accept($envFile, $sub);
-        }
-        command::Flag $noWork = $app->flag('no-work', '', 'run no task workers in this process');
-        command::Flag $noSchedule = $app->flag('no-schedule', '', 'push no scheduled tasks from this process');
-        $app->accept($listen, $serve);
-        $app->accept($workers, $serve);
-        $app->accept($noWork, $serve);
-        $app->accept($noSchedule, $serve);
 
-        // the commands of the extensions; an option two of them share is made once
+        // every command: the core's, then each extension's under its name
         Tables $tables = .generated();
         $commands = Commands(Generated($tables->generated));
+        $commands->add(ServeCommand());
+        $commands->add(RoutesCommand());
+        $commands->add(DoctorCommand($commands));
+        $commands->add(EnvCommand($tables->envs));
         foreach ($extensions as $ext) {
+            $commands->from = $ext->name();
             $ext->commands($commands);
         }
         foreach ($commands->problems() as const &$p) {
             io::eprintln("{$name}: {$p}");
             return 1;
         }
-        array<Command> $extra = $commands->all();
+
+        // an option two commands share is made once
+        array<Command> $all = $commands->all();
         map<string, command::Arg> $values = [];
         map<string, command::Arg> $lists = [];
         map<string, command::Flag> $flags = [];
-        foreach ($extra as &$cmd) {
+        foreach ($all as &$cmd) {
             command::Subcommand $sub = $app->command($cmd->name(), $cmd->summary(), $cmd->help());
             $app->accept($mode, $sub);
             $app->accept($envFile, $sub);
@@ -97,6 +85,16 @@ public struct Console
         command::Outcome $r = $app->parse($argv);
         if ($r->error != null) {
             command::Error $e = $r->error ?? .noCommand;
+            bool $none = match ($e) {
+                .noCommand => true,
+                else => false,
+            };
+            // no command: the whole help page, not just the usage
+            if ($none) {
+                command::CLIContext $page = .from($r->parsed, $app, .stdout);
+                $page->print(command::renderHelp($app, $r->parsed, $page));
+                return 1;
+            }
             command::CLIContext $err = .from($r->parsed, $app, .stderr);
             $err->print(command::renderError($e, $app, $r->parsed, $err));
             return 1;
@@ -120,50 +118,15 @@ public struct Console
             io::eprintln("{$name}: {$e->message()}");
             return 1;
         };
-        Logger $log = guard Console::logFor($m, $environment) else ($e) {
-            io::eprintln("{$name}: {$e->message()}");
-            return 1;
-        };
-        Logger::install($log);
-        Kernel $k = guard Kernel::boot($extensions, $m, $log, $environment, tables: $tables) else ($e) {
-            foreach ($e->lines() as const &$line) {
-                io::eprintln("{$name}: {$line}");
-            }
-            return 1;
-        };
-
         string $subject = $parsed->subject($app);
-        if ($subject == 'routes') {
-            io::println(Console::table($k));
-            return 0;
-        }
-        if ($subject == 'doctor') {
-            int32 $unbound = 0;
-            foreach ($extra as &$cmd) {
-                if (!$cmd->bound($k->services)) {
-                    io::eprintln("{$name}: command {$cmd->name()} has no binding; bind its class in an extension's services");
-                    $unbound = $unbound + 1;
-                }
-            }
-            if ($unbound > 0) {
-                return 1;
-            }
-            foreach (Console::unrouted($k) as const &$action) {
-                io::eprintln("{$name}: warning: {$action} is an action no route reaches; route it with bindAction or drop it");
-            }
-            io::println("ok: {$k->router->count()} routes, {$extra->count()} commands, mode {$m->name()}");
-            return 0;
-        }
-        foreach ($extra as &$cmd) {
+        foreach ($all as &$cmd) {
             if ($cmd->name() != $subject) {
                 continue;
             }
-            if (!$cmd->bound($k->services)) {
-                io::eprintln("{$name}: command {$cmd->name()} has no binding; bind its class in an extension's services");
-                $k->shutdown();
-                return 1;
-            }
             $in = Invocation($m);
+            $in->program = $name;
+            $in->env = $environment;
+            $in->command = $cmd;
             $in->out = .from($parsed, $app, .stdout);
             $in->positionals = $parsed->positionals;
             foreach ($cmd->options() as const &$o) {
@@ -177,27 +140,26 @@ public struct Console
                     $in->given[$o->name] = $parsed->stated($a);
                 }
             }
-            int32 $code = $cmd->run($k, $in);
-            $k->shutdown();
+            // the app boots only when the command asks for it
+            $in->boot = function[$extensions, $m, $environment, $tables]() : result<Kernel, BootError> {
+                Logger $log = guard Console::logFor($m, $environment) else ($e) {
+                    return .error(.extension('nexus', $e->message()));
+                };
+                Logger::install($log);
+                return Kernel::boot($extensions, $m, $log, $environment, tables: $tables);
+            };
+            int32 $code = $cmd->run($in);
+            $in->finish();
             return $code;
         }
-
-        $options = Serve();
-        guard $options->listen($parsed->value($listen)) else {
-            io::eprintln("{$name}: --listen wants host:port");
-            return 1;
-        };
-        uint64 $w = str::uint($parsed->value($workers)) ?? 0;
-        $options->workers = $w as uint32;
-        $options->work = !$parsed->stated($noWork);
-        $options->schedule = !$parsed->stated($noSchedule);
-        return Console::serve($k, $options, $name);
+        io::eprintln("{$name}: no command {$subject}");
+        return 1;
     }
 
     /**
      * Serves until a signal arrives: starts the extensions' background work, serves through the
-     * transport, then stops the transport (its requests finish), drains the background work and
-     * shuts the kernel down.
+     * transport, then stops the transport (its requests finish) and drains the background work.
+     * The command line shuts the kernel down after the command.
      */
     public static function serve(Kernel $k, const Serve& $options, const string& $name) : int32
     {
@@ -213,7 +175,6 @@ public struct Console
             foreach ($e->lines() as const &$line) {
                 io::eprintln("{$name}: {$line}");
             }
-            $k->shutdown();
             return 1;
         };
         $done = Flag();
@@ -233,7 +194,6 @@ public struct Console
         $done->raise();
         $ticker->join();
         $k->drain();
-        $k->shutdown();
         guard $served else ($e) {
             foreach ($e->lines() as const &$line) {
                 io::eprintln("{$name}: {$line}");
@@ -373,7 +333,7 @@ public struct Console
      */
     public static function logFor(Mode $m, const Env& $environment) : result<Logger, log::ConfigError>
     {
-        string $levelName = $environment->get('NEXUS_LOG') ?? 'info';
+        string $levelName = $environment->get('NEXUS_LOG') ?? EnvList::LOG;
         log::Level $level = try log::Level::parse($levelName);
         string? $formatName = $environment->get('NEXUS_LOG_FORMAT');
         array<log::Sink> $sinks = [];
@@ -388,8 +348,8 @@ public struct Console
         if ($file != null) {
             string $path = guard $file;
             log::Format $written = try log::Format::parse($formatName ?? 'json');
-            log::Rotate $rotate = try log::Rotate::parse($environment->get('NEXUS_LOG_ROTATE') ?? 'never');
-            uint32 $keep = try Console::count('NEXUS_LOG_KEEP', $environment->get('NEXUS_LOG_KEEP') ?? '5');
+            log::Rotate $rotate = try log::Rotate::parse($environment->get('NEXUS_LOG_ROTATE') ?? EnvList::LOG_ROTATE);
+            uint32 $keep = try Console::count('NEXUS_LOG_KEEP', $environment->get('NEXUS_LOG_KEEP') ?? EnvList::LOG_KEEP);
             log::File $sink = guard log::File::open($path, $written, $rotate, $keep) else ($e) {
                 return .error(.file($e));
             };
@@ -399,7 +359,7 @@ public struct Console
         if ($queued != null) {
             string $q = guard $queued;
             uint32 $capacity = try Console::count('NEXUS_LOG_ASYNC', $q);
-            log::Overflow $overflow = try log::Overflow::parse($environment->get('NEXUS_LOG_OVERFLOW') ?? 'block');
+            log::Overflow $overflow = try log::Overflow::parse($environment->get('NEXUS_LOG_OVERFLOW') ?? EnvList::LOG_OVERFLOW);
             array<log::Sink> $queuedSinks = [];
             foreach ($sinks as const &$s) {
                 $queuedSinks[] = log::Async($s, $capacity as usize, $overflow);

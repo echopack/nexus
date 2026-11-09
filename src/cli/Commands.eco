@@ -27,6 +27,17 @@ public class Commands
     public Generated $generated;
 
     internal array<Command> $list = [];
+
+    /**
+     * Who added each command of `$list`, by its name: `nexus` for the core's, else the extension's
+     * name.
+     */
+    internal map<string, string> $owners = map<string, string>();
+
+    /**
+     * Who the commands added now come from; the command line sets it around each extension.
+     */
+    internal string $from = 'nexus';
     internal array<function<void(Builder&)>> $bindings = [];
     internal array<string> $problems = [];
 
@@ -40,7 +51,7 @@ public class Commands
      */
     public function add(Command $cmd) : void
     {
-        $this->list[] = $cmd;
+        $this->put($cmd);
     }
 
     /**
@@ -94,7 +105,21 @@ public class Commands
             return;
         };
         $make = $maker->make;
-        $this->list[] = $make($name);
+        $this->put($make($name));
+    }
+
+    /**
+     * Adds `$cmd` under the current owner, unless its name is taken.
+     */
+    internal function put(Command $cmd) : void
+    {
+        string $name = $cmd->name();
+        if ($this->owners->has($name)) {
+            $this->problems[] = "command {$name} is added twice, by {$this->owners->get($name)} and by {$this->from}";
+            return;
+        }
+        $this->list[] = $cmd;
+        $this->owners[$name] = $this->from;
     }
 
     /**

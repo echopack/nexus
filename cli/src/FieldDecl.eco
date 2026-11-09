@@ -20,6 +20,12 @@ public struct FieldDecl
     public bool $secret = false;
 
     /**
+     * Whether a config field is read from the environment (`#[nexus::env]`); one that is not keeps
+     * its default.
+     */
+    public bool $env = false;
+
+    /**
      * The field's docblock as prose, for option help and schemas.
      */
     public string $doc = '';
@@ -65,6 +71,14 @@ public struct FieldDecl
     public array<Rule> $each = [];
     public array<string> $checks = [];
     public array<string> $eachChecks = [];
+
+    /**
+     * Whether a missing value falls back to a default other than null.
+     */
+    public const function defaulted() : bool
+    {
+        return $this->hasDefault && $this->defaultText != 'null';
+    }
 
     /**
      * The rule named `$key`, nil when the field has none.

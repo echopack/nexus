@@ -1,0 +1,49 @@
+namespace nexus;
+
+use std::io;
+
+/**
+ * `env`: lists every environment variable the app reads, the core's and each module's from
+ * `$tables`. It never boots the app, so it works before the environment is complete.
+ */
+public class EnvCommand : Command
+{
+    internal array<EnvTable> $tables;
+
+    public constructor(array<EnvTable> $tables)
+    {
+        $this->tables = mv $tables;
+    }
+
+    public const function name() : string
+    {
+        return 'env';
+    }
+
+    public const function summary() : string
+    {
+        return 'list the environment variables';
+    }
+
+    public const function help() : string
+    {
+        return 'Lists every variable the app reads, with its type, its default and whether it is set; values are never shown. Boots nothing, so it needs no database. --dotenv prints a .env to start from instead.';
+    }
+
+    public const function options() : array<CommandOption>
+    {
+        array<CommandOption> $out = [CommandOption(flag: 'dotenv', 'print a .env to start from')];
+        return $out;
+    }
+
+    public function run(Invocation& $in) : int32
+    {
+        array<EnvVar> $vars = EnvList::all($this->tables);
+        if ($in->flag('dotenv')) {
+            io::print(EnvList::dotenv($vars));
+        } else {
+            io::print(EnvList::table($vars, $in->env));
+        }
+        return 0;
+    }
+}

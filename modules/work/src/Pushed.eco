@@ -1,11 +1,27 @@
 namespace nexus::work;
 
 /**
- * What became of a push: stored, or not stored because a task with the same non-empty key is stored
- * already, done or not.
+ * What became of a push: queued under the id of its first task, or skipped because a task holding
+ * the same `.unique` key waits or runs (or the scheduler stored the slot already).
  */
 public enum Pushed
 {
-    case stored;
-    case duplicate;
+    case queued(string $id);
+    case skipped;
+
+    /**
+     * The id of the queued task, or null when it was skipped.
+     */
+    public const function id() : string?
+    {
+        return match ($this) {
+            Pushed::queued($id) => $id,
+            Pushed::skipped => null,
+        };
+    }
+
+    public const function queued() : bool
+    {
+        return $this->id() != null;
+    }
 }

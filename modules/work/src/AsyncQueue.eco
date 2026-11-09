@@ -1,0 +1,66 @@
+namespace nexus::work;
+
+/**
+ * A queue whose tasks run on worker threads of this process, as soon as one is free; named by its
+ * lane:
+ *
+ * ```echo
+ * public struct WorkersLane : nexus::work::Lane {}
+ * public type WorkersQueue = nexus::work::AsyncQueue<WorkersLane>;
+ *
+ * $app->bindAsyncQueue<WorkersLane>(threads: 4);
+ *
+ * // in a service, action or signal handler built with the queue
+ * $this->workers->push(SendWelcome($user: 5));
+ * ```
+ *
+ * What waits is kept in memory and lost when the process stops; a distributed queue keeps it, and
+ * can run it later.
+ */
+#[atomic]
+public class AsyncQueue<L>
+{
+    internal Pool $pool;
+
+    public constructor(Pool $pool)
+    {
+        $this->pool = $pool;
+    }
+
+    /**
+     * Queues `$task`, tried `$tries` times when given, as often as it says otherwise.
+     */
+    public function push<T>(T $task, tries: int64 $tries = 0) : result<Pushed, nexus::Problem> where T : Task
+    {
+        return $this->pool->push(nexus::work::Pipeline::one(Item::tried<T>($task, $tries)));
+    }
+
+    /**
+     * Queues every task of `$p`, or none.
+     */
+    public function push(Pipeline $p) : result<Pushed, nexus::Problem>
+    {
+        return $this->pool->push($p);
+    }
+
+    /**
+     * Drops waiting task `$id` and every task waiting for it; answers how many.
+     */
+    public function cancel(const string& $id) : uint64
+    {
+        return $this->pool->cancel($id);
+    }
+
+    /**
+     * How many tasks wait, not counting the running ones.
+     */
+    public function waiting() : uint64
+    {
+        return $this->pool->waiting();
+    }
+
+    public const function lane() : string
+    {
+        return $this->pool->lane;
+    }
+}

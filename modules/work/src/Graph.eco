@@ -1,0 +1,10 @@
+namespace nexus::work;
+
+/**
+ * Stored tasks connected through what they wait for, as `work:graph` shows them.
+ */
+public struct Graph
+{
+    public array<StoredTask> $tasks = [];
+    public array<Edge> $edges = [];
+}

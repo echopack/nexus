@@ -28,3 +28,13 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
 {
     return .ok;
 }
+
+/**
+ * Every environment variable the #[nexus::config] structs of module nexus-oauth-carbon read.
+ */
+#[nexus::envs: 'nexus-oauth-carbon']
+public function envs() : array<nexus::EnvVar>
+{
+    array<nexus::EnvVar> $all = [];
+    return $all;
+}

@@ -34,7 +34,7 @@ internal class Rig
             return .ok($made);
         });
         array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::oauth::Extension(stores: .provided, clock: $clock), nexus::oauth::carbon::Extension()];
-        map<string, string> $vars = ['AUTH_KEY' => KEY];
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
         $this->app = TestApp($exts, $vars);
     }
 
@@ -127,7 +127,7 @@ test boot_refuses_a_database_without_the_tables
         return .ok(carbon::DB($driver));
     });
     array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::oauth::Extension(stores: .provided), nexus::oauth::carbon::Extension()];
-    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
     result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
     expect($r)->fails();
 }

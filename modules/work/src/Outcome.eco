@@ -1,0 +1,13 @@
+namespace nexus::work;
+
+/**
+ * How one run went: the task's answer, the tasks it spawned, how long it took, and the log the run
+ * wrote to, for whoever settles it to log there too.
+ */
+public struct Outcome
+{
+    public status<Failure> $status;
+    public Pipeline $spawned;
+    public float64 $ms;
+    public nexus::Logger $log;
+}

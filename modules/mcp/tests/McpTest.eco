@@ -119,9 +119,9 @@ internal class Rig
 
     public constructor()
     {
-        map<string, string> $vars = ['AUTH_KEY' => KEY, 'MCP_NAME' => 'tests', 'MCP_INSTRUCTIONS' => 'Call echo_text.'];
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
         array<ToolSpec> $tools = [TEchoMcp::spec(), TEchoMcp::locked()];
-        array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::mcp::Extension(tools: $tools), TExt(true)];
+        array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::mcp::Extension(tools: $tools, name: 'tests', instructions: 'Call echo_text.'), TExt(true)];
         $this->app = TestApp($exts, $vars);
         nexus::Payload $payload = $this->app->kernel->background('issue', 'test');
         nexus::auth::Issued $issued = guard $payload->get<nexus::auth::Tokens>()->issue('7');
@@ -248,7 +248,7 @@ test the_endpoint_refuses_what_it_does_not_speak
 
 test boot_refuses_a_tool_without_a_binding
 {
-    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
     array<ToolSpec> $tools = [TEchoMcp::spec()];
     array<nexus::Extension> $exts = [nexus::auth::Extension('test'), nexus::mcp::Extension(tools: $tools), TExt(false)];
     $r = TestApp::attempt($exts, $vars);
@@ -257,7 +257,7 @@ test boot_refuses_a_tool_without_a_binding
 
 test boot_needs_nexus_auth
 {
-    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
     array<nexus::Extension> $exts = [nexus::mcp::Extension(), TExt(true)];
     $r = TestApp::attempt($exts, $vars);
     expect($r)->fails();

@@ -1,0 +1,32 @@
+namespace nexus::work;
+
+/**
+ * The subflow of a running task: tasks it spawns while it runs. They run after it, on its queue,
+ * and the tasks waiting for it wait for them too.
+ *
+ * ```echo
+ * foreach ($this->codecs as $codec) {
+ *     $payload->get<nexus::work::Flow>()->spawn(Transcode($id: $this->id, codec: $codec));
+ * }
+ * ```
+ *
+ * A task that fails spawns nothing; a retry spawns afresh.
+ */
+#[atomic]
+public class Flow
+{
+    internal nexus::work::Pipeline $children;
+
+    public constructor()
+    {
+        $this->children = nexus::work::Pipeline();
+    }
+
+    /**
+     * Spawns `$task`, to run once this task and every step of `$after` is done.
+     */
+    public function spawn<T>(T $task, after: array<Step> $after = []) : Step where T : Task
+    {
+        return $this->children->add<T>($task, after: $after);
+    }
+}

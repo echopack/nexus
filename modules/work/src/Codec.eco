@@ -1,12 +1,12 @@
 namespace nexus::work;
 
 /**
- * What `nexus gen` wrote for one task type: its name (the struct's qualified name), how its data
- * runs, and the data of the task with every default, empty when a field has none.
+ * How one task type is stored: its name (the struct's qualified name), how a value of it becomes
+ * text, and how text becomes an item again.
  */
 public struct Codec
 {
     public string $name;
-    public function<status<Failure>(nexus::Payload&, const string&)> $run;
-    public string $defaults;
+    public function<string(const erased&)> $encode;
+    public function<result<Item, DataError>(const string&)> $decode;
 }

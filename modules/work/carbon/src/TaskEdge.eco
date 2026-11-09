@@ -1,0 +1,29 @@
+namespace nexus::work::carbon;
+
+/**
+ * A row of `nexus_task_edges`: task `taskId` waits for task `afterId`.
+ */
+#[carbon::model: 'nexus_task_edges']
+public class TaskEdge : carbon::Model<TaskEdge, TaskEdgeRepository>
+{
+    public carbon::Link $link = .detached();
+
+    /**
+     * `<task>><after>`.
+     */
+    #[carbon::key]
+    public string $id;
+
+    public string $taskId;
+    public string $afterId;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    public static function of(const nexus::work::Edge& $e) : TaskEdge
+    {
+        return TaskEdge($id: "{$e->task}>{$e->after}", $taskId: $e->task, $afterId: $e->after);
+    }
+}

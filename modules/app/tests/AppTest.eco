@@ -1,7 +1,7 @@
 /**
  * An app wired through nexus::App, with generated tables written the way `nexus gen` writes them:
- * routes and links, an action offered as a tool under a renamed argument, tasks bound with their
- * queue and schedule, and the boot errors when a helper's module is missing.
+ * routes and links, an action offered as a tool under a renamed argument, queues and schedules, and
+ * the boot errors when a helper's module is missing.
  */
 
 use nexus::testing::{TestApp, TestResponse};
@@ -60,6 +60,9 @@ internal struct ASend : nexus::work::Task
     }
 }
 
+internal struct AWorkersLane : nexus::work::Lane {}
+internal struct AJobsLane : nexus::work::Lane {}
+
 // what nexus gen writes for this module's types
 internal struct AShowDispatch
 {
@@ -104,6 +107,8 @@ internal function appGenerated(nexus::Generated $g) : void
     });
     $g->name<APrune>('APrune');
     $g->name<ASend>('ASend');
+    $g->name<AWorkersLane>('AWorkersLane');
+    $g->name<AJobsLane>('AJobsLane');
 }
 
 #[nexus::mcp::tools: 'nexus-app-tests']
@@ -115,11 +120,8 @@ internal function appOffers(nexus::mcp::Offers $o) : void
 #[nexus::tasks: 'nexus-app-tests']
 internal function appTasks(nexus::work::Codecs $k) : void
 {
-    function<status<nexus::work::Failure>(nexus::Payload&, const string&)> $run = function(nexus::Payload& $payload, const string& $data) : status<nexus::work::Failure> {
-        return .ok;
-    };
-    $k->add<APrune>(nexus::work::Codec('APrune', $run, '{"days":30}'));
-    $k->add<ASend>(nexus::work::Codec('ASend', $run, ''));
+    $k->add<APrune>('APrune', (const APrune& $t) => '{"days":30}', (const string& $text) => .ok(APrune()));
+    $k->add<ASend>('ASend', (const ASend& $t) => '{}', (const string& $text) => .ok(ASend(1)));
 }
 
 /**
@@ -141,21 +143,34 @@ internal struct AAlsoHappened
 }
 
 /**
- * Counts the events it heard, one listener on two events.
+ * What the handler heard, shared by the app.
  */
-internal class ANoter
+internal class AHeard
 {
-    public static int32 $heard = 0;
+    public int32 $n = 0;
+}
 
-    public static function handle(nexus::Payload& $payload, const AHappened& $e) : status<nexus::Problem>
+/**
+ * Counts the signals it heard, one handler for two signals.
+ */
+internal class ANoter : nexus::SignalHandler<AHappened>, nexus::SignalHandler<AAlsoHappened>
+{
+    public AHeard $heard;
+
+    public constructor(AHeard $heard)
     {
-        ANoter::$heard = ANoter::$heard + $e->n;
+        $this->heard = $heard;
+    }
+
+    public function handle(const AHappened& $signal) : status<nexus::Problem>
+    {
+        $this->heard->n = $this->heard->n + $signal->n;
         return .ok;
     }
 
-    public static function handle(nexus::Payload& $payload, const AAlsoHappened& $e) : status<nexus::Problem>
+    public function handle(const AAlsoHappened& $signal) : status<nexus::Problem>
     {
-        ANoter::$heard = ANoter::$heard + $e->n;
+        $this->heard->n = $this->heard->n + $signal->n;
         return .ok;
     }
 }
@@ -206,8 +221,13 @@ internal class ItemsProvider : nexus::Provider
 
 internal class AApp : nexus::Extension
 {
-    public bool $scheduleSend = false;
+    public bool $noLane = false;
     public bool $noMethods = false;
+
+    /**
+     * Binds the async queue without a count, so `NEXUS_WORK_THREADS` says.
+     */
+    public bool $configuredThreads = false;
 
     public function name() : string
     {
@@ -222,22 +242,33 @@ internal class AApp : nexus::Extension
             array<nexus::Method> $none = [];
             $app->action<AShow>()->route($none, '/nowhere/{id}');
         }
-        $app->bindTask<APrune>()->cron('0 3 * * *');
-        if ($this->scheduleSend) {
-            $app->bindTask<ASend>()->every('1h');
+        if ($this->configuredThreads) {
+            $app->bindAsyncQueue<AWorkersLane>()
+                ->log((const nexus::work::Run& $run) => nexus::work::RunLog::silent);
         } else {
-            $app->bindTask<ASend>()->queue('mail')->tries(5);
+            $app->bindAsyncQueue<AWorkersLane>(threads: 3)
+                ->log((const nexus::work::Run& $run) => nexus::work::RunLog::silent);
         }
-        $app->bindListener<ANoter>()->on<AHappened>()->on<AAlsoHappened>();
+        nexus::app::DistributedQueueRef<AJobsLane> $jobs = $app->bindDistributedQueue<AJobsLane>(store: nexus::work::MemoryStore());
+        if (!$this->noLane) {
+            $jobs->into<AWorkersLane>();
+        }
+        $app->schedule(APrune($days: 7))->cron('0 3 * * *')->into<AJobsLane>();
+        $app->schedule(ASend($user: 5))->every('1h')->into<AJobsLane>();
+        $app->instance(AHeard());
+        $app->instance(nexus::SignalDispatcher());
+        $app->get<nexus::SignalDispatcher>()
+            ->bind<AHappened, ANoter>($app->get<AHeard>())
+            ->bind<AAlsoHappened, ANoter>($app->get<AHeard>());
         $app->bind<AEvery>(scoped: () => AEvery());
         $app->middleware<AEvery>();
         return .ok;
     }
 }
 
-internal function aBoot(AApp $app, bool $mcp) : result<TestApp, nexus::BootError>
+internal function aBoot(AApp $app, bool $mcp, map<string, string> $vars = map<string, string>()) : result<TestApp, nexus::BootError>
 {
-    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    $vars['NEXUS_AUTH_KEY'] = KEY;
     array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::work::Extension()];
     if ($mcp) {
         $exts[] = nexus::mcp::Extension();
@@ -350,38 +381,50 @@ test a_route_without_methods_stops_the_boot
     expect(aFirst($e))->has('is routed at /nowhere/{id} without a method');
 }
 
-test a_listener_runs_on_every_event_it_is_put_on
+test a_bound_dispatcher_runs_the_handler_for_every_signal_it_is_bound_to
 {
     TestApp $app = aApp();
-    nexus::Payload $payload = $app->kernel->background('event', 'test');
-    guard nexus::Events::emit<AHappened>($payload, AHappened($n: 2));
-    guard nexus::Events::emit<AAlsoHappened>($payload, AAlsoHappened($n: 3));
-    nexus::Kernel::finish($payload);
-    expect(ANoter::$heard)->is(5);
+    $signals = $app->kernel->services->get<nexus::SignalDispatcher>();
+    guard $signals->send(AHappened($n: 2));
+    guard $signals->send(AAlsoHappened($n: 3));
+    expect($app->kernel->services->get<AHeard>()->n)->is(5);
 }
 
-test tasks_are_bound_with_their_queue_and_schedule
+test an_async_queue_bound_without_a_count_takes_nexus_work_threads
+{
+    $a = AApp();
+    $a->configuredThreads = true;
+    TestApp $app = guard aBoot($a, true, ['NEXUS_WORK_THREADS' => '5']);
+    $w = $app->kernel->services->get<nexus::work::Work>();
+    nexus::work::Pool $pool = expect($w->lanes->pool('AWorkersLane'))->some();
+    expect($pool->threads)->is(5 as uint32);
+}
+
+test queues_and_schedules_are_bound
 {
     TestApp $app = aApp();
     $w = $app->kernel->services->get<nexus::work::Work>();
-    nexus::work::Kind $send = expect($w->kinds->of<ASend>())->some();
-    expect($send->name)->is('ASend');
-    expect($send->queue)->is('mail');
-    expect($send->tries)->is(5);
-    nexus::work::Kind $prune = expect($w->kinds->of<APrune>())->some();
-    expect($prune->cron)->is('0 3 * * *');
-    expect($prune->data)->is('{"days":30}');
-    expect($w->planned)->size(1);
-    expect($w->queues)->size(2);
+    nexus::work::Pool $pool = expect($w->lanes->pool('AWorkersLane'))->some();
+    expect($pool->threads)->is(3 as uint32);
+    nexus::work::Distributed $jobs = expect($w->lanes->store('AJobsLane'))->some();
+    expect($jobs->into)->is('AWorkersLane');
+    expect($w->scheduler->plans)->size(2);
+    expect($w->scheduler->plans[0]->cron)->is('0 3 * * *');
+    expect($w->scheduler->plans[1]->text())->is('every 1h');
+    expect($w->scheduler->plans[1]->into)->is('AJobsLane');
+    nexus::Payload $payload = $app->kernel->background('push', 'test');
+    nexus::work::Pushed $p = guard $payload->get<nexus::work::DistributedQueue<AJobsLane>>()->push(ASend($user: 9));
+    expect($p->queued())->yes(says: 'the task was stored');
+    nexus::Kernel::finish($payload);
 }
 
-test a_scheduled_task_needs_every_default
+test a_distributed_queue_without_an_async_one_stops_the_boot
 {
     $app = AApp();
-    $app->scheduleSend = true;
+    $app->noLane = true;
     $r = aBoot($app, true);
     nexus::BootError $e = expect($r)->fails();
-    expect(aFirst($e))->has('ASend is scheduled, so every field needs a default');
+    expect(aFirst($e))->has('AJobsLane: a distributed queue needs an async queue to run on');
 }
 
 test a_tool_without_nexus_mcp_stops_the_boot

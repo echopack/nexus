@@ -3,7 +3,7 @@ namespace nexus::work;
 use std::io;
 
 /**
- * `work:failed`: lists the tasks that gave up, the latest first.
+ * `work:failed`: lists the stored tasks that failed for good, the latest first.
  */
 public class FailedCommand : nexus::Command
 {
@@ -14,18 +14,27 @@ public class FailedCommand : nexus::Command
 
     public const function summary() : string
     {
-        return 'list the tasks that gave up';
+        return 'list the stored tasks that failed for good';
     }
 
-    public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
+    public const function options() : array<nexus::CommandOption>
     {
-        nexus::Payload $payload = $kernel->background('work:failed', nexus::Kernel::id());
-        array<StoredTask> $failed = guard $payload->get<Queue>()->failed(100) else ($p) {
-            io::eprintln("work:failed: {$p->detail(.dev)}");
-            nexus::Kernel::finish($payload);
+        array<nexus::CommandOption> $out = [Picked::queue()];
+        return $out;
+    }
+
+    public function run(nexus::Invocation& $in) : int32
+    {
+        nexus::Kernel $kernel = guard $in->kernel() else {
             return 1;
         };
-        nexus::Kernel::finish($payload);
+        Distributed $d = guard Picked::lane($kernel, $in, 'work:failed') else {
+            return 1;
+        };
+        array<StoredTask> $failed = guard $d->store->failed($d->lane, 100) else ($p) {
+            io::eprintln("work:failed: {$p->detail(.dev)}");
+            return 1;
+        };
         if ($failed->empty()) {
             io::println('no failed tasks');
             return 0;

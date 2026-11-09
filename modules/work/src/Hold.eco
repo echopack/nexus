@@ -1,0 +1,11 @@
+namespace nexus::work;
+
+/**
+ * How a task's exclusive key holds, as a store keeps it.
+ */
+public enum Hold : uint8
+{
+    case none = 0;
+    case running = 1;
+    case unique = 2;
+}

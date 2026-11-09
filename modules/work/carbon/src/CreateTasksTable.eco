@@ -1,33 +1,60 @@
 namespace nexus::work::carbon;
 
 /**
- * `nexus_tasks`. Add it to the app's migrations with `nexus::work::carbon::Tables::migrations()`.
+ * `nexus_tasks`, `nexus_task_edges` and `nexus_task_locks`. Add them to the app's migrations with
+ * `nexus::work::carbon::Tables::migrations()`.
  */
 #[carbon::migration: '20261102000500_create_nexus_tasks']
 public class CreateTasksTable : carbon::Migration
 {
     public function up(carbon::Migrating $m) : status<carbon::Error>
     {
-        return $m->create(carbon::ddl::Table('nexus_tasks')
+        try $m->create(carbon::ddl::Table('nexus_tasks')
             ->string('id', 32)
             ->string('name', 190)
-            ->string('queue', 64)
+            ->string('lane', 190)
             ->text('data')
             ->bigint('tries')
             ->bigint('attempts')
+            ->tinyint('status')
+            ->tinyint('hold')
+            ->string('hold_key', 190)
+            ->string('unique_live', 190, $nullable: true, $unique: true)
+            ->bool('allow_failure')
+            ->int('priority')
+            ->bigint('pending')
+            ->bool('released')
+            ->string('parent', 32)
             ->string('unique_key', 190, $nullable: true, $unique: true)
             ->datetime('created_at')
             ->datetime('available_at')
+            ->datetime('expires_at', $nullable: true)
             ->datetime('reserved_until', $nullable: true)
             ->datetime('done_at', $nullable: true)
             ->datetime('failed_at', $nullable: true)
             ->text('error')
-            ->index(['queue', 'available_at'])
+            ->index(['lane', 'status', 'pending', 'available_at'])
+            ->index(['status', 'done_at'])
+            ->index(['status', 'expires_at'])
             ->primary(['id']));
+        try $m->create(carbon::ddl::Table('nexus_task_edges')
+            ->string('id', 66)
+            ->string('task_id', 32)
+            ->string('after_id', 32)
+            ->index(['task_id'])
+            ->index(['after_id'])
+            ->primary(['id']));
+        return $m->create(carbon::ddl::Table('nexus_task_locks')
+            ->string('lock_key', 190)
+            ->string('holder', 32)
+            ->datetime('held_until')
+            ->primary(['lock_key']));
     }
 
     public function down(carbon::Migrating $m) : status<carbon::Error>
     {
+        try $m->drop('nexus_task_locks');
+        try $m->drop('nexus_task_edges');
         return $m->drop('nexus_tasks');
     }
 }

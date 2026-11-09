@@ -1,0 +1,11 @@
+namespace nexus::work;
+
+/**
+ * Where a task claimed from a store reports how its run went: the feeder that claimed it settles
+ * it in the store, so the pool keeps no graph, retries or keys for it.
+ */
+internal struct Fed
+{
+    public Run $run;
+    public function<void(const Outcome&)> $report;
+}

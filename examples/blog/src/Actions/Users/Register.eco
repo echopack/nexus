@@ -1,0 +1,44 @@
+namespace Blog::Actions::Users;
+
+use Blog::Inputs::Registration;
+use Blog::Models::{User, UserRepository};
+use Blog::Signals::UserRegistered;
+use Blog::Transformers::UserTransformer;
+
+/**
+ * Signs a new user up and signals it: `WelcomeNewUser` queues the welcome. A taken email
+ * is a 409.
+ */
+#[nexus::answers: { response: "Blog::Transformers::UserTransformer" }]
+public class Register : nexus::Action
+{
+    private UserRepository $users;
+    private nexus::auth::Passwords $passwords;
+    private UserTransformer $transformer;
+    private nexus::SignalDispatcher $signals;
+
+    public constructor(UserRepository $users, nexus::auth::Passwords $passwords, UserTransformer $transformer, nexus::SignalDispatcher $signals)
+    {
+        $this->users = $users;
+        $this->passwords = $passwords;
+        $this->transformer = $transformer;
+        $this->signals = $signals;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Body<Registration> $in) : result<nexus::Response, nexus::Problem>
+    {
+        // checked before the write: a bad ?include= signs nobody up
+        $inc = try $this->transformer->requestedIncludes($payload);
+        const Registration& $r = $in->value;
+        try $this->passwords->acceptable($r->password);
+        $hash = try $this->passwords->hash($r->password);
+        $made = guard $this->users->create(User($email: $r->email, $name: $r->name, $passwordHash: $hash)) else ($e) {
+            if ($e->duplicate()) {
+                return .error(.conflict('that email is taken'));
+            }
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        try $this->signals->send(UserRegistered($user: $made->id));
+        return .ok($this->transformer->createResponse($payload, $made, mv $inc, status: 201));
+    }
+}

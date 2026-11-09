@@ -2,8 +2,8 @@
  * nexus-app: nexus::App, the app's wiring, with a helper for every door,
  * and nexus::Provider for wiring one part of the app at a time.
  *
- * The core's nexus::Services knows the container, actions and listeners;
- * the transformers, repositories, MCP tools and tasks live in their own
+ * The core's nexus::Services knows the container and actions;
+ * the transformers, repositories, MCP tools and queues live in their own
  * modules, so their helpers do too. This module puts them all on one
  * object for the app's `services()`:
  *
@@ -13,8 +13,11 @@
  *   $app->bind<PostService>(scoped: (Container $c) => PostService($c->get<PostRepository>()));
  *   $app->bindAction<ShowPost>(...)->route([.get], '/v1/posts/{id}')->tool('show_post');
  *   $app->bindTool<CreatePostTool>(...)->offer('create_post');
- *   $app->bindTask<SendWelcome>()->queue('mail')->tries(5);
- *   $app->bindListener<WelcomeNewUser>()->on<UserRegistered>();
+ *   $app->bindAsyncQueue<WorkersLane>();   // NEXUS_WORK_THREADS threads, or threads: 4
+ *   $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))->into<WorkersLane>();
+ *   $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
+ *   $app->instance(nexus::SignalDispatcher());
+ *   $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobsQueue>());
  *
  * and a provider's commands, which the command line reads before boot:
  *
@@ -26,7 +29,7 @@
 #[module: "nexus-app"]
 #[version: "0.1.0"]
 #[epm::license: "MIT"]
-#[epm::description: "nexus::App and providers for wiring a nexus app: services, routes, transformers, repositories, MCP tools, tasks"]
+#[epm::description: "nexus::App and providers for wiring a nexus app: services, routes, transformers, repositories, MCP tools, task queues"]
 
 #[depends: "../.."]
 #[depends: "../rest"]

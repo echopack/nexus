@@ -1,7 +1,7 @@
 /**
  * Writes the generated file for a program: per action a `<Action>Dispatch` struct with the
  * dispatcher (and `call()` when it can be offered over MCP), per input a `<Input>Decoder`, per task
- * a `<Task>Task`, per command a `<Command>Cli`, per tool a `<Tool>Mcp`, per shape of an exposing
+ * a `<Task>TaskCodec`, per command a `<Command>Cli`, per tool a `<Tool>Mcp`, per shape of an exposing
  * model a `<Model><Shape>Mapping`, per log record a `nexus::log::record` overload, and the tables,
  * keyed by type, that the kernel and the extensions find. Routes, command names, tool names and
  * task queues are not in it: the app gives those where it is wired.
@@ -94,6 +94,8 @@ public function render(const Program& $p) : string
     table($code, $p);
     $code->blank();
     configs($code, $p);
+    $code->blank();
+    envs($code, $p);
     if (declares($p)) {
         $code->blank();
         inputs($code, $p);
@@ -818,7 +820,7 @@ internal function command(Code& $code, const Program& $p, const CommandDecl& $cm
     $code->close();
     $code->blank();
 
-    $code->open('public function run(nexus::Kernel $k, const nexus::Invocation& $in) : int32');
+    $code->open('public function run(nexus::Invocation& $in) : int32');
     $code->line('command::CLIContext $out = $in->out;');
     if (!$cmd->input->empty()) {
         $code->line('$pairs = nexus::Query();');
@@ -849,6 +851,10 @@ internal function command(Code& $code, const Program& $p, const CommandDecl& $cm
             }
         }
     }
+    // the app boots once the arguments are read
+    $code->begin('nexus::Kernel $k = guard $in->kernel() else');
+    $code->line('return 1;');
+    $code->close(';');
     $code->line('$payload = $k->background($this->named, nexus::Kernel::id());');
     $code->line('$payload->door = .cli;');
     if (!$cmd->input->empty()) {
@@ -915,34 +921,15 @@ internal function read(Code& $code, const string& $source, const string& $wire, 
 // tasks -------------------------------------------------------------------
 
 /**
- * The `<Task>Task` struct of `$j`: its push, its encoding and its run.
+ * The `<Task>TaskCodec` struct of `$j`: how its data becomes text and back.
  */
 internal function task(Code& $code, const TaskDecl& $j) : void
 {
     $short = names::short($j->qualified);
-    string $companion = "{$j->qualified}Task";
     $code->line('/**');
-    $code->line(" * Pushes, encodes and runs {$j->qualified}.");
+    $code->line(" * Stores {$j->qualified} as JSON text and reads it back, for a distributed queue.");
     $code->line(' */');
-    $code->open("public struct {$short}Task");
-
-    $code->line('/**');
-    $code->line(' * Queues `$task` to run on a worker as soon as one is free, on the queue the app bound the');
-    $code->line(' * task with. The constructor arguments of the task build it in place:');
-    $code->line(' * `push($payload, $user: 5)`.');
-    $code->line(' */');
-    $code->open("public static function push(nexus::Payload& $payload, construct {$j->qualified} $task) : status<nexus::Problem>");
-    $code->line("return nexus::work::Tasks::push<{$j->qualified}>($payload, {$companion}::encode($task));");
-    $code->close();
-    $code->blank();
-
-    $code->line('/**');
-    $code->line(' * Queues `$task` to run once `$delay` has passed.');
-    $code->line(' */');
-    $code->open("public static function push(nexus::Payload& $payload, const {$j->qualified}& $task, after: std::time::duration $delay) : status<nexus::Problem>");
-    $code->line("return nexus::work::Tasks::push<{$j->qualified}>($payload, {$companion}::encode($task), after: $delay);");
-    $code->close();
-    $code->blank();
+    $code->open("internal struct {$short}TaskCodec");
 
     $code->line('/**');
     $code->line(' * The task data as JSON text.');
@@ -974,13 +961,10 @@ internal function task(Code& $code, const TaskDecl& $j) : void
     $code->blank();
 
     $code->line('/**');
-    $code->line(' * The task from its JSON text; text that does not decode gives the');
-    $code->line(' * task up, since no retry will change it.');
+    $code->line(' * The task from its JSON text, or every field that does not read.');
     $code->line(' */');
-    $code->open("public static function decode(const string& $text) : result<{$j->qualified}, nexus::work::Failure>");
-    $code->begin('$p = guard nexus::work::TaskData::parse($text) else ($e)');
-    giveUp($code);
-    $code->close(';');
+    $code->open("public static function decode(const string& $text) : result<{$j->qualified}, nexus::work::DataError>");
+    $code->line('$p = try nexus::work::TaskData::parse($text);');
     array<string> $unwraps = [];
     array<string> $named = [];
     foreach ($j->fields as const &$f) {
@@ -992,34 +976,15 @@ internal function task(Code& $code, const TaskDecl& $j) : void
         $local = types::moved($f->typeText, $r->local);
         $named[] = "${$f->name}: {$local}";
     }
-    $code->begin('guard $p->done() else ($e)');
-    giveUp($code);
-    $code->close(';');
+    $code->line('try $p->done();');
     foreach ($unwraps as const &$line) {
         $code->line($line);
     }
     $args = str::join($named, ', ');
     $code->line("return .ok({$j->qualified}({$args}));");
     $code->close();
-    $code->blank();
-
-    $code->line('/**');
-    $code->line(' * Decodes the task data and runs the task.');
-    $code->line(' */');
-    $code->open('internal static function run(nexus::Payload& $payload, const string& $data) : status<nexus::work::Failure>');
-    $code->line("$task = try {$companion}::decode($data);");
-    $code->line('return $task->handle($payload);');
-    $code->close();
     $code->close();
     $code->blank();
-}
-
-/**
- * The line that gives a task up over data that does not decode, `$e`.
- */
-internal function giveUp(Code& $code) : void
-{
-    $code->line('return .error(.giveUp("the task data does not decode: {$e}"));');
 }
 
 /**
@@ -1039,26 +1004,21 @@ internal function widen(const string& $value, const string& $reader) : string
 internal function tasks(Code& $code, const Program& $p) : void
 {
     $code->line('/**');
-    $code->line(" * How each task of module {$p->module} runs, keyed by type; the app binds");
-    $code->line(' * them with their queue, tries and schedule. nexus-work finds this');
-    $code->line(' * function through its attribute.');
+    $code->line(" * How each task of module {$p->module} is stored, by type and by name. nexus-work");
+    $code->line(' * finds this function through its attribute.');
     $code->line(' */');
     $moduleName = names::quote($p->module);
     $code->line("#[nexus::tasks: {$moduleName}]");
     $code->open('public function tasks(nexus::work::Codecs $k) : void');
-    int32 $n = 0;
     foreach ($p->tasks as const &$j) {
         $nameQ = names::quote($j->qualified);
-        string $companion = "{$j->qualified}Task";
-        $code->begin("$run{$n} = function(nexus::Payload& $payload, const string& $data) : status<nexus::work::Failure>");
-        $code->line("return {$companion}::run($payload, $data);");
-        $code->close(';');
-        string $data = "''";
-        if ($j->defaults) {
-            $data = "{$companion}::encode({$j->qualified}())";
-        }
-        $code->line("$k->add<{$j->qualified}>(nexus::work::Codec({$nameQ}, mv $run{$n}, {$data}));");
-        $n = $n + 1;
+        string $codec = "{$j->qualified}TaskCodec";
+        $code->begin("$k->add<{$j->qualified}>({$nameQ}, function(const {$j->qualified}& $task) : string");
+        $code->line("return {$codec}::encode($task);");
+        $code->close(',');
+        $code->begin("function(const string& $text) : result<{$j->qualified}, nexus::work::DataError>");
+        $code->line("return {$codec}::decode($text);");
+        $code->close(');');
     }
     $code->close();
 }
@@ -1112,7 +1072,7 @@ internal function table(Code& $code, const Program& $p) : void
         $toolQ = names::quote($tool->qualified);
         $code->line("$g->name<{$tool->qualified}>({$toolQ});");
     }
-    // tasks, listeners, middleware and the rest that conforms to a nexus interface
+    // tasks, signal handlers, middleware and the rest that conforms to a nexus interface
     foreach ($p->named as const &$q) {
         $nameQ = names::quote($q);
         $code->line("$g->name<{$q}>({$nameQ});");
@@ -1185,6 +1145,53 @@ internal function inputs(Code& $code, const Program& $p) : void
 }
 
 /**
+ * The function that lists every environment variable the config structs of the module read, for
+ * the `env` command: name, type, the default as it would be written, and the field's docblock.
+ */
+internal function envs(Code& $code, const Program& $p) : void
+{
+    $code->line('/**');
+    $code->line(" * Every environment variable the #[nexus::config] structs of module {$p->module} read.");
+    $code->line(' */');
+    $moduleName = names::quote($p->module);
+    $code->line("#[nexus::envs: {$moduleName}]");
+    $code->open('public function envs() : array<nexus::EnvVar>');
+    $code->line('array<nexus::EnvVar> $all = [];');
+    int32 $i = 0;
+    foreach ($p->configs as const &$t) {
+        foreach ($t->fields as const &$f) {
+            if (!$f->env) {
+                continue;
+            }
+            bool $defaulted = $f->defaulted();
+            bool $required = !$defaulted && !types::optional($f->type);
+            string $fallback = "''";
+            if ($defaulted) {
+                $bare = types::render(types::bare($f->type));
+                $code->line("{$bare} $d{$i} = {$f->defaultText};");
+                $fallback = "nexus::EnvVar::text($d{$i})";
+                $i = $i + 1;
+            }
+            $name = names::quote($f->wire);
+            $type = names::quote($f->reader);
+            $doc = names::quote($f->doc);
+            $owner = names::quote($t->qualified);
+            string $must = 'false';
+            if ($required) {
+                $must = 'true';
+            }
+            string $hidden = 'false';
+            if ($f->secret) {
+                $hidden = 'true';
+            }
+            $code->line("$all[] = nexus::EnvVar($name: {$name}, $type: {$type}, $fallback: {$fallback}, $required: {$must}, $secret: {$hidden}, $doc: {$doc}, $owner: {$owner});");
+        }
+    }
+    $code->line('return $all;');
+    $code->close();
+}
+
+/**
  * The function that reads every config struct of the program from the environment and binds it.
  */
 internal function configs(Code& $code, const Program& $p) : void
@@ -1207,6 +1214,10 @@ internal function configs(Code& $code, const Program& $p) : void
     foreach ($p->configs as const &$t) {
         array<string> $named = [];
         foreach ($t->fields as const &$f) {
+            // a field not read from the environment keeps its default
+            if (!$f->env) {
+                continue;
+            }
             $u = names::upper($f->name);
             $r = read($code, '$s', $f->wire, $f->type, $f->hasDefault, $f->defaultText, "C{$i}{$u}");
             if (!$r->unwrap->empty()) {

@@ -133,39 +133,27 @@ public function generated(nexus::Generated $g) : void
 public function configs(nexus::Env $env, container::Builder& $b) : status<nexus::BootError>
 {
     $s = nexus::Settings($env);
-    string $okC0Name = 'nexus';
-    $vC0Name = $s->string('MCP_NAME', required: false);
-    if ($vC0Name != null) {
-        $xC0Name = guard $vC0Name;
-        $okC0Name = mv $xC0Name;
-    }
-    string $okC0Title = '';
-    $vC0Title = $s->string('MCP_TITLE', required: false);
-    if ($vC0Title != null) {
-        $xC0Title = guard $vC0Title;
-        $okC0Title = mv $xC0Title;
-    }
-    string $okC0Version = '0.1.0';
-    $vC0Version = $s->string('MCP_VERSION', required: false);
-    if ($vC0Version != null) {
-        $xC0Version = guard $vC0Version;
-        $okC0Version = mv $xC0Version;
-    }
-    string $okC0Instructions = '';
-    $vC0Instructions = $s->string('MCP_INSTRUCTIONS', required: false);
-    if ($vC0Instructions != null) {
-        $xC0Instructions = guard $vC0Instructions;
-        $okC0Instructions = mv $xC0Instructions;
-    }
     string $okC0Origin = '';
-    $vC0Origin = $s->string('MCP_ORIGIN', required: false);
+    $vC0Origin = $s->string('NEXUS_MCP_ORIGIN', required: false);
     if ($vC0Origin != null) {
         $xC0Origin = guard $vC0Origin;
         $okC0Origin = mv $xC0Origin;
     }
     try $s->done();
-    $b->param<nexus::mcp::McpConfig>(nexus::mcp::McpConfig($name: mv $okC0Name, $title: mv $okC0Title, $version: mv $okC0Version, $instructions: mv $okC0Instructions, $origin: mv $okC0Origin));
+    $b->param<nexus::mcp::McpConfig>(nexus::mcp::McpConfig($origin: mv $okC0Origin));
     return .ok;
+}
+
+/**
+ * Every environment variable the #[nexus::config] structs of module nexus-mcp read.
+ */
+#[nexus::envs: 'nexus-mcp']
+public function envs() : array<nexus::EnvVar>
+{
+    array<nexus::EnvVar> $all = [];
+    string $d0 = '';
+    $all[] = nexus::EnvVar($name: 'NEXUS_MCP_ORIGIN', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'The public origin the OAuth metadata link in a 401 points at; empty takes it from the request.', $owner: 'nexus::mcp::McpConfig');
+    return $all;
 }
 
 /**

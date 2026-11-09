@@ -1,0 +1,408 @@
+/**
+ * What the nexus-work suites share: a task the way an app writes one (with its codec the way nexus
+ * gen writes one), lanes, and an app booted around them on a manual clock.
+ */
+
+use std::thread;
+use std::time;
+use nexus::testing::TestApp;
+use nexus::work::{Task, Failure, Exclusive, Priority, Run, Flow, TaskData, DataError, Queues, MemoryStore, Store, AsyncQueue, DistributedQueue, Lane, Pool, Distributed, Work};
+
+// 2026-11-02T02:59:00Z, a Monday
+internal const int64 START = 1793588340;
+
+internal struct TLane : Lane {}
+internal struct TJobs : Lane {}
+internal type WorkersQueue = AsyncQueue<TLane>;
+internal type JobsQueue = DistributedQueue<TJobs>;
+
+/**
+ * What tasks did, in order.
+ */
+#[atomic]
+internal class Tally
+{
+    public thread::mutex<array<string>> $seen = thread::mutex<array<string>>(array<string>());
+
+    public function add(const string& $s) : void
+    {
+        thread::locked<array<string>> $l = $this->seen->lock();
+        $l->value[] = $s;
+    }
+
+    public function all() : array<string>
+    {
+        thread::locked<array<string>> $l = $this->seen->lock();
+        return $l->value->clone();
+    }
+
+    public function count() : usize
+    {
+        thread::locked<array<string>> $l = $this->seen->lock();
+        return $l->value->count();
+    }
+
+    public function has(const string& $s) : bool
+    {
+        foreach ($this->all() as const &$x) {
+            if ($x == $s) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Where `$s` first is, or -1.
+     */
+    public function at(const string& $s) : int64
+    {
+        foreach ($this->all() as $i => const &$x) {
+            if ($x == $s) {
+                return $i as int64;
+            }
+        }
+        return -1;
+    }
+}
+
+/**
+ * Holds tasks that wait for it until it opens.
+ */
+#[atomic]
+internal class Gate
+{
+    public atomic<int32> $open = atomic<int32>(0);
+
+    public function release() : void
+    {
+        $this->open->store(1);
+    }
+
+    public function opened() : bool
+    {
+        return $this->open->load() != 0;
+    }
+}
+
+/**
+ * A task the way an app writes one, with knobs for every policy.
+ */
+internal struct TSay : Task
+{
+    public string $text;
+
+    /**
+     * '' for none, 'running' or 'unique', on `$key`.
+     */
+    public string $mode = '';
+    public string $key = '';
+    public bool $soft = false;
+    public int64 $prio = 0;
+
+    /**
+     * Waits for the gate, logging start and end.
+     */
+    public bool $hold = false;
+
+    /**
+     * How many children it spawns.
+     */
+    public int64 $spawn = 0;
+
+    /**
+     * Seconds it may wait, 0 for ever.
+     */
+    public int64 $ttl = 0;
+    public int64 $limit = 3;
+    public bool $quiet = false;
+
+    public const function tries() : int64
+    {
+        return $this->limit;
+    }
+
+    public const function exclusive() : Exclusive
+    {
+        if ($this->mode == 'running') {
+            return .running($this->key);
+        }
+        if ($this->mode == 'unique') {
+            return .unique($this->key);
+        }
+        return .none;
+    }
+
+    public const function allowFailure() : bool
+    {
+        return $this->soft;
+    }
+
+    public const function priority() : Priority
+    {
+        if ($this->prio > 0) {
+            return .high;
+        }
+        if ($this->prio < 0) {
+            return .low;
+        }
+        return .normal;
+    }
+
+    public const function expires() : time::duration?
+    {
+        if ($this->ttl == 0) {
+            return null;
+        }
+        return time::duration::secs($this->ttl);
+    }
+
+    public const function log(const Run& $run) : nexus::work::RunLog
+    {
+        if ($this->quiet) {
+            return .silent;
+        }
+        return .inherit;
+    }
+
+    public function handle(nexus::Payload& $payload) : status<Failure>
+    {
+        Tally $t = $payload->get<Tally>();
+        if ($this->hold) {
+            Gate $g = $payload->get<Gate>();
+            $t->add("start {$this->text}");
+            while (!$g->opened()) {
+                thread::sleep(5);
+            }
+            $t->add("end {$this->text}");
+            return .ok;
+        }
+        $t->add($this->text);
+        Run $run = guard $payload->state<Run>() else {
+            return .error(.giveUp('no run'));
+        };
+        foreach ($run->upstream as const &$u) {
+            if ($u->failed) {
+                $t->add("{$this->text} after failed {$u->name}");
+            }
+        }
+        $payload->log->info('said', ['text' => $this->text]);
+        Flow $flow = $payload->get<Flow>();
+        int64 $i = 0;
+        while ($i < $this->spawn) {
+            $flow->spawn(TSay("{$this->text}.{$i}"));
+            $i++;
+        }
+        if ($this->text == 'flaky' || $this->text == 'soft-flaky') {
+            return .error(.retry('flaky fails'));
+        }
+        if ($this->text == 'doomed' || $this->text == 'soft-doomed') {
+            return .error(.giveUp('doomed'));
+        }
+        return .ok;
+    }
+}
+
+/**
+ * The codec the way nexus gen writes one.
+ */
+internal struct TSayTaskCodec
+{
+    public static function encode(const TSay& $task) : string
+    {
+        $p = TaskData();
+        $p->put('text', $task->text);
+        $p->put('mode', $task->mode);
+        $p->put('key', $task->key);
+        $p->put('soft', $task->soft);
+        $p->put('prio', $task->prio);
+        $p->put('hold', $task->hold);
+        $p->put('spawn', $task->spawn);
+        $p->put('ttl', $task->ttl);
+        $p->put('limit', $task->limit);
+        $p->put('quiet', $task->quiet);
+        return $p->text();
+    }
+
+    public static function decode(const string& $text) : result<TSay, DataError>
+    {
+        $p = try TaskData::parse($text);
+        string? $vText = $p->string('text', required: true);
+        string $mode = $p->string('mode', required: false) ?? '';
+        string $key = $p->string('key', required: false) ?? '';
+        bool $soft = $p->bool('soft', required: false) ?? false;
+        int64 $prio = $p->int64('prio', required: false) ?? 0;
+        bool $hold = $p->bool('hold', required: false) ?? false;
+        int64 $spawn = $p->int64('spawn', required: false) ?? 0;
+        int64 $ttl = $p->int64('ttl', required: false) ?? 0;
+        int64 $limit = $p->int64('limit', required: false) ?? 3;
+        bool $quiet = $p->bool('quiet', required: false) ?? false;
+        try $p->done();
+        string $okText = guard $vText;
+        return .ok(TSay($text: $okText, $mode: $mode, $key: $key, $soft: $soft, $prio: $prio, $hold: $hold, $spawn: $spawn, $ttl: $ttl, $limit: $limit, $quiet: $quiet));
+    }
+}
+
+internal class TExt : nexus::Extension
+{
+    public Tally $tally;
+    public Gate $gate;
+    public MemoryStore $store;
+    public uint32 $threads;
+    public bool $plans;
+
+    public constructor(Tally $tally, Gate $gate, MemoryStore $store, uint32 $threads, bool $plans)
+    {
+        $this->tally = $tally;
+        $this->gate = $gate;
+        $this->store = $store;
+        $this->threads = $threads;
+        $this->plans = $plans;
+    }
+
+    public function name() : string
+    {
+        return 'work-test';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<Tally>(put: $this->tally);
+        $s->bind<Gate>(put: $this->gate);
+        Work $w = $s->get<Work>();
+        $w->codecs->add<TSay>('TSay', (const TSay& $t) => TSayTaskCodec::encode($t), (const string& $text) => TSayTaskCodec::decode($text));
+        Queues::bindAsync<TLane>($s, threads: $this->threads, name: 'workers');
+        Distributed $d = Queues::bindDistributed<TJobs>($s, $this->store, name: 'jobs');
+        $d->into = 'workers';
+        if ($this->plans) {
+            nexus::work::Planned $tick = Queues::schedule<TSay>($s, TSay('tick'));
+            $tick->every = '15m';
+            $tick->into = 'jobs';
+            nexus::work::Planned $nightly = Queues::schedule<TSay>($s, TSay('nightly'));
+            $nightly->cron = '0 3 * * *';
+            $nightly->into = 'jobs';
+        }
+        return .ok;
+    }
+}
+
+internal class Rig
+{
+    public TestApp $app;
+    public calendar::ManualClock $clock;
+    public Tally $tally;
+    public Gate $gate;
+    public MemoryStore $store;
+
+    public constructor(map<string, string> $vars, uint32 $threads = 2, MemoryStore $store = MemoryStore(), bool $plans = false)
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        $this->tally = Tally();
+        $this->gate = Gate();
+        $this->store = $store;
+        array<nexus::Extension> $exts = [nexus::work::Extension(clock: $this->clock), TExt($this->tally, $this->gate, $store, $threads, $plans)];
+        $this->app = TestApp($exts, mv $vars);
+    }
+
+    public function work() : Work
+    {
+        return $this->app->kernel->services->get<Work>();
+    }
+
+    public function payload() : nexus::Payload
+    {
+        return $this->app->kernel->background('test', nexus::Kernel::id());
+    }
+
+    public function workers() : WorkersQueue
+    {
+        return $this->app->kernel->services->get<WorkersQueue>();
+    }
+
+    /**
+     * The distributed queue as a request reaches it.
+     */
+    public function jobs() : JobsQueue
+    {
+        nexus::Payload $p = $this->payload();
+        return $p->get<JobsQueue>();
+    }
+
+    public function start() : void
+    {
+        guard $this->app->kernel->start(nexus::Serve());
+    }
+
+    public function stop() : void
+    {
+        $this->app->kernel->drain();
+    }
+
+    /**
+     * Waits, at most five seconds, until the tally holds `$n` entries.
+     */
+    public function wait(usize $n) : void
+    {
+        int32 $waited = 0;
+        while ($this->tally->count() < $n && $waited < 500) {
+            thread::sleep(10);
+            $waited++;
+        }
+    }
+
+    /**
+     * Waits, at most five seconds, until the tally holds `$s`.
+     */
+    public function until(const string& $s) : void
+    {
+        int32 $waited = 0;
+        while (!$this->tally->has($s) && $waited < 500) {
+            thread::sleep(10);
+            $waited++;
+        }
+    }
+
+    /**
+     * Waits, at most five seconds, until the store holds no task that waits or runs.
+     */
+    public function drained() : void
+    {
+        int32 $waited = 0;
+        while ($this->live() > 0 && $waited < 500) {
+            thread::sleep(10);
+            $waited++;
+        }
+    }
+
+    public function live() : uint64
+    {
+        uint64 $n = guard $this->store->waiting('jobs');
+        return $n;
+    }
+}
+
+/**
+ * The value of `$r`; a problem stops the test with its detail.
+ */
+internal function got<T>(result<T, nexus::Problem> $r) : T
+{
+    T $v = guard $r else ($e) {
+        die("expected a value, got the problem: {$e->detail(.dev)}");
+    };
+    return $v;
+}
+
+internal function rig() : Rig
+{
+    map<string, string> $vars = ['NEXUS_WORK_POLL' => '10ms'];
+    return Rig($vars);
+}
+
+internal function bootWhy(array<nexus::Extension> $exts) : string
+{
+    $none = map<string, string>();
+    guard TestApp::attempt($exts, $none) else ($e) {
+        return str::join($e->lines(), '; ');
+    };
+    return '';
+}

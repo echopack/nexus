@@ -1,0 +1,68 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * A task in a pool: waiting, ready or running, with where it stands in its pipeline.
+ */
+internal struct Node
+{
+    public string $id;
+    public string $name;
+    public Item $item;
+    public string $key = '';
+    public Hold $hold = .none;
+
+    /**
+     * The tries so far, the running one included.
+     */
+    public int64 $attempt = 0;
+
+    /**
+     * The tasks it waits for that have not settled.
+     */
+    public usize $pending = 0;
+
+    /**
+     * The tasks waiting for it.
+     */
+    public array<string> $next = [];
+    public array<Upstream> $upstream = [];
+    public uint64 $seq = 0;
+    public time::timestamp? $expiresAt = null;
+    public Fed? $fed = null;
+
+    /**
+     * `$item` waiting to run under `$id` as task type `$name`.
+     */
+    public static function of(const string& $id, const string& $name, const Item& $item) : Node
+    {
+        $n = Node($id, $name, $item);
+        $n->hold = $item->policy->exclusive->hold();
+        $n->key = $item->policy->exclusive->key($name);
+        return $n;
+    }
+
+    public const function tries() : int64
+    {
+        Fed? $fed = $this->fed;
+        if ($fed != null) {
+            Fed $f = guard $fed;
+            return $f->run->tries;
+        }
+        return $this->item->policy->tries;
+    }
+
+    /**
+     * Its run: the one a feeder claimed, or a fresh one in `$lane`.
+     */
+    public const function run(const string& $lane) : Run
+    {
+        Fed? $fed = $this->fed;
+        if ($fed != null) {
+            Fed $f = guard $fed;
+            return $f->run;
+        }
+        return Run($this->id, $this->name, $lane, $this->attempt, $this->tries(), $this->key, $this->upstream);
+    }
+}

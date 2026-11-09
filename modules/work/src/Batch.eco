@@ -1,0 +1,57 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * Tasks stored together with what they wait for: a pushed pipeline, or what a task spawned.
+ */
+public struct Batch
+{
+    public array<StoredTask> $tasks = [];
+    public array<Edge> $edges = [];
+
+    /**
+     * Stores `$p` on lane `$lane` of `$store`, the tasks that wait for nothing due at `$at`, under
+     * `$key` when it is not empty.
+     */
+    public static function store(Store $store, const string& $lane, Codecs $codecs, Pipeline $p, time::timestamp $now, time::timestamp $at, const string& $key) : result<Pushed, nexus::Problem>
+    {
+        array<string> $names = try $codecs->pushed($p);
+        $p->assign();
+        $batch = Batch::of($p, $names, $codecs, $lane, $now, $at, $key);
+        return $store->push($batch);
+    }
+
+    /**
+     * The tasks of `$p` (named `$names`, with ids assigned) on lane `$lane`: the ones that wait for
+     * nothing due at `$at`, every one under `$key` when it is not empty.
+     */
+    public static function of(const Pipeline& $p, const array<string>& $names, Codecs $codecs, const string& $lane, time::timestamp $now, time::timestamp $at, const string& $key) : Batch
+    {
+        Batch $b = Batch();
+        foreach ($p->items as $i => const &$item) {
+            Codec $codec = guard $codecs->find($names[$i]);
+            function<string(const erased&)> $encode = $codec->encode;
+            $b->tasks[] = StoredTask(
+                $id: $p->ids[$i],
+                $name: $names[$i],
+                $lane: $lane,
+                $data: $encode($item->value),
+                $tries: $item->policy->tries,
+                $hold: $item->policy->exclusive->hold(),
+                $holdKey: $item->policy->exclusive->key($names[$i]),
+                $allowFailure: $item->policy->allowFailure,
+                $priority: $item->policy->priority->value(),
+                $pending: $p->after[$i]->count() as int64,
+                $key: $key,
+                $createdAt: $now,
+                $availableAt: $at,
+                $expiresAt: $item->policy->expiresAt($now)
+            );
+            foreach ($p->after[$i] as $j) {
+                $b->edges[] = Edge($p->ids[$i], $p->ids[$j]);
+            }
+        }
+        return $b;
+    }
+}

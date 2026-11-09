@@ -77,7 +77,7 @@ internal class Rig
     public constructor(bool $compat, array<nexus::auth::Guard> $extra)
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
-        map<string, string> $vars = ['AUTH_KEY' => KEY, 'AUTH_TOKENS' => '1h', 'AUTH_SESSIONS' => '2h'];
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_AUTH_TOKENS' => '1h', 'NEXUS_AUTH_SESSIONS' => '2h'];
         array<nexus::Extension> $exts = [nexus::auth::Extension('test', compat: $compat, clock: $this->clock, cost: crypto::PasswordCost(8, 1), guards: $extra)];
         $this->app = TestApp($exts, $vars);
     }
@@ -442,10 +442,10 @@ test the_address_throttle_spans_accounts
 
 test boot_needs_a_key_and_a_good_prefix
 {
-    map<string, string> $short = ['AUTH_KEY' => 'too short'];
+    map<string, string> $short = ['NEXUS_AUTH_KEY' => 'too short'];
     array<nexus::Extension> $exts = [nexus::auth::Extension('test')];
     expect(TestApp::attempt($exts, $short))->fails();
-    map<string, string> $ok = ['AUTH_KEY' => KEY];
+    map<string, string> $ok = ['NEXUS_AUTH_KEY' => KEY];
     array<nexus::Extension> $bad = [nexus::auth::Extension('Has_Under')];
     expect(TestApp::attempt($bad, $ok))->fails();
     array<nexus::Extension> $good = [nexus::auth::Extension('ok1', cost: crypto::PasswordCost(8, 1))];

@@ -9,16 +9,33 @@ use container::{Builder, Container};
  *
  * ```echo
  * nexus::auth::Extension('blog'),
- * nexus::mcp::Extension(),
+ * nexus::mcp::Extension(name: 'blog', instructions: 'A blog; start with list_posts.'),
  * ```
+ *
+ * `name`, `title`, `version` and `instructions` are how the server introduces itself; the ones
+ * not given keep `McpConfig`'s defaults.
  */
 public class Extension : nexus::Extension
 {
     public array<ToolSpec> $tools;
+    internal string? $named;
+    internal string? $title;
+    internal string? $version;
+    internal string? $instructions;
 
-    public constructor(tools: array<ToolSpec> $tools = array<ToolSpec>())
+    public constructor(
+        tools: array<ToolSpec> $tools = array<ToolSpec>(),
+        name: string? $name = null,
+        title: string? $title = null,
+        version: string? $version = null,
+        instructions: string? $instructions = null
+    )
     {
         $this->tools = mv $tools;
+        $this->named = $name;
+        $this->title = $title;
+        $this->version = $version;
+        $this->instructions = $instructions;
     }
 
     public function name() : string
@@ -31,6 +48,13 @@ public class Extension : nexus::Extension
         if ($s->find<nexus::auth::Guards>() == null) {
             return .error(.extension('nexus-mcp', 'every MCP call needs a signed in caller; list nexus::auth::Extension() before nexus::mcp::Extension()'));
         }
+        // what the app gave here, over what the environment and the defaults say
+        McpConfig $config = $s->get<McpConfig>();
+        $config->name = $this->named ?? $config->name;
+        $config->title = $this->title ?? $config->title;
+        $config->version = $this->version ?? $config->version;
+        $config->instructions = $this->instructions ?? $config->instructions;
+        $s->replace<McpConfig>(put: $config);
         $offers = Offers();
         foreach (attr::of<ToolTable>('nexus::mcp::tools') as const &$t) {
             function<void(Offers)> $add = $t->call;

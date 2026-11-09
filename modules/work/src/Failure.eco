@@ -88,3 +88,13 @@ public enum Failure
         return .secs($secs);
     }
 }
+
+namespace str;
+
+/**
+ * Why the task did not finish.
+ */
+public function from(const nexus::work::Failure& $f) : string
+{
+    return $f->why();
+}

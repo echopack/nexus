@@ -1,0 +1,32 @@
+namespace Blog::Actions::Posts;
+
+use Blog::Inputs::PostChanges;
+use Blog::Services::PostService;
+use Blog::Transformers::PostTransformer;
+use Blog::Types::Caller;
+
+/**
+ * Changes a post's title or body. Only its author or an admin may.
+ */
+#[nexus::answers: { response: "Blog::Transformers::PostTransformer" }]
+#[nexus::through: ["Blog::Middleware::RequireUser"]]
+public class UpdatePost : nexus::Action
+{
+    private PostService $posts;
+    private PostTransformer $transformer;
+
+    public constructor(PostService $posts, PostTransformer $transformer)
+    {
+        $this->posts = $posts;
+        $this->transformer = $transformer;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id, nexus::Body<PostChanges> $in) : result<nexus::Response, nexus::Problem>
+    {
+        $me = try $payload->state<Caller>();
+        // checked before the write: a bad ?include= changes nothing
+        $inc = try $this->transformer->requestedIncludes($payload);
+        $changed = try $this->posts->update($me->user, $id, $in->value);
+        return .ok($this->transformer->createResponse($payload, $changed, mv $inc));
+    }
+}

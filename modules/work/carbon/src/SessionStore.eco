@@ -1,0 +1,596 @@
+namespace nexus::work::carbon;
+
+use std::time;
+
+/**
+ * The task store on one carbon session: what `Store` does for each call, in that call's own
+ * session. Its writes run in a transaction of their own, or in the one the session has open.
+ */
+internal class SessionStore : nexus::work::Store
+{
+    internal carbon::Session $session;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->session = $session;
+    }
+
+    public function push(const nexus::work::Batch& $batch) : result<nexus::work::Pushed, nexus::Problem>
+    {
+        bool $free = try $this->free($batch);
+        if (!$free) {
+            return .ok(.skipped);
+        }
+        SessionStore $self = $this;
+        nexus::work::Batch $all = $batch;
+        status<carbon::Error> $saved = $this->atomic(function[$self, $all]() : status<carbon::Error> {
+            return $self->insert($all, '');
+        });
+        guard $saved else ($e) {
+            // another server stored the same key in between
+            if ($e->duplicate()) {
+                return .ok(.skipped);
+            }
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok(.queued($batch->tasks[0]->id));
+    }
+
+    public function claim(const string& $lane, time::timestamp $now, time::timestamp $until, uint32 $max) : result<array<nexus::work::StoredTask>, nexus::Problem>
+    {
+        array<nexus::work::StoredTask> $out = try $this->take($lane, $now, $until, $max);
+        return .ok($out);
+    }
+
+    public function extend(const nexus::work::StoredTask& $task, time::timestamp $until) : status<nexus::Problem>
+    {
+        try $this->hold($task, $until);
+        return .ok;
+    }
+
+    public function done(const nexus::work::StoredTask& $task, time::timestamp $now, const nexus::work::Batch& $spawned) : status<nexus::Problem>
+    {
+        SessionStore $self = $this;
+        nexus::work::StoredTask $t = $task;
+        nexus::work::Batch $kids = $spawned;
+        try $this->atomic(function[$self, $t, $kids, $now]() : status<carbon::Error> {
+            return $self->finish($t, $now, $kids);
+        });
+        return .ok;
+    }
+
+    public function retry(const nexus::work::StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
+    {
+        SessionStore $self = $this;
+        nexus::work::StoredTask $t = $task;
+        string $why = $error;
+        try $this->atomic(function[$self, $t, $at, $why]() : status<carbon::Error> {
+            $set = hydrahon::Values();
+            $set[QueuedTaskTable::$status] = SessionStore::status(.waiting);
+            $set[QueuedTaskTable::$availableAt] = $at;
+            $set[QueuedTaskTable::$reservedUntil] = SessionStore::never();
+            $set[QueuedTaskTable::$error] = $why;
+            uint64 $n = try $self->change($t, mv $set);
+            if ($n == 1) {
+                try $self->unlock($t);
+            }
+            return .ok;
+        });
+        return .ok;
+    }
+
+    public function fail(const nexus::work::StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>
+    {
+        SessionStore $self = $this;
+        nexus::work::StoredTask $t = $task;
+        string $why = $error;
+        try $this->atomic(function[$self, $t, $now, $why]() : status<carbon::Error> {
+            $set = hydrahon::Values();
+            $set[QueuedTaskTable::$status] = SessionStore::status(.failed);
+            $set[QueuedTaskTable::$failedAt] = $now;
+            $set[QueuedTaskTable::$reservedUntil] = SessionStore::never();
+            $set[QueuedTaskTable::$uniqueLive] = SessionStore::none();
+            $set[QueuedTaskTable::$error] = $why;
+            uint64 $n = try $self->change($t, mv $set);
+            if ($n != 1) {
+                return .ok;
+            }
+            try $self->unlock($t);
+            if ($t->allowFailure && !$t->released) {
+                return $self->release($t->id);
+            }
+            return .ok;
+        });
+        return .ok;
+    }
+
+    public function upstream(const string& $id) : result<array<nexus::work::Upstream>, nexus::Problem>
+    {
+        array<nexus::work::Upstream> $out = try $this->before($id);
+        return .ok($out);
+    }
+
+    public function failed(const string& $lane, uint64 $limit) : result<array<nexus::work::StoredTask>, nexus::Problem>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        array<QueuedTask> $rows = try $tasks->find()
+            ->where(QueuedTaskTable::$lane == $lane)
+            ->where(QueuedTaskTable::$status == SessionStore::status(.failed))
+            ->order(desc: QueuedTaskTable::$failedAt)
+            ->limit($limit)
+            ->get();
+        return .ok(SessionStore::stored($rows));
+    }
+
+    public function again(const string& $id, time::timestamp $now) : result<nexus::work::Requeued, nexus::Problem>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        QueuedTask? $found = try $tasks->find()->where(QueuedTaskTable::$id == $id)->where(QueuedTaskTable::$status == SessionStore::status(.failed))->first();
+        QueuedTask $row = guard $found else {
+            return .ok(.missing);
+        };
+        $set = hydrahon::Values();
+        $set[QueuedTaskTable::$status] = SessionStore::status(.waiting);
+        $set[QueuedTaskTable::$failedAt] = SessionStore::never();
+        $set[QueuedTaskTable::$expiresAt] = SessionStore::never();
+        $set[QueuedTaskTable::$attempts] = 0;
+        $set[QueuedTaskTable::$availableAt] = $now;
+        if ($row->hold == SessionStore::hold(.unique)) {
+            $set[QueuedTaskTable::$uniqueLive] = $row->holdKey;
+        }
+        uint64 $n = try $tasks->find()->where(QueuedTaskTable::$id == $id)->where(QueuedTaskTable::$status == SessionStore::status(.failed))->update(mv $set);
+        if ($n != 1) {
+            return .ok(.missing);
+        }
+        return .ok(.sent);
+    }
+
+    public function cancel(const string& $id, time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        array<string> $ids = [$id];
+        uint64 $count = 0;
+        while (!$ids->empty()) {
+            string $at = $ids[$ids->count() - 1];
+            $ids->pop();
+            $set = hydrahon::Values();
+            $set[QueuedTaskTable::$status] = SessionStore::status(.cancelled);
+            $set[QueuedTaskTable::$doneAt] = $now;
+            $set[QueuedTaskTable::$uniqueLive] = SessionStore::none();
+            uint64 $n = try $tasks->find()->where(QueuedTaskTable::$id == $at)->where(QueuedTaskTable::$status == SessionStore::status(.waiting))->update(mv $set);
+            if ($n == 1) {
+                $count = $count + 1;
+                array<string> $after = try $this->after($at);
+                foreach ($after as const &$next) {
+                    $ids[] = $next;
+                }
+            }
+        }
+        return .ok($count);
+    }
+
+    public function graph(const string& $id, uint32 $depth) : result<nexus::work::Graph, nexus::Problem>
+    {
+        nexus::work::Graph $g = try $this->connected($id, $depth);
+        return .ok($g);
+    }
+
+    public function prune(time::timestamp $now, time::timestamp $before) : result<uint64, nexus::Problem>
+    {
+        uint64 $n = try $this->sweep($now, $before);
+        return .ok($n);
+    }
+
+    public function waiting(const string& $lane) : result<uint64, nexus::Problem>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        uint64 $n = try $tasks->find()
+            ->where(QueuedTaskTable::$lane == $lane)
+            ->where(QueuedTaskTable::$status == SessionStore::status(.waiting) || QueuedTaskTable::$status == SessionStore::status(.running))
+            ->count();
+        return .ok($n);
+    }
+
+    /**
+     * Whether `$batch` can be stored: no key a stored task has, no `.unique` key a live task holds,
+     * none twice.
+     */
+    internal function free(const nexus::work::Batch& $batch) : result<bool, carbon::Error>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        map<string, bool> $mine = map<string, bool>();
+        foreach ($batch->tasks as const &$t) {
+            if (!$t->key->empty()) {
+                QueuedTask? $have = try $tasks->find()->where(QueuedTaskTable::$uniqueKey == $t->key)->first();
+                if ($have != null) {
+                    return .ok(false);
+                }
+            }
+            if ($t->hold == nexus::work::Hold::unique) {
+                if ($mine->has($t->holdKey)) {
+                    return .ok(false);
+                }
+                $mine[$t->holdKey] = true;
+                QueuedTask? $live = try $tasks->find()->where(QueuedTaskTable::$uniqueLive == $t->holdKey)->first();
+                if ($live != null) {
+                    return .ok(false);
+                }
+            }
+        }
+        return .ok(true);
+    }
+
+    /**
+     * Inserts every task of `$batch` (spawned by `$parent` when it is not empty) and its edges.
+     */
+    internal function insert(const nexus::work::Batch& $batch, const string& $parent) : status<carbon::Error>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        TaskEdgeRepository $edges = try $this->session->repo<TaskEdgeRepository>();
+        foreach ($batch->tasks as const &$t) {
+            QueuedTask $row = QueuedTask::of($t);
+            if (!$parent->empty()) {
+                $row->parent = $parent;
+            }
+            try $tasks->create(mv $row);
+        }
+        foreach ($batch->edges as const &$e) {
+            try $edges->create(TaskEdge::of($e));
+        }
+        return .ok;
+    }
+
+    internal function take(const string& $lane, time::timestamp $now, time::timestamp $until, uint32 $max) : result<array<nexus::work::StoredTask>, carbon::Error>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        int64 $looked = ($max as int64) * 4 + 4;
+        array<QueuedTask> $due = try $tasks->find()
+            ->where(QueuedTaskTable::$lane == $lane)
+            ->where(QueuedTaskTable::$pending == 0)
+            ->where(QueuedTaskTable::$availableAt <= $now)
+            ->where(QueuedTaskTable::$expiresAt->isNull() || QueuedTaskTable::$expiresAt > $now)
+            ->where(QueuedTaskTable::$status == SessionStore::status(.waiting) || (QueuedTaskTable::$status == SessionStore::status(.running) && QueuedTaskTable::$reservedUntil < $now))
+            ->order(desc: QueuedTaskTable::$priority)
+            ->order(asc: QueuedTaskTable::$availableAt)
+            ->limit($looked as uint64)
+            ->get();
+        array<nexus::work::StoredTask> $out = [];
+        foreach ($due as const &$row) {
+            if (($out->count() as uint32) >= $max) {
+                break;
+            }
+            bool $locks = $row->hold == SessionStore::hold(.running);
+            if ($locks) {
+                bool $got = try $this->lock($row->holdKey, $row->id, $now, $until);
+                if (!$got) {
+                    continue;
+                }
+            }
+            $set = hydrahon::Values();
+            $set[QueuedTaskTable::$status] = SessionStore::status(.running);
+            $set[QueuedTaskTable::$attempts] = $row->attempts + 1;
+            $set[QueuedTaskTable::$reservedUntil] = $until;
+            uint64 $taken = try $tasks->find()
+                ->where(QueuedTaskTable::$id == $row->id)
+                ->where(QueuedTaskTable::$attempts == $row->attempts)
+                ->where(QueuedTaskTable::$status == $row->status)
+                ->update(mv $set);
+            if ($taken != 1) {
+                if ($locks) {
+                    try $this->unlockKey($row->holdKey, $row->id);
+                }
+                continue;
+            }
+            nexus::work::StoredTask $t = $row->stored();
+            $t->attempts = $row->attempts + 1;
+            $t->status = .running;
+            $t->reservedUntil = $until;
+            $out[] = mv $t;
+        }
+        return .ok($out);
+    }
+
+    /**
+     * Takes `.running` key `$key` for `$holder` until `$until`: a fresh row, or one whose holder let
+     * its lease run out. False when another task holds it.
+     */
+    internal function lock(const string& $key, const string& $holder, time::timestamp $now, time::timestamp $until) : result<bool, carbon::Error>
+    {
+        TaskLockRepository $locks = try $this->session->repo<TaskLockRepository>();
+        guard $locks->create(TaskLock($lockKey: $key, $holder: $holder, $heldUntil: $until)) else ($e) {
+            if (!$e->duplicate()) {
+                return .error($e);
+            }
+            $set = hydrahon::Values();
+            $set[TaskLockTable::$holder] = $holder;
+            $set[TaskLockTable::$heldUntil] = $until;
+            uint64 $n = try $locks->find()
+                ->where(TaskLockTable::$lockKey == $key)
+                ->where(TaskLockTable::$heldUntil < $now || TaskLockTable::$holder == $holder)
+                ->update(mv $set);
+            return .ok($n == 1);
+        };
+        return .ok(true);
+    }
+
+    internal function unlock(const nexus::work::StoredTask& $t) : status<carbon::Error>
+    {
+        if ($t->hold != nexus::work::Hold::running) {
+            return .ok;
+        }
+        return $this->unlockKey($t->holdKey, $t->id);
+    }
+
+    internal function unlockKey(const string& $key, const string& $holder) : status<carbon::Error>
+    {
+        TaskLockRepository $locks = try $this->session->repo<TaskLockRepository>();
+        try $locks->find()->where(TaskLockTable::$lockKey == $key)->where(TaskLockTable::$holder == $holder)->purge();
+        return .ok;
+    }
+
+    /**
+     * Holds claimed `$task` until `$until`, its `.running` key too.
+     */
+    internal function hold(const nexus::work::StoredTask& $task, time::timestamp $until) : status<carbon::Error>
+    {
+        $set = hydrahon::Values();
+        $set[QueuedTaskTable::$reservedUntil] = $until;
+        uint64 $n = try $this->change($task, mv $set);
+        if ($n != 1 || $task->hold != nexus::work::Hold::running) {
+            return .ok;
+        }
+        TaskLockRepository $locks = try $this->session->repo<TaskLockRepository>();
+        $lock = hydrahon::Values();
+        $lock[TaskLockTable::$heldUntil] = $until;
+        try $locks->find()->where(TaskLockTable::$lockKey == $task->holdKey)->where(TaskLockTable::$holder == $task->id)->update(mv $lock);
+        return .ok;
+    }
+
+    /**
+     * Marks claimed `$t` done, stores what it spawned, and lets the tasks waiting for it go.
+     */
+    internal function finish(const nexus::work::StoredTask& $t, time::timestamp $now, const nexus::work::Batch& $spawned) : status<carbon::Error>
+    {
+        $set = hydrahon::Values();
+        $set[QueuedTaskTable::$status] = SessionStore::status(.done);
+        $set[QueuedTaskTable::$doneAt] = $now;
+        $set[QueuedTaskTable::$reservedUntil] = SessionStore::never();
+        $set[QueuedTaskTable::$uniqueLive] = SessionStore::none();
+        uint64 $n = try $this->change($t, mv $set);
+        if ($n != 1) {
+            return .ok;
+        }
+        try $this->unlock($t);
+        array<string> $after = try $this->after($t->id);
+        nexus::work::Batch $kids = $spawned;
+        foreach ($spawned->tasks as const &$s) {
+            foreach ($after as const &$a) {
+                $kids->edges[] = nexus::work::Edge($a, $s->id);
+            }
+        }
+        try $this->insert($kids, $t->id);
+        int64 $by = $spawned->tasks->count() as int64;
+        if (!$t->released) {
+            $by = $by - 1;
+        }
+        return $this->shift($after, $by);
+    }
+
+    /**
+     * The tasks waiting for `$id` go ahead: it failed and allows failure.
+     */
+    internal function release(const string& $id) : status<carbon::Error>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        $set = hydrahon::Values();
+        $set[QueuedTaskTable::$released] = true;
+        try $tasks->find()->where(QueuedTaskTable::$id == $id)->update(mv $set);
+        array<string> $after = try $this->after($id);
+        return $this->shift($after, -1);
+    }
+
+    /**
+     * Adds `$by` to what each task of `$ids` waits for. The database adds to the row it locks, so
+     * tasks settling at once on several servers all count, whatever their transactions read
+     * before. Rows are taken in id order, so two settles never lock them the other way round.
+     */
+    internal function shift(const array<string>& $ids, int64 $by) : status<carbon::Error>
+    {
+        if ($by == 0) {
+            return .ok;
+        }
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        array<string> $ordered = $ids;
+        $ordered->sort();
+        foreach ($ordered as const &$id) {
+            $set = hydrahon::Values();
+            $set[QueuedTaskTable::$pending] = QueuedTaskTable::$pending + $by;
+            try $tasks->find()->where(QueuedTaskTable::$id == $id)->update(mv $set);
+        }
+        return .ok;
+    }
+
+    /**
+     * The tasks waiting for task `$id`.
+     */
+    internal function after(const string& $id) : result<array<string>, carbon::Error>
+    {
+        TaskEdgeRepository $edges = try $this->session->repo<TaskEdgeRepository>();
+        array<TaskEdge> $rows = try $edges->find()->where(TaskEdgeTable::$afterId == $id)->get();
+        array<string> $out = [];
+        foreach ($rows as const &$e) {
+            $out[] = $e->taskId;
+        }
+        return .ok($out);
+    }
+
+    internal function before(const string& $id) : result<array<nexus::work::Upstream>, carbon::Error>
+    {
+        TaskEdgeRepository $edges = try $this->session->repo<TaskEdgeRepository>();
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        array<TaskEdge> $rows = try $edges->find()->where(TaskEdgeTable::$taskId == $id)->get();
+        array<nexus::work::Upstream> $out = [];
+        if ($rows->empty()) {
+            return .ok($out);
+        }
+        array<string> $ids = [];
+        foreach ($rows as const &$e) {
+            $ids[] = $e->afterId;
+        }
+        array<QueuedTask> $ups = try $tasks->find()->where(QueuedTaskTable::$id in $ids)->get();
+        foreach ($ups as const &$u) {
+            $out[] = nexus::work::Upstream($u->id, $u->name, $failed: $u->status == SessionStore::status(.failed), $error: $u->error);
+        }
+        return .ok($out);
+    }
+
+    internal function connected(const string& $id, uint32 $depth) : result<nexus::work::Graph, carbon::Error>
+    {
+        TaskEdgeRepository $edges = try $this->session->repo<TaskEdgeRepository>();
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        map<string, bool> $seen = [$id => true];
+        array<string> $frontier = [$id];
+        uint32 $hops = 0;
+        while (!$frontier->empty() && $hops < $depth) {
+            array<TaskEdge> $rows = try $edges->find()->where(TaskEdgeTable::$taskId in $frontier || TaskEdgeTable::$afterId in $frontier)->get();
+            array<string> $next = [];
+            foreach ($rows as const &$e) {
+                if (!$seen->has($e->taskId)) {
+                    $seen[$e->taskId] = true;
+                    $next[] = $e->taskId;
+                }
+                if (!$seen->has($e->afterId)) {
+                    $seen[$e->afterId] = true;
+                    $next[] = $e->afterId;
+                }
+            }
+            $frontier = mv $next;
+            $hops = $hops + 1;
+        }
+        array<string> $ids = [];
+        foreach ($seen as $k => const &$v) {
+            $ids[] = $k;
+        }
+        nexus::work::Graph $g = nexus::work::Graph();
+        array<QueuedTask> $rows = try $tasks->find()->where(QueuedTaskTable::$id in $ids)->order(asc: QueuedTaskTable::$createdAt)->get();
+        $g->tasks = SessionStore::stored($rows);
+        array<TaskEdge> $links = try $edges->find()->where(TaskEdgeTable::$taskId in $ids)->get();
+        foreach ($links as const &$e) {
+            if ($seen->has($e->afterId)) {
+                $g->edges[] = nexus::work::Edge($e->taskId, $e->afterId);
+            }
+        }
+        return .ok($g);
+    }
+
+    internal function sweep(time::timestamp $now, time::timestamp $before) : result<uint64, carbon::Error>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        TaskEdgeRepository $edges = try $this->session->repo<TaskEdgeRepository>();
+        array<QueuedTask> $expired = try $tasks->find()
+            ->where(QueuedTaskTable::$status == SessionStore::status(.waiting))
+            ->where(QueuedTaskTable::$expiresAt <= $now)
+            ->limit(1000)
+            ->get();
+        foreach ($expired as const &$row) {
+            $set = hydrahon::Values();
+            $set[QueuedTaskTable::$status] = SessionStore::status(.failed);
+            $set[QueuedTaskTable::$failedAt] = $now;
+            $set[QueuedTaskTable::$uniqueLive] = SessionStore::none();
+            $set[QueuedTaskTable::$error] = 'expired before it ran';
+            uint64 $n = try $tasks->find()->where(QueuedTaskTable::$id == $row->id)->where(QueuedTaskTable::$status == SessionStore::status(.waiting))->update(mv $set);
+            if ($n == 1 && $row->allowFailure && !$row->released) {
+                try $this->release($row->id);
+            }
+        }
+        array<QueuedTask> $old = try $tasks->find()
+            ->where(QueuedTaskTable::$status == SessionStore::status(.done) || QueuedTaskTable::$status == SessionStore::status(.cancelled))
+            ->where(QueuedTaskTable::$doneAt < $before)
+            ->limit(1000)
+            ->get();
+        if ($old->empty()) {
+            return .ok(0);
+        }
+        array<string> $ids = [];
+        foreach ($old as const &$row) {
+            $ids[] = $row->id;
+        }
+        try $edges->find()->where(TaskEdgeTable::$taskId in $ids || TaskEdgeTable::$afterId in $ids)->purge();
+        uint64 $gone = try $tasks->find()->where(QueuedTaskTable::$id in $ids)->purge();
+        return .ok($gone);
+    }
+
+    /**
+     * Applies `$set` to `$task`'s row while the claim it names still holds; answers the rows
+     * changed, 0 when the claim was lost.
+     */
+    internal function change(const nexus::work::StoredTask& $task, hydrahon::Values $set) : result<uint64, carbon::Error>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        return $tasks->find()
+            ->where(QueuedTaskTable::$id == $task->id)
+            ->where(QueuedTaskTable::$attempts == $task->attempts)
+            ->where(QueuedTaskTable::$status == SessionStore::status(.running))
+            ->update(mv $set);
+    }
+
+    /**
+     * Runs `$work` in a transaction, or in the one the session has open. A transaction of its own
+     * runs again, up to five times, when the database rolled it back for one that changed the same
+     * rows (a deadlock, a lock wait timeout, a stale snapshot): settles racing on several servers
+     * then all land.
+     */
+    internal function atomic(function<status<carbon::Error>()> $work) : status<carbon::Error>
+    {
+        if ($this->session->inTransaction()) {
+            return $work();
+        }
+        int32 $tries = 1;
+        while (true) {
+            status<carbon::Error> $done = $this->session->transaction($work);
+            guard $done else ($e) {
+                if (!$e->retryable() || $tries >= 5) {
+                    return .error($e);
+                }
+                $tries++;
+                continue;
+            };
+            return .ok;
+        }
+    }
+
+    internal static function stored(const array<QueuedTask>& $rows) : array<nexus::work::StoredTask>
+    {
+        array<nexus::work::StoredTask> $out = arr::room<nexus::work::StoredTask>($rows->count());
+        foreach ($rows as const &$r) {
+            $out[] = $r->stored();
+        }
+        return $out;
+    }
+
+    internal static function status(nexus::work::TaskStatus $s) : int64
+    {
+        return $s->value() as int64;
+    }
+
+    internal static function hold(nexus::work::Hold $h) : int64
+    {
+        return $h->value() as int64;
+    }
+
+    /**
+     * No time: clears a nullable time column.
+     */
+    internal static function never() : hydrahon::DateTime?
+    {
+        return null;
+    }
+
+    /**
+     * No text: clears a nullable text column.
+     */
+    internal static function none() : string?
+    {
+        return null;
+    }
+}

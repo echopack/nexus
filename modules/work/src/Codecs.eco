@@ -1,31 +1,101 @@
 namespace nexus::work;
 
 /**
- * Every `Codec` of the program, keyed by task type; filled from the tables `nexus gen` writes when
- * the app boots.
+ * How every task type of the program is stored, by type and by name; filled from the tables `nexus
+ * gen` writes when the app boots.
  */
 #[atomic]
 public class Codecs
 {
-    internal map<type_id, Codec> $byType = map<type_id, Codec>();
+    internal map<type_id, string> $names = map<type_id, string>();
+    internal map<string, Codec> $byName = map<string, Codec>();
 
     /**
-     * Registers how task `T` runs.
+     * Registers task `T` under `$name` with what turns it into text and back.
      */
-    public function add<T>(Codec $c) : void
+    public function add<T>(const string& $name, function<string(const T&)> $encode, function<result<T, DataError>(const string&)> $decode) : void where T : Task
     {
-        $this->byType[type_id<T>()] = mv $c;
+        $erased = function[$encode](const erased& $v) : string {
+            unsafe {
+                $held = assume<Held<T>>($v);
+                return $encode($held->value);
+            }
+        };
+        $item = function[$decode](const string& $text) : result<Item, DataError> {
+            T $task = try $decode($text);
+            return .ok(Item::of<T>($task));
+        };
+        $this->names[type_id<T>()] = $name;
+        $this->byName[$name] = Codec($name, mv $erased, mv $item);
     }
 
     /**
-     * How task `T` runs, or null when `nexus gen` wrote nothing for it.
+     * The name task type `$type` was registered under, or null.
      */
-    public const function find<T>() : Codec?
+    public const function name(type_id $type) : string?
     {
-        $id = type_id<T>();
-        if (!$this->byType->has($id)) {
+        if (!$this->names->has($type)) {
             return null;
         }
-        return $this->byType->get($id);
+        return $this->names->get($type);
+    }
+
+    /**
+     * The codec of the task type named `$name`, or null.
+     */
+    public const function find(const string& $name) : Codec?
+    {
+        if (!$this->byName->has($name)) {
+            return null;
+        }
+        return $this->byName->get($name);
+    }
+
+    /**
+     * The name of every pipeline task, in order, or the problem naming the first one `nexus gen`
+     * wrote nothing for.
+     */
+    public const function names(const Pipeline& $p) : result<array<string>, nexus::Problem>
+    {
+        array<string> $out = arr::room<string>($p->items->count());
+        foreach ($p->items as const &$i) {
+            string $name = guard $this->name($i->type) else {
+                return .error(.server('a task was pushed that nexus gen wrote nothing for; is it a struct conforming to nexus::work::Task, and did nexus gen run?'));
+            };
+            $out[] = $name;
+        }
+        return .ok($out);
+    }
+
+    /**
+     * The names of the tasks of pushed `$p`; an error when it is empty, nexus gen wrote nothing for
+     * one of them, or one asks for fewer than 1 or more than 100 tries.
+     */
+    internal const function pushed(const Pipeline& $p) : result<array<string>, nexus::Problem>
+    {
+        if ($p->empty()) {
+            return .error(.server('an empty pipeline was pushed'));
+        }
+        array<string> $names = try $this->names($p);
+        foreach ($p->items as $i => const &$item) {
+            if ($item->policy->tries < 1 || $item->policy->tries > 100) {
+                return .error(.server("{$names[$i]} asks for {$item->policy->tries} tries; a task is tried 1 to 100 times"));
+            }
+        }
+        return .ok($names);
+    }
+
+    /**
+     * The names of what a run spawned into `$p`, with ids assigned; null, logged on `$log`, when
+     * nexus gen wrote nothing for one of them.
+     */
+    internal const function spawned(Pipeline& $p, nexus::Logger $log) : array<string>?
+    {
+        array<string> $names = guard $this->names($p) else ($problem) {
+            $log->error('the task spawned a task nexus gen wrote nothing for; none of its spawned tasks run', ['detail' => $problem->detail(.dev)]);
+            return null;
+        };
+        $p->assign();
+        return $names;
     }
 }

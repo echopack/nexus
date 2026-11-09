@@ -17,7 +17,7 @@ use container::{Container, Entry};
  * public function services(nexus::Services& $s) : status<nexus::BootError>
  * {
  *     nexus::App $app = nexus::App($s, $this->providers());
- *     $app->bindTask<SendWelcome>()->queue('mail')->tries(5);
+ *     $app->bindAsyncQueue<WorkersLane>(threads: 4);
  *     return .ok;
  * }
  *
@@ -44,7 +44,7 @@ use container::{Container, Entry};
  *
  * The boot builds every binding once in a throwaway request, so a missing binding, a cycle or a
  * shared service that takes a per-request one stops the boot with its chain. List nexus-mcp and
- * nexus-work before the app when it offers tools or binds tasks; a helper that finds its module
+ * nexus-work before the app when it offers tools or binds queues; a helper that finds its module
  * missing stops the boot with a line that says so.
  */
 public class App
@@ -150,6 +150,19 @@ public class App
     public function param<T>(construct T $value) : Entry<T>
     {
         return $this->services->param<T>($value);
+    }
+
+    /**
+     * The already built `T`: an `instance`, a `param`, a queue, or what an extension bound the same
+     * way. A provider takes what it wires onto from here:
+     *
+     * ```echo
+     * $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobsQueue>());
+     * ```
+     */
+    public function get<T>() : T
+    {
+        return $this->services->get<T>();
     }
 
     /**
@@ -277,14 +290,6 @@ public class App
         $this->services->middleware<M>();
     }
 
-    /**
-     * Takes listener `L`; `->on<E>()` says which events run it.
-     */
-    public function bindListener<L>() : nexus::app::ListenerRef<L>
-    {
-        return nexus::app::ListenerRef<L>($this->services);
-    }
-
     // transformers and repositories ------------------------------------------
 
     /**
@@ -311,7 +316,7 @@ public class App
         nexus::carbon::Repositories::bind<R>($this->services);
     }
 
-    // tools and tasks ---------------------------------------------------------
+    // tools, queues and schedules ---------------------------------------------
 
     /**
      * Binds MCP tool class `T` once per call, built by `$make` from the container; `->offer()` says
@@ -334,11 +339,41 @@ public class App
     }
 
     /**
-     * Binds task type `T` on the `default` queue, tried three times; `->queue()`, `->tries()`,
-     * `->every()` and `->cron()` change that.
+     * Binds `nexus::work::AsyncQueue<L>` with as many worker threads in this process as
+     * `NEXUS_WORK_THREADS` says. `->log()` says where its runs log.
      */
-    public function bindTask<T>() : nexus::app::TaskRef<T>
+    public function bindAsyncQueue<L>() : nexus::app::AsyncQueueRef<L>
     {
-        return nexus::app::TaskRef<T>($this->services);
+        nexus::work::Pool $pool = nexus::work::Queues::bindAsync<L>($this->services);
+        return nexus::app::AsyncQueueRef<L>($pool);
+    }
+
+    /**
+     * Binds `nexus::work::AsyncQueue<L>` with `$threads` worker threads in this process, whatever
+     * `NEXUS_WORK_THREADS` says. `->log()` says where its runs log.
+     */
+    public function bindAsyncQueue<L>(threads: uint32 $threads) : nexus::app::AsyncQueueRef<L>
+    {
+        nexus::work::Pool $pool = nexus::work::Queues::bindAsync<L>($this->services, threads: $threads);
+        return nexus::app::AsyncQueueRef<L>($pool);
+    }
+
+    /**
+     * Binds `nexus::work::DistributedQueue<L>` on `$store`, one queue for the whole process, so
+     * anything wired after it can `get` it; `->into<A>()` names the async queue its tasks run on.
+     */
+    public function bindDistributedQueue<L>(store: nexus::work::Store $store) : nexus::app::DistributedQueueRef<L>
+    {
+        nexus::work::Distributed $lane = nexus::work::Queues::bindDistributed<L>($this->services, $store);
+        return nexus::app::DistributedQueueRef<L>($this->services, $lane);
+    }
+
+    /**
+     * Plans `$task` for the scheduler; `->cron()` or `->every()` say when and `->into<L>()` where.
+     */
+    public function schedule<T>(T $task) : nexus::app::ScheduleRef where T : nexus::work::Task
+    {
+        nexus::work::Planned $plan = nexus::work::Queues::schedule<T>($this->services, $task);
+        return nexus::app::ScheduleRef($this->services, $plan);
     }
 }

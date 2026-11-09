@@ -107,7 +107,7 @@ test the_url_comes_from_the_environment
         return .ok(carbon::DB(carbon::fake::Source<hydrahon::Mysql>([cDriver()])));
     });
     array<nexus::Extension> $exts = [$ext, CApp()];
-    map<string, string> $vars = ['DATABASE_URL' => 'mysql://app@db/blog'];
+    map<string, string> $vars = ['NEXUS_DATABASE_URL' => 'mysql://app@db/blog'];
     TestApp($exts, $vars);
     expect($seen->url)->is('mysql://app@db/blog');
 }

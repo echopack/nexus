@@ -1,0 +1,15 @@
+namespace nexus::work;
+
+/**
+ * An owning box so a task value of any type can sit in an `erased`.
+ */
+#[atomic]
+internal class Held<T>
+{
+    public const T $value;
+
+    public constructor(T $value)
+    {
+        $this->value = $value;
+    }
+}

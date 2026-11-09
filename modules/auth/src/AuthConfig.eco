@@ -3,17 +3,28 @@ namespace nexus::auth;
 use std::time;
 
 /**
- * The auth settings: `AUTH_KEY`, the server secret every signed session's secret is derived from
- * (at least 32 characters; changing it ends every signed session), and how long tokens and sessions
- * live, `AUTH_TOKENS` and `AUTH_SESSIONS` (`30d`, `12h`). A session's lifetime slides: every
- * request starts it again.
+ * The auth settings, read from `NEXUS_AUTH_KEY`, `NEXUS_AUTH_TOKENS` and `NEXUS_AUTH_SESSIONS`.
  */
-#[nexus::config: "auth"]
+#[nexus::config: "NEXUS_AUTH"]
 public struct AuthConfig
 {
+    /**
+     * The server secret every signed session's secret is derived from, at least 32 characters.
+     * Changing it ends every signed session.
+     */
+    #[nexus::env: 'KEY']
     #[nexus::secret]
     public string $key = '';
 
+    /**
+     * How long a token lives, like `30d`.
+     */
+    #[nexus::env: 'TOKENS']
     public time::duration $tokens = std::time::duration::hours(720);
+
+    /**
+     * How long a session lives, like `12h`. It slides: every request starts it again.
+     */
+    #[nexus::env: 'SESSIONS']
     public time::duration $sessions = std::time::duration::hours(720);
 }

@@ -1,0 +1,86 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * Where a distributed queue keeps its tasks, shared by every server that works it. Every change to
+ * a claimed task names the attempt it claimed, so a worker whose lease ran out (and whose task
+ * another worker claimed) changes nothing. A task waits until every task before it settled: done,
+ * or failed with `allowFailure`. nexus-work keeps one in memory, nexus-work-carbon in the app's
+ * database.
+ */
+public interface Store
+{
+    /**
+     * Stores every task of `$batch` with what they wait for, or none: skipped when one carries a key
+     * a stored task has, or a `.unique` key a waiting or running task holds.
+     */
+    function push(const Batch& $batch) : result<Pushed, nexus::Problem>;
+
+    /**
+     * Takes up to `$max` tasks of `$lane` that are due, the highest priority first, then the one
+     * due longest, leaving out tasks whose `.running` key a worker holds. Their attempts go up by
+     * one and they are held until `$until`.
+     */
+    function claim(const string& $lane, time::timestamp $now, time::timestamp $until, uint32 $max) : result<array<StoredTask>, nexus::Problem>;
+
+    /**
+     * A claimed task still runs: held until `$until`.
+     */
+    function extend(const StoredTask& $task, time::timestamp $until) : status<nexus::Problem>;
+
+    /**
+     * A claimed task finished. What it spawned (`$spawned`, waiting for each other as it says) is
+     * stored, every task waiting for it waits for those too, and lets go of it.
+     */
+    function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : status<nexus::Problem>;
+
+    /**
+     * A claimed task is due again at `$at`.
+     */
+    function retry(const StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>;
+
+    /**
+     * A claimed task failed for good: kept with the failed ones. The tasks waiting for it go ahead
+     * when it allows failure, and stay held back otherwise.
+     */
+    function fail(const StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>;
+
+    /**
+     * The tasks task `$id` waits for, and how each ended.
+     */
+    function upstream(const string& $id) : result<array<Upstream>, nexus::Problem>;
+
+    /**
+     * The failed tasks of `$lane`, the latest failure first, at most `$limit`.
+     */
+    function failed(const string& $lane, uint64 $limit) : result<array<StoredTask>, nexus::Problem>;
+
+    /**
+     * Makes failed task `$id` due at `$now` with its tries fresh; the tasks held back behind it run
+     * once it is done.
+     */
+    function again(const string& $id, time::timestamp $now) : result<Requeued, nexus::Problem>;
+
+    /**
+     * Cancels waiting task `$id` and every waiting task after it; answers how many. A running task
+     * is not cancelled.
+     */
+    function cancel(const string& $id, time::timestamp $now) : result<uint64, nexus::Problem>;
+
+    /**
+     * Every task connected to task `$id`, before and after it, at most `$depth` steps away.
+     */
+    function graph(const string& $id, uint32 $depth) : result<Graph, nexus::Problem>;
+
+    /**
+     * Fails the waiting tasks that expired by `$now` and deletes the done and cancelled ones that
+     * finished before `$before`; answers how many it deleted.
+     */
+    function prune(time::timestamp $now, time::timestamp $before) : result<uint64, nexus::Problem>;
+
+    /**
+     * How many tasks of `$lane` wait or run.
+     */
+    function waiting(const string& $lane) : result<uint64, nexus::Problem>;
+}

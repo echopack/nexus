@@ -1,0 +1,22 @@
+namespace nexus::work;
+
+/**
+ * A task added to a pipeline, for the tasks after it to wait on. Its id is known once the pipeline
+ * was pushed.
+ */
+public struct Step
+{
+    internal Pipeline $owner;
+    internal usize $index;
+
+    /**
+     * The id the task was stored under, or null before the pipeline was pushed.
+     */
+    public const function id() : string?
+    {
+        if ($this->index >= $this->owner->ids->count()) {
+            return null;
+        }
+        return $this->owner->ids[$this->index];
+    }
+}

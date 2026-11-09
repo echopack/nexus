@@ -1,0 +1,124 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * A queue whose tasks are stored where every server of the app reaches them, named by its lane:
+ *
+ * ```echo
+ * public struct JobsLane : nexus::work::Lane {}
+ * public type JobsQueue = nexus::work::DistributedQueue<JobsLane>;
+ *
+ * $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+ *     ->into<WorkersLane>();
+ *
+ * // in a service, action or signal handler built with the queue
+ * $this->jobs->push(SendWelcome($user: 5), in: time::duration::mins(20));
+ * ```
+ *
+ * A server claims due tasks under a lease and runs them on the async queue the lane goes into. The
+ * queue is one for the whole process, bound when the app is wired, so anything built then can take
+ * it. A push is stored on its own, apart from whatever the pushing request writes: it stays queued
+ * when the request's writes roll back.
+ */
+#[atomic]
+public class DistributedQueue<L>
+{
+    internal Store $store;
+    internal string $lane;
+    internal Codecs $codecs;
+    internal calendar::Clock $clock;
+
+    public constructor(Store $store, const string& $lane, Codecs $codecs, calendar::Clock $clock)
+    {
+        $this->store = $store;
+        $this->lane = $lane;
+        $this->codecs = $codecs;
+        $this->clock = $clock;
+    }
+
+    /**
+     * Stores `$task` to run as soon as a server is free, tried `$tries` times when given.
+     */
+    public function push<T>(T $task, tries: int64 $tries = 0) : result<Pushed, nexus::Problem> where T : Task
+    {
+        return $this->store(nexus::work::Pipeline::one(Item::tried<T>($task, $tries)), $this->clock->now());
+    }
+
+    /**
+     * Stores `$task` to run once `$delay` has passed.
+     */
+    public function push<T>(T $task, in: time::duration $delay, tries: int64 $tries = 0) : result<Pushed, nexus::Problem> where T : Task
+    {
+        return $this->store(nexus::work::Pipeline::one(Item::tried<T>($task, $tries)), $this->clock->now() + $delay);
+    }
+
+    /**
+     * Stores `$task` to run at `$at`.
+     */
+    public function push<T>(T $task, at: time::timestamp $at, tries: int64 $tries = 0) : result<Pushed, nexus::Problem> where T : Task
+    {
+        return $this->store(nexus::work::Pipeline::one(Item::tried<T>($task, $tries)), $at);
+    }
+
+    /**
+     * Stores every task of `$p`, or none.
+     */
+    public function push(Pipeline $p) : result<Pushed, nexus::Problem>
+    {
+        return $this->store($p, $this->clock->now());
+    }
+
+    /**
+     * Stores every task of `$p`, the first ones to run once `$delay` has passed.
+     */
+    public function push(Pipeline $p, in: time::duration $delay) : result<Pushed, nexus::Problem>
+    {
+        return $this->store($p, $this->clock->now() + $delay);
+    }
+
+    /**
+     * Stores every task of `$p`, the first ones to run at `$at`.
+     */
+    public function push(Pipeline $p, at: time::timestamp $at) : result<Pushed, nexus::Problem>
+    {
+        return $this->store($p, $at);
+    }
+
+    /**
+     * Cancels waiting task `$id` and every waiting task after it; answers how many.
+     */
+    public function cancel(const string& $id) : result<uint64, nexus::Problem>
+    {
+        return $this->store->cancel($id, $this->clock->now());
+    }
+
+    /**
+     * Every task connected to task `$id`, at most `$depth` steps away.
+     */
+    public function graph(const string& $id, uint32 $depth = 32) : result<Graph, nexus::Problem>
+    {
+        return $this->store->graph($id, $depth);
+    }
+
+    /**
+     * How many tasks of this lane wait or run.
+     */
+    public function waiting() : result<uint64, nexus::Problem>
+    {
+        return $this->store->waiting($this->lane);
+    }
+
+    public const function lane() : string
+    {
+        return $this->lane;
+    }
+
+    /**
+     * Stores `$p` due at `$at`.
+     */
+    internal function store(Pipeline $p, time::timestamp $at) : result<Pushed, nexus::Problem>
+    {
+        return Batch::store($this->store, $this->lane, $this->codecs, $p, $this->clock->now(), $at, '');
+    }
+}

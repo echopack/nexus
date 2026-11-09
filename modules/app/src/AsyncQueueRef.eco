@@ -1,0 +1,28 @@
+namespace nexus::app;
+
+/**
+ * The async queue `bindAsyncQueue` just bound, for where its runs log:
+ *
+ * ```echo
+ * $app->bindAsyncQueue<WorkersLane>(threads: $config->workers)
+ *     ->log((const nexus::work::Run& $run) => .also(nexus::log::File("var/tasks/{$run->id}.log", .json)));
+ * ```
+ */
+public class AsyncQueueRef<L>
+{
+    internal nexus::work::Pool $pool;
+
+    internal constructor(nexus::work::Pool $pool)
+    {
+        $this->pool = $pool;
+    }
+
+    /**
+     * Where a run logs when its task leaves it to the queue: `.app` unless said.
+     */
+    public function log(function<nexus::work::RunLog(const nexus::work::Run&)> $choose) : AsyncQueueRef<L>
+    {
+        $this->pool->log = $choose;
+        return $this;
+    }
+}

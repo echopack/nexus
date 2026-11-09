@@ -1,0 +1,24 @@
+namespace Blog::Signals;
+
+use Blog::Queues::JobsQueue;
+use Blog::Tasks::{CountUsers, SendWelcome};
+
+/**
+ * Welcomes whoever signs up, on a worker, then counts the users: the request only stores the two
+ * tasks, through the jobs queue it was built with.
+ */
+public struct WelcomeNewUser : nexus::SignalHandler<UserRegistered>
+{
+    public JobsQueue $jobs;
+
+    public function handle(const UserRegistered& $signal) : status<nexus::Problem>
+    {
+        nexus::work::Pipeline $p = nexus::work::Pipeline();
+        nexus::work::Step $welcome = $p->add(SendWelcome($user: $signal->user));
+        $p->add(CountUsers(), after: [$welcome]);
+        guard $this->jobs->push($p) else ($problem) {
+            return .error($problem);
+        };
+        return .ok;
+    }
+}

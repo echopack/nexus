@@ -1,43 +1,31 @@
 namespace nexus::work;
 
-use container::Builder;
 use std::time;
 
 /**
- * Tasks for a nexus app: binds `Work` (every task type an extension binds with `Tasks::bind`, from
- * the codecs `nexus gen` writes) and, with `stores: .memory`, a `MemoryQueue`. When `serve` (or
- * `work`) starts, it starts `WORK_WORKERS` worker threads and the scheduler; when it stops, the
- * scheduler stops and the workers finish their tasks within `WORK_GRACE`. Adds `work`,
- * `work:failed`, `work:retry` and `work:schedule`.
+ * Tasks for a nexus app: binds `Work` (how every task type is stored, from the codecs `nexus gen`
+ * writes, every lane and the scheduler) and `Codecs`. The app binds its queues and plans after it.
+ * When `serve` (or `work`) starts, every async queue starts its threads, every distributed lane its
+ * feeder, and the scheduler starts; when it stops, the scheduler and the feeders stop and the
+ * queues finish their running tasks within `NEXUS_WORK_GRACE`. Adds `work`, `work:failed`,
+ * `work:retry`, `work:cancel`, `work:graph` and `work:schedule`.
  *
  * ```echo
- * nexus::work::Extension(stores: .provided),     // the queue from nexus-work-carbon
- * nexus::work::carbon::Extension(),
+ * nexus::work::Extension(),
  * ```
  *
- * Cron lines are read in `zone`, UTC unless given. `tasks` adds task types written by hand, next to
- * the bound ones. List it before the app, which binds its tasks.
+ * Cron lines are read in `zone`, UTC unless given.
  */
 public class Extension : nexus::Extension
 {
-    public Stores $stores;
     public calendar::Clock $clock;
     public calendar::Zone $zone;
-    public array<Kind> $tasks;
-    internal Workers? $workers = null;
-    internal Scheduler? $scheduler = null;
+    internal bool $started = false;
 
-    public constructor(
-        stores: Stores $stores = .memory,
-        clock: calendar::Clock $clock = calendar::SystemClock(),
-        zone: calendar::Zone $zone = .utc(),
-        tasks: array<Kind> $tasks = array<Kind>()
-    )
+    public constructor(clock: calendar::Clock $clock = calendar::SystemClock(), zone: calendar::Zone $zone = .utc())
     {
-        $this->stores = $stores;
         $this->clock = $clock;
         $this->zone = mv $zone;
-        $this->tasks = mv $tasks;
     }
 
     public function name() : string
@@ -47,53 +35,39 @@ public class Extension : nexus::Extension
 
     public function services(nexus::Services& $s) : status<nexus::BootError>
     {
-        $codecs = Codecs();
-        foreach (attr::of<TaskTable>('nexus::tasks') as const &$t) {
+        WorkConfig $config = $s->get<WorkConfig>();
+        Codecs $codecs = Codecs();
+        foreach (attr::of<TaskTable>("nexus::tasks") as const &$t) {
             function<void(Codecs)> $add = $t->call;
             $add($codecs);
         }
         $s->bind<Codecs>(put: $codecs);
-        $kinds = Kinds();
-        foreach ($this->tasks as const &$k) {
-            $kinds->add($k);
-        }
-        // the schedule and the queues once every extension has bound its tasks, at boot
-        $s->bind<Work>(put: Work($kinds, $s->get<WorkConfig>(), $this->clock, $this->zone));
-        if ($this->stores == Stores::memory) {
-            $s->bind<MemoryQueue>(put: MemoryQueue());
-            $s->alias<Queue, MemoryQueue>();
-        }
+        $s->bind<Work>(put: Work($config, $this->clock, $this->zone, $codecs));
         return .ok;
     }
 
     public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
     {
-        if (!$kernel->services->has<Queue>()) {
-            return .error(.extension('nexus-work', 'no queue is bound; use stores: .memory or add nexus::work::carbon::Extension()'));
-        }
-        $w = $kernel->services->get<Work>();
-        array<Planned> $planned = [];
-        foreach ($w->kinds->all() as const &$k) {
-            Schedule? $found = guard Schedule::of($k) else ($e) {
-                return .error(.extension('nexus-work', "{$k->name}: {$e}"));
+        Work $w = $kernel->services->get<Work>();
+        array<Feeder> $feeders = [];
+        foreach ($w->lanes->stores() as $d) {
+            if ($d->into->empty()) {
+                return .error(.extension('nexus-work', "{$d->lane}: a distributed queue needs an async queue to run on; give it ->into<Lane>()"));
+            }
+            Pool $into = guard $w->lanes->pool($d->into) else {
+                return .error(.extension('nexus-work', "{$d->lane} runs into lane {$d->into}, which is not a bound async queue"));
             };
-            if ($found != null) {
-                Schedule $schedule = guard $found;
-                $planned[] = Planned($kind: $k, $schedule: mv $schedule);
+            $feeders[] = Feeder($d, $into, $w);
+        }
+        $w->lanes->feeders = mv $feeders;
+        guard $w->scheduler->prepare($w->codecs, $w->lanes) else ($e) {
+            return .error(.extension('nexus-work', $e));
+        };
+        foreach ($w->scheduler->plans as $p) {
+            if ($w->lanes->pool($p->into) != null) {
+                $kernel->log->warn("{$p->name} is scheduled into async lane {$p->into}, so every process that schedules pushes it");
             }
         }
-        array<string> $queues = [];
-        foreach (str::split($w->config->queues, ',') as const &$q) {
-            string $name = string::from(str::trim($q));
-            if (!$name->empty()) {
-                $queues[] = $name;
-            }
-        }
-        if ($queues->empty()) {
-            $queues = $w->kinds->queues();
-        }
-        $w->planned = mv $planned;
-        $w->queues = mv $queues;
         return .ok;
     }
 
@@ -102,49 +76,67 @@ public class Extension : nexus::Extension
         $cmds->add(WorkCommand());
         $cmds->add(FailedCommand());
         $cmds->add(RetryCommand());
+        $cmds->add(CancelCommand());
+        $cmds->add(GraphCommand());
         $cmds->add(ScheduleCommand());
     }
 
     public function start(nexus::Kernel $kernel, const nexus::Serve& $options) : status<nexus::BootError>
     {
-        $w = $kernel->services->get<Work>();
-        if ($options->work && $w->config->workers > 0 && $w->kinds->count() > 0) {
-            $ws = Workers();
-            guard $ws->start($kernel, $w, $w->config->workers) else ($e) {
-                $ws->stop(.zero());
-                return .error($e);
-            };
-            $this->workers = $ws;
-            string $queues = str::join($w->queues, ', ');
-            $kernel->log->info("working {$queues} with {$w->config->workers} workers");
+        Work $w = $kernel->services->get<Work>();
+        if ($options->work) {
+            array<string> $lines = [];
+            foreach ($w->lanes->pools() as $p) {
+                guard $p->start($kernel) else ($e) {
+                    $this->drain($kernel);
+                    return .error($e);
+                };
+                $lines[] = "{$p->lane} ({$p->threads} threads)";
+                $this->started = true;
+            }
+            foreach ($w->lanes->feeders as $f) {
+                guard $f->start($kernel) else ($e) {
+                    $this->drain($kernel);
+                    return .error($e);
+                };
+                $lines[] = "{$f->lane->lane} into {$f->lane->into}";
+            }
+            if (!$lines->empty()) {
+                string $working = str::join($lines, ', ');
+                $kernel->log->info("working {$working}");
+            }
         }
-        if ($options->schedule && !$w->planned->empty()) {
-            $s = Scheduler($w, $w->clock->now() - time::duration::mins(1));
-            guard $s->start($kernel) else ($e) {
+        bool $plans = !$w->scheduler->plans->empty();
+        if ($options->schedule && ($plans || !$w->lanes->stores->empty())) {
+            guard $w->scheduler->start($kernel, $w) else ($e) {
                 $this->drain($kernel);
                 return .error($e);
             };
-            $this->scheduler = $s;
-            $kernel->log->info("scheduling {$w->planned->count()} tasks");
+            $kernel->log->info("scheduling {$w->scheduler->plans->count()} tasks");
         }
         return .ok;
     }
 
     public function drain(nexus::Kernel $kernel) : void
     {
-        if ($this->scheduler != null) {
-            Scheduler $s = guard $this->scheduler;
-            $s->stop();
-            $this->scheduler = null;
+        Work $w = $kernel->services->get<Work>();
+        $w->scheduler->stop();
+        foreach ($w->lanes->feeders as $f) {
+            $f->stop();
         }
-        if ($this->workers != null) {
-            Workers $ws = guard $this->workers;
-            if ($ws->stop($kernel->services->get<Work>()->config->grace)) {
-                $kernel->log->info('workers stopped');
-            } else {
-                $kernel->log->warn('tasks still running after the grace; they run again once their lease has passed', ['running' => $ws->running()]);
+        if (!$this->started) {
+            return;
+        }
+        $this->started = false;
+        bool $all = true;
+        foreach ($w->lanes->pools() as $p) {
+            if (!$p->stop($w->config->grace)) {
+                $all = false;
+                $kernel->log->warn('tasks still running after the grace', ['lane' => $p->lane, 'running' => $p->running()]);
             }
-            $this->workers = null;
+        }
+        if ($all) {
+            $kernel->log->info('workers stopped');
         }
     }
 }

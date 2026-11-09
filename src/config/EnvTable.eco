@@ -1,0 +1,11 @@
+namespace nexus;
+
+/**
+ * One module's generated list of the environment variables its config structs read, found by the
+ * `env` command with `attr::of<EnvTable>("nexus::envs")`.
+ */
+public struct EnvTable
+{
+    public string $module;
+    public function<array<EnvVar>()> $call;
+}

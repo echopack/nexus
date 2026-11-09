@@ -1,0 +1,85 @@
+namespace nexus::work;
+
+/**
+ * Runs tasks here and now, on the caller's payload: inside its database session, before the caller
+ * goes on. Each task is tried once and the caller decides what a failure means.
+ *
+ * ```echo
+ * guard nexus::work::Inline::run($payload, Reindex($post: 7)) else ($f) {
+ *     return .error(.server($f->why()));
+ * };
+ * ```
+ */
+public struct Inline
+{
+    /**
+     * Runs `$task`, then what it spawned.
+     */
+    public static function run<T>(nexus::Payload& $payload, T $task) : status<Failure> where T : Task
+    {
+        return Inline::run($payload, nexus::work::Pipeline::one(Item::of<T>($task)));
+    }
+
+    /**
+     * Runs the tasks of `$p` in the order they were added, each after what it spawned. Stops at the
+     * first failure, unless that task allows failure.
+     */
+    public static function run(nexus::Payload& $payload, Pipeline $p) : status<Failure>
+    {
+        $p->assign();
+        Codecs? $codecs = $payload->find<Codecs>();
+        array<string> $names = arr::room<string>($p->items->count());
+        foreach ($p->items as const &$item) {
+            string $name = 'task';
+            if ($codecs != null) {
+                Codecs $c = guard $codecs;
+                $name = $c->name($item->type) ?? 'task';
+            }
+            $names[] = $name;
+        }
+        array<string> $errors = arr::room<string>($p->items->count());
+        foreach ($p->items as $i => const &$item) {
+            array<Upstream> $upstream = [];
+            foreach ($p->after[$i] as $j) {
+                $upstream[] = Upstream($p->ids[$j], $names[$j], $failed: !$errors[$j]->empty(), $error: $errors[$j]);
+            }
+            $run = Run($p->ids[$i], $names[$i], '', 1, 1, $item->policy->exclusive->key($names[$i]), mv $upstream);
+            status<Failure> $status = Inline::one($payload, $item, $run);
+            guard $status else ($f) {
+                if (!$item->policy->allowFailure) {
+                    return .error($f);
+                }
+                $errors[] = $f->why();
+                continue;
+            };
+            $errors[] = '';
+        }
+        return .ok;
+    }
+
+    internal static function one(nexus::Payload& $payload, const Item& $item, const Run& $run) : status<Failure>
+    {
+        Flow $flow = Flow();
+        Run $copy = $run;
+        $payload->put<Run>(mv $copy);
+        $payload->put<Flow>($flow);
+        function<RunLog(const Run&)> $app = (const Run& $r) => RunLog::app;
+        RunLog $chosen = Pool::chosen($item->log, $run, $app);
+        nexus::Logger $before = $payload->log;
+        nexus::Logger $log = $chosen->logger($before);
+        $payload->useLog($log);
+        function<status<Failure>(nexus::Payload&)> $handle = $item->handle;
+        status<Failure> $status = $handle($payload);
+        if ($chosen->owns()) {
+            $log->flush();
+        }
+        $payload->useLog($before);
+        guard $status else ($f) {
+            return .error($f);
+        };
+        if ($flow->children->empty()) {
+            return .ok;
+        }
+        return Inline::run($payload, $flow->children);
+    }
+}

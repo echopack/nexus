@@ -1,0 +1,46 @@
+namespace Blog::Database;
+
+use Blog::Models::UserRepository;
+use Blog::Repositories::PostRepository;
+
+/**
+ * The database `NEXUS_DATABASE_URL` names: a MySQL pool with the blog's repositories registered and
+ * checked, the auth, tasks and OAuth tables with them.
+ */
+public function open(const nexus::carbon::DatabaseConfig& $config) : result<carbon::DB, carbon::Error>
+{
+    if ($config->url->empty()) {
+        return .error(.invalid('NEXUS_DATABASE_URL is not set; it looks like mysql://user:pass@host:3306/blog'));
+    }
+    $pool = try carbon::mysql::Source::parse($config->url);
+    $db = carbon::DB($pool);
+    try wire($db);
+    return .ok($db);
+}
+
+/**
+ * Registers the blog's repositories on `$db` and checks every one the models need, the auth, tasks
+ * and OAuth tables included.
+ */
+public function wire(carbon::DB $db) : status<carbon::Error>
+{
+    try $db->register<UserRepository>();
+    try $db->register<PostRepository>();
+    try Blog::Models::Carbon::check($db);
+    try nexus::auth::carbon::Tables::wire($db);
+    try nexus::work::carbon::Tables::wire($db);
+    try nexus::oauth::carbon::Tables::wire($db);
+    return .ok;
+}
+
+/**
+ * The blog's migrations after the auth, tasks and OAuth tables', in id order.
+ */
+public function migrations() : array<carbon::migrate::Step>
+{
+    $all = nexus::auth::carbon::Tables::migrations();
+    $all->extend(nexus::work::carbon::Tables::migrations());
+    $all->extend(nexus::oauth::carbon::Tables::migrations());
+    $all->extend(Blog::Migrations::Carbon::migrations());
+    return $all;
+}

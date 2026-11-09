@@ -8,6 +8,11 @@ namespace nexus;
 public struct Tables
 {
     public array<ConfigTable> $configs = [];
+
+    /**
+     * What every module's config structs read from the environment, for the `env` command.
+     */
+    public array<EnvTable> $envs = [];
     public array<InputTable> $inputs = [];
     public array<GeneratedTable> $generated = [];
 
@@ -19,6 +24,9 @@ public struct Tables
         $t = Tables();
         foreach (attr::of<ConfigTable>('nexus::configs') as const &$c) {
             $t->configs[] = $c;
+        }
+        foreach (attr::of<EnvTable>('nexus::envs') as const &$e) {
+            $t->envs[] = $e;
         }
         foreach (attr::of<InputTable>('nexus::inputs') as const &$i) {
             $t->inputs[] = $i;

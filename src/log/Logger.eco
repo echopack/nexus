@@ -100,6 +100,30 @@ public class Logger
     }
 
     /**
+     * A child with this logger's fields and level that also writes to `$sink`, the way a task
+     * run writes into a channel of its own next to the app's log.
+     */
+    public const function also(log::Sink $sink) : Logger
+    {
+        array<log::Sink> $sinks = $this->sinks->clone();
+        $sinks[] = $sink;
+        return $this->only(mv $sinks);
+    }
+
+    /**
+     * A child with this logger's fields and level that writes to `$sinks` only.
+     */
+    public const function only(array<log::Sink> $sinks) : Logger
+    {
+        log::Context? $at = $this->context;
+        if ($at == null) {
+            return Logger(mv $sinks, $this->level);
+        }
+        log::Context $c = guard $at;
+        return Logger(mv $sinks, $this->level, context: $c);
+    }
+
+    /**
      * Opens span `$name`. Its logger stamps the span and `$fields` on every entry; when the span
      * goes out of scope it logs `<name> closed` with the time it was open, at `$close`.
      */

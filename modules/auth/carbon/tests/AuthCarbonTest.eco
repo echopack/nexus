@@ -34,7 +34,7 @@ internal class Rig
             return .ok($made);
         });
         array<nexus::Extension> $exts = [$db, nexus::auth::Extension('t', stores: .provided, clock: $clock, cost: crypto::PasswordCost(8, 1)), nexus::auth::carbon::Extension()];
-        map<string, string> $vars = ['AUTH_KEY' => KEY, 'AUTH_SESSIONS' => '2h'];
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_AUTH_SESSIONS' => '2h'];
         $this->app = TestApp($exts, $vars);
     }
 
@@ -140,7 +140,7 @@ test boot_wants_the_repositories_registered
         return .ok(carbon::DB($driver));
     });
     array<nexus::Extension> $exts = [$db, nexus::auth::Extension('t', stores: .provided, cost: crypto::PasswordCost(8, 1)), nexus::auth::carbon::Extension()];
-    map<string, string> $vars = ['AUTH_KEY' => KEY];
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
     nexus::BootError $e = expect(TestApp::attempt($exts, $vars))->fails();
     expect(str::join($e->lines(), ';'))->has('Tables::wire');
 }

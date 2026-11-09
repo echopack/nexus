@@ -1,6 +1,12 @@
-namespace blog;
+namespace Blog;
 
 use container::Container;
+use Blog::Actions::Health;
+use Blog::Commands::SetPassword;
+use Blog::Config::BlogConfig;
+use Blog::Middleware::ServerTiming;
+use Blog::Providers::{AuthProvider, PostsProvider};
+use Blog::Queues::{JobsLane, WorkersLane};
 
 /**
  * The blog itself, as an extension: its providers, one per part, and what belongs to the whole
@@ -18,13 +24,17 @@ public class App : nexus::Extension
      */
     public function providers() : array<nexus::Provider>
     {
-        array<nexus::Provider> $all = [AuthProvider(), PostsProvider()];
+        array<nexus::Provider> $all = [
+            AuthProvider(), 
+            PostsProvider()
+        ];
+
         return $all;
     }
 
     public function services(nexus::Services& $s) : status<nexus::BootError>
     {
-        $app = nexus::App($s, $this->providers());
+        $app = nexus::App($s);
 
         // every answer says how long it took
         $app->bind<ServerTiming>(scoped: () => ServerTiming());
@@ -33,10 +43,19 @@ public class App : nexus::Extension
         $app->bindAction<Health>((Container $c) => Health($c->get<BlogConfig>()))
             ->route([.get], '/health');
 
-        // a sign up is welcomed on a worker; expired tokens go every night at three
-        $app->bindListener<WelcomeNewUser>()->on<UserRegistered>();
-        $app->bindTask<SendWelcome>()->queue('mail')->tries(5);
-        $app->bindTask<PruneAuth>()->cron('0 3 * * *');
+        // tasks wait in the database and run on the worker threads of whichever server claims them
+        $app->bindAsyncQueue<WorkersLane>();
+        $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+            ->into<WorkersLane>();
+
+        // the providers bind their handlers on it
+        $app->instance(nexus::SignalDispatcher());
+
+        // bind additional services from the providers
+        foreach ($this->providers() as const &$p) {
+            $app->register($p);
+        }
+
         return .ok;
     }
 

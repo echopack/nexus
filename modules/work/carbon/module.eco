@@ -1,17 +1,19 @@
 /*
- * nexus-work-carbon: nexus-work's queue in the app's carbon database.
+ * nexus-work-carbon: the store of a nexus-work distributed queue in the
+ * app's carbon database.
  *
- * One table, `nexus_tasks`, in one migration the app adds to its own. A
- * task pushed during a request is written on the request's database
- * session, so it commits or rolls back with the request's own writes.
- * Workers claim a task with a conditional update on its attempt count, so
- * two workers, or two processes, never both hold it.
+ * Three tables in one migration the app adds to its own: the tasks, what
+ * they wait for, and the `.running` keys held. A task pushed during a
+ * request is written on the request's database session, so it commits or
+ * rolls back with the request's own writes. Servers claim a task with a
+ * conditional update on its attempt count, so two of them never both hold
+ * it.
  */
 
 #[module: "nexus-work-carbon"]
 #[version: "0.1.0"]
 #[epm::license: "MIT"]
-#[epm::description: "The nexus-work queue in a carbon database"]
+#[epm::description: "The nexus-work distributed queue store in a carbon database"]
 
 #[depends: "../../.."]
 #[depends: ".."]
@@ -32,6 +34,7 @@
 
 #[target: test] {
     #[depends: "../../../../carbon/fake"]
+    #[depends: "../../../../carbon/drivers/mysql"]
     #[depends: "../../testing"]
     #[sources: "tests/*.eco"]
     #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]

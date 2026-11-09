@@ -1,0 +1,50 @@
+namespace nexus::app;
+
+/**
+ * The task value `schedule` just planned, for when it is pushed and into which lane; both are
+ * needed and checked at boot:
+ *
+ * ```echo
+ * $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
+ * $app->schedule(Heartbeat())->every('1m')->into<WorkersLane>();
+ * ```
+ */
+public class ScheduleRef
+{
+    internal nexus::Services $services;
+    internal nexus::work::Planned $plan;
+
+    internal constructor(nexus::Services $services, nexus::work::Planned $plan)
+    {
+        $this->services = $services;
+        $this->plan = $plan;
+    }
+
+    /**
+     * Pushes the task every `$every`, like `15m`, counted from the Unix epoch.
+     */
+    public function every(const string& $every) : ScheduleRef
+    {
+        $this->plan->every = $every;
+        return $this;
+    }
+
+    /**
+     * Pushes the task on the cron line `$cron`, like `0 3 * * *`.
+     */
+    public function cron(const string& $cron) : ScheduleRef
+    {
+        $this->plan->cron = $cron;
+        return $this;
+    }
+
+    /**
+     * Pushes the task into the queue of lane `L`. A distributed lane runs each slot once across
+     * every server; an async lane runs it on every process that schedules.
+     */
+    public function into<L>() : ScheduleRef
+    {
+        $this->plan->into = nexus::work::Queues::lane<L>($this->services, '');
+        return $this;
+    }
+}

@@ -1,0 +1,251 @@
+namespace nexus::work;
+
+use std::thread;
+use std::time;
+
+/**
+ * Feeds a distributed lane's tasks to the async queue it goes into: claims as many due tasks as
+ * that queue has idle workers, hands each over with what it waited for, keeps their leases alive
+ * while they run, and settles each in the store when its run ends. Several servers feed from one
+ * store; the claim keeps them from taking the same task.
+ */
+#[atomic]
+internal class Feeder
+{
+    internal Distributed $lane;
+    internal Pool $into;
+    internal Work $work;
+    internal thread::mutex<map<string, StoredTask>> $inflight = thread::mutex<map<string, StoredTask>>(map<string, StoredTask>());
+    internal thread::mutex<time::instant> $beaten = thread::mutex<time::instant>(time::instant::now());
+    internal nexus::Flag $halt = nexus::Flag();
+
+    /**
+     * Raised when a run settled: the tasks waiting for it may be due, so the feeder looks again
+     * without waiting out its poll.
+     */
+    internal atomic<int32> $poked = atomic<int32>(0);
+    internal thread::mutex<array<thread::handle>> $handles = thread::mutex<array<thread::handle>>(array<thread::handle>());
+
+    public constructor(Distributed $lane, Pool $into, Work $work)
+    {
+        $this->lane = $lane;
+        $this->into = $into;
+        $this->work = $work;
+    }
+
+    /**
+     * Claims and hands over tasks until `stop`, looking again every `NEXUS_WORK_POLL` when there was none.
+     */
+    public function start(nexus::Kernel $k) : status<nexus::BootError>
+    {
+        $this->halt = nexus::Flag();
+        Feeder $self = $this;
+        thread::handle $t = guard thread::spawn(function[$self, $k]() : void {
+            while (!$self->halt->raised()) {
+                uint32 $handed = $self->step($k);
+                $self->beat($k);
+                if ($handed == 0) {
+                    $self->rest();
+                }
+            }
+        }) else {
+            return .error(.extension('nexus-work', "{$this->lane->lane}: cannot start the feeder thread"));
+        };
+        thread::locked<array<thread::handle>> $held = $this->handles->lock();
+        $held->value[] = $t;
+        return .ok;
+    }
+
+    /**
+     * Waits `NEXUS_WORK_POLL`, or until a run settles or the feeder stops.
+     */
+    internal function rest() : void
+    {
+        Feeder $self = $this;
+        Pool::nap($this->work->config->poll, function[$self]() : bool {
+            return $self->halt->raised() || $self->poked->load() != 0;
+        });
+        $this->poked->store(0);
+    }
+
+    /**
+     * Stops claiming. Tasks already handed over still settle when their runs end.
+     */
+    public function stop() : void
+    {
+        $this->halt->raise();
+        thread::locked<array<thread::handle>> $held = $this->handles->lock();
+        foreach ($held->value as &$t) {
+            $t->join();
+        }
+        $held->value = array<thread::handle>();
+    }
+
+    /**
+     * Claims what the async queue has room for and hands it over; answers how many.
+     */
+    public function step(nexus::Kernel $k) : uint32
+    {
+        uint32 $room = $this->into->room();
+        if ($room == 0) {
+            return 0;
+        }
+        time::timestamp $now = $this->work->clock->now();
+        Store $store = $this->lane->store;
+        array<StoredTask> $claimed = guard $store->claim($this->lane->lane, $now, $now + $this->work->config->lease, $room) else ($p) {
+            $k->log->with(['work' => 'feeder'])->error('the store cannot be read', ['lane' => $this->lane->lane, 'detail' => $p->detail(.dev)]);
+            return 0;
+        };
+        array<array<Upstream>> $upstream = arr::room<array<Upstream>>($claimed->count());
+        foreach ($claimed as const &$t) {
+            array<Upstream> $ups = guard $store->upstream($t->id) else {
+                $upstream[] = array<Upstream>();
+                continue;
+            };
+            $upstream[] = mv $ups;
+        }
+        foreach ($claimed as $i => const &$t) {
+            $this->hand($k, $t, $upstream[$i]);
+        }
+        return $claimed->count() as uint32;
+    }
+
+    /**
+     * Holds every running task another lease, once a third of the lease has passed.
+     */
+    public function beat(nexus::Kernel $k) : void
+    {
+        time::duration $lease = $this->work->config->lease;
+        {
+            thread::locked<time::instant> $last = $this->beaten->lock();
+            if ($last->value->elapsed() < $lease / 3) {
+                return;
+            }
+            $last->value = time::instant::now();
+        }
+        array<StoredTask> $running = [];
+        {
+            thread::locked<map<string, StoredTask>> $held = $this->inflight->lock();
+            foreach ($held->value as $id => const &$t) {
+                $running[] = $t;
+            }
+        }
+        if ($running->empty()) {
+            return;
+        }
+        Store $store = $this->lane->store;
+        time::timestamp $until = $this->work->clock->now() + $lease;
+        foreach ($running as const &$t) {
+            guard $store->extend($t, $until) else ($p) {
+                $k->log->with(['work' => 'feeder'])->error('the store cannot extend a lease', ['task' => $t->name, 'id' => $t->id, 'detail' => $p->detail(.dev)]);
+                continue;
+            };
+        }
+    }
+
+    /**
+     * Hands claimed `$task` to the async queue, or settles it at once when it cannot run.
+     */
+    internal function hand(nexus::Kernel $k, const StoredTask& $task, const array<Upstream>& $upstream) : void
+    {
+        nexus::Logger $log = $k->log->with(['work' => $task->name, 'id' => $task->id]);
+        if ($task->attempts > $task->tries) {
+            // every try was claimed and none came back: the process died with it
+            $this->reject($task, "gave up after {$task->tries} tries that never finished", $log);
+            return;
+        }
+        Codec $codec = guard $this->work->codecs->find($task->name) else {
+            $this->reject($task, "no task named {$task->name} in this program", $log);
+            return;
+        };
+        function<result<Item, DataError>(const string&)> $decode = $codec->decode;
+        Item $item = guard $decode($task->data) else ($e) {
+            $this->reject($task, "the task data does not decode: {$e}", $log);
+            return;
+        };
+        function<RunLog(const Run&)>? $laneLog = $this->lane->log;
+        if ($laneLog != null) {
+            function<RunLog(const Run&)> $fallback = guard $laneLog;
+            function<RunLog(const Run&)> $own = $item->log;
+            $item->log = function[$own, $fallback](const Run& $run) : RunLog {
+                return Pool::chosen($own, $run, $fallback);
+            };
+        }
+        $run = Run($task->id, $task->name, $this->lane->lane, $task->attempts, $task->tries, $task->holdKey, $upstream);
+        {
+            thread::locked<map<string, StoredTask>> $held = $this->inflight->lock();
+            $held->value[$task->id] = $task;
+        }
+        Feeder $self = $this;
+        string $id = $task->id;
+        $this->into->feed($item, mv $run, function[$self, $id](const Outcome& $o) : void {
+            $self->report($id, $o);
+        });
+    }
+
+    /**
+     * Fails claimed `$task` without running it, for `$why`.
+     */
+    internal function reject(const StoredTask& $task, const string& $why, nexus::Logger $log) : void
+    {
+        Settle $s = .fail($why);
+        $s->tell($log, $task->attempts, 0.0, $this->work->clock->now());
+        $this->settle($task, $s, Batch(), $log);
+    }
+
+    /**
+     * Settles in-flight task `$id` in the store after its run `$o`.
+     */
+    internal function report(const string& $id, Outcome $o) : void
+    {
+        StoredTask? $inflight = null;
+        {
+            thread::locked<map<string, StoredTask>> $held = $this->inflight->lock();
+            if ($held->value->has($id)) {
+                $inflight = $held->value->get($id);
+            }
+        }
+        StoredTask $task = guard $inflight else {
+            return;
+        };
+        time::timestamp $now = $this->work->clock->now();
+        Settle $s = Settle::of($o->status, $task->attempts, $task->tries, $now);
+        $s->tell($o->log, $task->attempts, $o->ms, $now);
+        Batch $spawned = Batch();
+        if (!$o->spawned->empty()) {
+            $spawned = $this->spawned($o, $now);
+        }
+        $this->settle($task, $s, $spawned, $o->log);
+        {
+            thread::locked<map<string, StoredTask>> $held = $this->inflight->lock();
+            $held->value->remove($task->id);
+        }
+        $this->poked->store(1);
+    }
+
+    /**
+     * What run `$o` spawned, ready to store.
+     */
+    internal function spawned(Outcome $o, time::timestamp $now) : Batch
+    {
+        array<string> $names = guard $this->work->codecs->spawned($o->spawned, $o->log) else {
+            return Batch();
+        };
+        return Batch::of($o->spawned, $names, $this->work->codecs, $this->lane->lane, $now, $now, '');
+    }
+
+    internal function settle(const StoredTask& $task, const Settle& $s, const Batch& $spawned, nexus::Logger $log) : void
+    {
+        time::timestamp $now = $this->work->clock->now();
+        Store $store = $this->lane->store;
+        status<nexus::Problem> $saved = match ($s) {
+            Settle::done => $store->done($task, $now, $spawned),
+            Settle::retry($at, $why) => $store->retry($task, $at, $why),
+            Settle::fail($why) => $store->fail($task, $now, $why),
+        };
+        guard $saved else ($p) {
+            $log->error('the store cannot settle a task', ['detail' => $p->detail(.dev)]);
+            return;
+        };
+    }
+}

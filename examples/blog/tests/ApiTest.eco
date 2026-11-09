@@ -4,7 +4,8 @@
  */
 
 use nexus::testing::{TestApp, Client, TestResponse};
-use blog::{Post, PostTable, User, UserTable, Role};
+use Blog::Models::{Post, PostTable, User, UserTable};
+use Blog::Types::Role;
 use carbon::fake;
 use hydrahon::{Value, Mysql};
 use std::time;
@@ -30,14 +31,14 @@ internal class Rig
         $this->fake = $driver;
         $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
             $made = carbon::DB($driver, clock: calendar::FixedClock(time::timestamp::from_unix_secs(1700000000)));
-            try blog::database::wire($made);
+            try Blog::Database::wire($made);
             return .ok($made);
         });
         $clock = calendar::FixedClock(time::timestamp::from_unix_secs(1700000000));
         $auth = nexus::auth::Extension('blog', clock: $clock, cost: crypto::PasswordCost(8, 1));
         $work = nexus::work::Extension(clock: $this->clock);
-        array<nexus::Extension> $exts = [$db, $auth, nexus::oauth::Extension(clock: $clock), nexus::mcp::Extension(), $work, blog::App()];
-        $vars['AUTH_KEY'] = 'a-test-key-of-at-least-thirty-two-chars';
+        array<nexus::Extension> $exts = [$db, $auth, nexus::oauth::Extension(clock: $clock), nexus::mcp::Extension(), $work, Blog::App()];
+        $vars['NEXUS_AUTH_KEY'] = 'a-test-key-of-at-least-thirty-two-chars';
         $this->app = TestApp($exts, mv $vars);
     }
 
@@ -69,19 +70,42 @@ internal class Rig
     }
 }
 
-internal function queued(Rig $r) : array<nexus::work::StoredTask>
+/**
+ * How many statements sent so far start with `$prefix`.
+ */
+internal function sentLike(Rig $r, const string& $prefix) : int32
 {
-    return $r->app->kernel->services->get<nexus::work::MemoryQueue>()->all();
+    int32 $n = 0;
+    foreach ($r->fake->texts() as const &$t) {
+        if ($t->starts($prefix)) {
+            $n++;
+        }
+    }
+    return $n;
 }
 
-internal function runTask(Rig $r) : bool
+/**
+ * Runs `$task` here, as a worker would, on a payload of its own.
+ */
+internal function runInline(Rig $r, Blog::Tasks::SendWelcome $task) : status<nexus::work::Failure>
 {
-    return nexus::work::Runner::step($r->app->kernel, $r->app->kernel->services->get<nexus::work::Work>());
+    nexus::Payload $payload = $r->app->kernel->background('test', nexus::Kernel::id());
+    status<nexus::work::Failure> $out = nexus::work::Inline::run($payload, $task);
+    nexus::Kernel::finish($payload);
+    return $out;
+}
+
+internal function runInline(Rig $r, Blog::Tasks::PruneAuth $task) : status<nexus::work::Failure>
+{
+    nexus::Payload $payload = $r->app->kernel->background('test', nexus::Kernel::id());
+    status<nexus::work::Failure> $out = nexus::work::Inline::run($payload, $task);
+    nexus::Kernel::finish($payload);
+    return $out;
 }
 
 internal function rig() : Rig
 {
-    map<string, string> $vars = ['BLOG_PAGE_SIZE' => '2'];
+    map<string, string> $vars = ['BLOG_DEFAULT_PAGE_SIZE' => '2'];
     return Rig($vars);
 }
 
@@ -204,7 +228,7 @@ test show_with_its_author
     $r->fake->rows([postRow(5, 'Hello')])->rows([editorRow()]);
     array<string> $name = ['data', 'author', 'name'];
     array<string> $id = ['data', 'id'];
-    string $target = $r->app->kernel->router->url<blog::ShowPost>(['id' => '5'])->text();
+    string $target = $r->app->kernel->router->url<Blog::Actions::Posts::ShowPost>(['id' => '5'])->text();
     $res = $r->client()->get("{$target}?include=author");
     $res->assertStatus(200)->assertJson($id, 5)->assertJson($name, 'The editor');
     // the hook's url before the include, which is written last
@@ -411,30 +435,28 @@ internal function registration(const string& $email, const string& $password) : 
     return $doc;
 }
 
-test signing_up_queues_a_welcome
+test signing_up_stores_a_welcome_pipeline
 {
     $r = rig();
-    // nobody has the address yet, then the insert
-    $r->fake->rows([])->written($insertId: 7);
+    // nobody has the address yet, the insert, then the welcome's unique key is free and the
+    // pipeline is stored: two tasks and the edge between them
+    $r->fake->rows([])->written($insertId: 7)->rows([])->written()->written()->written();
     array<string> $id = ['data', 'id'];
     array<string> $name = ['data', 'name'];
     $r->client()->post('/v1/users', json: registration(' Reader@Example.com ', 'a long password'))->assertStatus(201)->assertJson($id, 7)->assertJson($name, 'A reader');
     $sql = $r->fake->texts();
     expect($sql[0])->has('WHERE `users`.`email` = ?');
-    expect($r->fake->last())->starts('INSERT INTO `users`');
-    $tasks = queued($r);
-    expect($tasks)->size(1);
-    expect($tasks[0]->name)->is('blog::SendWelcome');
-    expect($tasks[0]->queue)->is('mail');
-    expect($tasks[0]->tries)->is(5);
-    expect($tasks[0]->data)->is('{"user":7}');
+    expect(sentLike($r, 'INSERT INTO `users`'))->is(1);
+    expect(sentLike($r, 'SELECT') > 1)->yes(says: 'the unique key was checked');
+    expect(sentLike($r, 'INSERT INTO `nexus_tasks`'))->is(2);
+    expect(sentLike($r, 'INSERT INTO `nexus_task_edges`'))->is(1);
+    expect($r->fake->pending())->is(0);
 
     // a worker welcomes them
     $r->fake->rows([UserTable()->row(User($id: 7, $email: 'reader@example.com', $name: 'A reader'))])->written();
-    expect(runTask($r))->yes(says: 'a worker ran the welcome task');
+    expect(runInline($r, Blog::Tasks::SendWelcome($user: 7)))->fine();
     expect($r->fake->last())->starts('UPDATE `users` SET')->has('`welcomed_at` = ?');
     expect($r->app->logged('welcome'))->yes(says: 'the welcome was logged');
-    expect(queued($r))->empty();
 }
 
 test a_taken_email_or_a_short_password_queues_nothing
@@ -449,40 +471,41 @@ test a_taken_email_or_a_short_password_queues_nothing
     $r->client()->post('/v1/users', json: registration('editor@example.com', 'a long password'))->assertProblem(409)->assertBodyContains('that email is taken');
     $r->fake->rows([]);
     $r->client()->post('/v1/users', json: registration('new@example.com', 'short'))->assertInvalid('password', 'min');
-    expect(queued($r))->empty();
+    expect(sentLike($r, 'INSERT INTO `nexus_tasks`'))->is(0);
 }
 
 test the_welcome_gives_up_when_the_user_is_gone
 {
     $r = rig();
-    $payload = $r->app->kernel->background('test', 't');
-    guard blog::SendWelcomeTask::push($payload, $user: 9);
-    nexus::Kernel::finish($payload);
     $r->fake->rows([]);
-    expect(runTask($r))->yes(says: 'a worker ran the welcome task');
-    $j = queued($r)[0];
-    expect($j->failedAt)->some();
-    expect($j->error)->is('user 9 is gone');
+    nexus::work::Failure $f = expect(runInline($r, Blog::Tasks::SendWelcome($user: 9)))->fails();
+    expect($f->why())->is('user 9 is gone');
 }
 
 test auth_is_pruned_nightly_at_three
 {
     $r = rig();
     $w = $r->app->kernel->services->get<nexus::work::Work>();
-    expect($w->planned)->size(1);
-    expect($w->planned[0]->kind->name)->is('blog::PruneAuth');
-    $s = nexus::work::Scheduler($w, $r->clock->now() - time::duration::mins(1));
-    expect($s->tick($r->app->kernel, $r->clock->now()))->is(0);
+    expect($w->scheduler->plans)->size(1);
+    expect($w->scheduler->plans[0]->into)->is('Blog::Queues::JobsLane');
+    $w->scheduler->since($r->clock->now() - time::duration::mins(1));
+    // the first tick finds no slot yet, and prunes the store: nothing expired, nothing old
+    $r->fake->rows([])->rows([]);
+    expect($w->scheduler->tick($r->app->kernel, $w, $r->clock->now()))->is(0 as uint32);
     $r->clock->advance(time::duration::secs(35));
-    expect($s->tick($r->app->kernel, $r->clock->now()))->is(1);
-    expect(queued($r)[0]->key)->is('blog::PruneAuth@1793588400');
+    // 03:00: the slot's key is free, so the task is stored
+    $r->fake->rows([])->written();
+    expect($w->scheduler->tick($r->app->kernel, $w, $r->clock->now()))->is(1 as uint32);
+    expect(sentLike($r, 'INSERT INTO `nexus_tasks`'))->is(1);
     $r->fake->written(2)->written(1);
-    expect(runTask($r))->yes(says: 'a worker ran the prune task');
-    expect($r->fake->texts()[0])->is('DELETE FROM `auth_tokens` WHERE `auth_tokens`.`expires_at` < ?');
+    expect(runInline($r, Blog::Tasks::PruneAuth()))->fine();
+    expect($r->fake->texts()[$r->fake->count() - 2])->is('DELETE FROM `auth_tokens` WHERE `auth_tokens`.`expires_at` < ?');
     expect($r->fake->last())->is('DELETE FROM `auth_sessions` WHERE `auth_sessions`.`expires_at` < ?');
     expect($r->app->logged('pruned'))->yes(says: 'the prune was logged');
     // the next one is tomorrow
-    $next = expect($w->planned[0]->schedule->next($r->clock->now(), $w->zone))->some();
+    nexus::work::Schedule? $nightly = guard nexus::work::Schedule::of('', $w->scheduler->plans[0]->cron);
+    nexus::work::Schedule $s = guard $nightly;
+    $next = expect($s->next($r->clock->now(), $w->zone))->some();
     expect($next->unix_secs())->is(1793588400 + 86400);
 }
 
@@ -491,7 +514,8 @@ test auth_is_pruned_nightly_at_three
  */
 internal function command(Rig $r, nexus::Command $cmd, nexus::Invocation& $in) : int32
 {
-    return $cmd->run($r->app->kernel, $in);
+    $in->attach($r->app->kernel);
+    return $cmd->run($in);
 }
 
 internal function printed(const nexus::Invocation& $in) : string
@@ -526,19 +550,19 @@ test posts_show_prints_a_post_from_the_service
     $r->fake->rows([postRow(3, 'Hello')])->rows([editorRow()]);
     $in = nexus::Invocation(nexus::Mode::testing);
     $in->positionals = ['3'];
-    expect(command($r, blog::ShowPostCommandCli('posts:show'), $in))->is(0);
+    expect(command($r, Blog::Commands::ShowPostCommandCli('posts:show'), $in))->is(0);
     string $text = printed($in);
     expect($text)->has('#3  Hello')->has('by The editor <editor@example.com>')->has('tags: echo, nexus');
 
     $r->fake->rows([]);
     $missing = nexus::Invocation(nexus::Mode::testing);
     $missing->positionals = ['9'];
-    expect(command($r, blog::ShowPostCommandCli('posts:show'), $missing))->is(1);
+    expect(command($r, Blog::Commands::ShowPostCommandCli('posts:show'), $missing))->is(1);
     expect(printed($missing))->has('error: Not Found');
 
     $bad = nexus::Invocation(nexus::Mode::testing);
     $bad->positionals = ['nine'];
-    expect(command($r, blog::ShowPostCommandCli('posts:show'), $bad))->is(1);
+    expect(command($r, Blog::Commands::ShowPostCommandCli('posts:show'), $bad))->is(1);
     expect(printed($bad))->has('error: id:');
 }
 
@@ -554,7 +578,7 @@ test posts_create_keeps_the_api_rules
     $in->values['body'] = 'Typed in a terminal';
     $in->given['body'] = true;
     $in->lists['tags'] = ['Echo', ' echo', 'CLI'];
-    expect(command($r, blog::CreatePostCommandCli('posts:create'), $in))->is(0);
+    expect(command($r, Blog::Commands::CreatePostCommandCli('posts:create'), $in))->is(0);
     expect(printed($in))->has('published post #5 by The editor');
     expect($r->fake->last())->starts('INSERT INTO `posts`');
 
@@ -564,10 +588,10 @@ test posts_create_keeps_the_api_rules
     $short->values['title'] = 'No';
     $short->given['title'] = true;
     usize $sent = $r->fake->count();
-    expect(command($r, blog::CreatePostCommandCli('posts:create'), $short))->is(1);
+    expect(command($r, Blog::Commands::CreatePostCommandCli('posts:create'), $short))->is(1);
     expect(printed($short))->has('title:')->has('body:');
     expect($r->fake->count())->is($sent);
-    expect(str::join(blog::PostService::tags(['Echo', ' echo', '', 'CLI']), ','))->is('echo,cli');
+    expect(str::join(Blog::Services::PostService::tags(['Echo', ' echo', '', 'CLI']), ','))->is('echo,cli');
 }
 
 test the_post_tools_are_listed_with_their_schemas

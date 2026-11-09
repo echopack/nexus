@@ -8,7 +8,6 @@ public struct TypeDecl
     public string $qualified;
     public string $file;
     public int64 $line;
-    public string $section = '';
     public array<FieldDecl> $fields = [];
 
     /**

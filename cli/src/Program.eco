@@ -34,7 +34,7 @@ public struct Program
     public array<MappedDecl> $mapped = [];
 
     /**
-     * The other types of the module that conform to a nexus interface (middleware, listeners,
+     * The other types of the module that conform to a nexus interface (middleware, signal handlers,
      * transformers...), by qualified name: the generated table names them for logs and `routes`.
      */
     public array<string> $named = [];
@@ -464,10 +464,6 @@ public struct Program
                 $this->fail($d, "task field ${$name} has type {$text}; task data holds integers, float64, bool, strings, arrays of strings or int64, and their nullables");
                 return;
             }
-            if (!decl::flag($f, 'default')) {
-                // a scheduled task is pushed as T(), so only one with every default can be
-                $j->defaults = false;
-            }
             $j->fields[] = FieldDecl($name, $name, $type, $text, decl::flag($f, 'default'), decl::text($f, 'default_value'));
         }
         string $wanted = 'public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>';
@@ -662,13 +658,12 @@ public struct Program
             return;
         }
         $tool = guard decl::tool($d, 'config');
-        $section = decl::string(decl::value($tool));
-        if ($section->empty()) {
-            $this->fail($d, '#[nexus::config] needs a section name, like #[nexus::config: "db"]');
+        $prefix = decl::string(decl::value($tool));
+        if (!names::variable($prefix)) {
+            $this->fail($d, '#[nexus::config] takes the env prefix as it is read, like #[nexus::config: "BLOG"]');
             return;
         }
-        $t = TypeDecl($q, decl::text($d, 'file'), decl::int($d, 'line'), $section);
-        $prefix = names::screaming($section);
+        $t = TypeDecl($q, decl::text($d, 'file'), decl::int($d, 'line'));
         foreach (decl::items($d, 'fields') as const &$f) {
             if (decl::flag($f, 'static')) {
                 continue;
@@ -692,14 +687,27 @@ public struct Program
         }
         $reader = types::reader($type);
         bool $config = !$envPrefix->empty() || $wireTool == 'env';
-        if ($config && ($reader->empty() || $reader == 'strings' || $reader == 'ints' || $reader == 'json')) {
+        // a config field is read from the environment only when #[nexus::env] says so
+        bool $env = $config && decl::has($f, 'env');
+        if ($config && !$env && !decl::flag($f, 'default')) {
+            $this->failAt($d, $f, "field ${$name} is not read from the environment and has no default; give it a default or #[nexus::env]");
+            return null;
+        }
+        if ($env && ($reader->empty() || $reader == 'strings' || $reader == 'ints' || $reader == 'json')) {
             $this->failAt($d, $f, "field ${$name} has type {$text}, which nexus cannot read here");
             return null;
         }
         string $wire = $name;
         if ($config) {
-            $upper = names::screaming($name);
-            $wire = decl::option($f, 'env', "{$envPrefix}_{$upper}");
+            // #[nexus::env: "PAGE_SIZE"] names what follows the prefix; bare, the field's name does
+            string $suffix = decl::option($f, 'env', '');
+            if ($suffix->empty()) {
+                $suffix = names::screaming($name);
+            } else if (!names::variable($suffix)) {
+                $this->failAt($d, $f, "#[nexus::env] on ${$name} takes what follows the prefix as it is read, like #[nexus::env: \"PAGE_SIZE\"]");
+                return null;
+            }
+            $wire = "{$envPrefix}_{$suffix}";
         } else {
             $wire = decl::option($f, 'name', $name);
         }
@@ -707,6 +715,7 @@ public struct Program
         $out->secret = decl::has($f, 'secret');
         $out->doc = names::prose(decl::text($f, 'doc'));
         $out->positional = decl::has($f, 'positional');
+        $out->env = $env;
         if ($config) {
             $out->reader = $reader;
             return $out;

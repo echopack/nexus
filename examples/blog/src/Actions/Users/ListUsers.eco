@@ -1,0 +1,30 @@
+namespace Blog::Actions::Users;
+
+use Blog::Models::{UserRepository, UserTable};
+use Blog::Transformers::UserAdminTransformer;
+
+/**
+ * Every user of the blog, for an admin: in the admin shape, emails and roles included.
+ */
+#[nexus::answers: { collection: "Blog::Transformers::UserAdminTransformer" }]
+#[nexus::through: [
+    "Blog::Middleware::RequireUser",
+    "Blog::Middleware::RequireAdmin"
+]]
+public class ListUsers : nexus::Action
+{
+    private UserRepository $users;
+    private UserAdminTransformer $transformer;
+
+    public constructor(UserRepository $users, UserAdminTransformer $transformer)
+    {
+        $this->users = $users;
+        $this->transformer = $transformer;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        $all = try $this->users->find()->order(asc: UserTable::$id)->get();
+        return $this->transformer->createCollectionResponse($payload, $all, nexus::rest::Meta());
+    }
+}

@@ -161,13 +161,13 @@ public class Router
     }
 
     /**
-     * `url<A>($params)` on the public origin, `APP_URL`; asking without one stops the program. For
+     * `url<A>($params)` on the public origin, `NEXUS_APP_URL`; asking without one stops the program. For
      * links in an answer to the client `url<A>()->on($request->url())` needs no configuration.
      */
     public const function absoluteUrl<A>(const map<string, string>& $params) : Url
     {
         Url $origin = guard $this->base else {
-            die('nexus: an absolute link needs the public origin; set APP_URL');
+            die('nexus: an absolute link needs the public origin; set NEXUS_APP_URL');
         };
         return $this->url<A>($params)->on($origin);
     }
@@ -190,7 +190,7 @@ public class Router
 
     /**
      * Sets the public origin, `https://blog.example.com` or one with a path the app is mounted
-     * under, `https://example.com/api`. The kernel sets it from `APP_URL`; a relative one is a bug
+     * under, `https://example.com/api`. The kernel sets it from `NEXUS_APP_URL`; a relative one is a bug
      * and stops the program.
      */
     public function origin(const Url& $base) : void

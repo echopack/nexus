@@ -4,7 +4,7 @@
  * An app is a list of extensions. Each one wires the app by hand in one
  * place: services into the container, actions onto routes
  * (`$s->bindAction<ShowPost>(method: .get, path: '/v1/posts/{id}', ...)`),
- * listeners onto events. `nexus gen` writes what only the types can
+ * signal handlers onto a dispatcher. `nexus gen` writes what only the types can
  * tell: the code that runs each action from its `handle()` signature,
  * the input decoders and the config loaders. The kernel finds the
  * generated tables at compile time, keyed by type.

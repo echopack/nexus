@@ -6,7 +6,7 @@ namespace nexus::oauth;
 public struct Metadata
 {
     /**
-     * The app's public origin: `OAUTH_ISSUER`, or the request's.
+     * The app's public origin: `NEXUS_OAUTH_ISSUER`, or the request's.
      */
     public static function issuer(const OAuthConfig& $config, const nexus::Request& $req) : string
     {

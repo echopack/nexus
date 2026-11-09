@@ -1,10 +1,45 @@
 namespace nexus::work;
 
 /**
- * A scheduled task type with its parsed schedule.
+ * A task value the scheduler pushes on a schedule into a lane: `every` (a duration like `15m`) or
+ * `cron` (five fields), set where it is wired and checked at boot.
  */
-public struct Planned
+#[atomic]
+public class Planned
 {
-    public Kind $kind;
-    public Schedule $schedule;
+    public Item $item;
+    public string $every = '';
+    public string $cron = '';
+
+    /**
+     * The lane it is pushed into.
+     */
+    public string $into = '';
+
+    /**
+     * The task type, known at boot.
+     */
+    internal string $name = '';
+
+    /**
+     * What its pushes are keyed by, so a slot is stored once across servers.
+     */
+    internal string $key = '';
+    internal Schedule? $schedule = null;
+
+    public constructor(Item $item)
+    {
+        $this->item = $item;
+    }
+
+    /**
+     * The schedule as written.
+     */
+    public const function text() : string
+    {
+        if (!$this->every->empty()) {
+            return "every {$this->every}";
+        }
+        return $this->cron;
+    }
 }

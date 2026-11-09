@@ -1,0 +1,34 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * What a task value says about how it is queued, read once when it is pushed.
+ */
+public struct Policy
+{
+    public int64 $tries = 3;
+    public Exclusive $exclusive = .none;
+    public bool $allowFailure = false;
+    public Priority $priority = .normal;
+    public time::duration? $expires = null;
+
+    /**
+     * The policy task `$task` declares.
+     */
+    public static function of<T>(const T& $task) : Policy where T : Task
+    {
+        return Policy($tries: $task->tries(), $exclusive: $task->exclusive(), $allowFailure: $task->allowFailure(), $priority: $task->priority(), $expires: $task->expires());
+    }
+
+    /**
+     * When a task pushed at `$now` expires; null when it never does.
+     */
+    public const function expiresAt(time::timestamp $now) : time::timestamp?
+    {
+        time::duration $d = guard $this->expires else {
+            return null;
+        };
+        return $now + $d;
+    }
+}

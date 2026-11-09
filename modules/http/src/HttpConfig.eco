@@ -1,12 +1,16 @@
 namespace nexus::http;
 
 /**
- * The HTTP settings: `HTTP_TRUSTED_PROXIES`, the addresses of the reverse proxies in front of the
- * app, comma separated. A request from one of them comes from the client its `X-Forwarded-For`
- * names; from anywhere else the header is ignored.
+ * The HTTP settings, read from `NEXUS_HTTP_TRUSTED_PROXIES`.
  */
-#[nexus::config: "http"]
+#[nexus::config: "NEXUS_HTTP"]
 public struct HttpConfig
 {
+    /**
+     * The addresses of the reverse proxies in front of the app, comma separated. A request from
+     * one of them comes from the client its `X-Forwarded-For` names; from anywhere else the header
+     * is ignored.
+     */
+    #[nexus::env: 'TRUSTED_PROXIES']
     public string $trustedProxies = '';
 }

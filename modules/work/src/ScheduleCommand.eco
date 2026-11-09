@@ -3,7 +3,8 @@ namespace nexus::work;
 use std::io;
 
 /**
- * `work:schedule`: lists the scheduled tasks with their schedule and when they are next due.
+ * `work:schedule`: lists the scheduled tasks with their schedule, their lane and when they are next
+ * due.
  */
 public class ScheduleCommand : nexus::Command
 {
@@ -17,21 +18,28 @@ public class ScheduleCommand : nexus::Command
         return 'list the scheduled tasks and when they are next due';
     }
 
-    public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
+    public function run(nexus::Invocation& $in) : int32
     {
+        nexus::Kernel $kernel = guard $in->kernel() else {
+            return 1;
+        };
         $w = $kernel->services->get<Work>();
-        if ($w->planned->empty()) {
+        if ($w->scheduler->plans->empty()) {
             io::println('no scheduled tasks');
             return 0;
         }
-        foreach ($w->planned as const &$p) {
+        foreach ($w->scheduler->plans as $p) {
             string $next = 'never';
-            std::time::timestamp? $at = $p->schedule->next($w->clock->now(), $w->zone);
-            if ($at != null) {
-                std::time::timestamp $due = guard $at;
-                $next = Stamp::text($due);
+            Schedule? $schedule = $p->schedule;
+            if ($schedule != null) {
+                Schedule $s = guard $schedule;
+                std::time::timestamp? $at = $s->next($w->clock->now(), $w->zone);
+                if ($at != null) {
+                    std::time::timestamp $due = guard $at;
+                    $next = Stamp::text($due);
+                }
             }
-            io::println("{$p->kind->name}  {$p->schedule->text}  next {$next}");
+            io::println("{$p->name}  {$p->text()}  into {$p->into}  next {$next}");
         }
         return 0;
     }

@@ -1,0 +1,48 @@
+namespace nexus::work;
+
+/**
+ * A task value with its type erased: what pipelines and queues hold. It runs the task, says where
+ * the run logs, and keeps the value so a distributed queue can encode it.
+ */
+public struct Item
+{
+    public type_id $type;
+    public erased $value;
+    public Policy $policy;
+    public function<status<Failure>(nexus::Payload&)> $handle;
+    public function<RunLog(const Run&)> $log;
+
+    /**
+     * `$task` as an item tried `$tries` times, or as often as it says when `$tries` is 0.
+     */
+    public static function tried<T>(T $task, int64 $tries) : Item where T : Task
+    {
+        Item $item = Item::of<T>($task);
+        if ($tries != 0) {
+            $item->policy->tries = $tries;
+        }
+        return $item;
+    }
+
+    /**
+     * `$task` as an item.
+     */
+    public static function of<T>(T $task) : Item where T : Task
+    {
+        // handle may change the task, so its run gets a copy of its own; the log shares the box
+        T $copy = $task;
+        $policy = Policy::of<T>($task);
+        Held<T> $held = Held<T>($task);
+        return Item(
+            type_id<T>(),
+            erased::from($held),
+            mv $policy,
+            function[$copy](nexus::Payload& $payload) : status<Failure> {
+                return $copy->handle($payload);
+            },
+            function[$held](const Run& $run) : RunLog {
+                return $held->value->log($run);
+            }
+        );
+    }
+}

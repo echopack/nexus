@@ -3,7 +3,7 @@ namespace nexus::work;
 use std::time;
 
 /**
- * A task in the queue: what to run, how often it was tried, and where it stands.
+ * A task in a store: what to run, how often it was tried, what it waits for and where it stands.
  */
 public struct StoredTask
 {
@@ -13,7 +13,11 @@ public struct StoredTask
      * The task type, the struct's qualified name.
      */
     public string $name;
-    public string $queue;
+
+    /**
+     * The lane of the distributed queue it was pushed to.
+     */
+    public string $lane;
 
     /**
      * The task's fields as JSON text.
@@ -22,17 +26,42 @@ public struct StoredTask
     public int64 $tries;
 
     /**
-     * How often it was claimed, this run included.
+     * How often it was claimed, the running try included.
      */
     public int64 $attempts = 0;
+    public TaskStatus $status = .waiting;
+    public Hold $hold = .none;
 
     /**
-     * Pushes with the same key are one task, done or not: the scheduler's `name@slot`. Empty for
-     * none.
+     * The exclusive key, or empty.
+     */
+    public string $holdKey = '';
+    public bool $allowFailure = false;
+    public int32 $priority = 0;
+
+    /**
+     * The tasks it waits for that are not settled yet.
+     */
+    public int64 $pending = 0;
+
+    /**
+     * Whether it let the tasks waiting for it go already, failing as it allows.
+     */
+    public bool $released = false;
+
+    /**
+     * The task that spawned it, or empty.
+     */
+    public string $parent = '';
+
+    /**
+     * Pushes with the same key are one task, whatever became of it: the scheduler's `name@slot`.
+     * Empty for none.
      */
     public string $key = '';
     public time::timestamp $createdAt;
     public time::timestamp $availableAt;
+    public time::timestamp? $expiresAt = null;
 
     /**
      * Held by a worker until then.
@@ -47,20 +76,49 @@ public struct StoredTask
     public string $error = '';
 
     /**
-     * Whether a worker may claim it at `$now`.
+     * Whether it waits or runs.
+     */
+    public const function live() : bool
+    {
+        return $this->status == TaskStatus::waiting || $this->status == TaskStatus::running;
+    }
+
+    /**
+     * Whether a worker holds it at `$now`.
+     */
+    public const function held(time::timestamp $now) : bool
+    {
+        if ($this->status != TaskStatus::running || $this->reservedUntil == null) {
+            return false;
+        }
+        time::timestamp $until = guard $this->reservedUntil;
+        return $until >= $now;
+    }
+
+    /**
+     * Whether it waited past its expiry by `$now`.
+     */
+    public const function expired(time::timestamp $now) : bool
+    {
+        if ($this->expiresAt == null) {
+            return false;
+        }
+        time::timestamp $at = guard $this->expiresAt;
+        return $at <= $now;
+    }
+
+    /**
+     * Whether a worker may claim it at `$now`: due, nothing before it left, and no worker holding
+     * it (a worker whose lease ran out lost it).
      */
     public const function due(time::timestamp $now) : bool
     {
-        if ($this->doneAt != null || $this->failedAt != null) {
+        if ($this->pending > 0 || $this->availableAt > $now || $this->expired($now)) {
             return false;
         }
-        if ($this->availableAt > $now) {
-            return false;
-        }
-        if ($this->reservedUntil == null) {
+        if ($this->status == TaskStatus::waiting) {
             return true;
         }
-        time::timestamp $until = guard $this->reservedUntil;
-        return $until < $now;
+        return $this->status == TaskStatus::running && !$this->held($now);
     }
 }

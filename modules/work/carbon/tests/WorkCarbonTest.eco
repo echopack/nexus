@@ -1,11 +1,12 @@
 /**
- * nexus-work's queue in a carbon database, on carbon's fake driver: each test queues what the
- * database answers and reads back what was sent.
+ * The carbon task store on carbon's fake driver: each test queues what the database answers and
+ * reads back what was sent.
  */
 
-use nexus::work::{Kind, Failure, Queue, StoredTask, Runner, Work, Pushed, Requeued};
-use nexus::work::carbon::{QueuedTask, QueuedTaskTable, CarbonQueue};
+use nexus::work::{StoredTask, Batch, Edge, Pushed, Requeued, TaskStatus, Hold, Lane, Queues, Distributed};
+use nexus::work::carbon::{QueuedTask, QueuedTaskTable, TaskEdge, TaskEdgeTable, Store};
 use nexus::testing::TestApp;
+use container::Container;
 use carbon::fake;
 use hydrahon::Mysql;
 use std::time;
@@ -13,11 +14,23 @@ use ecotest::expect;
 
 internal const int64 START = 1793588340;
 
-internal function quiet() : Kind
+internal struct CWorkers : Lane {}
+internal struct CJobs : Lane {}
+
+internal class CLanes : nexus::Extension
 {
-    return Kind('TQuiet', function(nexus::Payload& $payload, const string& $data) : status<Failure> {
+    public function name() : string
+    {
+        return 'carbon-lanes';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        Queues::bindAsync<CWorkers>($s, threads: 1, name: 'workers');
+        Distributed $d = Queues::bindDistributed<CJobs>($s, Store($s->get<carbon::DB>()), name: 'jobs');
+        $d->into = 'workers';
         return .ok;
-    });
+    }
 }
 
 internal class Rig
@@ -39,131 +52,64 @@ internal class Rig
             }
             return .ok($made);
         });
-        array<Kind> $kinds = [quiet()];
-        array<nexus::Extension> $exts = [$db, nexus::work::Extension(stores: .provided, clock: $clock, tasks: mv $kinds), nexus::work::carbon::Extension()];
+        array<nexus::Extension> $exts = [$db, nexus::work::Extension(clock: $clock), nexus::work::carbon::Extension(), CLanes()];
         $this->app = TestApp($exts);
     }
 
-    public function queue() : Queue
+    public function store() : nexus::work::Store
     {
-        nexus::Payload $payload = $this->app->kernel->background('test', 'q');
-        return $payload->get<Queue>();
+        Distributed $d = guard $this->app->kernel->services->get<nexus::work::Work>()->lanes->store('jobs');
+        return $d->store;
     }
 
-    public function task(const string& $key) : StoredTask
+    public function task(const string& $id) : StoredTask
     {
         time::timestamp $now = $this->clock->now();
-        return StoredTask($id: 'j1', $name: 'TQuiet', $queue: 'default', $data: '{}', $tries: 3, $key: $key, $createdAt: $now, $availableAt: $now);
+        return StoredTask($id: $id, $name: 'TQuiet', $lane: 'jobs', $data: '{}', $tries: 3, $createdAt: $now, $availableAt: $now);
+    }
+
+    /**
+     * `$t` as a row the fake answers with.
+     */
+    public function row(const StoredTask& $t) : array<hydrahon::Value>
+    {
+        return QueuedTaskTable()->row(QueuedTask::of($t));
+    }
+
+    /**
+     * `$t` as claimed: running, its first attempt.
+     */
+    public function claimed(const string& $id) : StoredTask
+    {
+        StoredTask $t = $this->task($id);
+        $t->attempts = 1;
+        $t->status = .running;
+        return $t;
     }
 }
 
-internal function claimOne(Queue $q, time::timestamp $now) : StoredTask?
+internal function pushed(nexus::work::Store $s, const Batch& $b) : Pushed
 {
-    array<string> $queues = ['default', 'mail'];
-    StoredTask? $j = guard $q->claim($queues, $now, $now + time::duration::mins(5));
-    return $j;
+    Pushed $p = guard $s->push($b) else ($e) {
+        die("the push failed: {$e->detail(.dev)}");
+    };
+    return $p;
 }
 
-/**
- * Whether the queue stored `$j`.
- */
-internal function pushOne(Queue $q, const StoredTask& $j) : bool
+internal function claimed(nexus::work::Store $s, time::timestamp $now, uint32 $max) : array<StoredTask>
 {
-    Pushed $p = guard $q->push($j);
-    return $p == Pushed::stored;
+    array<StoredTask> $all = guard $s->claim('jobs', $now, $now + time::duration::mins(5), $max) else ($e) {
+        die("the claim failed: {$e->detail(.dev)}");
+    };
+    return $all;
 }
 
-test a_push_inserts_a_row
+internal function fine(status<nexus::Problem> $s) : bool
 {
-    $r = Rig(true);
-    $r->fake->written();
-    expect(pushOne($r->queue(), $r->task('')))->yes(says: 'the push is stored');
-    expect($r->fake->count())->is(1);
-    expect($r->fake->last())->starts('INSERT INTO `nexus_tasks`');
-}
-
-test a_keyed_push_is_stored_once
-{
-    $r = Rig(true);
-    $r->fake->rows([])->written();
-    expect(pushOne($r->queue(), $r->task('TQuiet@1')))->yes(says: 'the first keyed push is stored');
-    expect($r->fake->texts()[0])->has('WHERE `nexus_tasks`.`unique_key` = ?');
-    $r->fake->rows([QueuedTaskTable()->row(QueuedTask::of($r->task('TQuiet@1')))]);
-    usize $before = $r->fake->count();
-    expect(pushOne($r->queue(), $r->task('TQuiet@1')))->no(says: 'a push with a stored key is not stored again');
-    expect($r->fake->count())->is($before + 1);
-}
-
-test a_claim_takes_a_due_row_by_its_attempt
-{
-    $r = Rig(true);
-    $r->fake->rows([QueuedTaskTable()->row(QueuedTask::of($r->task('')))])->written(1);
-    StoredTask $j = expect(claimOne($r->queue(), $r->clock->now()))->some();
-    expect($j->id)->is('j1');
-    expect($j->attempts)->is(1);
-    string $select = $r->fake->texts()[0];
-    expect($select)
-        ->has('`nexus_tasks`.`queue` IN (?, ?)')
-        ->has('`nexus_tasks`.`done_at` IS NULL')
-        ->has('`nexus_tasks`.`reserved_until` IS NULL OR `nexus_tasks`.`reserved_until` < ?')
-        ->has('ORDER BY `nexus_tasks`.`available_at` ASC LIMIT 5');
-    expect($r->fake->last())->is('UPDATE `nexus_tasks` SET `attempts` = ?, `reserved_until` = ? WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`attempts` = ?');
-}
-
-test a_claim_lost_to_another_worker_moves_on
-{
-    $r = Rig(true);
-    $r->fake->rows([QueuedTaskTable()->row(QueuedTask::of($r->task('')))])->written(0);
-    expect(claimOne($r->queue(), $r->clock->now()))->none();
-}
-
-test the_runner_claims_runs_and_deletes
-{
-    $r = Rig(true);
-    $r->fake->rows([QueuedTaskTable()->row(QueuedTask::of($r->task('')))])->written(1)->written(1);
-    expect(Runner::step($r->app->kernel, $r->app->kernel->services->get<Work>()))->yes(says: 'the runner ran a task');
-    expect($r->fake->last())->is('DELETE FROM `nexus_tasks` WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`attempts` = ?');
-    expect($r->fake->pending())->is(0);
-    expect($r->app->logged('task done'))->yes(says: "the log holds 'task done'");
-}
-
-test a_done_scheduled_run_is_kept
-{
-    $r = Rig(true);
-    $r->fake->written(1);
-    StoredTask $j = $r->task('TQuiet@1');
-    $j->attempts = 1;
-    guard $r->queue()->done($j, $r->clock->now());
-    expect($r->fake->last())->is('UPDATE `nexus_tasks` SET `done_at` = ?, `reserved_until` = ? WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`attempts` = ?');
-}
-
-test failures_retries_and_prunes
-{
-    $r = Rig(true);
-    $r->fake->written()->written()->written(1)->written(4);
-    Queue $q = $r->queue();
-    StoredTask $j = $r->task('');
-    $j->attempts = 2;
-    guard $q->retry($j, $r->clock->now(), 'busy');
-    expect($r->fake->last())->is('UPDATE `nexus_tasks` SET `available_at` = ?, `reserved_until` = ?, `error` = ? WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`attempts` = ?');
-    guard $q->fail($j, $r->clock->now(), 'gone');
-    expect($r->fake->last())->starts('UPDATE `nexus_tasks` SET `failed_at` = ?');
-    Requeued $sent = guard $q->again('j1', $r->clock->now());
-    expect($sent == Requeued::sent)->yes(says: 'the failed task was sent back');
-    expect($r->fake->last())->is('UPDATE `nexus_tasks` SET `failed_at` = ?, `attempts` = ?, `available_at` = ? WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`failed_at` IS NOT NULL');
-    uint64 $gone = guard $q->prune($r->clock->now());
-    expect($gone)->is(4);
-    expect($r->fake->last())->is('DELETE FROM `nexus_tasks` WHERE `nexus_tasks`.`done_at` < ?');
-}
-
-test boot_wants_the_table_wired
-{
-    $driver = fake::Driver<Mysql>();
-    $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
-        return .ok(carbon::DB($driver));
-    });
-    array<nexus::Extension> $exts = [$db, nexus::work::Extension(stores: .provided), nexus::work::carbon::Extension()];
-    expect(bootWhy($exts))->is('nexus-work-carbon: wire the tasks table on the database: nexus::work::carbon::Tables::wire($db)');
+    guard $s else ($e) {
+        die("expected success: {$e->detail(.dev)}");
+    };
+    return true;
 }
 
 internal function bootWhy(array<nexus::Extension> $exts) : string
@@ -172,4 +118,119 @@ internal function bootWhy(array<nexus::Extension> $exts) : string
         return str::join($e->lines(), '; ');
     };
     return '';
+}
+
+test a_push_stores_tasks_and_edges_in_one_transaction
+{
+    $r = Rig(true);
+    $r->fake->written()->written()->written();
+    Batch $b = Batch();
+    $b->tasks[] = $r->task('a');
+    StoredTask $then = $r->task('b');
+    $then->pending = 1;
+    $b->tasks[] = $then;
+    $b->edges[] = Edge('b', 'a');
+    Pushed $p = pushed($r->store(), $b);
+    expect($p->id())->some('a');
+    array<string> $sent = $r->fake->texts();
+    expect($sent)->size(5);
+    expect($sent[0])->is('BEGIN');
+    expect($sent[1])->starts('INSERT INTO `nexus_tasks`');
+    expect($sent[3])->starts('INSERT INTO `nexus_task_edges`');
+    expect($sent[4])->is('COMMIT');
+}
+
+test keyed_and_unique_pushes_are_checked_first
+{
+    $r = Rig(true);
+    StoredTask $slot = $r->task('s');
+    $slot->key = 'Tick@60';
+    $r->fake->rows([])->written();
+    expect(pushed($r->store(), Batch([$slot]))->queued())->yes(says: 'the first slot is stored');
+    expect($r->fake->texts()[0])->has('WHERE `nexus_tasks`.`unique_key` = ?');
+    $r->fake->rows([$r->row($slot)]);
+    expect(pushed($r->store(), Batch([$slot]))->queued())->no(says: 'a stored slot is skipped');
+
+    StoredTask $u = $r->task('u');
+    $u->hold = .unique;
+    $u->holdKey = 'TSay#5';
+    $r->fake->rows([$r->row($u)]);
+    expect(pushed($r->store(), Batch([$u]))->queued())->no(says: 'a live unique key is skipped');
+    expect($r->fake->last())->has('WHERE `nexus_tasks`.`unique_live` = ?');
+}
+
+test a_claim_takes_due_rows_by_priority_and_attempt
+{
+    $r = Rig(true);
+    $r->fake->rows([$r->row($r->task('a')), $r->row($r->task('b'))])->written(1)->written(0);
+    array<StoredTask> $got = claimed($r->store(), $r->clock->now(), 2);
+    expect($got)->size(1);
+    expect($got[0]->id)->is('a');
+    expect($got[0]->attempts)->is(1);
+    expect($got[0]->status == TaskStatus::running)->yes(says: 'the claimed task runs');
+    expect($r->fake->texts()[0])
+        ->has('`nexus_tasks`.`pending` = ?')
+        ->has('`nexus_tasks`.`expires_at` IS NULL OR `nexus_tasks`.`expires_at` > ?')
+        ->has('ORDER BY `nexus_tasks`.`priority` DESC, `nexus_tasks`.`available_at` ASC LIMIT 12');
+    expect($r->fake->texts()[1])->is('UPDATE `nexus_tasks` SET `status` = ?, `attempts` = ?, `reserved_until` = ? WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`attempts` = ? AND `nexus_tasks`.`status` = ?');
+}
+
+test a_running_key_is_a_lock_row
+{
+    $r = Rig(true);
+    StoredTask $t = $r->task('a');
+    $t->hold = .running;
+    $t->holdKey = 'TSay';
+    $r->fake->rows([$r->row($t)])->fails(.driver(carbon::Failure($fault: .duplicate, $message: 'lock_key taken')))->written(0);
+    expect(claimed($r->store(), $r->clock->now(), 1))->empty();
+    expect($r->fake->texts()[1])->starts('INSERT INTO `nexus_task_locks`');
+    expect($r->fake->last())->is('UPDATE `nexus_task_locks` SET `holder` = ?, `held_until` = ? WHERE `nexus_task_locks`.`lock_key` = ? AND (`nexus_task_locks`.`held_until` < ? OR `nexus_task_locks`.`holder` = ?)');
+}
+
+test done_lets_the_waiting_tasks_go_and_a_stale_claim_changes_nothing
+{
+    $r = Rig(true);
+    StoredTask $a = $r->claimed('a');
+    $r->fake->written(1)->rows([TaskEdgeTable()->row(TaskEdge::of(Edge('b', 'a')))])->written(1);
+    expect(fine($r->store()->done($a, $r->clock->now(), Batch())))->yes(says: 'done is stored');
+    expect($r->fake->texts()[1])->starts('UPDATE `nexus_tasks` SET `status` = ?, `done_at` = ?');
+    // the database counts down, so settles on two servers at once both count
+    expect($r->fake->texts()[3])->is('UPDATE `nexus_tasks` SET `pending` = `nexus_tasks`.`pending` + ? WHERE `nexus_tasks`.`id` = ?');
+    expect($r->fake->pending())->is(0);
+
+    $stale = Rig(true);
+    $stale->fake->written(0);
+    expect(fine($stale->store()->done($a, $stale->clock->now(), Batch())))->yes(says: 'a stale done is no error');
+    expect($stale->fake->texts())->size(3);
+}
+
+test retries_failures_again_and_prune
+{
+    $r = Rig(true);
+    StoredTask $t = $r->claimed('a');
+    $r->fake->written(1)->written(1);
+    expect(fine($r->store()->retry($t, $r->clock->now(), 'busy')))->yes(says: 'the retry is stored');
+    expect($r->fake->texts()[1])->starts('UPDATE `nexus_tasks` SET `status` = ?, `available_at` = ?, `reserved_until` = ?, `error` = ?');
+    expect(fine($r->store()->fail($t, $r->clock->now(), 'gone')))->yes(says: 'the failure is stored');
+    expect($r->fake->last())->is('COMMIT');
+
+    StoredTask $failed = $r->task('a');
+    $failed->status = .failed;
+    $r->fake->rows([$r->row($failed)])->written(1);
+    Requeued $sent = guard $r->store()->again('a', $r->clock->now());
+    expect($sent == Requeued::sent)->yes(says: 'the failed task was sent back');
+
+    $r->fake->rows([])->rows([])->written(0);
+    uint64 $gone = guard $r->store()->prune($r->clock->now(), $r->clock->now());
+    expect($gone)->is(0);
+}
+
+test boot_wants_the_tables_wired
+{
+    $driver = fake::Driver<Mysql>();
+    $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+        return .ok(carbon::DB($driver));
+    });
+    array<nexus::Extension> $exts = [$db, nexus::work::Extension(), nexus::work::carbon::Extension()];
+    expect(bootWhy($exts))->is('nexus-work-carbon: wire the task tables on the database: nexus::work::carbon::Tables::wire($db)');
 }

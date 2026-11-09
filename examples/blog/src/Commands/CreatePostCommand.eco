@@ -1,0 +1,25 @@
+namespace Blog::Commands;
+
+use Blog::Inputs::{AuthoredPost, NewPost};
+use Blog::Services::PostService;
+
+/**
+ * Publishes a post by the user `--author` names, with the same rules as the API.
+ */
+public class CreatePostCommand : nexus::Cli
+{
+    private PostService $posts;
+
+    public constructor(PostService $posts)
+    {
+        $this->posts = $posts;
+    }
+
+    public function handle(nexus::Payload& $payload, command::CLIContext& $out, AuthoredPost $in) : status<nexus::Problem>
+    {
+        $author = try $this->posts->author($in->author);
+        $made = try $this->posts->create($author, NewPost($title: $in->title, $body: $in->body, $tags: $in->tags));
+        $out->line("published post #{$made->id} by {$author->name}");
+        return .ok;
+    }
+}

@@ -1,9 +1,0 @@
-namespace blog;
-
-/**
- * Someone signed up.
- */
-public struct UserRegistered
-{
-    public int64 $user;
-}

@@ -1,0 +1,54 @@
+namespace nexus;
+
+use std::env;
+use std::io;
+
+/**
+ * `serve`: boots the app and serves it through its transport until SIGINT or SIGTERM, working the
+ * task queues and the schedule unless told not to.
+ */
+public class ServeCommand : Command
+{
+    public const function name() : string
+    {
+        return 'serve';
+    }
+
+    public const function summary() : string
+    {
+        return 'answer requests until stopped';
+    }
+
+    public const function help() : string
+    {
+        return 'Boots the app and serves it through its transport. SIGINT or SIGTERM stops it cleanly.';
+    }
+
+    public const function options() : array<CommandOption>
+    {
+        array<CommandOption> $out = [
+            CommandOption(value: 'listen', '<host:port>', 'where to listen', string::from(env::var('NEXUS_LISTEN', EnvList::LISTEN))),
+            CommandOption(value: 'workers', '<n>', 'worker threads, 0 for one per core', '0'),
+            CommandOption(flag: 'no-work', 'run no task workers in this process'),
+            CommandOption(flag: 'no-schedule', 'push no scheduled tasks from this process'),
+        ];
+        return $out;
+    }
+
+    public function run(Invocation& $in) : int32
+    {
+        $options = Serve();
+        guard $options->listen($in->value('listen')) else {
+            io::eprintln("{$in->program}: --listen wants host:port");
+            return 1;
+        };
+        uint64 $w = str::uint($in->value('workers')) ?? 0;
+        $options->workers = $w as uint32;
+        $options->work = !$in->flag('no-work');
+        $options->schedule = !$in->flag('no-schedule');
+        Kernel $k = guard $in->kernel() else {
+            return 1;
+        };
+        return Console::serve($k, $options, $in->program);
+    }
+}

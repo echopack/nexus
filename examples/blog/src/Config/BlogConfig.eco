@@ -1,0 +1,21 @@
+namespace Blog::Config;
+
+/**
+ * The blog's settings. Read from BLOG_TITLE and BLOG_DEFAULT_PAGE_SIZE, in the environment or a
+ * .env file.
+ */
+#[nexus::config: "BLOG"]
+public struct BlogConfig
+{
+    /**
+     * The blog's name, on every page.
+     */
+    #[nexus::env]
+    public string $title = 'A nexus blog';
+
+    /**
+     * How many posts a page lists.
+     */
+    #[nexus::env: 'DEFAULT_PAGE_SIZE']
+    public uint32 $pageSize = 10;
+}

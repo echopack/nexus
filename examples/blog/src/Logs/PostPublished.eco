@@ -1,0 +1,13 @@
+namespace Blog::Logs;
+
+/**
+ * A post went live: written to the log as `post published` with the post, its author and how many
+ * tags it has.
+ */
+#[nexus::log: { level: "info", message: "post published" }]
+public struct PostPublished
+{
+    public int64 $post;
+    public int64 $author;
+    public usize $tags;
+}

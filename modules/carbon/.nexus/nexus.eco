@@ -26,7 +26,7 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
 {
     $s = nexus::Settings($env);
     string $okC0Url = '';
-    $vC0Url = $s->string('DATABASE_URL', required: false);
+    $vC0Url = $s->string('NEXUS_DATABASE_URL', required: false);
     if ($vC0Url != null) {
         $xC0Url = guard $vC0Url;
         $okC0Url = mv $xC0Url;
@@ -34,4 +34,16 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
     try $s->done();
     $b->param<nexus::carbon::DatabaseConfig>(nexus::carbon::DatabaseConfig($url: mv $okC0Url));
     return .ok;
+}
+
+/**
+ * Every environment variable the #[nexus::config] structs of module nexus-carbon read.
+ */
+#[nexus::envs: 'nexus-carbon']
+public function envs() : array<nexus::EnvVar>
+{
+    array<nexus::EnvVar> $all = [];
+    string $d0 = '';
+    $all[] = nexus::EnvVar($name: 'NEXUS_DATABASE_URL', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: true, $doc: 'The database URL. What it means is the app\'s to say, in the function it hands the extension: `mysql://user:pass@host:3306/app?pool=16` for carbon::mysql::Source.', $owner: 'nexus::carbon::DatabaseConfig');
+    return $all;
 }

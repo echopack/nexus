@@ -1,0 +1,350 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * What a pool knows about its tasks: which wait for others, which are ready, which run, and the
+ * exclusive keys they hold. Every method runs with the pool's lock held.
+ */
+internal struct Board
+{
+    public map<string, Node> $nodes = map<string, Node>();
+
+    /**
+     * Tasks whose turn it is, in no order; a worker takes the best.
+     */
+    public array<string> $ready = [];
+
+    /**
+     * Tasks to try again at a time.
+     */
+    public map<string, time::timestamp> $delayed = map<string, time::timestamp>();
+
+    /**
+     * Tasks a worker runs now.
+     */
+    public map<string, bool> $running = map<string, bool>();
+
+    /**
+     * The `.running` keys a worker holds now.
+     */
+    public map<string, bool> $held = map<string, bool>();
+
+    /**
+     * The `.unique` keys of every task waiting or running.
+     */
+    public map<string, bool> $live = map<string, bool>();
+
+    /**
+     * Ready tasks set aside until their `.running` key is free, oldest first.
+     */
+    public map<string, array<string>> $parked = map<string, array<string>>();
+    public uint64 $seq = 0;
+
+    /**
+     * Adds `$n`, linked after every task of `$waitsFor` still here.
+     */
+    public function add(Node $n, const array<string>& $waitsFor) : void
+    {
+        $this->seq = $this->seq + 1;
+        $n->seq = $this->seq;
+        foreach ($waitsFor as const &$dep) {
+            if ($this->nodes->has($dep)) {
+                Node& $d = $this->nodes->at($dep);
+                $d->next[] = $n->id;
+            }
+        }
+        if ($n->hold == Hold::unique) {
+            $this->live[$n->key] = true;
+        }
+        string $id = $n->id;
+        bool $ready = $n->pending == 0;
+        $this->nodes[$id] = mv $n;
+        if ($ready) {
+            $this->ready[] = $id;
+        }
+    }
+
+    /**
+     * Takes the ready task to run next, the highest priority and then the oldest, setting aside
+     * the ones whose `.running` key a worker holds. Null when none can run.
+     */
+    public function take() : Node?
+    {
+        while (!$this->ready->empty()) {
+            usize $best = 0;
+            int32 $bestPriority = 0;
+            uint64 $bestSeq = 0;
+            foreach ($this->ready as $i => const &$id) {
+                const Node& $n = $this->nodes->at($id);
+                int32 $p = $n->item->policy->priority->value();
+                if ($i == 0 || $p > $bestPriority || ($p == $bestPriority && $n->seq < $bestSeq)) {
+                    $best = $i;
+                    $bestPriority = $p;
+                    $bestSeq = $n->seq;
+                }
+            }
+            string $id = $this->ready[$best];
+            $this->ready->remove($best);
+            Node $n = $this->nodes->get($id);
+            bool $local = $n->fed == null;
+            if ($local && $n->hold == Hold::running && $this->held->has($n->key)) {
+                $this->park($n->key, $id);
+                continue;
+            }
+            if ($local && $n->hold == Hold::running) {
+                $this->held[$n->key] = true;
+            }
+            $n->attempt = $n->attempt + 1;
+            $this->running[$id] = true;
+            $this->nodes[$id] = $n;
+            return $n;
+        }
+        return null;
+    }
+
+    /**
+     * Settles task `$id` after a run of its own: done (its spawned tasks join in front of the tasks
+     * waiting for it), tried again later, or failed. Answers the names of the tasks a failure took
+     * with it.
+     */
+    public function settle(const string& $id, const Settle& $s, Pipeline $spawned, const array<string>& $names) : array<string>
+    {
+        array<string> $dropped = [];
+        if (!$this->nodes->has($id)) {
+            return $dropped;
+        }
+        Node $n = $this->nodes->get($id);
+        $this->running->remove($id);
+        $this->unhold($n);
+        match ($s) {
+            Settle::done => {
+                $this->nodes->remove($id);
+                $this->unlive($n);
+                $this->spawn($n, $spawned, $names);
+                Upstream $up = Upstream($id, $n->name);
+                foreach ($n->next as const &$d) {
+                    $this->release($d, $up);
+                }
+            },
+            Settle::retry($at, $why) => {
+                $this->delayed[$id] = $at;
+            },
+            Settle::fail($why) => {
+                $dropped = $this->fail($id, $why);
+            },
+        };
+        return $dropped;
+    }
+
+    /**
+     * Forgets task `$id` a feeder ran: the store settles it.
+     */
+    public function finish(const string& $id) : void
+    {
+        $this->running->remove($id);
+        $this->nodes->remove($id);
+    }
+
+    /**
+     * Moves the tasks due by `$now` back to ready, and fails the ones that waited past their expiry.
+     * Answers the names of the tasks that expired or went with them.
+     */
+    public function due(time::timestamp $now) : array<string>
+    {
+        array<string> $back = [];
+        foreach ($this->delayed as $id => const &$at) {
+            if ($at <= $now) {
+                $back[] = $id;
+            }
+        }
+        foreach ($back as const &$id) {
+            $this->delayed->remove($id);
+            $this->ready[] = $id;
+        }
+        array<string> $expired = [];
+        foreach ($this->nodes as $id => const &$n) {
+            if (!$this->running->has($id) && $n->expiresAt != null) {
+                time::timestamp $at = guard $n->expiresAt;
+                if ($at <= $now) {
+                    $expired[] = $id;
+                }
+            }
+        }
+        array<string> $gone = [];
+        foreach ($expired as const &$id) {
+            if ($this->nodes->has($id)) {
+                foreach ($this->fail($id, 'expired before it ran') as const &$name) {
+                    $gone[] = $name;
+                }
+            }
+        }
+        return $gone;
+    }
+
+    /**
+     * Drops waiting task `$id` and every task waiting for it; answers how many. A running task is
+     * not cancelled.
+     */
+    public function cancel(const string& $id) : uint64
+    {
+        if (!$this->nodes->has($id) || $this->running->has($id)) {
+            return 0;
+        }
+        array<string> $ids = [$id];
+        return $this->drop($ids)->count() as uint64;
+    }
+
+    /**
+     * How many tasks wait, not counting the running ones.
+     */
+    public const function waiting() : uint64
+    {
+        return ($this->nodes->count() - $this->running->count()) as uint64;
+    }
+
+    /**
+     * Fails `$id`: the tasks waiting for it go ahead when it allows failure, and go with it when it
+     * does not. Answers the names of every task dropped, `$id`'s own first.
+     */
+    internal function fail(const string& $id, const string& $why) : array<string>
+    {
+        Node $n = $this->nodes->get($id);
+        if (!$n->item->policy->allowFailure) {
+            array<string> $ids = [$id];
+            return $this->drop($ids);
+        }
+        $this->forget($id);
+        $this->nodes->remove($id);
+        $this->unlive($n);
+        Upstream $up = Upstream($id, $n->name, $failed: true, $error: $why);
+        foreach ($n->next as const &$d) {
+            $this->release($d, $up);
+        }
+        array<string> $names = [$n->name];
+        return $names;
+    }
+
+    /**
+     * Removes `$ids` and every task waiting for them; answers their names.
+     */
+    internal function drop(array<string> $ids) : array<string>
+    {
+        array<string> $names = [];
+        while (!$ids->empty()) {
+            string $id = $ids[$ids->count() - 1];
+            $ids->pop();
+            if (!$this->nodes->has($id)) {
+                continue;
+            }
+            Node $n = $this->nodes->get($id);
+            $this->forget($id);
+            $this->nodes->remove($id);
+            $this->unlive($n);
+            $names[] = $n->name;
+            foreach ($n->next as const &$d) {
+                $ids[] = $d;
+            }
+        }
+        return $names;
+    }
+
+    /**
+     * One task `$id` waited for settled as `$up`; it runs once none is left.
+     */
+    internal function release(const string& $id, const Upstream& $up) : void
+    {
+        if (!$this->nodes->has($id)) {
+            return;
+        }
+        Node& $n = $this->nodes->at($id);
+        if ($n->pending > 0) {
+            $n->pending = $n->pending - 1;
+        }
+        $n->upstream[] = $up;
+        if ($n->pending == 0) {
+            $this->ready[] = $id;
+        }
+    }
+
+    /**
+     * Adds the tasks `$parent` spawned: they wait for each other as their pipeline says, and every
+     * task waiting for the parent waits for them too.
+     */
+    internal function spawn(const Node& $parent, Pipeline $spawned, const array<string>& $names) : void
+    {
+        if ($spawned->empty()) {
+            return;
+        }
+        foreach ($parent->next as const &$d) {
+            if ($this->nodes->has($d)) {
+                Node& $w = $this->nodes->at($d);
+                $w->pending = $w->pending + $spawned->count();
+            }
+        }
+        foreach ($spawned->items as $i => const &$item) {
+            Node $c = Node::of($spawned->ids[$i], $names[$i], $item);
+            $c->expiresAt = $parent->expiresAt;
+            $c->pending = $spawned->after[$i]->count();
+            $c->next = $parent->next;
+            $this->add(mv $c, $spawned->waits($i));
+        }
+    }
+
+    internal function park(const string& $key, const string& $id) : void
+    {
+        array<string> $line = [];
+        if ($this->parked->has($key)) {
+            $line = $this->parked->get($key);
+        }
+        $line[] = $id;
+        $this->parked[$key] = mv $line;
+    }
+
+    /**
+     * Frees `$n`'s `.running` key and puts back the tasks that waited for it.
+     */
+    internal function unhold(const Node& $n) : void
+    {
+        if ($n->fed != null || $n->hold != Hold::running) {
+            return;
+        }
+        $this->held->remove($n->key);
+        if (!$this->parked->has($n->key)) {
+            return;
+        }
+        foreach ($this->parked->get($n->key) as const &$id) {
+            $this->ready[] = $id;
+        }
+        $this->parked->remove($n->key);
+    }
+
+    internal function unlive(const Node& $n) : void
+    {
+        if ($n->hold == Hold::unique) {
+            $this->live->remove($n->key);
+        }
+    }
+
+    /**
+     * Takes `$id` off the ready, delayed and parked lists.
+     */
+    internal function forget(const string& $id) : void
+    {
+        foreach ($this->ready as $i => const &$r) {
+            if ($r == $id) {
+                $this->ready->remove($i);
+                break;
+            }
+        }
+        $this->delayed->remove($id);
+        foreach ($this->parked as $key => &$line) {
+            foreach ($line as $i => const &$r) {
+                if ($r == $id) {
+                    $line->remove($i);
+                    break;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,133 @@
+namespace nexus::work;
+
+use std::io;
+
+/**
+ * `work:graph --id <id>`: prints every stored task connected to one, as a tree from the tasks that
+ * wait for nothing, each with where it stands.
+ */
+public class GraphCommand : nexus::Command
+{
+    public const function name() : string
+    {
+        return 'work:graph';
+    }
+
+    public const function summary() : string
+    {
+        return 'show the tasks connected to a task and where each stands';
+    }
+
+    public const function options() : array<nexus::CommandOption>
+    {
+        array<nexus::CommandOption> $out = [Picked::id('the task'), Picked::queue()];
+        return $out;
+    }
+
+    public function run(nexus::Invocation& $in) : int32
+    {
+        string $id = $in->value('id');
+        if ($id->empty()) {
+            io::eprintln('work:graph: --id wants a task id');
+            return 1;
+        }
+        nexus::Kernel $kernel = guard $in->kernel() else {
+            return 1;
+        };
+        Distributed $d = guard Picked::lane($kernel, $in, 'work:graph') else {
+            return 1;
+        };
+        Graph $g = guard $d->store->graph($id, 32) else ($p) {
+            io::eprintln("work:graph: {$p->detail(.dev)}");
+            return 1;
+        };
+        if ($g->tasks->empty()) {
+            io::eprintln("work:graph: no task {$id}");
+            return 1;
+        }
+        foreach (GraphCommand::lines($g) as const &$line) {
+            io::println($line);
+        }
+        return 0;
+    }
+
+    /**
+     * `$g` as tree lines: each task under the first task it waits for, its status after its name.
+     */
+    public static function lines(const Graph& $g) : array<string>
+    {
+        map<string, StoredTask> $byId = map<string, StoredTask>();
+        foreach ($g->tasks as const &$t) {
+            $byId[$t->id] = $t;
+        }
+        map<string, array<string>> $below = map<string, array<string>>();
+        map<string, bool> $placed = map<string, bool>();
+        foreach ($g->edges as const &$e) {
+            if ($placed->has($e->task)) {
+                continue;
+            }
+            $placed[$e->task] = true;
+            array<string> $kids = [];
+            if ($below->has($e->after)) {
+                $kids = $below->get($e->after);
+            }
+            $kids[] = $e->task;
+            $below[$e->after] = mv $kids;
+        }
+        array<string> $out = [];
+        foreach ($g->tasks as const &$t) {
+            if (!$placed->has($t->id)) {
+                GraphCommand::walk($out, $byId, $below, $g, $t->id, '', '');
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Writes task `$id` after `$lead`, and the tasks below it after `$indent`.
+     */
+    internal static function walk(array<string>& $out, const map<string, StoredTask>& $byId, const map<string, array<string>>& $below, const Graph& $g, const string& $id, const string& $lead, const string& $indent) : void
+    {
+        StoredTask $t = $byId->get($id);
+        string $state = GraphCommand::state($t, $g, $byId);
+        $out[] = "{$lead}{$t->name}  {$state}  {$t->id}";
+        if (!$below->has($id)) {
+            return;
+        }
+        array<string> $kids = $below->get($id);
+        foreach ($kids as $i => const &$k) {
+            bool $last = $i + 1 == $kids->count();
+            string $mark = '├ ';
+            string $more = '│ ';
+            if ($last) {
+                $mark = '└ ';
+                $more = '  ';
+            }
+            GraphCommand::walk($out, $byId, $below, $g, $k, "{$indent}{$mark}", "{$indent}{$more}");
+        }
+    }
+
+    /**
+     * Where `$t` stands; a waiting task behind a task that failed for good is `blocked`.
+     */
+    internal static function state(const StoredTask& $t, const Graph& $g, const map<string, StoredTask>& $byId) : string
+    {
+        if ($t->status == TaskStatus::waiting && $t->pending > 0) {
+            foreach ($g->edges as const &$e) {
+                if ($e->task == $t->id && $byId->has($e->after)) {
+                    StoredTask $up = $byId->get($e->after);
+                    if ($up->status == TaskStatus::failed && !$up->allowFailure) {
+                        return 'blocked';
+                    }
+                }
+            }
+        }
+        return match ($t->status) {
+            TaskStatus::waiting => 'waiting',
+            TaskStatus::running => 'running',
+            TaskStatus::done => 'done',
+            TaskStatus::failed => 'failed',
+            TaskStatus::cancelled => 'cancelled',
+        };
+    }
+}

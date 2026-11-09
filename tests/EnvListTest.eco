@@ -1,0 +1,56 @@
+/**
+ * What `env` prints: whether each variable is set, its default as it would be written, never a
+ * value; and a .env to start from.
+ */
+
+use nexus::{EnvList, EnvVar, EnvTable, Env};
+use std::time;
+use ecotest::expect;
+
+internal function evVars() : array<EnvVar>
+{
+    array<EnvVar> $all = [
+        EnvVar($name: 'SHOP_URL', $type: 'string', $required: true, $secret: true, $doc: 'Where the shop is.', $owner: 'shop::ShopConfig'),
+        EnvVar($name: 'SHOP_PAGE', $type: 'uint32', $fallback: '10', $doc: 'Items per page.', $owner: 'shop::ShopConfig'),
+        EnvVar($name: 'SHOP_NOTE', $type: 'string', $owner: 'shop::ShopConfig'),
+    ];
+    return $all;
+}
+
+test the_table_says_what_is_set_and_never_a_value
+{
+    map<string, string> $vars = ['SHOP_URL' => 'mysql://secret@db/shop'];
+    string $out = EnvList::table(evVars(), Env(fixed: $vars));
+    $lines = str::split($out, "\n")->owned();
+    expect($lines[0])->is('NAME       TYPE    DEFAULT   SET    DESCRIPTION');
+    expect($lines[1])->is('SHOP_URL   string  required  set    Where the shop is.');
+    expect($lines[2])->is('SHOP_PAGE  uint32  10        unset  Items per page.');
+    expect($lines[3])->is('SHOP_NOTE  string  -         unset');
+    expect($out)->lacks('secret@db');
+}
+
+test the_dotenv_leaves_required_and_secret_ones_to_fill_in
+{
+    string $out = EnvList::dotenv(evVars());
+    expect($out)->is("# shop::ShopConfig\n# Where the shop is.\nSHOP_URL=\n# Items per page.\n# SHOP_PAGE=10\n# SHOP_NOTE=\n");
+}
+
+test the_core_comes_first_then_each_module_by_name
+{
+    array<EnvTable> $tables = [EnvTable('shop', () => evVars())];
+    array<EnvVar> $all = EnvList::all($tables);
+    expect($all[0]->name)->is('NEXUS_MODE');
+    usize $core = EnvList::core()->count();
+    expect($all[$core]->name)->is('SHOP_NOTE');
+    expect($all[$core + 2]->name)->is('SHOP_URL');
+}
+
+test a_default_is_written_as_the_variable_takes_it
+{
+    expect(EnvVar::text(time::duration::hours(720)))->is('720h');
+    expect(EnvVar::text(time::duration::mins(5)))->is('5m');
+    expect(EnvVar::text(time::duration::secs(30)))->is('30s');
+    expect(EnvVar::text(time::duration::millis(250)))->is('250ms');
+    expect(EnvVar::text(true))->is('true');
+    expect(EnvVar::text(16 as uint32))->is('16');
+}

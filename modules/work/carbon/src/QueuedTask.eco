@@ -14,13 +14,32 @@ public class QueuedTask : carbon::Model<QueuedTask, QueuedTaskRepository>
     public string $id;
 
     public string $name;
-    public string $queue;
+    public string $lane;
     public string $data;
     public int64 $tries;
     public int64 $attempts = 0;
+    public int64 $status = 0;
+    public int64 $hold = 0;
+    public string $holdKey = '';
+
+    /**
+     * The `.unique` key while the task waits or runs, null otherwise; unique, so a second live one
+     * cannot be stored.
+     */
+    public string? $uniqueLive = null;
+    public bool $allowFailure = false;
+    public int64 $priority = 0;
+    public int64 $pending = 0;
+    public bool $released = false;
+    public string $parent = '';
+
+    /**
+     * The scheduler's `name@slot`, unique; null for none.
+     */
     public string? $uniqueKey = null;
     public time::timestamp $createdAt;
     public time::timestamp $availableAt;
+    public time::timestamp? $expiresAt = null;
     public time::timestamp? $reservedUntil = null;
     public time::timestamp? $doneAt = null;
     public time::timestamp? $failedAt = null;
@@ -31,22 +50,70 @@ public class QueuedTask : carbon::Model<QueuedTask, QueuedTaskRepository>
         return $this->link;
     }
 
-    /**
-     * The row for `$j`. A static, not a constructor: the model keeps its memberwise constructor,
-     * which carbon reads rows back with.
-     */
-    public static function of(const nexus::work::StoredTask& $j) : QueuedTask
+    public static function of(const nexus::work::StoredTask& $t) : QueuedTask
     {
         string? $key = null;
-        if (!$j->key->empty()) {
-            $key = $j->key;
+        if (!$t->key->empty()) {
+            $key = $t->key;
         }
-        return QueuedTask($id: $j->id, $name: $j->name, $queue: $j->queue, $data: $j->data, $tries: $j->tries, $attempts: $j->attempts, $uniqueKey: $key, $createdAt: $j->createdAt, $availableAt: $j->availableAt, $reservedUntil: $j->reservedUntil, $doneAt: $j->doneAt, $failedAt: $j->failedAt, $error: $j->error);
+        string? $live = null;
+        if ($t->hold == nexus::work::Hold::unique && $t->live()) {
+            $live = $t->holdKey;
+        }
+        return QueuedTask(
+            $id: $t->id,
+            $name: $t->name,
+            $lane: $t->lane,
+            $data: $t->data,
+            $tries: $t->tries,
+            $attempts: $t->attempts,
+            $status: SessionStore::status($t->status),
+            $hold: SessionStore::hold($t->hold),
+            $holdKey: $t->holdKey,
+            $uniqueLive: $live,
+            $allowFailure: $t->allowFailure,
+            $priority: $t->priority as int64,
+            $pending: $t->pending,
+            $released: $t->released,
+            $parent: $t->parent,
+            $uniqueKey: $key,
+            $createdAt: $t->createdAt,
+            $availableAt: $t->availableAt,
+            $expiresAt: $t->expiresAt,
+            $reservedUntil: $t->reservedUntil,
+            $doneAt: $t->doneAt,
+            $failedAt: $t->failedAt,
+            $error: $t->error
+        );
     }
 
     public const function stored() : nexus::work::StoredTask
     {
-        string $key = $this->uniqueKey ?? '';
-        return nexus::work::StoredTask($id: $this->id, $name: $this->name, $queue: $this->queue, $data: $this->data, $tries: $this->tries, $attempts: $this->attempts, $key: $key, $createdAt: $this->createdAt, $availableAt: $this->availableAt, $reservedUntil: $this->reservedUntil, $doneAt: $this->doneAt, $failedAt: $this->failedAt, $error: $this->error);
+        nexus::work::TaskStatus $status = nexus::work::TaskStatus::from($this->status as uint8) ?? nexus::work::TaskStatus::waiting;
+        nexus::work::Hold $hold = nexus::work::Hold::from($this->hold as uint8) ?? nexus::work::Hold::none;
+        return nexus::work::StoredTask(
+            $id: $this->id,
+            $name: $this->name,
+            $lane: $this->lane,
+            $data: $this->data,
+            $tries: $this->tries,
+            $attempts: $this->attempts,
+            $status: $status,
+            $hold: $hold,
+            $holdKey: $this->holdKey,
+            $allowFailure: $this->allowFailure,
+            $priority: $this->priority as int32,
+            $pending: $this->pending,
+            $released: $this->released,
+            $parent: $this->parent,
+            $key: $this->uniqueKey ?? '',
+            $createdAt: $this->createdAt,
+            $availableAt: $this->availableAt,
+            $expiresAt: $this->expiresAt,
+            $reservedUntil: $this->reservedUntil,
+            $doneAt: $this->doneAt,
+            $failedAt: $this->failedAt,
+            $error: $this->error
+        );
     }
 }

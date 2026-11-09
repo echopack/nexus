@@ -71,6 +71,25 @@ test a_child_adds_fields_and_the_nearer_value_wins
     expect($all[1]->all()->empty())->yes(says: 'the root stamps nothing');
 }
 
+test also_adds_a_sink_and_only_replaces_them_keeping_the_fields
+{
+    $app = Memory();
+    $own = Memory();
+    $root = memoryLog($app, .info);
+    $req = $root->with(['req' => 'abc']);
+    $req->also($own)->info('both');
+    array<Sink> $mine = [$own];
+    $only = $req->only(mv $mine);
+    $only->info('mine');
+    $only->debug('below the level');
+    expect($app->entries())->size(1);
+    $kept = $own->entries();
+    expect($kept)->size(2);
+    expect($kept[0]->message)->is('both');
+    expect($kept[1]->message)->is('mine');
+    expect($kept[1]->all()->get('req')?->text())->some('abc');
+}
+
 test entries_below_the_minimum_are_dropped
 {
     $mem = Memory();

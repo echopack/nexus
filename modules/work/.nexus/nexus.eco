@@ -11,29 +11,47 @@ namespace nexusgen::nexus_work;
 #[nexus::generated: 'nexus-work']
 public function generated(nexus::Generated $g) : void
 {
+    $g->name<nexus::work::Batch>('nexus::work::Batch');
+    $g->name<nexus::work::Board>('nexus::work::Board');
+    $g->name<nexus::work::CancelCommand>('nexus::work::CancelCommand');
     $g->name<nexus::work::Codec>('nexus::work::Codec');
     $g->name<nexus::work::Codecs>('nexus::work::Codecs');
     $g->name<nexus::work::Cron>('nexus::work::Cron');
+    $g->name<nexus::work::Distributed>('nexus::work::Distributed');
+    $g->name<nexus::work::Edge>('nexus::work::Edge');
     $g->name<nexus::work::Extension>('nexus::work::Extension');
     $g->name<nexus::work::FailedCommand>('nexus::work::FailedCommand');
-    $g->name<nexus::work::Kind>('nexus::work::Kind');
-    $g->name<nexus::work::Kinds>('nexus::work::Kinds');
-    $g->name<nexus::work::MemoryQueue>('nexus::work::MemoryQueue');
+    $g->name<nexus::work::Fed>('nexus::work::Fed');
+    $g->name<nexus::work::Feeder>('nexus::work::Feeder');
+    $g->name<nexus::work::Flow>('nexus::work::Flow');
+    $g->name<nexus::work::Graph>('nexus::work::Graph');
+    $g->name<nexus::work::GraphCommand>('nexus::work::GraphCommand');
+    $g->name<nexus::work::Inline>('nexus::work::Inline');
+    $g->name<nexus::work::Item>('nexus::work::Item');
+    $g->name<nexus::work::Lanes>('nexus::work::Lanes');
+    $g->name<nexus::work::MemoryStore>('nexus::work::MemoryStore');
+    $g->name<nexus::work::Node>('nexus::work::Node');
+    $g->name<nexus::work::Outcome>('nexus::work::Outcome');
+    $g->name<nexus::work::Picked>('nexus::work::Picked');
+    $g->name<nexus::work::Pipeline>('nexus::work::Pipeline');
     $g->name<nexus::work::Planned>('nexus::work::Planned');
+    $g->name<nexus::work::Policy>('nexus::work::Policy');
+    $g->name<nexus::work::Pool>('nexus::work::Pool');
+    $g->name<nexus::work::Queues>('nexus::work::Queues');
     $g->name<nexus::work::RetryCommand>('nexus::work::RetryCommand');
-    $g->name<nexus::work::Runner>('nexus::work::Runner');
+    $g->name<nexus::work::Run>('nexus::work::Run');
     $g->name<nexus::work::Schedule>('nexus::work::Schedule');
     $g->name<nexus::work::ScheduleCommand>('nexus::work::ScheduleCommand');
-    $g->name<nexus::work::Scheduler>('nexus::work::Scheduler');
     $g->name<nexus::work::Stamp>('nexus::work::Stamp');
+    $g->name<nexus::work::Step>('nexus::work::Step');
     $g->name<nexus::work::StoredTask>('nexus::work::StoredTask');
     $g->name<nexus::work::TaskData>('nexus::work::TaskData');
+    $g->name<nexus::work::TaskScheduler>('nexus::work::TaskScheduler');
     $g->name<nexus::work::TaskTable>('nexus::work::TaskTable');
-    $g->name<nexus::work::Tasks>('nexus::work::Tasks');
+    $g->name<nexus::work::Upstream>('nexus::work::Upstream');
     $g->name<nexus::work::Work>('nexus::work::Work');
     $g->name<nexus::work::WorkCommand>('nexus::work::WorkCommand');
     $g->name<nexus::work::WorkConfig>('nexus::work::WorkConfig');
-    $g->name<nexus::work::Workers>('nexus::work::Workers');
 }
 
 /**
@@ -43,43 +61,57 @@ public function generated(nexus::Generated $g) : void
 public function configs(nexus::Env $env, container::Builder& $b) : status<nexus::BootError>
 {
     $s = nexus::Settings($env);
-    uint32 $okC0Workers = 2;
-    uint32? $vC0Workers = $s->uint32('WORK_WORKERS', required: false);
-    if ($vC0Workers != null) {
-        uint32 $xC0Workers = guard $vC0Workers;
-        $okC0Workers = $xC0Workers;
-    }
-    string $okC0Queues = '';
-    $vC0Queues = $s->string('WORK_QUEUES', required: false);
-    if ($vC0Queues != null) {
-        $xC0Queues = guard $vC0Queues;
-        $okC0Queues = mv $xC0Queues;
+    uint32 $okC0Threads = 2;
+    uint32? $vC0Threads = $s->uint32('NEXUS_WORK_THREADS', required: false);
+    if ($vC0Threads != null) {
+        uint32 $xC0Threads = guard $vC0Threads;
+        $okC0Threads = $xC0Threads;
     }
     std::time::duration $okC0Poll = .secs(1);
-    $vC0Poll = $s->duration('WORK_POLL', required: false);
+    $vC0Poll = $s->duration('NEXUS_WORK_POLL', required: false);
     if ($vC0Poll != null) {
         $xC0Poll = guard $vC0Poll;
         $okC0Poll = mv $xC0Poll;
     }
     std::time::duration $okC0Lease = .mins(5);
-    $vC0Lease = $s->duration('WORK_LEASE', required: false);
+    $vC0Lease = $s->duration('NEXUS_WORK_LEASE', required: false);
     if ($vC0Lease != null) {
         $xC0Lease = guard $vC0Lease;
         $okC0Lease = mv $xC0Lease;
     }
     std::time::duration $okC0Grace = .secs(30);
-    $vC0Grace = $s->duration('WORK_GRACE', required: false);
+    $vC0Grace = $s->duration('NEXUS_WORK_GRACE', required: false);
     if ($vC0Grace != null) {
         $xC0Grace = guard $vC0Grace;
         $okC0Grace = mv $xC0Grace;
     }
     std::time::duration $okC0Keep = .hours(24);
-    $vC0Keep = $s->duration('WORK_KEEP', required: false);
+    $vC0Keep = $s->duration('NEXUS_WORK_KEEP', required: false);
     if ($vC0Keep != null) {
         $xC0Keep = guard $vC0Keep;
         $okC0Keep = mv $xC0Keep;
     }
     try $s->done();
-    $b->param<nexus::work::WorkConfig>(nexus::work::WorkConfig($workers: $okC0Workers, $queues: mv $okC0Queues, $poll: mv $okC0Poll, $lease: mv $okC0Lease, $grace: mv $okC0Grace, $keep: mv $okC0Keep));
+    $b->param<nexus::work::WorkConfig>(nexus::work::WorkConfig($threads: $okC0Threads, $poll: mv $okC0Poll, $lease: mv $okC0Lease, $grace: mv $okC0Grace, $keep: mv $okC0Keep));
     return .ok;
+}
+
+/**
+ * Every environment variable the #[nexus::config] structs of module nexus-work read.
+ */
+#[nexus::envs: 'nexus-work']
+public function envs() : array<nexus::EnvVar>
+{
+    array<nexus::EnvVar> $all = [];
+    uint32 $d0 = 2;
+    $all[] = nexus::EnvVar($name: 'NEXUS_WORK_THREADS', $type: 'uint32', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'Worker threads of each async queue bound without a count of its own.', $owner: 'nexus::work::WorkConfig');
+    std::time::duration $d1 = .secs(1);
+    $all[] = nexus::EnvVar($name: 'NEXUS_WORK_POLL', $type: 'duration', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How long a feeder with nothing to claim waits before it looks again.', $owner: 'nexus::work::WorkConfig');
+    std::time::duration $d2 = .mins(5);
+    $all[] = nexus::EnvVar($name: 'NEXUS_WORK_LEASE', $type: 'duration', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'How long a claimed task is held. A running task\'s lease is renewed every third of it, so a task is claimed again only once the server running it stopped renewing.', $owner: 'nexus::work::WorkConfig');
+    std::time::duration $d3 = .secs(30);
+    $all[] = nexus::EnvVar($name: 'NEXUS_WORK_GRACE', $type: 'duration', $fallback: nexus::EnvVar::text($d3), $required: false, $secret: false, $doc: 'How long a stopping process waits for running tasks to finish. Stored ones still running then run again once their lease has passed; async ones are lost.', $owner: 'nexus::work::WorkConfig');
+    std::time::duration $d4 = .hours(24);
+    $all[] = nexus::EnvVar($name: 'NEXUS_WORK_KEEP', $type: 'duration', $fallback: nexus::EnvVar::text($d4), $required: false, $secret: false, $doc: 'How long a done stored task is kept, so a scheduled slot is not pushed again and the graph still shows it.', $owner: 'nexus::work::WorkConfig');
+    return $all;
 }

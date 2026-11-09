@@ -1,26 +1,82 @@
 namespace nexus::work;
 
+use std::time;
+
 /**
- * Marks a struct as a task: its public fields are its data, its `handle()` the work, run on a
- * worker with services from the task run's own child container. `nexus gen` writes a `<Task>Task`
- * companion, `SendWelcomeTask::push($payload, $user: 5)`; the app binds it with its queue, tries
- * and schedule where it is wired:
+ * A unit of work: a struct whose public fields are its data and whose `handle()` is the work. The
+ * same value runs inline, on an async queue in this process, or on a distributed queue any server
+ * may claim it from; `nexus gen` writes how its data is stored, so it can be distributed.
  *
  * ```echo
  * public struct SendWelcome : nexus::work::Task
  * {
  *     public int64 $user;
  *
+ *     public const function tries() : int64 { return 5; }
+ *     public const function exclusive() : nexus::work::Exclusive { return .unique("user:{$this->user}"); }
+ *
  *     public function handle(nexus::Payload& $payload) : status<nexus::work::Failure> { ... }
  * }
  *
- * $app->bindTask<SendWelcome>()->queue('mail')->tries(5);
- * $app->bindTask<PruneAuth>()->cron('0 3 * * *');
+ * // in a service, action or signal handler built with the queue
+ * $this->jobs->push(SendWelcome($user: 5));
  * ```
  *
- * A scheduled task is pushed with its defaults, so every field needs one.
+ * Everything but `handle()` has a default, so a task says only what it changes.
  */
 public interface Task
 {
     function handle(nexus::Payload& $payload) : status<Failure>;
+
+    /**
+     * How often the task is tried before it is kept with the failed ones, 1 to 100. A push may
+     * give another count.
+     */
+    const function tries() : int64
+    {
+        return 3;
+    }
+
+    /**
+     * Whether runs of this task may overlap: `.running` lets one run at a time, `.unique` lets one
+     * wait or run at a time and skips a further push.
+     */
+    const function exclusive() : Exclusive
+    {
+        return .none;
+    }
+
+    /**
+     * Whether the tasks after it in a pipeline still run when it fails for good.
+     */
+    const function allowFailure() : bool
+    {
+        return false;
+    }
+
+    /**
+     * Which waiting task runs first: the higher priority, then the one due longest.
+     */
+    const function priority() : Priority
+    {
+        return .normal;
+    }
+
+    /**
+     * How long the task may wait before it is dropped unrun, or null to wait for ever. A dropped
+     * task counts as failed for the tasks after it.
+     */
+    const function expires() : time::duration?
+    {
+        return null;
+    }
+
+    /**
+     * Where the run logs: `.inherit` takes what its queue says, `.app` the app's log, `.also(sink)`
+     * the app's log and a sink of its own, `.only(sink)` the sink alone, `.silent` nowhere.
+     */
+    const function log(const Run& $run) : RunLog
+    {
+        return .inherit;
+    }
 }

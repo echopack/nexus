@@ -1,24 +1,16 @@
 namespace nexus::work;
 
 /**
- * The app's work, bound once: every task type, the scheduled ones with their schedules, the queues
- * workers take from, the clock and the zone cron lines are read in.
+ * The app's work, bound once: how each task type is stored, every lane, the scheduler, the clock
+ * and the zone cron lines are read in.
  */
 #[atomic]
 public class Work
 {
-    public Kinds $kinds;
     public WorkConfig $config;
     public calendar::Clock $clock;
     public calendar::Zone $zone;
-
-    /**
-     * The scheduled task types with their schedules, filled at boot.
-     */
-    public array<Planned> $planned = [];
-
-    /**
-     * The queues workers take from, filled at boot.
-     */
-    public array<string> $queues = [];
+    public Codecs $codecs;
+    public Lanes $lanes = Lanes();
+    public TaskScheduler $scheduler = TaskScheduler();
 }

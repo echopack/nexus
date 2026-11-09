@@ -1,0 +1,10 @@
+namespace nexus::work;
+
+/**
+ * Task `$task` waits for task `$after`.
+ */
+public struct Edge
+{
+    public string $task;
+    public string $after;
+}

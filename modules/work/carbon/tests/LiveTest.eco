@@ -1,0 +1,150 @@
+/**
+ * The carbon task store on a real MySQL or MariaDB, where transactions and their isolation are
+ * the server's own and the fake driver cannot stand in. Runs when WORK_LIVE_URL names a database,
+ * as the blog's smoke test does, and migrates the task tables into it if they are missing; skipped
+ * otherwise.
+ */
+
+use nexus::work::{StoredTask, Batch, Edge};
+use nexus::work::carbon::{QueuedTask, QueuedTaskRepository, QueuedTaskTable, TaskEdgeRepository, TaskEdgeTable, Store, SessionStore, Tables};
+use std::{time, thread};
+use ecotest::expect;
+
+/**
+ * The other server's settle, on a thread of its own: its handle, joined once the test lets go of
+ * the row it waits for, and why it failed, if it did.
+ */
+#[atomic]
+internal class LiveServer
+{
+    public thread::mutex<array<thread::handle>> $threads = thread::mutex<array<thread::handle>>(array<thread::handle>());
+    public thread::mutex<string> $failed = thread::mutex<string>('');
+
+    /**
+     * Settles `$t` on a session of `$db` of its own, in its own transaction, without waiting.
+     */
+    public function settle(carbon::DB $db, const StoredTask& $t, time::timestamp $now) : void
+    {
+        LiveServer $self = $this;
+        StoredTask $task = $t;
+        thread::handle $h = guard thread::spawn(function[$self, $db, $task, $now]() : void {
+            guard Store($db)->done($task, $now, Batch()) else ($p) {
+                thread::locked<string> $why = $self->failed->lock();
+                $why->value = $p->detail(.dev);
+                return;
+            };
+        }) else {
+            die('cannot start the second server');
+        };
+        thread::locked<array<thread::handle>> $held = $this->threads->lock();
+        $held->value[] = $h;
+    }
+
+    /**
+     * Waits for the settle; answers why it failed, or ''.
+     */
+    public function join() : string
+    {
+        thread::locked<array<thread::handle>> $held = $this->threads->lock();
+        foreach ($held->value as &$h) {
+            $h->join();
+        }
+        $held->value = array<thread::handle>();
+        thread::locked<string> $why = $this->failed->lock();
+        return $why->value;
+    }
+}
+
+internal function liveUrl() : string?
+{
+    string::view? $url = std::env::var('WORK_LIVE_URL');
+    string::view $u = guard $url else {
+        return null;
+    };
+    return string::from($u);
+}
+
+internal function liveTask(const string& $id, const string& $lane, time::timestamp $now) : StoredTask
+{
+    return StoredTask($id: $id, $name: 'LiveImage', $lane: $lane, $data: '{}', $tries: 3, $createdAt: $now, $availableAt: $now);
+}
+
+internal function liveWaiting(carbon::DB $db, const string& $id) : int64
+{
+    QueuedTaskRepository $tasks = guard $db->session()->repo<QueuedTaskRepository>();
+    QueuedTask? $found = guard $tasks->find()->where(QueuedTaskTable::$id == $id)->first();
+    QueuedTask $row = guard $found else {
+        die("task {$id} is gone");
+    };
+    return $row->pending;
+}
+
+internal function liveDone(nexus::work::Store $store, const StoredTask& $t, time::timestamp $now) : status<carbon::Error>
+{
+    guard $store->done($t, $now, Batch()) else ($p) {
+        return .error(.driver(carbon::Failure($fault: .other, $message: $p->detail(.dev))));
+    };
+    return .ok;
+}
+
+test dependencies_finishing_at_once_on_two_servers_all_count
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('WORK_LIVE_URL is not set');
+        return;
+    };
+    carbon::mysql::Source $source = guard carbon::mysql::Source::parse($url);
+    carbon::DB $db = carbon::DB($source);
+    guard Tables::wire($db);
+    // the task tables, unless the database has them already
+    guard carbon::Migrator($db, Tables::migrations(), carbon::ddl::Mysql())->up();
+    time::timestamp $now = $db->now();
+    // a lane of its own, so another run's rows never count
+    int64 $stamp = time::timestamp::now()->unix_nanos();
+    string $lane = "live-{$stamp}";
+
+    // three images, then one task that waits for all of them
+    Batch $b = Batch();
+    array<string> $images = ["{$lane}-1", "{$lane}-2", "{$lane}-3"];
+    string $sum = "{$lane}-sum";
+    StoredTask $last = liveTask($sum, $lane, $now);
+    $last->pending = 3;
+    foreach ($images as const &$id) {
+        $b->tasks[] = liveTask($id, $lane, $now);
+        $b->edges[] = Edge($sum, $id);
+    }
+    $b->tasks[] = $last;
+    guard SessionStore($db->session())->push($b);
+    array<StoredTask> $claimed = guard SessionStore($db->session())->claim($lane, $now, $now + time::duration::mins(5), 10);
+    expect($claimed)->size(3);
+
+    // two servers settle an image each at once: this one holds the waiting task's row in an open
+    // transaction while the other settles in its own, reads, and then waits for that row
+    $db->seal();
+    LiveServer $other = LiveServer();
+    StoredTask $x = $claimed[0];
+    StoredTask $y = $claimed[1];
+    carbon::Session $mine = $db->scoped();
+    status<carbon::Error> $settled = $mine->transaction(function[$mine, $db, $other, $x, $y, $now]() : status<carbon::Error> {
+        try liveDone(SessionStore($mine), $y, $now);
+        $other->settle($db, $x, $now);
+        thread::sleep(300);
+        return .ok;
+    });
+    guard $settled else ($e) {
+        die("this server cannot settle: {$e}");
+    };
+    expect($other->join())->is('');
+    expect(liveWaiting($db, $sum))->is(1);
+
+    guard SessionStore($db->session())->done($claimed[2], $now, Batch());
+    expect(liveWaiting($db, $sum))->is(0);
+    array<StoredTask> $next = guard SessionStore($db->session())->claim($lane, $now, $now + time::duration::mins(5), 10);
+    expect($next)->size(1);
+    expect($next[0]->id)->is($sum);
+
+    TaskEdgeRepository $edges = guard $db->session()->repo<TaskEdgeRepository>();
+    guard $edges->find()->where(TaskEdgeTable::$taskId == $sum)->purge();
+    QueuedTaskRepository $tasks = guard $db->session()->repo<QueuedTaskRepository>();
+    guard $tasks->find()->where(QueuedTaskTable::$lane == $lane)->purge();
+}

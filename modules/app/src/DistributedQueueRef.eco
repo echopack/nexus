@@ -1,0 +1,40 @@
+namespace nexus::app;
+
+/**
+ * The distributed queue `bindDistributedQueue` just bound, for the async queue its tasks run on
+ * (it needs one) and where their runs log:
+ *
+ * ```echo
+ * $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+ *     ->into<WorkersLane>();
+ * ```
+ */
+public class DistributedQueueRef<L>
+{
+    internal nexus::Services $services;
+    internal nexus::work::Distributed $lane;
+
+    internal constructor(nexus::Services $services, nexus::work::Distributed $lane)
+    {
+        $this->services = $services;
+        $this->lane = $lane;
+    }
+
+    /**
+     * Runs the claimed tasks on the async queue of lane `A`.
+     */
+    public function into<A>() : DistributedQueueRef<L>
+    {
+        $this->lane->into = nexus::work::Queues::lane<A>($this->services, '');
+        return $this;
+    }
+
+    /**
+     * Where a run logs when its task leaves it to the queue, before the async queue's own choice.
+     */
+    public function log(function<nexus::work::RunLog(const nexus::work::Run&)> $choose) : DistributedQueueRef<L>
+    {
+        $this->lane->log = $choose;
+        return $this;
+    }
+}

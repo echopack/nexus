@@ -1,0 +1,51 @@
+namespace nexus::work;
+
+use std::io;
+
+/**
+ * `work:cancel --id <id>`: cancels a waiting stored task and every task waiting after it.
+ */
+public class CancelCommand : nexus::Command
+{
+    public const function name() : string
+    {
+        return 'work:cancel';
+    }
+
+    public const function summary() : string
+    {
+        return 'cancel a waiting task and the tasks after it';
+    }
+
+    public const function options() : array<nexus::CommandOption>
+    {
+        array<nexus::CommandOption> $out = [Picked::id('the task'), Picked::queue()];
+        return $out;
+    }
+
+    public function run(nexus::Invocation& $in) : int32
+    {
+        string $id = $in->value('id');
+        if ($id->empty()) {
+            io::eprintln('work:cancel: --id wants a task id');
+            return 1;
+        }
+        nexus::Kernel $kernel = guard $in->kernel() else {
+            return 1;
+        };
+        Distributed $d = guard Picked::lane($kernel, $in, 'work:cancel') else {
+            return 1;
+        };
+        Work $w = $kernel->services->get<Work>();
+        uint64 $n = guard $d->store->cancel($id, $w->clock->now()) else ($p) {
+            io::eprintln("work:cancel: {$p->detail(.dev)}");
+            return 1;
+        };
+        if ($n == 0) {
+            io::eprintln("work:cancel: no waiting task {$id}");
+            return 1;
+        }
+        io::println("cancelled  {$n} tasks");
+        return 0;
+    }
+}

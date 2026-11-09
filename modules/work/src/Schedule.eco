@@ -13,26 +13,27 @@ public struct Schedule
     internal Cron? $cron = null;
 
     /**
-     * The schedule of `$kind`, or null when it has none.
+     * The schedule `every` (a duration like `15m`) or `cron` (five fields) say, or null when both
+     * are empty.
      */
-    public static function of(const Kind& $kind) : result<Schedule?, ScheduleError>
+    public static function of(const string& $every, const string& $cron) : result<Schedule?, ScheduleError>
     {
-        if (!$kind->every->empty()) {
-            time::duration $d = guard nexus::Settings::span($kind->every) else {
-                return .error(.duration($kind->every));
+        if (!$every->empty()) {
+            time::duration $d = guard nexus::Settings::span($every) else {
+                return .error(.duration($every));
             };
             int64 $secs = $d->as_secs();
             if ($secs < 1 || $d != time::duration::secs($secs)) {
-                return .error(.seconds($kind->every));
+                return .error(.seconds($every));
             }
-            $s = Schedule($text: "every {$kind->every}", $everySecs: $secs);
+            $s = Schedule($text: "every {$every}", $everySecs: $secs);
             return .ok($s);
         }
-        if (!$kind->cron->empty()) {
-            Cron $c = guard Cron::parse($kind->cron) else ($e) {
+        if (!$cron->empty()) {
+            Cron $c = guard Cron::parse($cron) else ($e) {
                 return .error(.cron($e));
             };
-            $s = Schedule($text: $kind->cron, $cron: $c);
+            $s = Schedule($text: $cron, $cron: $c);
             return .ok($s);
         }
         return .ok(null);

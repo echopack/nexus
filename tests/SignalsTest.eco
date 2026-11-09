@@ -1,0 +1,88 @@
+/**
+ * Signals reach their handlers by type, in the order they were bound; the first problem stops the
+ * rest.
+ */
+
+use nexus::{SignalDispatcher, SignalHandler, Problem};
+use ecotest::expect;
+
+internal struct SSaid
+{
+    public string $text;
+}
+
+internal struct SOther
+{
+    public int64 $n;
+}
+
+internal class STrace
+{
+    public array<string> $seen = [];
+}
+
+/**
+ * Notes what it is sent, and refuses a said signal when told to.
+ */
+internal struct SNote : SignalHandler<SSaid>, SignalHandler<SOther>
+{
+    public STrace $trace;
+    public string $name;
+    public bool $refuse = false;
+
+    public function handle(const SSaid& $signal) : status<Problem>
+    {
+        if ($this->refuse) {
+            return .error(.conflict('no'));
+        }
+        $this->trace->seen[] = "{$this->name} {$signal->text}";
+        return .ok;
+    }
+
+    public function handle(const SOther& $signal) : status<Problem>
+    {
+        $this->trace->seen[] = "{$this->name} {$signal->n}";
+        return .ok;
+    }
+}
+
+test handlers_run_in_order_by_type
+{
+    $trace = STrace();
+    $d = SignalDispatcher()
+        ->bind<SSaid>(SNote($trace, 'first'))
+        ->bind<SSaid, SNote>($trace, 'second')
+        ->bind<SOther>(SNote($trace, 'counted'))
+        ->bind<SSaid>(SNote($trace, 'third'));
+    guard $d->send(SSaid('hi'));
+    guard $d->send(SOther(3));
+    expect($trace->seen)->is(['first hi', 'second hi', 'third hi', 'counted 3']);
+    expect($d->count<SSaid>())->is(3);
+    expect($d->count<SOther>())->is(1);
+}
+
+test a_signal_nothing_handles_is_fine
+{
+    $d = SignalDispatcher();
+    guard $d->send(SSaid('hi'));
+    expect($d->count<SSaid>())->is(0);
+}
+
+test a_problem_stops_the_rest
+{
+    $trace = STrace();
+    $d = SignalDispatcher()
+        ->bind<SSaid>(SNote($trace, 'first'))
+        ->bind<SSaid>(SNote($trace, 'second', $refuse: true))
+        ->bind<SSaid>(SNote($trace, 'third'));
+    expect(sRefused($d->send(SSaid('hi'))))->is(409);
+    expect($trace->seen)->is(['first hi']);
+}
+
+internal function sRefused(status<Problem> $s) : int32
+{
+    guard $s else ($p) {
+        return $p->status();
+    };
+    return 0;
+}

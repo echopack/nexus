@@ -1,0 +1,8 @@
+namespace Blog::Queues;
+
+/**
+ * The blog's tasks in its database, run by the workers of whichever server claims them first.
+ */
+public struct JobsLane : nexus::work::Lane {}
+
+public type JobsQueue = nexus::work::DistributedQueue<JobsLane>;

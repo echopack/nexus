@@ -1,0 +1,23 @@
+namespace nexus::work::carbon;
+
+use std::time;
+
+/**
+ * A row of `nexus_task_locks`: a `.running` key, the task holding it, and until when.
+ */
+#[carbon::model: 'nexus_task_locks']
+public class TaskLock : carbon::Model<TaskLock, TaskLockRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $lockKey;
+
+    public string $holder;
+    public time::timestamp $heldUntil;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+}

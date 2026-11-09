@@ -1,0 +1,52 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * What becomes of a task after a run: done, tried again at a time, or kept failed.
+ */
+public enum Settle
+{
+    case done;
+    case retry(time::timestamp $at, string $why);
+    case fail(string $why);
+
+    /**
+     * The settlement of try number `$attempt` of `$tries` that answered `$status` at `$now`: a
+     * `retry` backs off, a `later` waits what it says, both only while tries are left.
+     */
+    public static function of(status<Failure> $status, int64 $attempt, int64 $tries, time::timestamp $now) : Settle
+    {
+        guard $status else ($f) {
+            time::duration? $wait = match ($f) {
+                Failure::retry($why) => Failure::backoff($attempt),
+                Failure::later($after, $why) => $after,
+                Failure::giveUp($why) => null,
+            };
+            if ($wait != null && $attempt < $tries) {
+                time::duration $d = guard $wait;
+                return .retry($now + $d, $f->why());
+            }
+            return .fail($f->why());
+        };
+        return .done;
+    }
+
+    /**
+     * Logs how the run went on the run's own log.
+     */
+    public const function tell(nexus::Logger $log, int64 $attempt, float64 $ms, time::timestamp $now) : void
+    {
+        match ($this) {
+            Settle::done => {
+                $log->info('task done', ['ms' => $ms, 'attempt' => $attempt]);
+            },
+            Settle::retry($at, $why) => {
+                $log->warn('task will retry', ['why' => $why, 'attempt' => $attempt, 'in' => ($at - $now)->as_secs()]);
+            },
+            Settle::fail($why) => {
+                $log->error('task failed', ['why' => $why, 'attempt' => $attempt]);
+            },
+        };
+    }
+}

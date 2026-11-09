@@ -1,0 +1,10 @@
+namespace Blog::Types;
+
+/**
+ * What a user may do beyond their own posts: an admin may change anyone's.
+ */
+public enum Role : uint8
+{
+    case author = 1;
+    case admin = 2;
+}

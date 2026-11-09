@@ -1,0 +1,23 @@
+namespace Blog::Repositories;
+
+use Blog::Models::{Post, PostWiring};
+use Blog::Queries::PostQuery;
+
+/**
+ * Writing posts: a title is trimmed, and an empty one refused.
+ */
+public struct PostRepository : carbon::Repository<Post, PostQuery, int64>, PostWiring
+{
+    public carbon::Session $session;
+
+    public function before(carbon::Event $event, Post& $post) : status<carbon::Error>
+    {
+        if ($event->saves()) {
+            $post->title = string::from(str::trim($post->title));
+            if ($post->title->empty()) {
+                return .error(.refused(carbon::Refusal('a post needs a title')));
+            }
+        }
+        return .ok;
+    }
+}

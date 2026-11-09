@@ -1,0 +1,19 @@
+namespace Blog::Tasks;
+
+use Blog::Models::UserRepository;
+
+/**
+ * Notes how many users the blog has; it runs after a welcome, in the same pipeline.
+ */
+public struct CountUsers : nexus::work::Task
+{
+    public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
+    {
+        UserRepository $users = $payload->get<UserRepository>();
+        uint64 $n = guard $users->find()->count() else ($e) {
+            return .error(.retry("counting users: {$e}"));
+        };
+        $payload->log->info('users counted', ['users' => $n as int64]);
+        return .ok;
+    }
+}

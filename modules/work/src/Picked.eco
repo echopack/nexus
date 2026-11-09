@@ -1,0 +1,32 @@
+namespace nexus::work;
+
+use std::io;
+
+/**
+ * What the `work:*` commands share: the `--queue` option and the store it picks.
+ */
+internal struct Picked
+{
+    public static function queue() : nexus::CommandOption
+    {
+        return nexus::CommandOption(value: 'queue', '<lane>', 'the distributed queue, when more than one is bound');
+    }
+
+    public static function id(const string& $what) : nexus::CommandOption
+    {
+        return nexus::CommandOption(value: 'id', '<id>', $what);
+    }
+
+    /**
+     * The distributed lane `--queue` names, or the only one; null after printing why there is none.
+     */
+    public static function lane(nexus::Kernel $kernel, const nexus::Invocation& $in, const string& $command) : Distributed?
+    {
+        Work $w = $kernel->services->get<Work>();
+        Distributed $d = guard $w->lanes->pick($in->value('queue')) else ($e) {
+            io::eprintln("{$command}: {$e}");
+            return null;
+        };
+        return $d;
+    }
+}

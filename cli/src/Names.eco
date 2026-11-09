@@ -13,6 +13,27 @@ public function upper(const string& $name) : string
 }
 
 /**
+ * Whether `$name` is written the way an environment variable is read: `BLOG`, `NEXUS_WORK`.
+ */
+public function variable(const string& $name) : bool
+{
+    if ($name->empty()) {
+        return false;
+    }
+    usize $i = 0;
+    while ($i < $name->size()) {
+        uint8 $c = $name->byte($i);
+        bool $letter = $c >= 65 && $c <= 90;
+        bool $more = $c == 95 || ($c >= 48 && $c <= 57);
+        if (!$letter && ($i == 0 || !$more)) {
+            return false;
+        }
+        $i = $i + 1;
+    }
+    return true;
+}
+
+/**
  * `pageSize` to `PAGE_SIZE`.
  */
 public function screaming(const string& $name) : string

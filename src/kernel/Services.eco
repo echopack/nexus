@@ -4,7 +4,7 @@ use container::{Builder, Container, Entry};
 
 /**
  * What an extension wires the app with in `services()`: the container (every `bind` of
- * `container::Builder` works here too), the routes and the listeners, in one place. `nexus gen`
+ * `container::Builder` works here too) and the routes, in one place. `nexus gen`
  * only knows how each action runs; where it answers is said here.
  *
  * ```echo
@@ -16,7 +16,6 @@ use container::{Builder, Container, Entry};
  *     $s->bindAction<Login>(method: .post, path: '/v1/auth/token', function(Container $c) : Login {
  *         return Login($c->get<SignIn>(), $c->get<nexus::auth::Tokens>());
  *     });
- *     $s->listen<UserRegistered, WelcomeNewUser>();
  *     return .ok;
  * }
  * ```
@@ -34,11 +33,6 @@ public class Services
     public Generated $generated;
 
     /**
-     * The app's events, which `listen` adds to.
-     */
-    public Events $events;
-
-    /**
      * The route table, bound in the container. It is empty while the app is wired and filled at
      * boot, so take it now and build links when a request comes.
      */
@@ -48,11 +42,10 @@ public class Services
     internal array<MiddlewareRef> $around = [];
     internal array<BootError> $problems = [];
 
-    public constructor(Builder $builder, Generated $generated, Events $events)
+    public constructor(Builder $builder, Generated $generated)
     {
         $this->builder = $builder;
         $this->generated = $generated;
-        $this->events = $events;
         $this->router = Router();
         $builder->bind<Router>(put: $this->router);
         $builder->name<Router>('nexus::Router');
@@ -290,27 +283,6 @@ public class Services
     public function middleware<M>() : void
     {
         $this->around[] = MiddlewareRef::of<M>($this->generated->nameOf<M>('middleware'));
-    }
-
-    // events -----------------------------------------------------------------
-
-    /**
-     * Runs listener `L` whenever an `E` is emitted.
-     */
-    public function listen<E, L>() : void
-    {
-        string $name = $this->generated->nameOf<L>('a listener');
-        $this->events->on<E>($name, function(Payload& $payload, const E& $e) : status<Problem> {
-            return L::handle($payload, $e);
-        });
-    }
-
-    /**
-     * Runs `$listener` whenever an `E` is emitted; `$name` is what logs call it.
-     */
-    public function on<E>(const string& $name, function<status<Problem>(Payload&, const E&)> $listener) : void
-    {
-        $this->events->on<E>($name, $listener);
     }
 
     // problems ---------------------------------------------------------------

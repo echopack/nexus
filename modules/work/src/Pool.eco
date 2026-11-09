@@ -1,0 +1,354 @@
+namespace nexus::work;
+
+use std::thread;
+use std::time;
+
+/**
+ * The threads of an async queue and the tasks they run, kept in memory: what waits when the
+ * process stops is lost. Each worker takes the best ready task (the highest priority, then the
+ * oldest), runs it on a background payload of its own, and settles it: the tasks waiting for it go
+ * ahead, a retry waits its backoff, a failure takes the tasks waiting for it along unless it allows
+ * failure. A `.running` key lets one task run at a time and a `.unique` key one wait or run, in this
+ * process. Tasks a feeder claimed from a store run here too, and the feeder settles them.
+ */
+#[atomic]
+public class Pool
+{
+    public const string $lane;
+
+    /**
+     * Worker threads, set where the queue is bound.
+     */
+    public uint32 $threads;
+
+    /**
+     * Where a run logs when its task leaves it to the queue.
+     */
+    public function<RunLog(const Run&)> $log;
+
+    internal Codecs $codecs;
+    internal calendar::Clock $clock;
+    internal nexus::Kernel? $kernel = null;
+    internal thread::mutex<Board> $board = thread::mutex<Board>(Board());
+    internal thread::condition $wake = thread::condition();
+    internal nexus::Flag $halt = nexus::Flag();
+    internal atomic<int32> $alive = atomic<int32>(0);
+    internal thread::mutex<array<thread::handle>> $handles = thread::mutex<array<thread::handle>>(array<thread::handle>());
+
+    public constructor(const string& $lane, uint32 $threads, Codecs $codecs, calendar::Clock $clock)
+    {
+        $this->lane = $lane;
+        $this->threads = $threads;
+        $this->codecs = $codecs;
+        $this->clock = $clock;
+        $this->log = (const Run& $run) => RunLog::app;
+    }
+
+    /**
+     * Queues every task of `$p`, or none: skipped when one holds a `.unique` key a waiting or
+     * running task holds. Answers the id of the first task.
+     */
+    public function push(Pipeline $p) : result<Pushed, nexus::Problem>
+    {
+        array<string> $names = try $this->codecs->pushed($p);
+        time::timestamp $now = $this->clock->now();
+        {
+            thread::locked<Board> $b = $this->board->lock();
+            map<string, bool> $mine = map<string, bool>();
+            foreach ($p->items as $i => const &$item) {
+                if ($item->policy->exclusive->hold() == Hold::unique) {
+                    string $key = $item->policy->exclusive->key($names[$i]);
+                    if ($b->value->live->has($key) || $mine->has($key)) {
+                        return .ok(.skipped);
+                    }
+                    $mine[$key] = true;
+                }
+            }
+            $p->assign();
+            foreach ($p->items as $i => const &$item) {
+                Node $n = Node::of($p->ids[$i], $names[$i], $item);
+                $n->pending = $p->after[$i]->count();
+                $n->expiresAt = $item->policy->expiresAt($now);
+                $b->value->add(mv $n, $p->waits($i));
+            }
+        }
+        $this->wake->notify_all();
+        return .ok(.queued($p->ids[0]));
+    }
+
+    /**
+     * Runs `$item`, claimed by a feeder as `$run`; `$report` settles it in the store.
+     */
+    internal function feed(const Item& $item, Run $run, function<void(const Outcome&)> $report) : void
+    {
+        Node $n = Node::of($run->id, $run->name, $item);
+        $n->attempt = $run->attempt - 1;
+        $n->fed = Fed(mv $run, $report);
+        {
+            thread::locked<Board> $b = $this->board->lock();
+            $b->value->add(mv $n, array<string>());
+        }
+        $this->wake->notify_all();
+    }
+
+    /**
+     * Drops waiting task `$id` and every task waiting for it; answers how many. A running task is
+     * not cancelled.
+     */
+    public function cancel(const string& $id) : uint64
+    {
+        thread::locked<Board> $b = $this->board->lock();
+        return $b->value->cancel($id);
+    }
+
+    /**
+     * How many tasks wait, not counting the running ones.
+     */
+    public function waiting() : uint64
+    {
+        thread::locked<Board> $b = $this->board->lock();
+        return $b->value->waiting();
+    }
+
+    /**
+     * How many more tasks the workers could start now: idle workers no ready task waits for. None
+     * before the workers started.
+     */
+    public function room() : uint32
+    {
+        if ($this->alive->load() == 0) {
+            return 0;
+        }
+        thread::locked<Board> $b = $this->board->lock();
+        usize $taken = $b->value->running->count() + $b->value->ready->count();
+        if ($taken >= ($this->threads as usize)) {
+            return 0;
+        }
+        return $this->threads - ($taken as uint32);
+    }
+
+    /**
+     * Starts the worker threads and the thread that brings retries back when they are due.
+     */
+    public function start(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        $this->kernel = $kernel;
+        $this->halt = nexus::Flag();
+        Pool $self = $this;
+        uint32 $i = 0;
+        while ($i < $this->threads) {
+            thread::handle $t = guard thread::spawn(function[$self]() : void {
+                $self->loop();
+            }) else {
+                return .error(.extension('nexus-work', "{$this->lane}: cannot start a worker thread"));
+            };
+            $this->keep($t);
+            $i = $i + 1;
+        }
+        thread::handle $ticker = guard thread::spawn(function[$self]() : void {
+            $self->tick();
+        }) else {
+            return .error(.extension('nexus-work', "{$this->lane}: cannot start the retry thread"));
+        };
+        $this->keep($ticker);
+        return .ok;
+    }
+
+    /**
+     * Lets every worker finish the task it holds and waits for them, at most `$grace`. True when
+     * all stopped in time. What still waits is lost.
+     */
+    public function stop(time::duration $grace) : bool
+    {
+        $this->halt->raise();
+        $this->wake->notify_all();
+        time::instant $start = time::instant::now();
+        while ($this->alive->load() > 0 && $start->elapsed() < $grace) {
+            $this->wake->notify_all();
+            thread::sleep(10);
+        }
+        if ($this->alive->load() > 0) {
+            return false;
+        }
+        thread::locked<array<thread::handle>> $held = $this->handles->lock();
+        foreach ($held->value as &$t) {
+            $t->join();
+        }
+        $held->value = array<thread::handle>();
+        return true;
+    }
+
+    /**
+     * How many workers are running.
+     */
+    public const function running() : int32
+    {
+        return $this->alive->load();
+    }
+
+    /**
+     * Runs `$n` on a background payload of its own and settles it.
+     */
+    internal function run(Node $n) : void
+    {
+        nexus::Kernel $k = guard $this->kernel else {
+            return;
+        };
+        nexus::Payload $payload = $k->background($n->name, $n->id);
+        Run $run = $n->run($this->lane);
+        Fed? $fed = $n->fed;
+        Flow $flow = Flow();
+        Run $state = $run;
+        $payload->put<Run>(mv $state);
+        $payload->put<Flow>($flow);
+        RunLog $chosen = Pool::chosen($n->item->log, $run, $this->log);
+        nexus::Logger $log = $chosen->logger($payload->log);
+        $payload->useLog($log);
+        time::instant $start = time::instant::now();
+        function<status<Failure>(nexus::Payload&)> $handle = $n->item->handle;
+        status<Failure> $status = $handle($payload);
+        float64 $ms = ($start->elapsed()->as_micros() as float64) / 1000.0;
+        $o = Outcome($status, $flow->children, $ms, $log);
+        if ($fed != null) {
+            Fed $f = guard $fed;
+            function<void(const Outcome&)> $report = $f->report;
+            $report($o);
+            thread::locked<Board> $b = $this->board->lock();
+            $b->value->finish($n->id);
+        } else {
+            $this->settle($n, $o);
+        }
+        if ($chosen->owns()) {
+            $log->flush();
+        }
+        nexus::Kernel::finish($payload);
+        $this->wake->notify_all();
+    }
+
+    /**
+     * Settles local task `$n` after `$o`, logging how it went on the run's log.
+     */
+    internal function settle(const Node& $n, Outcome $o) : void
+    {
+        nexus::Logger $log = $o->log;
+        time::timestamp $now = $this->clock->now();
+        Settle $s = Settle::of($o->status, $n->attempt, $n->tries(), $now);
+        $s->tell($log, $n->attempt, $o->ms, $now);
+        array<string> $names = guard $this->codecs->spawned($o->spawned, $log) else {
+            array<string> $none = [];
+            $this->settled($n, $s, nexus::work::Pipeline(), $none, $log);
+            return;
+        };
+        $this->settled($n, $s, $o->spawned, $names, $log);
+    }
+
+    internal function settled(const Node& $n, const Settle& $s, Pipeline $spawned, const array<string>& $names, nexus::Logger $log) : void
+    {
+        array<string> $dropped = [];
+        {
+            thread::locked<Board> $b = $this->board->lock();
+            $dropped = $b->value->settle($n->id, $s, $spawned, $names);
+        }
+        if ($dropped->count() > 1) {
+            $dropped->remove(0);
+            $log->warn('tasks waiting for it were dropped', ['tasks' => str::join($dropped, ', ')]);
+        }
+    }
+
+    internal function loop() : void
+    {
+        $this->alive->add(1);
+        while (true) {
+            Node? $next = null;
+            {
+                thread::locked<Board> $b = $this->board->lock();
+                while (!$this->halt->raised()) {
+                    $next = $b->value->take();
+                    if ($next != null) {
+                        break;
+                    }
+                    $this->wake->wait($b);
+                }
+            }
+            Node $n = guard $next else {
+                break;
+            };
+            $this->run(mv $n);
+        }
+        $this->alive->add(-1);
+    }
+
+    /**
+     * Brings retries back when they are due and drops tasks that waited past their expiry, until
+     * the pool stops.
+     */
+    internal function tick() : void
+    {
+        while (!$this->halt->raised()) {
+            array<string> $gone = [];
+            bool $readied = false;
+            {
+                thread::locked<Board> $b = $this->board->lock();
+                usize $before = $b->value->ready->count();
+                $gone = $b->value->due($this->clock->now());
+                $readied = $b->value->ready->count() > $before;
+            }
+            // a failure may release the tasks waiting for it, so an expiry wakes the workers too
+            if ($readied || !$gone->empty()) {
+                $this->wake->notify_all();
+            }
+            if (!$gone->empty()) {
+                nexus::Kernel? $k = $this->kernel;
+                if ($k != null) {
+                    nexus::Kernel $kernel = guard $k;
+                    $kernel->log->warn('tasks expired before they ran', ['lane' => $this->lane, 'tasks' => str::join($gone, ', ')]);
+                }
+            }
+            Pool::nap($this->halt, time::duration::millis(20));
+        }
+    }
+
+    internal function keep(thread::handle $t) : void
+    {
+        thread::locked<array<thread::handle>> $held = $this->handles->lock();
+        $held->value[] = $t;
+    }
+
+    /**
+     * Where a run logs: the task's `$own` choice, or the queue's.
+     */
+    internal static function chosen(function<RunLog(const Run&)> $own, const Run& $run, function<RunLog(const Run&)> $queue) : RunLog
+    {
+        RunLog $mine = $own($run);
+        return match ($mine) {
+            RunLog::inherit => $queue($run),
+            else => $mine,
+        };
+    }
+
+    /**
+     * Sleeps `$d`, waking early when `$halt` is raised.
+     */
+    public static function nap(nexus::Flag $halt, time::duration $d) : void
+    {
+        Pool::nap($d, function[$halt]() : bool {
+            return $halt->raised();
+        });
+    }
+
+    /**
+     * Sleeps `$d`, waking early when `$woken` answers true.
+     */
+    public static function nap(time::duration $d, function<bool()> $woken) : void
+    {
+        int64 $left = $d->as_millis();
+        while ($left > 0 && !$woken()) {
+            int64 $slice = 10;
+            if ($left < $slice) {
+                $slice = $left;
+            }
+            thread::sleep($slice as int32);
+            $left = $left - $slice;
+        }
+    }
+}

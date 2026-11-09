@@ -303,48 +303,48 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
 {
     $s = nexus::Settings($env);
     string $okC0Issuer = '';
-    $vC0Issuer = $s->string('OAUTH_ISSUER', required: false);
+    $vC0Issuer = $s->string('NEXUS_OAUTH_ISSUER', required: false);
     if ($vC0Issuer != null) {
         $xC0Issuer = guard $vC0Issuer;
         $okC0Issuer = mv $xC0Issuer;
     }
-    string $okC0Consent = '/oauth/consent';
-    $vC0Consent = $s->string('OAUTH_CONSENT', required: false);
-    if ($vC0Consent != null) {
-        $xC0Consent = guard $vC0Consent;
-        $okC0Consent = mv $xC0Consent;
-    }
     std::time::duration $okC0Access = std::time::duration::hours(1);
-    $vC0Access = $s->duration('OAUTH_ACCESS', required: false);
+    $vC0Access = $s->duration('NEXUS_OAUTH_ACCESS', required: false);
     if ($vC0Access != null) {
         $xC0Access = guard $vC0Access;
         $okC0Access = mv $xC0Access;
     }
     std::time::duration $okC0Refresh = std::time::duration::hours(720);
-    $vC0Refresh = $s->duration('OAUTH_REFRESH', required: false);
+    $vC0Refresh = $s->duration('NEXUS_OAUTH_REFRESH', required: false);
     if ($vC0Refresh != null) {
         $xC0Refresh = guard $vC0Refresh;
         $okC0Refresh = mv $xC0Refresh;
     }
     uint32 $okC0Clients = 1000;
-    uint32? $vC0Clients = $s->uint32('OAUTH_CLIENTS', required: false);
+    uint32? $vC0Clients = $s->uint32('NEXUS_OAUTH_CLIENTS', required: false);
     if ($vC0Clients != null) {
         uint32 $xC0Clients = guard $vC0Clients;
         $okC0Clients = $xC0Clients;
     }
-    string $okC0Scope = 'mcp';
-    $vC0Scope = $s->string('OAUTH_SCOPE', required: false);
-    if ($vC0Scope != null) {
-        $xC0Scope = guard $vC0Scope;
-        $okC0Scope = mv $xC0Scope;
-    }
-    string $okC0Name = '';
-    $vC0Name = $s->string('OAUTH_NAME', required: false);
-    if ($vC0Name != null) {
-        $xC0Name = guard $vC0Name;
-        $okC0Name = mv $xC0Name;
-    }
     try $s->done();
-    $b->param<nexus::oauth::OAuthConfig>(nexus::oauth::OAuthConfig($issuer: mv $okC0Issuer, $consent: mv $okC0Consent, $access: mv $okC0Access, $refresh: mv $okC0Refresh, $clients: $okC0Clients, $scope: mv $okC0Scope, $name: mv $okC0Name));
+    $b->param<nexus::oauth::OAuthConfig>(nexus::oauth::OAuthConfig($issuer: mv $okC0Issuer, $access: mv $okC0Access, $refresh: mv $okC0Refresh, $clients: $okC0Clients));
     return .ok;
+}
+
+/**
+ * Every environment variable the #[nexus::config] structs of module nexus-oauth read.
+ */
+#[nexus::envs: 'nexus-oauth']
+public function envs() : array<nexus::EnvVar>
+{
+    array<nexus::EnvVar> $all = [];
+    string $d0 = '';
+    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_ISSUER', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'The app\'s public origin, like `https://blog.example.com`; empty takes it from each request.', $owner: 'nexus::oauth::OAuthConfig');
+    std::time::duration $d1 = std::time::duration::hours(1);
+    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_ACCESS', $type: 'duration', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How long an access token lasts.', $owner: 'nexus::oauth::OAuthConfig');
+    std::time::duration $d2 = std::time::duration::hours(720);
+    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_REFRESH', $type: 'duration', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'How long a refresh token lasts from its last use.', $owner: 'nexus::oauth::OAuthConfig');
+    uint32 $d3 = 1000;
+    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_CLIENTS', $type: 'uint32', $fallback: nexus::EnvVar::text($d3), $required: false, $secret: false, $doc: 'How many clients are registered at most at once.', $owner: 'nexus::oauth::OAuthConfig');
+    return $all;
 }

@@ -41,12 +41,15 @@ public class MigrateCommand : nexus::Command
         return $out;
     }
 
-    public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
+    public function run(nexus::Invocation& $in) : int32
     {
         if ($this->verb->destructive() && $in->mode == nexus::Mode::prod && !$in->flag('force')) {
             io::eprintln("{$this->verb->command()}: this undoes schema changes in prod; add --force");
             return 1;
         }
+        nexus::Kernel $kernel = guard $in->kernel() else {
+            return 1;
+        };
         $db = $kernel->services->get<carbon::DB>();
         $m = carbon::Migrator($db, $this->steps, $this->grammar);
         if ($this->verb == MigrateVerb::status) {

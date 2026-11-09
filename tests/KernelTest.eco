@@ -241,7 +241,7 @@ test app_url_gives_absolute_links
 {
     array<Extension> $exts = [KTwiceApp()];
     array<ConfigTable> $configs = [];
-    map<string, string> $vars = ['APP_URL' => 'https://example.com/api/'];
+    map<string, string> $vars = ['NEXUS_APP_URL' => 'https://example.com/api/'];
     $tables = Tables($configs: $configs, $generated: kGenerated());
     Kernel $k = guard Kernel::boot($exts, .testing, .silent(), Env(fixed: $vars), tables: $tables);
     expect($k->router->absoluteUrl<KHello>(['name' => 'ann'])->text())->is('https://example.com/api/hello/ann');
@@ -252,11 +252,11 @@ test a_bad_app_url_stops_the_boot
     array<Extension> $exts = [KTwiceApp()];
     array<ConfigTable> $configs = [];
     $tables = Tables($configs: $configs, $generated: kGenerated());
-    map<string, string> $broken = ['APP_URL' => 'https://exa mple.com'];
+    map<string, string> $broken = ['NEXUS_APP_URL' => 'https://exa mple.com'];
     result<Kernel, BootError> $r = Kernel::boot($exts, .testing, .silent(), Env(fixed: $broken), tables: $tables);
     expect($r)->fails();
-    expect($r->failure()->lines()[0])->has('APP_URL');
-    map<string, string> $relative = ['APP_URL' => '/api'];
+    expect($r->failure()->lines()[0])->has('NEXUS_APP_URL');
+    map<string, string> $relative = ['NEXUS_APP_URL' => '/api'];
     result<Kernel, BootError> $again = Kernel::boot($exts, .testing, .silent(), Env(fixed: $relative), tables: $tables);
     expect($again)->fails();
     expect($again->failure()->lines()[0])->has('not absolute');

@@ -1,9 +1,22 @@
 namespace nexus;
 
+use std::io;
+
 /**
  * What a `Command` was run with: the values of its options, the flags and lists given, the
- * positional words, the mode the kernel booted in, and where to print (libcommand's terminal
- * output; a buffer in tests).
+ * positional words, the mode, the environment, and where to print (libcommand's terminal output; a
+ * buffer in tests). The app boots only when the command asks for it with `kernel()`, so a command
+ * that needs nothing of it, like `env`, runs without a database:
+ *
+ * ```echo
+ * public function run(nexus::Invocation& $in) : int32
+ * {
+ *     nexus::Kernel $k = guard $in->kernel() else {
+ *         return 1;
+ *     };
+ *     ...
+ * }
+ * ```
  */
 public struct Invocation
 {
@@ -15,10 +28,85 @@ public struct Invocation
     public array<string> $positionals = [];
     public command::CLIContext $out;
 
+    /**
+     * The environment the app boots with: the process's over the `--env-file`.
+     */
+    public Env $env;
+
+    /**
+     * What boot problems are prefixed with, the program's name.
+     */
+    internal string $program = 'nexus';
+    internal function<result<Kernel, BootError>()>? $boot = null;
+    internal Command? $command = null;
+    internal Kernel? $booted = null;
+
     public constructor(Mode $mode)
     {
         $this->mode = $mode;
         $this->out = .plain();
+        $this->env = Env();
+    }
+
+    /**
+     * The booted app: booted the first time a command asks, the same one after. Null, with the
+     * reason printed, when it does not boot or does not bind the command being run.
+     */
+    public function kernel() : Kernel?
+    {
+        if ($this->booted != null) {
+            return $this->booted;
+        }
+        function<result<Kernel, BootError>()> $boot = guard $this->boot else {
+            io::eprintln("{$this->program}: there is no app to boot here");
+            return null;
+        };
+        Kernel $k = guard $boot() else ($e) {
+            foreach ($e->lines() as const &$line) {
+                io::eprintln("{$this->program}: {$line}");
+            }
+            return null;
+        };
+        $this->booted = $k;
+        if ($this->command != null) {
+            Command $cmd = guard $this->command;
+            if (!Invocation::bound($this->program, $cmd, $k)) {
+                return null;
+            }
+        }
+        return $k;
+    }
+
+    /**
+     * Whether `$cmd` has its binding in `$k`; says what to do on stderr when not.
+     */
+    internal static function bound(const string& $program, const Command& $cmd, Kernel $k) : bool
+    {
+        if ($cmd->bound($k->services)) {
+            return true;
+        }
+        io::eprintln("{$program}: command {$cmd->name()} has no binding; bind its class in an extension's services");
+        return false;
+    }
+
+    /**
+     * Runs the command on `$k`, booted already, as a test does.
+     */
+    public function attach(Kernel $k) : void
+    {
+        $this->booted = $k;
+    }
+
+    /**
+     * Shuts the app down when the command booted it.
+     */
+    internal function finish() : void
+    {
+        if ($this->booted != null) {
+            Kernel $k = guard $this->booted;
+            $k->shutdown();
+            $this->booted = null;
+        }
     }
 
     /**

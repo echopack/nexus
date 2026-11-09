@@ -4,7 +4,7 @@ use std::time;
 
 /**
  * Dynamic client registration (RFC 7591). Anyone may register, since registering grants nothing:
- * ten tries per address in fifteen minutes, at most `OAUTH_CLIENTS` clients, and clients never used
+ * ten tries per address in fifteen minutes, at most `NEXUS_OAUTH_CLIENTS` clients, and clients never used
  * are swept after an hour.
  */
 public class Register : nexus::Action

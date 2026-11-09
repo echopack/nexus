@@ -1,0 +1,396 @@
+namespace nexus::work;
+
+use std::thread;
+use std::time;
+
+/**
+ * A store in memory, with everything a database store does: for tests, and for one process that
+ * wants delays and pipelines but may lose what waits when it stops. Two feeders on one memory store
+ * behave like two servers on one database.
+ */
+#[atomic]
+public class MemoryStore : Store
+{
+    private thread::mutex<Batch> $all = thread::mutex<Batch>(Batch());
+
+    public function push(const Batch& $batch) : result<Pushed, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        map<string, bool> $mine = map<string, bool>();
+        foreach ($batch->tasks as const &$t) {
+            foreach ($held->value->tasks as const &$s) {
+                if (!$t->key->empty() && $s->key == $t->key && $s->lane == $t->lane) {
+                    return .ok(.skipped);
+                }
+                if ($t->hold == Hold::unique && $s->hold == Hold::unique && $s->holdKey == $t->holdKey && $s->live()) {
+                    return .ok(.skipped);
+                }
+            }
+            if ($t->hold == Hold::unique) {
+                if ($mine->has($t->holdKey)) {
+                    return .ok(.skipped);
+                }
+                $mine[$t->holdKey] = true;
+            }
+        }
+        foreach ($batch->tasks as const &$t) {
+            $held->value->tasks[] = $t;
+        }
+        foreach ($batch->edges as const &$e) {
+            $held->value->edges[] = $e;
+        }
+        return .ok(.queued($batch->tasks[0]->id));
+    }
+
+    public function claim(const string& $lane, time::timestamp $now, time::timestamp $until, uint32 $max) : result<array<StoredTask>, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        map<string, bool> $keys = map<string, bool>();
+        foreach ($held->value->tasks as const &$t) {
+            if ($t->hold == Hold::running && $t->held($now)) {
+                $keys[$t->holdKey] = true;
+            }
+        }
+        array<StoredTask> $out = [];
+        while (($out->count() as uint32) < $max) {
+            usize? $best = null;
+            foreach ($held->value->tasks as $i => const &$t) {
+                if ($t->lane != $lane || !$t->due($now)) {
+                    continue;
+                }
+                if ($t->hold == Hold::running && $keys->has($t->holdKey)) {
+                    continue;
+                }
+                if ($best == null) {
+                    $best = $i;
+                    continue;
+                }
+                usize $b = guard $best;
+                StoredTask $o = $held->value->tasks[$b];
+                if ($t->priority > $o->priority || ($t->priority == $o->priority && $t->availableAt < $o->availableAt)) {
+                    $best = $i;
+                }
+            }
+            usize $at = guard $best else {
+                break;
+            };
+            StoredTask& $taken = $held->value->tasks[$at];
+            $taken->attempts = $taken->attempts + 1;
+            $taken->status = .running;
+            $taken->reservedUntil = $until;
+            if ($taken->hold == Hold::running) {
+                $keys[$taken->holdKey] = true;
+            }
+            StoredTask $copy = $taken;
+            $out[] = $copy;
+        }
+        return .ok($out);
+    }
+
+    public function extend(const StoredTask& $task, time::timestamp $until) : status<nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        usize $i = guard MemoryStore::claimed($held->value->tasks, $task) else {
+            return .ok;
+        };
+        $held->value->tasks[$i]->reservedUntil = $until;
+        return .ok;
+    }
+
+    public function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : status<nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        usize $i = guard MemoryStore::claimed($held->value->tasks, $task) else {
+            return .ok;
+        };
+        StoredTask& $t = $held->value->tasks[$i];
+        $t->status = .done;
+        $t->doneAt = $now;
+        $t->reservedUntil = null;
+        bool $released = $t->released;
+        array<string> $after = MemoryStore::waitingFor($held->value->edges, $task->id);
+        foreach ($spawned->tasks as const &$s) {
+            StoredTask $child = $s;
+            $child->parent = $task->id;
+            $held->value->tasks[] = mv $child;
+            foreach ($after as const &$a) {
+                $held->value->edges[] = Edge($a, $s->id);
+            }
+        }
+        foreach ($spawned->edges as const &$e) {
+            $held->value->edges[] = $e;
+        }
+        int64 $more = $spawned->tasks->count() as int64;
+        if ($released) {
+            $more = $more + 1;
+        }
+        MemoryStore::shift($held->value->tasks, $after, $more - 1);
+        return .ok;
+    }
+
+    public function retry(const StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        usize $i = guard MemoryStore::claimed($held->value->tasks, $task) else {
+            return .ok;
+        };
+        StoredTask& $t = $held->value->tasks[$i];
+        $t->status = .waiting;
+        $t->availableAt = $at;
+        $t->reservedUntil = null;
+        $t->error = $error;
+        return .ok;
+    }
+
+    public function fail(const StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        usize $i = guard MemoryStore::claimed($held->value->tasks, $task) else {
+            return .ok;
+        };
+        MemoryStore::failAt($held->value, $i, $now, $error);
+        return .ok;
+    }
+
+    public function upstream(const string& $id) : result<array<Upstream>, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        array<Upstream> $out = [];
+        foreach ($held->value->edges as const &$e) {
+            if ($e->task != $id) {
+                continue;
+            }
+            foreach ($held->value->tasks as const &$t) {
+                if ($t->id == $e->after) {
+                    $out[] = Upstream($t->id, $t->name, $failed: $t->status == TaskStatus::failed, $error: $t->error);
+                }
+            }
+        }
+        return .ok($out);
+    }
+
+    public function failed(const string& $lane, uint64 $limit) : result<array<StoredTask>, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        array<StoredTask> $out = [];
+        foreach ($held->value->tasks as const &$t) {
+            if ($t->lane == $lane && $t->status == TaskStatus::failed) {
+                $out[] = $t;
+            }
+        }
+        $out->sort(by: function(const StoredTask& $a, const StoredTask& $b) : ordering {
+            return MemoryStore::millis($b->failedAt) <=> MemoryStore::millis($a->failedAt);
+        });
+        while (($out->count() as uint64) > $limit) {
+            $out->pop();
+        }
+        return .ok($out);
+    }
+
+    public function again(const string& $id, time::timestamp $now) : result<Requeued, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        foreach ($held->value->tasks as &$t) {
+            if ($t->id == $id && $t->status == TaskStatus::failed) {
+                $t->status = .waiting;
+                $t->failedAt = null;
+                $t->expiresAt = null;
+                $t->attempts = 0;
+                $t->availableAt = $now;
+                return .ok(.sent);
+            }
+        }
+        return .ok(.missing);
+    }
+
+    public function cancel(const string& $id, time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        array<string> $ids = [$id];
+        uint64 $n = 0;
+        while (!$ids->empty()) {
+            string $at = $ids[$ids->count() - 1];
+            $ids->pop();
+            foreach ($held->value->tasks as &$t) {
+                if ($t->id == $at && $t->status == TaskStatus::waiting) {
+                    $t->status = .cancelled;
+                    $t->doneAt = $now;
+                    $n = $n + 1;
+                    foreach (MemoryStore::waitingFor($held->value->edges, $at) as const &$next) {
+                        $ids[] = $next;
+                    }
+                }
+            }
+        }
+        return .ok($n);
+    }
+
+    public function graph(const string& $id, uint32 $depth) : result<Graph, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        map<string, bool> $seen = [$id => true];
+        array<string> $frontier = [$id];
+        uint32 $hops = 0;
+        while (!$frontier->empty() && $hops < $depth) {
+            array<string> $next = [];
+            foreach ($held->value->edges as const &$e) {
+                foreach ($frontier as const &$f) {
+                    if ($e->task == $f && !$seen->has($e->after)) {
+                        $seen[$e->after] = true;
+                        $next[] = $e->after;
+                    }
+                    if ($e->after == $f && !$seen->has($e->task)) {
+                        $seen[$e->task] = true;
+                        $next[] = $e->task;
+                    }
+                }
+            }
+            $frontier = mv $next;
+            $hops = $hops + 1;
+        }
+        Graph $g = Graph();
+        foreach ($held->value->tasks as const &$t) {
+            if ($seen->has($t->id)) {
+                $g->tasks[] = $t;
+            }
+        }
+        foreach ($held->value->edges as const &$e) {
+            if ($seen->has($e->task) && $seen->has($e->after)) {
+                $g->edges[] = $e;
+            }
+        }
+        return .ok($g);
+    }
+
+    public function prune(time::timestamp $now, time::timestamp $before) : result<uint64, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        usize $n = $held->value->tasks->count();
+        for (usize $i = 0; $i < $n; $i++) {
+            StoredTask $t = $held->value->tasks[$i];
+            if ($t->status == TaskStatus::waiting && $t->expired($now)) {
+                MemoryStore::failAt($held->value, $i, $now, 'expired before it ran');
+            }
+        }
+        array<StoredTask> $kept = [];
+        map<string, bool> $gone = map<string, bool>();
+        foreach ($held->value->tasks as const &$t) {
+            bool $finished = $t->status == TaskStatus::done || $t->status == TaskStatus::cancelled;
+            bool $old = false;
+            if ($finished && $t->doneAt != null) {
+                time::timestamp $at = guard $t->doneAt;
+                $old = $at < $before;
+            }
+            if ($old) {
+                $gone[$t->id] = true;
+            } else {
+                $kept[] = $t;
+            }
+        }
+        array<Edge> $edges = [];
+        foreach ($held->value->edges as const &$e) {
+            if (!$gone->has($e->task) && !$gone->has($e->after)) {
+                $edges[] = $e;
+            }
+        }
+        $held->value->tasks = mv $kept;
+        $held->value->edges = mv $edges;
+        return .ok($gone->count() as uint64);
+    }
+
+    public function waiting(const string& $lane) : result<uint64, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        uint64 $n = 0;
+        foreach ($held->value->tasks as const &$t) {
+            if ($t->lane == $lane && $t->live()) {
+                $n = $n + 1;
+            }
+        }
+        return .ok($n);
+    }
+
+    /**
+     * Every task stored, for tests.
+     */
+    public function tasks() : array<StoredTask>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        return $held->value->tasks;
+    }
+
+    /**
+     * Task `$i` failed for good at `$now`: the tasks waiting for it go ahead when it allows failure.
+     */
+    internal static function failAt(Batch& $all, usize $i, time::timestamp $now, const string& $error) : void
+    {
+        StoredTask& $t = $all->tasks[$i];
+        $t->status = .failed;
+        $t->failedAt = $now;
+        $t->reservedUntil = null;
+        $t->error = $error;
+        if ($t->allowFailure && !$t->released) {
+            $t->released = true;
+            string $id = $t->id;
+            array<string> $after = MemoryStore::waitingFor($all->edges, $id);
+            MemoryStore::shift($all->tasks, $after, -1);
+        }
+    }
+
+    /**
+     * The tasks waiting for task `$id`.
+     */
+    internal static function waitingFor(const array<Edge>& $edges, const string& $id) : array<string>
+    {
+        array<string> $out = [];
+        foreach ($edges as const &$e) {
+            if ($e->after == $id) {
+                $out[] = $e->task;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Adds `$by` to what each task of `$ids` waits for.
+     */
+    internal static function shift(array<StoredTask>& $tasks, const array<string>& $ids, int64 $by) : void
+    {
+        if ($by == 0) {
+            return;
+        }
+        foreach ($tasks as &$t) {
+            foreach ($ids as const &$id) {
+                if ($t->id == $id) {
+                    $t->pending = $t->pending + $by;
+                }
+            }
+        }
+    }
+
+    /**
+     * Where `$task` is, while the claim it names still holds.
+     */
+    internal static function claimed(const array<StoredTask>& $all, const StoredTask& $task) : usize?
+    {
+        foreach ($all as $i => const &$t) {
+            if ($t->id == $task->id) {
+                if ($t->attempts != $task->attempts || $t->status != TaskStatus::running) {
+                    return null;
+                }
+                usize $at = $i;
+                return $at;
+            }
+        }
+        return null;
+    }
+
+    internal static function millis(time::timestamp? $at) : int64
+    {
+        if ($at == null) {
+            return 0;
+        }
+        time::timestamp $t = guard $at;
+        return $t->unix_millis();
+    }
+}

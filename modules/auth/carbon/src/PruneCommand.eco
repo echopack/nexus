@@ -19,8 +19,11 @@ public class PruneCommand : nexus::Command
         return 'delete expired tokens and sessions';
     }
 
-    public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
+    public function run(nexus::Invocation& $in) : int32
     {
+        nexus::Kernel $kernel = guard $in->kernel() else {
+            return 1;
+        };
         carbon::DB $db = $kernel->services->get<carbon::DB>();
         uint64 $tokens = guard PruneCommand::tokens($db) else ($e) {
             io::eprintln("auth:prune: {$e}");

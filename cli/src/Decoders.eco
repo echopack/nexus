@@ -95,7 +95,7 @@ internal function field(Code& $code, const Program& $p, const FieldDecl& $f) : R
     string $text = $f->typeText;
     $bare = types::render(types::bare($f->type));
     $optional = types::optional($f->type);
-    bool $defaulted = $f->hasDefault && $f->defaultText != 'null';
+    bool $defaulted = $f->defaulted();
     bool $required = !$optional && !$f->hasDefault;
     string $req = 'false';
     if ($required) {

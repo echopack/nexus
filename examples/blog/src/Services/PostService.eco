@@ -1,0 +1,122 @@
+namespace Blog::Services;
+
+use Blog::Inputs::{NewPost, PostChanges};
+use Blog::Logs::PostPublished;
+use Blog::Models::{Post, User, UserRepository};
+use Blog::Repositories::PostRepository;
+
+/**
+ * What the blog does with posts, whichever door asks: the HTTP actions, the `posts:*` commands and
+ * the MCP tools all call it, so the rules (who may change a post, what a tag looks like) live here
+ * once.
+ */
+public class PostService
+{
+    private PostRepository $posts;
+    private UserRepository $users;
+    private nexus::Logger $log;
+
+    public constructor(PostRepository $posts, UserRepository $users, nexus::Logger $log)
+    {
+        $this->posts = $posts;
+        $this->users = $users;
+        $this->log = $log;
+    }
+
+    /**
+     * Post `$id` with its author; a 404 when there is none.
+     */
+    public function find(int64 $id) : result<Post, nexus::Problem>
+    {
+        $found = try $this->posts->find()->withAuthor()->get($id);
+        $p = guard $found else {
+            return .error(.notFound('the post'));
+        };
+        return .ok($p);
+    }
+
+    /**
+     * User `$id`, for a door that names the author itself; a 404 when there is none.
+     */
+    public function author(int64 $id) : result<User, nexus::Problem>
+    {
+        $found = try $this->users->find()->get($id);
+        $u = guard $found else {
+            return .error(.notFound("user {$id}"));
+        };
+        return .ok($u);
+    }
+
+    /**
+     * Publishes `$in` by `$author`, its tags cleaned.
+     */
+    public function create(const User& $author, const NewPost& $in) : result<Post, nexus::Problem>
+    {
+        $made = try $this->posts->create(Post($authorId: $author->id, $title: $in->title, $body: $in->body, $tags: PostService::tags($in->tags)));
+        $this->log->emit<PostPublished>($made->id, $author->id, $made->tags->count());
+        return .ok($made);
+    }
+
+    /**
+     * Publishes every one of `$in` by `$author`, all or none.
+     */
+    public function createAll(const User& $author, const array<NewPost>& $in) : result<array<Post>, nexus::Problem>
+    {
+        // the span closes when this returns, and logs `batch closed`
+        $span = $this->log->span('batch', ['posts' => $in->count()]);
+        $repo = $this->posts;
+        int64 $authorId = $author->id;
+        array<NewPost> $all = $in;
+        $made = try $repo->connection()->transaction<array<Post>>(function[$repo, $authorId, $all]() : result<array<Post>, carbon::Error> {
+            $out = arr::room<Post>($all->count());
+            foreach ($all as const &$one) {
+                $p = try $repo->create(Post($authorId: $authorId, $title: $one->title, $body: $one->body, $tags: PostService::tags($one->tags)));
+                $out[] = mv $p;
+            }
+            return .ok($out);
+        });
+        return .ok($made);
+    }
+
+    /**
+     * Changes post `$id` as `$change` says; whatever it leaves out stays. Only its author or an
+     * admin may.
+     */
+    public function update(const User& $me, int64 $id, const PostChanges& $change) : result<Post, nexus::Problem>
+    {
+        $found = try $this->posts->find()->get($id);
+        $p = guard $found else {
+            return .error(.notFound('the post'));
+        };
+        try $p->changeableBy($me);
+        $p->title = $change->title ?? $p->title;
+        $p->body = $change->body ?? $p->body;
+        try $this->posts->save($p);
+        return .ok($p);
+    }
+
+    /**
+     * Tags as the blog keeps them: trimmed, lower case, each once, the empty ones dropped.
+     */
+    public static function tags(const array<string>& $given) : array<string>
+    {
+        array<string> $out = [];
+        foreach ($given as const &$raw) {
+            string $tag = str::lower(str::trim($raw));
+            if ($tag->empty()) {
+                continue;
+            }
+            bool $seen = false;
+            foreach ($out as const &$have) {
+                if ($have == $tag) {
+                    $seen = true;
+                }
+            }
+            if ($seen) {
+                continue;
+            }
+            $out[] = mv $tag;
+        }
+        return $out;
+    }
+}

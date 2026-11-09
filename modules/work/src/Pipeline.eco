@@ -1,0 +1,105 @@
+namespace nexus::work;
+
+/**
+ * Tasks pushed together, each waiting for the ones it names. A task runs once every task it waits
+ * for is done; one that failed for good holds the tasks after it back unless it `allowFailure()`.
+ * A queue takes the whole pipeline or none of it.
+ *
+ * ```echo
+ * nexus::work::Pipeline $p = nexus::work::Pipeline();
+ * $fetch = $p->add(FetchVideo($id: 7));
+ * $probe = $p->add(Probe($id: 7), after: [$fetch]);
+ * $p->add(Publish($id: 7), after: [$probe]);
+ * $this->jobs->push($p);
+ * ```
+ *
+ * A task can only wait for one added before it, so a pipeline has no cycles and its order is one
+ * the tasks can run in.
+ */
+#[atomic]
+public class Pipeline
+{
+    internal string $tag;
+    internal array<Item> $items = [];
+    internal array<array<usize>> $after = [];
+
+    /**
+     * The ids of the tasks once pushed, in the order they were added.
+     */
+    internal array<string> $ids = [];
+
+    public constructor()
+    {
+        $this->tag = nexus::Kernel::id();
+    }
+
+    /**
+     * Adds `$task`, to run once every step of `$after` is done.
+     */
+    public function add<T>(T $task, after: array<Step> $after = []) : Step where T : Task
+    {
+        return $this->append(Item::of<T>($task), $after);
+    }
+
+    /**
+     * Adds an item, to run once every step of `$after` is done.
+     */
+    public function append(Item $item, const array<Step>& $after) : Step
+    {
+        array<usize> $waits = [];
+        foreach ($after as const &$s) {
+            if ($s->owner->tag != $this->tag) {
+                die('nexus::work::Pipeline: a task was told to wait for a step of another pipeline');
+            }
+            $waits[] = $s->index;
+        }
+        $this->items[] = mv $item;
+        $this->after[] = mv $waits;
+        return Step($this, $this->items->count() - 1);
+    }
+
+    public const function count() : usize
+    {
+        return $this->items->count();
+    }
+
+    public const function empty() : bool
+    {
+        return $this->items->empty();
+    }
+
+    /**
+     * The ids of the tasks task `$i` waits for, once assigned.
+     */
+    internal const function waits(usize $i) : array<string>
+    {
+        array<string> $out = arr::room<string>($this->after[$i]->count());
+        foreach ($this->after[$i] as $j) {
+            $out[] = $this->ids[$j];
+        }
+        return $out;
+    }
+
+    /**
+     * Gives every task a fresh id, for a push.
+     */
+    internal function assign() : void
+    {
+        array<string> $ids = arr::room<string>($this->items->count());
+        foreach ($this->items as const &$i) {
+            $ids[] = nexus::Kernel::id();
+        }
+        $this->ids = mv $ids;
+    }
+
+    /**
+     * A pipeline of one task.
+     */
+    internal static function one(Item $item) : Pipeline
+    {
+        $p = nexus::work::Pipeline();
+        array<Step> $none = [];
+        $p->append(mv $item, $none);
+        return $p;
+    }
+}

@@ -1,0 +1,155 @@
+namespace nexus;
+
+/**
+ * What the `env` command prints: every environment variable the app reads, the core's own first,
+ * then each module's config structs in the order their tables were found. A value is never
+ * printed, only whether it is set.
+ *
+ * ```
+ * NAME                TYPE      DEFAULT       SET    DESCRIPTION
+ * NEXUS_APP_URL       string    -             unset  The public origin absolute links are built on.
+ * NEXUS_WORK_THREADS  uint32    2             set    Worker threads of each async queue ...
+ * ```
+ */
+public struct EnvList
+{
+    /**
+     * The defaults of the core's variables, shared with the code that reads them.
+     */
+    public const string MODE = 'dev';
+    public const string LISTEN = '127.0.0.1:8080';
+    public const string LOG = 'info';
+    public const string LOG_ROTATE = 'never';
+    public const string LOG_KEEP = '5';
+    public const string LOG_OVERFLOW = 'block';
+
+    /**
+     * The variables the core reads itself, outside any config struct.
+     */
+    public static function core() : array<EnvVar>
+    {
+        array<EnvVar> $all = [
+            EnvVar($name: 'NEXUS_MODE', $type: 'string', $fallback: EnvList::MODE, $doc: 'What the process is for: dev, test or prod; --mode wins.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LISTEN', $type: 'string', $fallback: EnvList::LISTEN, $doc: 'Where serve listens; --listen wins.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_APP_URL', $type: 'string', $doc: 'The public origin absolute links are built on, like https://blog.example.com.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LOG', $type: 'string', $fallback: EnvList::LOG, $doc: 'The lowest log level written.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LOG_FORMAT', $type: 'string', $doc: 'pretty, logfmt or json; pretty in dev, json in prod and in a log file.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LOG_FILE', $type: 'string', $doc: 'Also append the log to this file.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LOG_ROTATE', $type: 'string', $fallback: EnvList::LOG_ROTATE, $doc: 'When the log file rotates: never, daily or a size like 64mb.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LOG_KEEP', $type: 'uint32', $fallback: EnvList::LOG_KEEP, $doc: 'How many rotated log files are kept.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LOG_ASYNC', $type: 'uint32', $doc: 'A queue size; each log sink then gets a writer thread.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LOG_OVERFLOW', $type: 'string', $fallback: EnvList::LOG_OVERFLOW, $doc: 'What a full log queue does: block or drop.', $owner: 'nexus'),
+        ];
+        return $all;
+    }
+
+    /**
+     * The core's variables, then every module's, each module's sorted by name.
+     */
+    public static function all(const array<EnvTable>& $tables) : array<EnvVar>
+    {
+        array<EnvVar> $out = EnvList::core();
+        foreach ($tables as const &$t) {
+            function<array<EnvVar>()> $list = $t->call;
+            array<EnvVar> $vars = $list();
+            $vars->sort(key: (const EnvVar& $v) : string => $v->name);
+            foreach ($vars as const &$v) {
+                $out[] = $v;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * One line per variable: name, type, default (`required` when there is none to fall back on,
+     * `-` when unset means empty), whether `$env` has it, and what it is for.
+     */
+    public static function table(const array<EnvVar>& $vars, const Env& $env) : string
+    {
+        usize $name = 4;
+        usize $type = 4;
+        usize $fallback = 7;
+        foreach ($vars as const &$v) {
+            $name = EnvList::wider($name, $v->name);
+            $type = EnvList::wider($type, $v->type);
+            $fallback = EnvList::wider($fallback, EnvList::fallback($v));
+        }
+        string $out = '';
+        $out->append(EnvList::row(['NAME', 'TYPE', 'DEFAULT', 'SET', 'DESCRIPTION'], [$name, $type, $fallback, 5]));
+        foreach ($vars as const &$v) {
+            string $set = 'unset';
+            if ($env->get($v->name) != null) {
+                $set = 'set';
+            }
+            $out->append(EnvList::row([$v->name, $v->type, EnvList::fallback($v), $set, $v->doc], [$name, $type, $fallback, 5]));
+        }
+        return $out;
+    }
+
+    /**
+     * A `.env` to start from: each variable under its description, commented out with its default
+     * unless it is required or secret, which are left to fill in.
+     */
+    public static function dotenv(const array<EnvVar>& $vars) : string
+    {
+        string $out = '';
+        string $owner = '';
+        foreach ($vars as const &$v) {
+            if ($v->owner != $owner) {
+                if (!$out->empty()) {
+                    $out->append("\n");
+                }
+                $out->append("# {$v->owner}\n");
+                $owner = $v->owner;
+            }
+            if (!$v->doc->empty()) {
+                $out->append("# {$v->doc}\n");
+            }
+            if ($v->required || $v->secret) {
+                $out->append("{$v->name}=\n");
+            } else {
+                $out->append("# {$v->name}={$v->fallback}\n");
+            }
+        }
+        return $out;
+    }
+
+    internal static function fallback(const EnvVar& $v) : string
+    {
+        if ($v->required) {
+            return 'required';
+        }
+        if ($v->fallback->empty()) {
+            return '-';
+        }
+        return $v->fallback;
+    }
+
+    internal static function wider(usize $width, const string& $text) : usize
+    {
+        if ($text->size() > $width) {
+            return $text->size();
+        }
+        return $width;
+    }
+
+    /**
+     * `$cells` padded to `$widths`, two spaces apart; the last cell is not padded.
+     */
+    internal static function row(const array<string>& $cells, const array<usize>& $widths) : string
+    {
+        string $out = '';
+        usize $i = 0;
+        while ($i < $cells->count()) {
+            bool $more = $i + 1 < $cells->count() && !$cells[$i + 1]->empty();
+            if ($more && $i < $widths->count()) {
+                $out->append(str::rpad($cells[$i], $widths[$i] + 2, 32));
+            } else {
+                $out->append($cells[$i]);
+            }
+            $i = $i + 1;
+        }
+        $out->append("\n");
+        return $out;
+    }
+}

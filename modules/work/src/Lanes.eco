@@ -1,0 +1,105 @@
+namespace nexus::work;
+
+/**
+ * Every queue the app bound, by lane name: the async ones with their pools, the distributed ones
+ * with how they reach their store. Filled while the app wires, read afterwards.
+ */
+#[atomic]
+public class Lanes
+{
+    internal ordered_map<string, Pool> $pools = ordered_map<string, Pool>();
+    internal ordered_map<string, Distributed> $stores = ordered_map<string, Distributed>();
+    internal array<Feeder> $feeders = [];
+
+    /**
+     * Adds async lane `$p`; a lane name taken already is refused.
+     */
+    public function async(Pool $p) : status<string>
+    {
+        if ($this->taken($p->lane)) {
+            return .error("{$p->lane}: a lane of that name is bound already");
+        }
+        $this->pools[$p->lane] = $p;
+        return .ok;
+    }
+
+    /**
+     * Adds distributed lane `$d`; a lane name taken already is refused.
+     */
+    public function distributed(Distributed $d) : status<string>
+    {
+        if ($this->taken($d->lane)) {
+            return .error("{$d->lane}: a lane of that name is bound already");
+        }
+        $this->stores[$d->lane] = $d;
+        return .ok;
+    }
+
+    public const function pool(const string& $name) : Pool?
+    {
+        if (!$this->pools->has($name)) {
+            return null;
+        }
+        return $this->pools->get($name);
+    }
+
+    public const function store(const string& $name) : Distributed?
+    {
+        if (!$this->stores->has($name)) {
+            return null;
+        }
+        return $this->stores->get($name);
+    }
+
+    public const function pools() : array<Pool>
+    {
+        array<Pool> $out = [];
+        foreach ($this->pools as $name => const &$p) {
+            $out[] = $p;
+        }
+        return $out;
+    }
+
+    public const function stores() : array<Distributed>
+    {
+        array<Distributed> $out = [];
+        foreach ($this->stores as $name => const &$d) {
+            $out[] = $d;
+        }
+        return $out;
+    }
+
+    /**
+     * The distributed lane a command works on: the one named, or the only one bound.
+     */
+    public const function pick(const string& $named) : result<Distributed, string>
+    {
+        if (!$named->empty()) {
+            Distributed $d = guard $this->store($named) else {
+                return .error("no distributed queue on lane {$named}; bound: {$this->listed()}");
+            };
+            return .ok($d);
+        }
+        if ($this->stores->empty()) {
+            return .error('no distributed queue is bound');
+        }
+        if ($this->stores->count() > 1) {
+            return .error("pass --queue <lane>, one of {$this->listed()}");
+        }
+        return .ok($this->stores()[0]);
+    }
+
+    internal const function listed() : string
+    {
+        array<string> $names = [];
+        foreach ($this->stores as $name => const &$d) {
+            $names[] = $name;
+        }
+        return str::join($names, ', ');
+    }
+
+    internal const function taken(const string& $name) : bool
+    {
+        return $this->pools->has($name) || $this->stores->has($name);
+    }
+}

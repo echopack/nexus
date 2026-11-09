@@ -1,0 +1,32 @@
+namespace Blog::Actions::Posts;
+
+use Blog::Inputs::NewPost;
+use Blog::Services::PostService;
+use Blog::Transformers::PostTransformer;
+use Blog::Types::Caller;
+
+/**
+ * Publishes a post by whoever is signed in.
+ */
+#[nexus::answers: { response: "Blog::Transformers::PostTransformer" }]
+#[nexus::through: ["Blog::Middleware::RequireUser"]]
+public class CreatePost : nexus::Action
+{
+    private PostService $posts;
+    private PostTransformer $transformer;
+
+    public constructor(PostService $posts, PostTransformer $transformer)
+    {
+        $this->posts = $posts;
+        $this->transformer = $transformer;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Body<NewPost> $in) : result<nexus::Response, nexus::Problem>
+    {
+        $me = try $payload->state<Caller>();
+        // checked before the write: a bad ?include= changes nothing
+        $inc = try $this->transformer->requestedIncludes($payload);
+        $made = try $this->posts->create($me->user, $in->value);
+        return .ok($this->transformer->createResponse($payload, $made, mv $inc, status: 201));
+    }
+}
