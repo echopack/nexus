@@ -1,10 +1,9 @@
 namespace nexus::auth;
 
 /**
- * A bearer token, `<prefix>_<id>_<secret>`: the app's prefix, 12 hex to
- * find the record and 64 hex of secret. The store keeps the sha256 of the
- * secret, never the secret, and compares it in constant time; tokens are
- * long and random, so a fast hash is enough for every request.
+ * A bearer token, `<prefix>_<id>_<secret>`: the app's prefix, 12 hex to find the record and 64 hex
+ * of secret. The store keeps the sha256 of the secret, never the secret, and compares it in
+ * constant time; tokens are long and random, so a fast hash is enough for every request.
  */
 public struct Token
 {
@@ -20,11 +19,13 @@ public struct Token
     }
 
     /**
-     * A fresh token with `$prefix`.
+     * A fresh token with `$prefix`: a random id and secret.
      */
-    public static function mint(const string& $prefix) : Token
+    public constructor(fresh: const string& $prefix)
     {
-        return Token($prefix, Secrets::hex(6), Secrets::hex(32));
+        $this->prefix = $prefix;
+        $this->id = Secrets::hex(6);
+        $this->secret = Secrets::hex(32);
     }
 
     /**

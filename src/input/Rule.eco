@@ -1,13 +1,12 @@
 namespace nexus;
 
 /**
- * A rule as a class, for what a field rule cannot say: it needs a service
- * (`unique` against the users table) or more than one field. Name it from
- * the input with `#[nexus::rule: { check: 'blog::UniqueEmail' }]`: on a
- * field, `T` is the field's type and the rule runs once the field's own
- * rules passed; on the struct, `T` is the input and it runs once every
- * field passed. It is built per request from the container, so bind it in
- * the app like an action.
+ * A rule as a class, for what a field rule cannot say: it needs a service (`unique` against the
+ * users table) or more than one field. Name it from the input with
+ * `#[nexus::rule: { check: 'blog::UniqueEmail' }]`: on a field, `T` is the field's type and the
+ * rule runs once the field's own rules passed; on the struct, `T` is the input and it runs once
+ * every field passed. It is built per request from the container, so bind it in the app like an
+ * action.
  *
  * ```echo
  * public class UniqueEmail : nexus::Rule<string>

@@ -8,20 +8,20 @@ use ecotest::expect;
 
 test dotenv_parses_lines
 {
-    map<string, string> $out = map<string, string>();
+    $out = map<string, string>();
     string $text = "# comment\nexport DB_URL=mysql://x\nNAME = 'quoted value'\nEMPTY=\n";
     guard Env::parse('.env', $text, $out);
     expect($out->get('DB_URL'))->is('mysql://x');
     expect($out->get('NAME'))->is('quoted value');
     expect($out->get('EMPTY'))->is('');
-    map<string, string> $bad = map<string, string>();
+    $bad = map<string, string>();
     expect(Env::parse('.env', "JUSTAWORD\n", $bad))->fails();
 }
 
 test settings_read_types_and_collect_errors
 {
     map<string, string> $vars = ['POOL' => '16', 'DEBUG' => 'yes', 'TIMEOUT' => '5m', 'PORT' => '99999', 'RATIO' => 'x'];
-    Settings $s = Settings(Env(fixed: $vars));
+    $s = Settings(Env(fixed: $vars));
     expect($s->uint32('POOL', required: true))->some(16);
     expect($s->bool('DEBUG', required: false))->some(true);
     expect($s->duration('TIMEOUT', required: true))->some(time::duration::mins(5));
@@ -38,13 +38,13 @@ test settings_read_types_and_collect_errors
 test env_overrides_win
 {
     map<string, string> $vars = ['A' => '1'];
-    Env $e = Env(fixed: $vars);
+    $e = Env(fixed: $vars);
     $e->set('A', '2');
     expect($e->get('A'))->some('2');
     expect($e->get('B'))->none();
 }
 
-test duration_grammar
+test durations_read_units_or_bare_seconds
 {
     expect(Settings::span('250ms'))->some(time::duration::millis(250));
     expect(Settings::span('30'))->some(time::duration::secs(30));

@@ -1,8 +1,8 @@
 namespace nexus::mcp;
 
 /**
- * Every tool the app offers, by name, in the order they were added. Built
- * at boot, read by every call.
+ * Every tool the app offers, by name, in the order they were added. Built at boot, read by every
+ * call.
  */
 #[atomic]
 public class Tools
@@ -14,16 +14,16 @@ public class Tools
      */
     public function add(ToolSpec $t) : void
     {
-        $this->byName[$t->name] = $t;
+        string $name = $t->name;
+        $this->byName[$name] = mv $t;
     }
 
     /**
-     * Offers `T` (an action, or a class conforming to `nexus::mcp::Tool`)
-     * as tool `$name`, from what `nexus gen` wrote for it. The title, the
-     * hints and the description are what MCP clients show; the
-     * description defaults to `T`'s docblock. `map` renames arguments,
-     * tool argument to the name `handle()` uses (`['post' => 'id']`). Bind
-     * `T` like any service. A problem stops the boot.
+     * Offers `T` (an action, or a class conforming to `nexus::mcp::Tool`) as tool `$name`, from
+     * what `nexus gen` wrote for it. The title, the hints and the description are what MCP clients
+     * show; the description defaults to `T`'s docblock. `map` renames arguments, tool argument to
+     * the name `handle()` uses (`['post' => 'id']`). Bind `T` like any service. A problem stops the
+     * boot.
      *
      * ```echo
      * nexus::mcp::Tools::offer<ShowPost>($s, name: 'show_post', readOnly: true, map: ['post' => 'id']);
@@ -45,9 +45,8 @@ public class Tools
             $s->fail(.extension('nexus-mcp', "tool {$name}: list nexus::mcp::Extension() before the extension that offers it"));
             return;
         };
-        Offers $offers = $s->get<Offers>();
         string $owner = $s->generated->nameOf<T>('its class');
-        Offer $o = guard $offers->find<T>() else {
+        Offer $o = guard $s->get<Offers>()->find<T>() else {
             $s->fail(.extension('nexus-mcp', "tool {$name}: nexus gen wrote no tool code for {$owner}; offer a nexus::mcp::Tool class, or an action whose path parameters and input fields have distinct names"));
             return;
         };
@@ -62,38 +61,39 @@ public class Tools
         json::Value $schema = $o->schema;
         map<string, string> $renamed = [];
         foreach ($renames as $arg => const &$param) {
-            json::Value? $moved = Tools::rename($schema, $param, $arg);
-            if ($moved == null) {
+            json::Value $next = guard Tools::rename($schema, $param, $arg) else {
                 $s->fail(.extension('nexus-mcp', "tool {$name} maps '{$arg}' to '{$param}', which is no argument of {$owner}, or '{$arg}' is one already"));
                 return;
-            }
-            json::Value $next = guard $moved;
-            $schema = $next;
+            };
+            $schema = mv $next;
             $renamed[$arg] = $param;
         }
         function<bool(container::Container)> $bound = function(container::Container $services) : bool {
             return $services->has<T>();
         };
-        ToolSpec $spec = ToolSpec($name, $o->owner, $schema, $o->call, $bound);
-        $spec->renamed = $renamed;
+        $spec = ToolSpec($name, $o->owner, $schema, $o->call, $bound);
+        $spec->renamed = mv $renamed;
         $spec->through = $o->through;
+        $spec->title = $title;
         $spec->description = $o->description;
         if (!$description->empty()) {
             $spec->description = $description;
         }
         json::Value $hints = json::object();
         if (!$title->empty()) {
-            $spec->title = $title;
             $hints['title'] = json::str($title);
         }
         Tools::hint($hints, 'readOnlyHint', $readOnly);
         Tools::hint($hints, 'destructiveHint', $destructive);
         Tools::hint($hints, 'idempotentHint', $idempotent);
         Tools::hint($hints, 'openWorldHint', $openWorld);
-        $spec->annotations = $hints;
-        $tools->add($spec);
+        $spec->annotations = mv $hints;
+        $tools->add(mv $spec);
     }
 
+    /**
+     * The tool named `$name`, or null.
+     */
     public const function find(const string& $name) : ToolSpec?
     {
         if (!$this->byName->has($name)) {
@@ -103,15 +103,21 @@ public class Tools
         return $t;
     }
 
+    /**
+     * Every tool, in the order they were added.
+     */
     public const function all() : array<ToolSpec>
     {
-        array<ToolSpec> $out = [];
+        array<ToolSpec> $out = arr::room<ToolSpec>($this->byName->count());
         foreach ($this->byName as $name => const &$t) {
             $out[] = $t;
         }
         return $out;
     }
 
+    /**
+     * How many tools there are.
+     */
     public const function count() : usize
     {
         return $this->byName->count();
@@ -127,10 +133,13 @@ public class Tools
             $list[] = $t->entry();
         }
         json::Value $o = json::object();
-        $o['tools'] = $list;
+        $o['tools'] = mv $list;
         return $o;
     }
 
+    /**
+     * Sets hint `$key` on `$hints` when the offer gave it.
+     */
     internal static function hint(json::Value& $hints, const string& $key, bool? $value) : void
     {
         if ($value == null) {
@@ -141,8 +150,8 @@ public class Tools
     }
 
     /**
-     * `$schema` with property `$from` renamed `$to`, in place and in the
-     * required list; null when there is no `$from` or `$to` is taken.
+     * `$schema` with property `$from` renamed `$to`, in place and in the required list; null when
+     * there is no `$from` or `$to` is taken.
      */
     internal static function rename(const json::Value& $schema, const string& $from, const string& $to) : json::Value?
     {
@@ -163,7 +172,7 @@ public class Tools
                         $renamed[$name] = $p;
                     }
                 }
-                $out[$key] = $renamed;
+                $out[$key] = mv $renamed;
             } else if ($key == 'required') {
                 json::Value $list = json::arr();
                 foreach (($value->asArray() ?? array<json::Value>()) as const &$r) {
@@ -173,7 +182,7 @@ public class Tools
                         $list[] = $r;
                     }
                 }
-                $out[$key] = $list;
+                $out[$key] = mv $list;
             } else {
                 $out[$key] = $value;
             }
@@ -181,6 +190,9 @@ public class Tools
         return $out;
     }
 
+    /**
+     * Whether `$name` is 1 to 64 letters, digits, `_` and `-`.
+     */
     internal static function named(const string& $name) : bool
     {
         if ($name->empty() || $name->size() > 64) {

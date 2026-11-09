@@ -3,28 +3,26 @@ namespace nexus::auth;
 use std::time;
 
 /**
- * Opens, checks and closes signed sessions, on this request's
- * `SessionStore`. A session's secret is the HMAC of its id under the
- * server's key: sent once when the session opens, recomputed for every
- * request, kept nowhere. A request is checked before the store is asked,
- * so a forged one never reaches it.
+ * Opens, checks and closes signed sessions, on this request's `SessionStore`. A session's secret is
+ * the HMAC of its id under the server's key: sent once when the session opens, recomputed for every
+ * request, kept nowhere. A request is checked before the store is asked, so a forged one never
+ * reaches it.
  *
- * A signature binds the method, target, time and body, so nothing in a
- * captured request can be changed; the same request can still be sent
- * again within its window. Writes that must happen once take an
- * idempotency key of their own.
+ * A signature binds the method, target, time and body, so nothing in a captured request can be
+ * changed; the same request can still be sent again within its window. Writes that must happen once
+ * take an idempotency key of their own.
  */
 public class Sessions
 {
     public SessionStore $store;
-    public time::duration $lifetime;
+    public const time::duration $lifetime;
 
     /**
      * How far a request's time may be from the server's, either way.
      */
-    public time::duration $window;
+    public const time::duration $window;
     public calendar::Clock $clock;
-    internal string $key;
+    internal const string $key;
 
     public constructor(SessionStore $store, const string& $key, time::duration $lifetime, time::duration $window, calendar::Clock $clock)
     {
@@ -38,15 +36,13 @@ public class Sessions
     /**
      * A new session for `$subject`, with `$scopes` (none means all).
      */
-    public function open(const string& $subject, array<string> $scopes = array<string>()) : result<Opened, nexus::Problem>
+    public function open(const string& $subject, const array<string>& $scopes = array<string>()) : result<Opened, nexus::Problem>
     {
         string $id = Secrets::hex(16);
         time::timestamp $now = $this->clock->now();
-        StoredSession $s = StoredSession($id: $id, $subject: $subject, $scopes: $scopes, $createdAt: $now, $expiresAt: $now + $this->lifetime);
-        guard $this->store->create($s) else ($p) {
-            return .error($p);
-        };
-        return .ok(Opened($this->secret($id), $s));
+        $s = StoredSession($id: $id, $subject: $subject, $scopes: $scopes, $createdAt: $now, $expiresAt: $now + $this->lifetime);
+        try $this->store->create($s);
+        return .ok(Opened($this->secret($id), mv $s));
     }
 
     public function close(const string& $id) : status<nexus::Problem>
@@ -68,10 +64,9 @@ public class Sessions
     }
 
     /**
-     * Who the signed request `$req` comes from: a 401 when its time is
-     * outside the window, the signature does not match, or the session is
-     * gone or expired. A session in use has its expiry moved forward, at
-     * most once a minute.
+     * Who the signed request `$req` comes from: a 401 when its time is outside the window, the
+     * signature does not match, or the session is gone or expired. A session in use has its expiry
+     * moved forward, at most once a minute.
      */
     public function check(const SignedHeader& $h, const nexus::Request& $req) : result<Identity, nexus::Problem>
     {
@@ -91,9 +86,7 @@ public class Sessions
         if (!Secrets::isHex($h->id) || !crypto::equal(Signature::sign($this->secret($h->id), $text), $h->sig)) {
             return .error(.unauthorized('the signature does not match'));
         }
-        StoredSession? $found = guard $this->store->find($h->id) else ($p) {
-            return .error($p);
-        };
+        StoredSession? $found = try $this->store->find($h->id);
         StoredSession $s = guard $found else {
             return .error(.unauthorized('the session has ended'));
         };
@@ -102,9 +95,7 @@ public class Sessions
         }
         time::timestamp $next = $now + $this->lifetime;
         if ($next - $s->expiresAt >= time::duration::mins(1)) {
-            guard $this->store->touch($s->id, $next) else ($p) {
-                return .error($p);
-            };
+            try $this->store->touch($s->id, $next);
         }
         return .ok(Identity($via: SignedGuard::NAME, $subject: $s->subject, $credential: $s->id, $scopes: $s->scopes));
     }

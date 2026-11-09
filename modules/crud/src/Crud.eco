@@ -1,18 +1,17 @@
 namespace nexus::crud;
 
 /**
- * List, show, create, update and delete for one model: model `M`, its
- * query `Q` (a `carbon::Query<M, Q>`), key `K`, repository `Repo` (a
- * `carbon::Repository<M, Q, K>`) and transformer `T` (a
- * `nexus::rest::Transformer<M>`), which answers and says what `?include=`
- * may name. Built per request with the request's repository; a type alias
- * keeps the five names in one place.
+ * List, show, create, update and delete for one model: model `M`, its query `Q` (a
+ * `carbon::Query<M, Q>`), key `K`, repository `Repo` (a `carbon::Repository<M, Q, K>`) and
+ * transformer `T` (a `nexus::rest::Transformer<M>`), which answers and says what `?include=` may
+ * name. Built per request with the request's repository; a type alias keeps the five names in one
+ * place.
  *
  * ```echo
  * public type PostCrud = nexus::crud::Crud<Post, PostQuery, int64, PostRepository, PostTransformer>;
  *
  * $s->bind<PostCrud>(scope: function(Container $c) : PostCrud {
- *     PostCrud $crud = PostCrud($c->get<PostRepository>(), $c->get<PostTransformer>());
+ *     $crud = PostCrud($c->get<PostRepository>(), $c->get<PostTransformer>());
  *     $crud->load = function(PostQuery $q, const EchoPack::Rest::Includes& $inc) : PostQuery {
  *         if ($inc->has('author')) {
  *             return $q->withAuthor();
@@ -35,25 +34,24 @@ namespace nexus::crud;
  * }
  * ```
  *
- * `find` and `page` hand back the models, for an action that answers
- * itself; `show`, `list`, `create` and `update` answer through `T`. Every
- * read starts from the repository's `find()`, narrowed by `scope` (who
- * sees which rows) and widened by `load` (the relations the request's
- * includes name). `authorize` runs on every record shown or written,
- * `before` and `after` around every write. A database error becomes its
- * `nexus::carbon::Problems` answer.
+ * `find` and `page` hand back the models, for an action that answers itself; `show`, `list`,
+ * `create` and `update` answer through `T`. Every read starts from the repository's `find()`,
+ * narrowed by `scope` (who sees which rows) and widened by `load` (the relations the request's
+ * includes name). `authorize` runs on every record shown or written, `before` and `after` around
+ * every write. A database error becomes its `nexus::carbon::Problems` answer.
  */
-// Q, Repo and T are what their names say, but unconstrained: a type alias to this class in
-// the module that declares Q cannot see Q's conformances yet, and every call is checked once
-// the class is instantiated anyway
 public class Crud<M, Q, K, Repo, T>
 {
+    // Q, Repo and T are what their names say, but unconstrained: a type alias to this class in
+    // the module that declares Q cannot see Q's conformances yet, and every call is checked once
+    // the class is instantiated anyway
+
     public Repo $repo;
     public T $transformer;
 
     /**
-     * What `T` gets next to the model in `show`, `list`, `create` and
-     * `update`: `$crud->context->set<UserContext>($user: $me->user)`.
+     * What `T` gets next to the model in `show`, `list`, `create` and `update`:
+     * `$crud->context->set<UserContext>($user: $me->user)`.
      */
     public nexus::rest::TransformerContext $context = nexus::rest::TransformerContext();
 
@@ -68,8 +66,8 @@ public class Crud<M, Q, K, Repo, T>
     public function<Q(Q)>? $scope = null;
 
     /**
-     * Whether this request may show or write `M`: a problem (a 403, or a
-     * 404 to hide that it exists) answers instead.
+     * Whether this request may show or write `M`: a problem (a 403, or a 404 to hide that it
+     * exists) answers instead.
      */
     public function<status<nexus::Problem>(Verb, const M&)>? $authorize = null;
 
@@ -95,14 +93,12 @@ public class Crud<M, Q, K, Repo, T>
     }
 
     /**
-     * The record with key `$key`, with the relations the request includes:
-     * a 404 when there is none, `authorize`'s answer when it refuses.
+     * The record with key `$key`, with the relations the request includes: a 404 when there is
+     * none, `authorize`'s answer when it refuses.
      */
     public function find(nexus::Payload& $payload, K $key) : result<M, nexus::Problem>
     {
-        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
+        $inc = try $this->transformer->requestedIncludes($payload);
         return $this->find($key, $inc);
     }
 
@@ -111,67 +107,49 @@ public class Crud<M, Q, K, Repo, T>
      */
     public function find(K $key, const EchoPack::Rest::Includes& $inc) : result<M, nexus::Problem>
     {
-        M $m = guard $this->fetch($key, $inc) else ($p) {
-            return .error($p);
-        };
-        guard $this->allowed(Verb::show, $m) else ($p) {
-            return .error($p);
-        };
+        $m = try $this->fetch($key, $inc);
+        try $this->allowed(Verb::show, $m);
         return .ok($m);
     }
 
     /**
-     * A page of records, read as `$o` says, with the relations the request
-     * includes.
+     * A page of records, read as `$o` says, with the relations the request includes.
      */
     public function page(nexus::Payload& $payload, const Listing<Q>& $o) : result<Page<M>, nexus::Problem>
     {
-        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
+        $inc = try $this->transformer->requestedIncludes($payload);
         return $this->page($payload, $o, $inc);
     }
 
     /**
-     * A page of records, read as `$o` says and loaded for `$inc`: the
-     * request's filter, `ids`, `order`, `page` and `size`, and with
-     * `count=1` the counts.
+     * A page of records, read as `$o` says and loaded for `$inc`: the request's filter, `ids`,
+     * `order`, `page` and `size`, and with `count=1` the counts.
      */
     public function page(nexus::Payload& $payload, const Listing<Q>& $o, const EchoPack::Rest::Includes& $inc) : result<Page<M>, nexus::Problem>
     {
-        Page<M> $out = Page<M>();
-        Q $base = $this->scoped();
-        Q $q = $base;
+        $out = Page<M>();
+        $base = $this->scoped();
+        $q = $base;
         if ($o->filter != null) {
-            function<result<Q, nexus::Problem>(Q, const nexus::Request&)> $filter = guard $o->filter;
-            Q $filtered = guard $filter($q, $payload->request) else ($p) {
-                return .error($p);
-            };
+            $filter = guard $o->filter;
+            $filtered = try $filter($q, $payload->request);
             $q = $filtered;
         }
-        array<int64> $ids = guard $o->wanted($payload->request) else ($p) {
-            return .error($p);
-        };
+        $ids = try $o->wanted($payload->request);
         if (!$ids->empty()) {
-            function<hydrahon::Term<bool>(array<int64>)> $match = guard $o->ids;
+            $match = guard $o->ids;
             $q = $q->where($match($ids));
         }
         $out->counted = $o->counting && ($payload->request->query->get('count') ?? '') == '1';
         if ($out->counted) {
-            uint64 $all = guard $base->count() else ($e) {
-                return .error(nexus::carbon::Problems::of($e));
-            };
-            uint64 $left = guard $q->count() else ($e) {
-                return .error(nexus::carbon::Problems::of($e));
-            };
+            uint64 $all = try $base->count();
+            uint64 $left = try $q->count();
             $out->total = $all;
             $out->matching = $left;
         }
-        Sorting? $sorting = guard $o->sorting($payload->request) else ($p) {
-            return .error($p);
-        };
+        $sorting = try $o->sorting($payload->request);
         if ($sorting != null) {
-            Sorting $s = guard $sorting;
+            $s = guard $sorting;
             if ($s->desc) {
                 $q = $q->order(desc: $s->column);
             } else {
@@ -179,17 +157,13 @@ public class Crud<M, Q, K, Repo, T>
             }
         }
         if ($o->paging) {
-            Window $asked = guard $o->window($payload->request) else ($p) {
-                return .error($p);
-            };
+            $asked = try $o->window($payload->request);
             $out->paged = true;
             $out->window = $asked;
             $q = $q->page($asked->page - 1, size: $asked->size);
         }
         $q = $this->loading($q, $inc);
-        array<M> $models = guard $q->get() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        $models = try $q->get();
         $out->models = mv $models;
         return .ok($out);
     }
@@ -199,25 +173,19 @@ public class Crud<M, Q, K, Repo, T>
      */
     public function list(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
     {
-        Listing<Q> $o = Listing<Q>();
+        $o = Listing<Q>();
         return $this->list($payload, $o);
     }
 
     /**
-     * A page of records as the answer, read as `$o` says. It carries
-     * `page` and `size`, and with `count=1` `total_count` and
-     * `filter_count`.
+     * A page of records as the answer, read as `$o` says. It carries `page` and `size`, and with
+     * `count=1` `total_count` and `filter_count`.
      */
     public function list(nexus::Payload& $payload, const Listing<Q>& $o) : result<nexus::Response, nexus::Problem>
     {
-        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
-        Page<M> $page = guard $this->page($payload, $o, $inc) else ($p) {
-            return .error($p);
-        };
-        nexus::rest::Meta $meta = $page->meta();
-        return .ok($this->transformer->createCollectionResponse($payload, $page->models, $meta, $this->context, mv $inc));
+        $inc = try $this->transformer->requestedIncludes($payload);
+        $page = try $this->page($payload, $o, $inc);
+        return .ok($this->transformer->createCollectionResponse($payload, $page->models, $page->meta(), $this->context, mv $inc));
     }
 
     /**
@@ -225,63 +193,37 @@ public class Crud<M, Q, K, Repo, T>
      */
     public function show(nexus::Payload& $payload, K $key) : result<nexus::Response, nexus::Problem>
     {
-        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
-        M $m = guard $this->find($key, $inc) else ($p) {
-            return .error($p);
-        };
+        $inc = try $this->transformer->requestedIncludes($payload);
+        $m = try $this->find($key, $inc);
         return .ok($this->transformer->createResponse($payload, $m, $this->context, mv $inc));
     }
 
     /**
-     * Creates `$model`, built by the action from the request's input, and
-     * answers with it: a 201.
+     * Creates `$model`, built by the action from the request's input, and answers with it: a 201.
      */
     public function create(nexus::Payload& $payload, M $model) : result<nexus::Response, nexus::Problem>
     {
         // checked before the write: a bad ?include= changes nothing
-        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
-        M $m = $model;
-        guard $this->allowed(Verb::create, $m) else ($p) {
-            return .error($p);
-        };
-        guard $this->hook(Verb::create, $m) else ($p) {
-            return .error($p);
-        };
-        M $made = guard $this->repo->create($m) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        $inc = try $this->transformer->requestedIncludes($payload);
+        try $this->allowed(Verb::create, $model);
+        try $this->hook(Verb::create, $model);
+        $made = try $this->repo->create($model);
         $this->done(Verb::create, $made);
         return .ok($this->transformer->createResponse($payload, $made, $this->context, mv $inc, status: 201));
     }
 
     /**
-     * The record with key `$key`, changed by `$fill` and saved. Answers
-     * with it, with the relations the request includes.
+     * The record with key `$key`, changed by `$fill` and saved. Answers with it, with the relations
+     * the request includes.
      */
     public function update(nexus::Payload& $payload, K $key, function<status<nexus::Problem>(M&)> $fill) : result<nexus::Response, nexus::Problem>
     {
-        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
-        M $m = guard $this->fetch($key, $inc) else ($p) {
-            return .error($p);
-        };
-        guard $this->allowed(Verb::update, $m) else ($p) {
-            return .error($p);
-        };
-        guard $fill($m) else ($p) {
-            return .error($p);
-        };
-        guard $this->hook(Verb::update, $m) else ($p) {
-            return .error($p);
-        };
-        guard $this->repo->save($m) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        $inc = try $this->transformer->requestedIncludes($payload);
+        $m = try $this->fetch($key, $inc);
+        try $this->allowed(Verb::update, $m);
+        try $fill($m);
+        try $this->hook(Verb::update, $m);
+        try $this->repo->save($m);
         $this->done(Verb::update, $m);
         return .ok($this->transformer->createResponse($payload, $m, $this->context, mv $inc));
     }
@@ -291,19 +233,11 @@ public class Crud<M, Q, K, Repo, T>
      */
     public function delete(nexus::Payload& $payload, K $key) : status<nexus::Problem>
     {
-        EchoPack::Rest::Includes $none = EchoPack::Rest::Includes();
-        M $m = guard $this->fetch($key, $none) else ($p) {
-            return .error($p);
-        };
-        guard $this->allowed(Verb::delete, $m) else ($p) {
-            return .error($p);
-        };
-        guard $this->hook(Verb::delete, $m) else ($p) {
-            return .error($p);
-        };
-        guard $this->repo->delete($m) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        $none = EchoPack::Rest::Includes();
+        $m = try $this->fetch($key, $none);
+        try $this->allowed(Verb::delete, $m);
+        try $this->hook(Verb::delete, $m);
+        try $this->repo->delete($m);
         $this->done(Verb::delete, $m);
         return .ok;
     }
@@ -313,9 +247,9 @@ public class Crud<M, Q, K, Repo, T>
      */
     internal function scoped() : Q
     {
-        Q $q = $this->repo->find();
+        $q = $this->repo->find();
         if ($this->scope != null) {
-            function<Q(Q)> $narrow = guard $this->scope;
+            $narrow = guard $this->scope;
             $q = $narrow($q);
         }
         return $q;
@@ -329,17 +263,15 @@ public class Crud<M, Q, K, Repo, T>
         if ($this->load == null) {
             return $q;
         }
-        function<Q(Q, const EchoPack::Rest::Includes&)> $load = guard $this->load;
+        $load = guard $this->load;
         return $load($q, $inc);
     }
 
     internal function fetch(K $key, const EchoPack::Rest::Includes& $inc) : result<M, nexus::Problem>
     {
-        Q $q = $this->loading($this->scoped(), $inc);
-        M? $found = guard $q->get($key) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
-        M $m = guard $found else {
+        $q = $this->loading($this->scoped(), $inc);
+        M? $found = try $q->get($key);
+        $m = guard $found else {
             return .error(.notFound("the {$this->name}"));
         };
         return .ok($m);
@@ -350,7 +282,7 @@ public class Crud<M, Q, K, Repo, T>
         if ($this->authorize == null) {
             return .ok;
         }
-        function<status<nexus::Problem>(Verb, const M&)> $check = guard $this->authorize;
+        $check = guard $this->authorize;
         return $check($v, $m);
     }
 
@@ -359,7 +291,7 @@ public class Crud<M, Q, K, Repo, T>
         if ($this->before == null) {
             return .ok;
         }
-        function<status<nexus::Problem>(Verb, M&)> $run = guard $this->before;
+        $run = guard $this->before;
         return $run($v, $m);
     }
 
@@ -368,7 +300,7 @@ public class Crud<M, Q, K, Repo, T>
         if ($this->after == null) {
             return;
         }
-        function<void(Verb, const M&)> $run = guard $this->after;
+        $run = guard $this->after;
         $run($v, $m);
     }
 }

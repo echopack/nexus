@@ -1,9 +1,9 @@
 namespace nexus;
 
 /**
- * Typed path parameters for the generated dispatchers. The route pattern
- * already checked the shape; a value that still does not fit (an integer
- * too large) means the resource does not exist, so the answer is 404.
+ * Typed path parameters for the generated dispatchers. The route pattern already checked the shape;
+ * a value that still does not fit (an integer too large) means the resource does not exist, so the
+ * answer is 404.
  */
 public struct Param
 {
@@ -28,9 +28,7 @@ public struct Param
 
     public static function int32(Payload& $payload, const string& $name) : result<int32, Problem>
     {
-        int64 $n = guard Param::int64($payload, $name) else ($p) {
-            return .error($p);
-        };
+        int64 $n = try Param::int64($payload, $name);
         if ($n < (int32::min() as int64) || $n > (int32::max() as int64)) {
             return .error(.notFound($payload->request->path));
         }
@@ -50,9 +48,7 @@ public struct Param
 
     public static function uint32(Payload& $payload, const string& $name) : result<uint32, Problem>
     {
-        uint64 $n = guard Param::uint64($payload, $name) else ($p) {
-            return .error($p);
-        };
+        uint64 $n = try Param::uint64($payload, $name);
         if ($n > (uint32::max() as uint64)) {
             return .error(.notFound($payload->request->path));
         }

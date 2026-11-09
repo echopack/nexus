@@ -3,20 +3,18 @@ namespace nexus::auth;
 use std::time;
 
 /**
- * Issues and revokes bearer tokens, on this request's `TokenStore`. Ask
- * for it in an action's constructor.
+ * Issues and revokes bearer tokens, on this request's `TokenStore`. Ask for it in an action's
+ * constructor.
  *
  * ```echo
- * nexus::auth::Issued $t = guard $this->tokens->issue("{$user->id}", name: 'cli') else ($p) {
- *     return .error($p);
- * };
+ * nexus::auth::Issued $t = try $this->tokens->issue("{$user->id}", name: 'cli');
  * ```
  */
 public class Tokens
 {
     public TokenStore $store;
-    public string $prefix;
-    public time::duration $lifetime;
+    public const string $prefix;
+    public const time::duration $lifetime;
     public calendar::Clock $clock;
 
     public constructor(TokenStore $store, const string& $prefix, time::duration $lifetime, calendar::Clock $clock)
@@ -28,21 +26,19 @@ public class Tokens
     }
 
     /**
-     * A new token for `$subject`, expiring after the configured lifetime
-     * (never, when that is zero), with `$scopes` (none means all).
+     * A new token for `$subject`, expiring after the configured lifetime (never, when that is
+     * zero), with `$scopes` (none means all).
      */
-    public function issue(const string& $subject, string $name = '', array<string> $scopes = array<string>()) : result<Issued, nexus::Problem>
+    public function issue(const string& $subject, const string& $name = '', const array<string>& $scopes = array<string>()) : result<Issued, nexus::Problem>
     {
-        Token $t = Token::mint($this->prefix);
+        $t = Token(fresh: $this->prefix);
         time::timestamp $now = $this->clock->now();
-        StoredToken $s = StoredToken($id: $t->id, $hash: $t->hash(), $subject: $subject, $name: $name, $scopes: $scopes, $createdAt: $now);
+        $s = StoredToken($id: $t->id, $hash: $t->hash(), $subject: $subject, $name: $name, $scopes: $scopes, $createdAt: $now);
         if ($this->lifetime > time::duration::zero()) {
             $s->expiresAt = $now + $this->lifetime;
         }
-        guard $this->store->create($s) else ($p) {
-            return .error($p);
-        };
-        return .ok(Issued($t->text(), $s));
+        try $this->store->create($s);
+        return .ok(Issued($t->text(), mv $s));
     }
 
     public function revoke(const string& $id) : status<nexus::Problem>
@@ -59,17 +55,15 @@ public class Tokens
     }
 
     /**
-     * Who the token `$text` was issued to: a 401 for a token that is
-     * malformed, unknown, expired or not the stored one.
+     * Who the token `$text` was issued to: a 401 for a token that is malformed, unknown, expired or
+     * not the stored one.
      */
     public function check(const string& $text) : result<Identity, nexus::Problem>
     {
         Token $t = guard Token::parse($this->prefix, $text) else {
             return .error(.unauthorized('the token is not valid'));
         };
-        StoredToken? $found = guard $this->store->find($t->id) else ($p) {
-            return .error($p);
-        };
+        StoredToken? $found = try $this->store->find($t->id);
         StoredToken $s = guard $found else {
             return .error(.unauthorized('the token is not valid'));
         };

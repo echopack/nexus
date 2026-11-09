@@ -1,270 +1,268 @@
-namespace nexusgen;
+/**
+ * Which `#[nexus::rule]` keys fit which kind of field, and what each one takes. A misfit is found
+ * here, at generate time, with a message that says what fits instead.
+ */
+
+namespace nexusgen::rules;
+
+use nexusgen::decl;
 
 /**
- * Which `#[nexus::rule]` keys fit which kind of field, and what each one
- * takes. A misfit is found here, at generate time, with a message that
- * says what fits instead.
+ * The kind a `Fields` reader reads, as messages name it.
  */
-public struct Rules
+public function kind(const string& $reader) : string
 {
-    /**
-     * The kind a `Fields` reader reads, as messages name it.
-     */
-    public static function kind(const string& $reader) : string
-    {
-        if ($reader == 'string') {
-            return 'string';
-        }
-        if ($reader == 'bool') {
-            return 'boolean';
-        }
-        if ($reader == 'float64') {
-            return 'number';
-        }
-        if ($reader == 'strings' || $reader == 'ints') {
-            return 'list';
-        }
-        if ($reader == 'date' || $reader == 'timestamp' || $reader == 'json') {
-            return $reader;
-        }
-        return 'integer';
+    if ($reader == 'string') {
+        return 'string';
     }
-
-    /**
-     * Whether `$key` changes the value before the rules see it.
-     */
-    public static function normaliser(const string& $key) : bool
-    {
-        return $key == 'trim' || $key == 'lower' || $key == 'upper' || $key == 'squish' || $key == 'nullIfBlank';
+    if ($reader == 'bool') {
+        return 'boolean';
     }
+    if ($reader == 'float64') {
+        return 'number';
+    }
+    if ($reader == 'strings' || $reader == 'ints') {
+        return 'list';
+    }
+    if ($reader == 'date' || $reader == 'timestamp' || $reader == 'json') {
+        return $reader;
+    }
+    return 'integer';
+}
 
-    /**
-     * Whether `$key` compares with another field of the input.
-     */
-    public static function crossing(const string& $key, const json::Value& $value) : bool
-    {
-        if ($key == 'confirmed' || $key == 'same' || $key == 'different' || $key == 'requiredWith' || $key == 'requiredWithout') {
+/**
+ * Whether `$key` changes the value before the rules see it.
+ */
+public function normaliser(const string& $key) : bool
+{
+    return $key == 'trim' || $key == 'lower' || $key == 'upper' || $key == 'squish' || $key == 'nullIfBlank';
+}
+
+/**
+ * Whether `$key` compares with another field of the input.
+ */
+public function crossing(const string& $key, const json::Value& $value) : bool
+{
+    if ($key == 'confirmed' || $key == 'same' || $key == 'different' || $key == 'requiredWith' || $key == 'requiredWithout') {
+        return true;
+    }
+    if (comparing($key) || dating($key)) {
+        $text = decl::string($value);
+        return !$text->empty() && $text != 'today' && $text != 'now' && !looksDated($text);
+    }
+    return false;
+}
+
+public function comparing(const string& $key) : bool
+{
+    return $key == 'gt' || $key == 'gte' || $key == 'lt' || $key == 'lte';
+}
+
+public function dating(const string& $key) : bool
+{
+    return $key == 'after' || $key == 'before' || $key == 'afterOrEqual' || $key == 'beforeOrEqual';
+}
+
+/**
+ * Why `$key: $value` does not fit a field of `$kind` (with `$shape`), null when it does. `$item` is
+ * true inside `each:`; `$optional` when the field is `T?`.
+ */
+public function misfit(const string& $key, const json::Value& $value, const string& $kind, const string& $shape, bool $item, bool $optional) : string?
+{
+    $fits = fitting($kind, $shape, $item);
+    bool $known = false;
+    foreach ($fits as const &$f) {
+        if ($f == $key) {
+            $known = true;
+        }
+    }
+    if (!$known) {
+        $list = str::join($fits, ', ');
+        $a = article($kind);
+        if (!exists($key)) {
+            return "'{$key}' is not a rule; {$a} {$kind} field takes {$list}";
+        }
+        return "'{$key}' does not apply to {$a} {$kind} field, which takes {$list}";
+    }
+    $vk = decl::text($value, 'kind');
+    if (flag($key)) {
+        if ($vk != 'bool' || !decl::flag($value, 'boolean')) {
+            return "'{$key}' is written '{$key}: true'";
+        }
+        if ($key == 'nullIfBlank' && !$optional) {
+            return "'nullIfBlank' needs a field that may be null (string?)";
+        }
+        return null;
+    }
+    if ($key == 'min' || $key == 'max' || $key == 'size' || $key == 'multipleOf') {
+        if ($vk == 'int' || ($vk == 'float' && $kind == 'number' && $key != 'size')) {
+            if (($kind == 'string' || $kind == 'list') && decl::int($value, 'integer') < 0) {
+                return "'{$key}' counts, so it cannot be negative";
+            }
+            return null;
+        }
+        return "'{$key}' takes a number, like '{$key}: 3'";
+    }
+    if ($key == 'between') {
+        $two = decl::items($value, 'items');
+        $numbers = $two->count() == 2;
+        foreach ($two as const &$n) {
+            $nk = decl::text($n, 'kind');
+            if ($nk != 'int' && !($nk == 'float' && $kind == 'number')) {
+                $numbers = false;
+            }
+        }
+        if ($vk != 'list' || !$numbers) {
+            return "'between' takes the two ends, like 'between: [3, 120]'";
+        }
+        return null;
+    }
+    if ($key == 'oneOf' || $key == 'noneOf') {
+        string $want = 'string';
+        if ($kind == 'integer') {
+            $want = 'int';
+        }
+        $items = decl::items($value, 'items');
+        bool $ok = $vk == 'list' && !$items->empty();
+        foreach ($items as const &$i) {
+            if (decl::text($i, 'kind') != $want) {
+                $ok = false;
+            }
+        }
+        if (!$ok) {
+            return "'{$key}' takes a list of {$kind} values, like '{$key}: [...]'";
+        }
+        return null;
+    }
+    if ($key == 'startsWith' || $key == 'endsWith') {
+        if (decl::strings($value)->empty() && decl::string($value)->empty()) {
+            return "'{$key}' takes a string or a list of them";
+        }
+        return null;
+    }
+    if (comparing($key)) {
+        if ($vk == 'int' || $vk == 'float' || ($vk == 'string' && !decl::string($value)->empty())) {
+            return null;
+        }
+        return "'{$key}' takes a number or the name of another field";
+    }
+    if (dating($key)) {
+        $text = decl::string($value);
+        if ($text->empty()) {
+            return "'{$key}' takes 'today', 'now', a date or the name of another field";
+        }
+        if ($text == 'today' && $kind != 'date') {
+            return "'today' is for a date field; a timestamp compares with 'now'";
+        }
+        if ($text == 'now' && $kind != 'timestamp') {
+            return "'now' is for a timestamp field; a date compares with 'today'";
+        }
+        if (looksDated($text)) {
+            if ($kind == 'date' && calendar::Date::parse($text)->failed()) {
+                return "'{$text}' is not a date like 2026-10-28";
+            }
+            if ($kind == 'timestamp' && calendar::Zoned::parse($text)->failed()) {
+                return "'{$text}' is not a timestamp like 2026-10-28T09:30:00Z";
+            }
+        }
+        return null;
+    }
+    if ($key == 'same' || $key == 'different' || $key == 'requiredWith' || $key == 'requiredWithout') {
+        if (decl::string($value)->empty()) {
+            return "'{$key}' takes the name of another field";
+        }
+        if (($key == 'requiredWith' || $key == 'requiredWithout') && !$optional) {
+            return "'{$key}' needs a field that may be null; a plain field is always required";
+        }
+        return null;
+    }
+    if ($key == 'each') {
+        if ($vk != 'record') {
+            return "'each' takes the rules of one item, like 'each: { max: 30 }'";
+        }
+        return null;
+    }
+    if ($key == 'check') {
+        if (decl::strings($value)->empty() && decl::string($value)->empty()) {
+            return "'check' takes a rule class or a list of them, like 'check: \"blog::UniqueEmail\"'";
+        }
+        return null;
+    }
+    return null;
+}
+
+/**
+ * The rule keys a field of `$kind` takes.
+ */
+public function fitting(const string& $kind, const string& $shape, bool $item) : array<string>
+{
+    array<string> $out = [];
+    if ($kind == 'string') {
+        $out = ['trim', 'lower', 'upper', 'squish', 'min', 'max', 'between', 'size', 'notBlank', 'email', 'url', 'uuid', 'alpha', 'alphaNum', 'alphaDash', 'ascii', 'digits', 'startsWith', 'endsWith', 'oneOf', 'noneOf'];
+        if (!$item) {
+            $out[] = 'nullIfBlank';
+        }
+    } else if ($kind == 'integer') {
+        $out = ['min', 'max', 'between', 'multipleOf', 'oneOf', 'noneOf', 'gt', 'gte', 'lt', 'lte'];
+    } else if ($kind == 'number') {
+        $out = ['min', 'max', 'between', 'multipleOf', 'gt', 'gte', 'lt', 'lte'];
+    } else if ($kind == 'boolean') {
+        $out = ['accepted', 'declined'];
+    } else if ($kind == 'date' || $kind == 'timestamp') {
+        $out = ['after', 'before', 'afterOrEqual', 'beforeOrEqual'];
+    } else if ($kind == 'list') {
+        $out = ['min', 'max', 'between', 'size'];
+        if ($shape == 'scalar') {
+            $out[] = 'distinct';
+            $out[] = 'each';
+        }
+    }
+    if (!$item && $kind != 'list' && $kind != 'object' && $kind != 'json') {
+        $out[] = 'confirmed';
+        $out[] = 'same';
+        $out[] = 'different';
+    }
+    if (!$item) {
+        $out[] = 'requiredWith';
+        $out[] = 'requiredWithout';
+    }
+    $out[] = 'check';
+    return $out;
+}
+
+internal function article(const string& $kind) : string
+{
+    if ($kind == 'integer' || $kind == 'enum' || $kind == 'object') {
+        return 'an';
+    }
+    return 'a';
+}
+
+internal function exists(const string& $key) : bool
+{
+    array<string> $all = ['trim', 'lower', 'upper', 'squish', 'nullIfBlank', 'min', 'max', 'between', 'size', 'notBlank', 'email', 'url', 'uuid', 'alpha', 'alphaNum', 'alphaDash', 'ascii', 'digits', 'startsWith', 'endsWith', 'oneOf', 'noneOf', 'multipleOf', 'gt', 'gte', 'lt', 'lte', 'accepted', 'declined', 'after', 'before', 'afterOrEqual', 'beforeOrEqual', 'distinct', 'each', 'confirmed', 'same', 'different', 'requiredWith', 'requiredWithout', 'check'];
+    foreach ($all as const &$a) {
+        if ($a == $key) {
             return true;
         }
-        if (Rules::comparing($key) || Rules::dating($key)) {
-            string $text = Json::string($value);
-            return !$text->empty() && $text != 'today' && $text != 'now' && !Rules::looksDated($text);
-        }
+    }
+    return false;
+}
+
+internal function flag(const string& $key) : bool
+{
+    return $key == 'trim' || $key == 'lower' || $key == 'upper' || $key == 'squish' || $key == 'nullIfBlank' || $key == 'notBlank' || $key == 'email' || $key == 'url' || $key == 'uuid' || $key == 'alpha' || $key == 'alphaNum' || $key == 'alphaDash' || $key == 'ascii' || $key == 'digits' || $key == 'accepted' || $key == 'declined' || $key == 'distinct' || $key == 'confirmed';
+}
+
+/**
+ * Whether a rule argument is a date or a timestamp rather than a field name: it starts with a digit
+ * or a sign.
+ */
+public function looksDated(const string& $text) : bool
+{
+    if ($text->empty()) {
         return false;
     }
-
-    public static function comparing(const string& $key) : bool
-    {
-        return $key == 'gt' || $key == 'gte' || $key == 'lt' || $key == 'lte';
-    }
-
-    public static function dating(const string& $key) : bool
-    {
-        return $key == 'after' || $key == 'before' || $key == 'afterOrEqual' || $key == 'beforeOrEqual';
-    }
-
-    /**
-     * Why `$key: $value` does not fit a field of `$kind` (with `$shape`),
-     * empty when it does. `$item` is true inside `each:`; `$optional`
-     * when the field is `T?`.
-     */
-    public static function misfit(const string& $key, const json::Value& $value, const string& $kind, const string& $shape, bool $item, bool $optional) : string
-    {
-        array<string> $fits = Rules::fitting($kind, $shape, $item);
-        bool $known = false;
-        foreach ($fits as const &$f) {
-            if ($f == $key) {
-                $known = true;
-            }
-        }
-        if (!$known) {
-            string $list = str::join($fits, ', ');
-            string $a = Rules::article($kind);
-            if (!Rules::exists($key)) {
-                return "'{$key}' is not a rule; {$a} {$kind} field takes {$list}";
-            }
-            return "'{$key}' does not apply to {$a} {$kind} field, which takes {$list}";
-        }
-        string $vk = Json::text($value, 'kind');
-        if (Rules::flag($key)) {
-            if ($vk != 'bool' || !Json::flag($value, 'boolean')) {
-                return "'{$key}' is written '{$key}: true'";
-            }
-            if ($key == 'nullIfBlank' && !$optional) {
-                return "'nullIfBlank' needs a field that may be null (string?)";
-            }
-            return '';
-        }
-        if ($key == 'min' || $key == 'max' || $key == 'size' || $key == 'multipleOf') {
-            if ($vk == 'int' || ($vk == 'float' && $kind == 'number' && $key != 'size')) {
-                if (($kind == 'string' || $kind == 'list') && Json::int($value, 'integer') < 0) {
-                    return "'{$key}' counts, so it cannot be negative";
-                }
-                return '';
-            }
-            return "'{$key}' takes a number, like '{$key}: 3'";
-        }
-        if ($key == 'between') {
-            array<json::Value> $two = Json::items($value, 'items');
-            bool $numbers = $two->count() == 2;
-            foreach ($two as const &$n) {
-                string $nk = Json::text($n, 'kind');
-                if ($nk != 'int' && !($nk == 'float' && $kind == 'number')) {
-                    $numbers = false;
-                }
-            }
-            if ($vk != 'list' || !$numbers) {
-                return "'between' takes the two ends, like 'between: [3, 120]'";
-            }
-            return '';
-        }
-        if ($key == 'oneOf' || $key == 'noneOf') {
-            string $want = 'string';
-            if ($kind == 'integer') {
-                $want = 'int';
-            }
-            array<json::Value> $items = Json::items($value, 'items');
-            bool $ok = $vk == 'list' && !$items->empty();
-            foreach ($items as const &$i) {
-                if (Json::text($i, 'kind') != $want) {
-                    $ok = false;
-                }
-            }
-            if (!$ok) {
-                return "'{$key}' takes a list of {$kind} values, like '{$key}: [...]'";
-            }
-            return '';
-        }
-        if ($key == 'startsWith' || $key == 'endsWith') {
-            if (Json::strings($value)->empty() && Json::string($value)->empty()) {
-                return "'{$key}' takes a string or a list of them";
-            }
-            return '';
-        }
-        if (Rules::comparing($key)) {
-            if ($vk == 'int' || $vk == 'float' || ($vk == 'string' && !Json::string($value)->empty())) {
-                return '';
-            }
-            return "'{$key}' takes a number or the name of another field";
-        }
-        if (Rules::dating($key)) {
-            string $text = Json::string($value);
-            if ($text->empty()) {
-                return "'{$key}' takes 'today', 'now', a date or the name of another field";
-            }
-            if ($text == 'today' && $kind != 'date') {
-                return "'today' is for a date field; a timestamp compares with 'now'";
-            }
-            if ($text == 'now' && $kind != 'timestamp') {
-                return "'now' is for a timestamp field; a date compares with 'today'";
-            }
-            if (Rules::looksDated($text)) {
-                if ($kind == 'date' && calendar::Date::parse($text)->failed()) {
-                    return "'{$text}' is not a date like 2026-10-28";
-                }
-                if ($kind == 'timestamp' && calendar::Zoned::parse($text)->failed()) {
-                    return "'{$text}' is not a timestamp like 2026-10-28T09:30:00Z";
-                }
-            }
-            return '';
-        }
-        if ($key == 'same' || $key == 'different' || $key == 'requiredWith' || $key == 'requiredWithout') {
-            if (Json::string($value)->empty()) {
-                return "'{$key}' takes the name of another field";
-            }
-            if (($key == 'requiredWith' || $key == 'requiredWithout') && !$optional) {
-                return "'{$key}' needs a field that may be null; a plain field is always required";
-            }
-            return '';
-        }
-        if ($key == 'each') {
-            if ($vk != 'record') {
-                return "'each' takes the rules of one item, like 'each: { max: 30 }'";
-            }
-            return '';
-        }
-        if ($key == 'check') {
-            if (Json::strings($value)->empty() && Json::string($value)->empty()) {
-                return "'check' takes a rule class or a list of them, like 'check: \"blog::UniqueEmail\"'";
-            }
-            return '';
-        }
-        return '';
-    }
-
-    /**
-     * The rule keys a field of `$kind` takes.
-     */
-    public static function fitting(const string& $kind, const string& $shape, bool $item) : array<string>
-    {
-        array<string> $out = [];
-        if ($kind == 'string') {
-            $out = ['trim', 'lower', 'upper', 'squish', 'min', 'max', 'between', 'size', 'notBlank', 'email', 'url', 'uuid', 'alpha', 'alphaNum', 'alphaDash', 'ascii', 'digits', 'startsWith', 'endsWith', 'oneOf', 'noneOf'];
-            if (!$item) {
-                $out[] = 'nullIfBlank';
-            }
-        } else if ($kind == 'integer') {
-            $out = ['min', 'max', 'between', 'multipleOf', 'oneOf', 'noneOf', 'gt', 'gte', 'lt', 'lte'];
-        } else if ($kind == 'number') {
-            $out = ['min', 'max', 'between', 'multipleOf', 'gt', 'gte', 'lt', 'lte'];
-        } else if ($kind == 'boolean') {
-            $out = ['accepted', 'declined'];
-        } else if ($kind == 'date' || $kind == 'timestamp') {
-            $out = ['after', 'before', 'afterOrEqual', 'beforeOrEqual'];
-        } else if ($kind == 'list') {
-            $out = ['min', 'max', 'between', 'size'];
-            if ($shape == 'scalar') {
-                $out[] = 'distinct';
-                $out[] = 'each';
-            }
-        }
-        if (!$item && $kind != 'list' && $kind != 'object' && $kind != 'json') {
-            $out[] = 'confirmed';
-            $out[] = 'same';
-            $out[] = 'different';
-        }
-        if (!$item) {
-            $out[] = 'requiredWith';
-            $out[] = 'requiredWithout';
-        }
-        $out[] = 'check';
-        return $out;
-    }
-
-    internal static function article(const string& $kind) : string
-    {
-        if ($kind == 'integer' || $kind == 'enum' || $kind == 'object') {
-            return 'an';
-        }
-        return 'a';
-    }
-
-    internal static function exists(const string& $key) : bool
-    {
-        array<string> $all = ['trim', 'lower', 'upper', 'squish', 'nullIfBlank', 'min', 'max', 'between', 'size', 'notBlank', 'email', 'url', 'uuid', 'alpha', 'alphaNum', 'alphaDash', 'ascii', 'digits', 'startsWith', 'endsWith', 'oneOf', 'noneOf', 'multipleOf', 'gt', 'gte', 'lt', 'lte', 'accepted', 'declined', 'after', 'before', 'afterOrEqual', 'beforeOrEqual', 'distinct', 'each', 'confirmed', 'same', 'different', 'requiredWith', 'requiredWithout', 'check'];
-        foreach ($all as const &$a) {
-            if ($a == $key) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    internal static function flag(const string& $key) : bool
-    {
-        return $key == 'trim' || $key == 'lower' || $key == 'upper' || $key == 'squish' || $key == 'nullIfBlank' || $key == 'notBlank' || $key == 'email' || $key == 'url' || $key == 'uuid' || $key == 'alpha' || $key == 'alphaNum' || $key == 'alphaDash' || $key == 'ascii' || $key == 'digits' || $key == 'accepted' || $key == 'declined' || $key == 'distinct' || $key == 'confirmed';
-    }
-
-    /**
-     * Whether a rule argument is a date or a timestamp rather than a
-     * field name: it starts with a digit or a sign.
-     */
-    public static function looksDated(const string& $text) : bool
-    {
-        if ($text->empty()) {
-            return false;
-        }
-        uint8 $b = $text->byte(0);
-        return ($b >= 48 && $b <= 57) || $b == 43 || $b == 45;
-    }
+    uint8 $b = $text->byte(0);
+    return ($b >= 48 && $b <= 57) || $b == 43 || $b == 45;
 }

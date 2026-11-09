@@ -1,8 +1,7 @@
 namespace blog;
 
 /**
- * Every user of the blog, for an admin: in the admin shape, emails and
- * roles included.
+ * Every user of the blog, for an admin: in the admin shape, emails and roles included.
  */
 #[nexus::answers: { collection: "blog::UserAdminTransformer" }]
 #[nexus::through: [
@@ -22,9 +21,7 @@ public class ListUsers : nexus::Action
 
     public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
     {
-        array<User> $all = guard $this->users->find()->order(asc: UserTable::$id)->get() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        $all = try $this->users->find()->order(asc: UserTable::$id)->get();
         return $this->transformer->createCollectionResponse($payload, $all, nexus::rest::Meta());
     }
 }

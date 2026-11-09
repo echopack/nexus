@@ -1,8 +1,8 @@
 namespace nexus;
 
 /**
- * The global middleware, outermost first. Extensions add to it in their
- * `middleware` hook; the kernel freezes it at boot.
+ * The global middleware, outermost first. Extensions add to it in their `middleware` hook; the
+ * kernel freezes it at boot.
  */
 public class Pipeline
 {

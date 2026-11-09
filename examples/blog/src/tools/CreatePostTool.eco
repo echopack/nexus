@@ -1,8 +1,8 @@
 namespace blog;
 
 /**
- * Publishes a post by the signed in user: a title of 3 to 120 characters,
- * a body, and up to five tags. Answers the post as the API does.
+ * Publishes a post by the signed in user: a title of 3 to 120 characters, a body, and up to five
+ * tags. Answers the post as the API does.
  */
 #[nexus::answers: { response: "blog::PostTransformer" }]
 #[nexus::through: ["blog::RequireUser"]]
@@ -19,12 +19,8 @@ public class CreatePostTool : nexus::mcp::Tool
 
     public function handle(nexus::Payload& $payload, NewPost $in) : result<nexus::Response, nexus::Problem>
     {
-        Caller $me = guard $payload->state<Caller>() else ($p) {
-            return .error($p);
-        };
-        Post $made = guard $this->posts->create($me->user, $in) else ($p) {
-            return .error($p);
-        };
+        $me = try $payload->state<Caller>();
+        $made = try $this->posts->create($me->user, $in);
         return $this->transformer->createResponse($payload, $made);
     }
 }

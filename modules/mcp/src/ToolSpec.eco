@@ -1,9 +1,8 @@
 namespace nexus::mcp;
 
 /**
- * One tool as nexus-mcp offers it: the name, title and description the
- * model reads, the JSON Schema of its arguments, the hints, the class
- * behind it and the generated call that runs it.
+ * One tool as nexus-mcp offers it: the name, title and description the model reads, the JSON Schema
+ * of its arguments, the hints, the class behind it and the generated call that runs it.
  */
 public struct ToolSpec
 {
@@ -18,28 +17,26 @@ public struct ToolSpec
     public function<bool(container::Container)> $bound;
 
     /**
-     * The middleware the class names in `#[nexus::through]`, around every
-     * call as around every route.
+     * The middleware the class names in `#[nexus::through]`, around every call as around every
+     * route.
      */
     public array<nexus::MiddlewareRef> $through = [];
     public string $title = '';
     public string $description = '';
 
     /**
-     * `readOnlyHint`, `destructiveHint`, ...: what the tool says of itself,
-     * as the client shows it.
+     * `readOnlyHint`, `destructiveHint`, ...: what the tool says of itself, as the client shows it.
      */
     public json::Value $annotations = json::object();
 
     /**
-     * Tool argument to the name the generated call reads, for the
-     * arguments the app renamed when it offered the tool.
+     * Tool argument to the name the generated call reads, for the arguments the app renamed when it
+     * offered the tool.
      */
     public map<string, string> $renamed = [];
 
     /**
-     * `$args` with every renamed argument back under the name the
-     * generated call reads.
+     * `$args` with every renamed argument back under the name the generated call reads.
      */
     public const function unmap(const json::Value& $args) : json::Value
     {
@@ -82,11 +79,6 @@ public struct ToolSpec
      */
     public const function takes(const string& $key) : bool
     {
-        json::Value? $props = $this->schema->get('properties');
-        if ($props == null) {
-            return false;
-        }
-        json::Value $p = guard $props;
-        return $p->get($key) != null;
+        return $this->schema->get('properties')?->get($key) != null;
     }
 }

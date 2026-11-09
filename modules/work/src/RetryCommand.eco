@@ -3,22 +3,22 @@ namespace nexus::work;
 use std::io;
 
 /**
- * `work:retry --id <id>`: sends a failed task back to the queue with its
- * tries fresh; `--id all` sends every failed one.
+ * `work:retry --id <id>`: sends a failed task back to the queue with its tries fresh; `--id all`
+ * sends every failed one.
  */
 public class RetryCommand : nexus::Command
 {
-    public function name() : string
+    public const function name() : string
     {
         return 'work:retry';
     }
 
-    public function summary() : string
+    public const function summary() : string
     {
         return 'send failed tasks back to the queue';
     }
 
-    public function options() : array<nexus::CommandOption>
+    public const function options() : array<nexus::CommandOption>
     {
         array<nexus::CommandOption> $out = [];
         $out[] = nexus::CommandOption(value: 'id', '<id|all>', 'the failed task, or all of them');
@@ -32,13 +32,13 @@ public class RetryCommand : nexus::Command
             io::eprintln('work:retry: --id wants a failed task id, or all');
             return 1;
         }
-        Work $w = $kernel->services->get<Work>();
+        $w = $kernel->services->get<Work>();
         nexus::Payload $payload = $kernel->background('work:retry', nexus::Kernel::id());
-        Queue $q = $payload->get<Queue>();
+        $q = $payload->get<Queue>();
         array<string> $ids = [];
         if ($wanted == 'all') {
             array<StoredTask> $failed = guard $q->failed(10000) else ($p) {
-                io::eprintln("work:retry: {$p->detail(nexus::Mode::dev)}");
+                io::eprintln("work:retry: {$p->detail(.dev)}");
                 nexus::Kernel::finish($payload);
                 return 1;
             };
@@ -50,12 +50,12 @@ public class RetryCommand : nexus::Command
         }
         uint32 $sent = 0;
         foreach ($ids as const &$id) {
-            bool $found = guard $q->again($id, $w->clock->now()) else ($p) {
-                io::eprintln("work:retry: {$p->detail(nexus::Mode::dev)}");
+            Requeued $requeued = guard $q->again($id, $w->clock->now()) else ($p) {
+                io::eprintln("work:retry: {$p->detail(.dev)}");
                 nexus::Kernel::finish($payload);
                 return 1;
             };
-            if ($found) {
+            if ($requeued == Requeued::sent) {
                 $sent = $sent + 1;
             } else if ($wanted != 'all') {
                 io::eprintln("work:retry: no failed task {$id}");

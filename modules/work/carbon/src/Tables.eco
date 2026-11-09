@@ -1,8 +1,8 @@
 namespace nexus::work::carbon;
 
 /**
- * The tasks table on the app's database: one call in the function that
- * opens it, before it is sealed.
+ * The tasks table on the app's database: one call in the function that opens it, before it is
+ * sealed.
  *
  * ```echo
  * guard nexus::work::carbon::Tables::wire($db) else ($e) {
@@ -17,9 +17,7 @@ public struct Tables
      */
     public static function wire(carbon::DB $db) : status<carbon::Error>
     {
-        guard Carbon::register($db) else ($e) {
-            return .error($e);
-        };
+        try Carbon::register($db);
         return Carbon::check($db);
     }
 

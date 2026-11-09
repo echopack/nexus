@@ -3,9 +3,8 @@ namespace blog;
 use std::time;
 
 /**
- * A post, written by a user, tagged with a few words. The fields marked
- * `#[nexus::expose]` are what `PostMapping` writes, the author when the
- * request includes it.
+ * A post, written by a user, tagged with a few words. The fields marked `#[nexus::expose]` are what
+ * `PostMapping` writes, the author when the request includes it.
  */
 #[carbon::model: 'posts']
 public class Post : carbon::Model<Post, PostRepository>
@@ -45,8 +44,7 @@ public class Post : carbon::Model<Post, PostRepository>
     }
 
     /**
-     * Whether `$me` may change this post: its author or an admin may, a
-     * 403 for anyone else.
+     * Whether `$me` may change this post: its author or an admin may, a 403 for anyone else.
      */
     public const function changeableBy(const User& $me) : status<nexus::Problem>
     {
@@ -57,8 +55,7 @@ public class Post : carbon::Model<Post, PostRepository>
     }
 
     /**
-     * The crud's `authorize` for `$me`: anyone reads, and a write needs
-     * `changeableBy`.
+     * The crud's `authorize` for `$me`: anyone reads, and a write needs `changeableBy`.
      */
     public static function authorizeFor(User $me) : function<status<nexus::Problem>(nexus::crud::Verb, const Post&)>
     {

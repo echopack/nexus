@@ -4,8 +4,8 @@ use std::io;
 use std::thread;
 
 /**
- * Lines on stdout or stderr: pretty on stderr in dev, JSON on stdout in
- * prod. The pretty format is coloured when the stream is a terminal.
+ * Lines on stdout or stderr: pretty on stderr in dev, JSON on stdout in prod. The pretty format is
+ * coloured when the stream is a terminal.
  */
 #[atomic]
 public class Stream : Sink

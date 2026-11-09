@@ -18,16 +18,10 @@ public class UpdatePost : nexus::Action
 
     public function handle(nexus::Payload& $payload, int64 $id, nexus::Body<PostChanges> $in) : result<nexus::Response, nexus::Problem>
     {
-        Caller $me = guard $payload->state<Caller>() else ($p) {
-            return .error($p);
-        };
+        $me = try $payload->state<Caller>();
         // checked before the write: a bad ?include= changes nothing
-        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
-        Post $changed = guard $this->posts->update($me->user, $id, $in->value) else ($p) {
-            return .error($p);
-        };
+        $inc = try $this->transformer->requestedIncludes($payload);
+        $changed = try $this->posts->update($me->user, $id, $in->value);
         return .ok($this->transformer->createResponse($payload, $changed, mv $inc));
     }
 }

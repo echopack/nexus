@@ -1,8 +1,7 @@
 namespace nexus;
 
 /**
- * The command class `bindCommand` just bound, for what the command line
- * calls it:
+ * The command class `bindCommand` just bound, for what the command line calls it:
  *
  * ```echo
  * $cmds->bindCommand<ShowPostCommand>((Container $c) => ShowPostCommand($c->get<PostService>()))
@@ -19,8 +18,8 @@ public class CommandRef<C>
     }
 
     /**
-     * Offers the command as `$name`: lowercase letters, digits, `-` and
-     * `:`, like `posts:show`. Call it again for a second name.
+     * Offers the command as `$name`: lowercase letters, digits, `-` and `:`, like `posts:show`.
+     * Call it again for a second name.
      */
     public function name(const string& $name) : CommandRef<C>
     {

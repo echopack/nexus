@@ -3,11 +3,9 @@ namespace nexus::work::carbon;
 use container::{Builder, Container};
 
 /**
- * Keeps nexus-work's queue in the app's carbon database: binds
- * `nexus::work::Queue` on each request's (or task's) `carbon::Session`.
- * List it after nexus-carbon, with nexus-work set to `stores: .provided`;
- * the app wires the table on its database and runs the migration with
- * its own:
+ * Keeps nexus-work's queue in the app's carbon database: binds `nexus::work::Queue` on each
+ * request's (or task's) `carbon::Session`. List it after nexus-carbon, with nexus-work set to
+ * `stores: .provided`; the app wires the table on its database and runs the migration with its own:
  *
  * ```echo
  * // the database the app opens
@@ -35,8 +33,7 @@ public class Extension : nexus::Extension
 
     public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
     {
-        carbon::DB $db = $kernel->services->get<carbon::DB>();
-        if (!$db->has<QueuedTaskRepository>()) {
+        if (!$kernel->services->get<carbon::DB>()->has<QueuedTaskRepository>()) {
             return .error(.extension('nexus-work-carbon', 'wire the tasks table on the database: nexus::work::carbon::Tables::wire($db)'));
         }
         return .ok;

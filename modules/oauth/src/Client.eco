@@ -3,10 +3,9 @@ namespace nexus::oauth;
 use std::time;
 
 /**
- * An app that registered itself (an MCP client, an editor, an inspector).
- * It is a public client: no secret, PKCE proves a code was its own. It
- * only names where codes may go; what it may do is the access of the user
- * who allows it.
+ * An app that registered itself (an MCP client, an editor, an inspector). It is a public client: no
+ * secret, PKCE proves a code was its own. It only names where codes may go; what it may do is the
+ * access of the user who allows it.
  */
 public struct Client
 {
@@ -19,14 +18,13 @@ public struct Client
     public time::timestamp $createdAt;
 
     /**
-     * When it last traded a code or a refresh token; clients never used
-     * are swept.
+     * When it last traded a code or a refresh token; clients never used are swept.
      */
     public time::timestamp? $usedAt = null;
 
     /**
-     * The registered redirect `$asked` names; with none asked, the only one
-     * registered. Null when it is not one of them.
+     * The registered redirect `$asked` names; with none asked, the only one registered. Null when
+     * it is not one of them.
      */
     public const function redirect(const string& $asked) : RedirectUri?
     {
@@ -66,7 +64,7 @@ public struct Client
         $o['client_id'] = json::str($this->id);
         $o['client_id_issued_at'] = json::int($this->createdAt->unix_secs());
         $o['client_name'] = json::str($this->name);
-        $o['redirect_uris'] = $uris;
+        $o['redirect_uris'] = mv $uris;
         $o['grant_types'] = Metadata::strings(['authorization_code', 'refresh_token']);
         $o['response_types'] = Metadata::strings(['code']);
         $o['token_endpoint_auth_method'] = json::str('none');

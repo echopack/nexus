@@ -5,20 +5,93 @@ namespace nexusgen;
  */
 public enum Failure
 {
-    case input(string $why);
-    case tool(string $status, string $stderr);
-    case problems(array<string> $lines);
-    case stale(string $path);
-    case generator(string $program, string $output);
+    /**
+     * The working directory has no `module.eco`.
+     */
+    case noManifest;
 
-    public const function message() : string
-    {
-        return match ($this) {
-            Failure::input($why) => $why,
-            Failure::tool($status, $stderr) => "echoc -p decls failed ({$status}):\n{$stderr}",
-            Failure::problems($lines) => str::join($lines, "\n"),
-            Failure::stale($path) => "{$path} is out of date; run nexus gen",
-            Failure::generator($program, $output) => "{$program} failed:\n{$output}",
-        };
-    }
+    /**
+     * `module.eco` does not compile `.nexus/` behind `NEXUS_NOGEN`.
+     */
+    case unwired;
+
+    /**
+     * `module.eco` has no `#[module: "..."]`.
+     */
+    case unnamed;
+
+    /**
+     * The decls pass printed no module called `$name`.
+     */
+    case noModule(string $name);
+
+    /**
+     * The program `$program` could not be started.
+     */
+    case cannotRun(string $program, std::io::ioerror $cause);
+
+    /**
+     * `echoc -p decls` (or `-p tools`) ended with `$status` and printed no declarations; `$stderr`
+     * is what it said.
+     */
+    case tool(std::process::exit_status $status, string $stderr);
+
+    /**
+     * Every declaration that does not fit, one line each.
+     */
+    case problems(array<string> $lines);
+
+    /**
+     * `$path` is not what generating would write now.
+     */
+    case stale(std::fs::path $path);
+
+    /**
+     * The file `$path` could not be written.
+     */
+    case cannotWrite(std::fs::path $path, std::io::ioerror $cause);
+
+    /**
+     * The manifest wires `$tool`, but no dependency offers it.
+     */
+    case notOffered(Tool $tool);
+
+    /**
+     * `echoc -p tools` offers `$tool` with no way to build it.
+     */
+    case noBuild(Tool $tool);
+
+    /**
+     * Building `$tool` could not start.
+     */
+    case cannotBuild(Tool $tool, std::io::ioerror $cause);
+
+    /**
+     * The generator `$program` ran and failed, printing `$output`.
+     */
+    case generator(string $program, string $output);
+}
+
+namespace str;
+
+/**
+ * The reason in words, as `nexus` prints it after `nexus: `.
+ */
+public function from(const nexusgen::Failure& $f) : string
+{
+    return match ($f) {
+        .noManifest => 'no module.eco here; run nexus gen in the module that declares the actions',
+        .unwired => "module.eco does not wire the generated code; add:\n\n#[if: !NEXUS_NOGEN]\n#[sources: \".nexus/*.eco\"]\n#[end]",
+        .unnamed => 'module.eco names no module (#[module: "..."])',
+        .noModule($name) => "the decls pass holds no module named {$name}",
+        .cannotRun($program, $cause) => "could not run {$program}: {$cause}",
+        .tool($status, $stderr) => "echoc -p decls failed ({$status}):\n{$stderr}",
+        .problems($lines) => str::join($lines, "\n"),
+        .stale($path) => "{$path} is out of date; run nexus gen",
+        .cannotWrite($path, $cause) => "could not write {$path}: {$cause}",
+        .notOffered($tool) => "module.eco wires {$tool->dir()} but no dependency offers {$tool->program()}; depend on {$tool->library()} directly",
+        .noBuild($tool) => "echoc -p tools gives no way to build {$tool->program()}",
+        .cannotBuild($tool, $cause) => "could not build {$tool->program()}: {$cause}",
+        .generator($program, $output) => "{$program} failed:\n{$output}",
+    };
 }

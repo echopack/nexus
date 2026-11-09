@@ -1,16 +1,12 @@
 namespace blog;
 
 /**
- * A user as the API shows them: what `User` exposes to everyone
- * (`UserMapping`), and the email to that user themselves.
+ * A user as the API shows them: what `User` exposes to everyone (`UserMapping`), and the email to
+ * that user themselves.
  */
 #[atomic]
 public class UserTransformer : nexus::rest::Transformer<User>, UserMapping
 {
-    public constructor()
-    {
-    }
-
     public function transform(const User& $u, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
     {
         UserContext $viewer = guard $ctx->find<UserContext>() else {

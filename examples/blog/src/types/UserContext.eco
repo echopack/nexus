@@ -1,8 +1,8 @@
 namespace blog;
 
 /**
- * Who is viewing, as an action hands it to the transformers: what lets
- * `UserTransformer` show users their own email.
+ * Who is viewing, as an action hands it to the transformers: what lets `UserTransformer` show users
+ * their own email.
  */
 public struct UserContext
 {

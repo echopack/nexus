@@ -1,0 +1,180 @@
+/**
+ * Small readers over libjson for the decls JSON, where a missing key and a `null` mean the same
+ * thing: not there.
+ */
+
+namespace nexusgen::decl;
+
+use nexusgen::types;
+
+public function field(const json::Value& $v, const string& $key) : json::Value
+{
+    return $v->get($key) ?? json::nil();
+}
+
+public function text(const json::Value& $v, const string& $key) : string
+{
+    return field($v, $key)->asStr() ?? '';
+}
+
+public function int(const json::Value& $v, const string& $key) : int64
+{
+    return field($v, $key)->asInt() ?? 0;
+}
+
+public function flag(const json::Value& $v, const string& $key) : bool
+{
+    return field($v, $key)->asBool() ?? false;
+}
+
+public function items(const json::Value& $v, const string& $key) : array<json::Value>
+{
+    return field($v, $key)->asArray() ?? array<json::Value>();
+}
+
+/**
+ * The `#[nexus::<name>]` attribute of a declaration, or null.
+ */
+public function tool(const json::Value& $decl, const string& $name) : json::Value?
+{
+    foreach (items($decl, 'tools') as const &$t) {
+        if (text($t, 'namespace') == 'nexus' && text($t, 'name') == $name) {
+            return $t->clone();
+        }
+    }
+    return null;
+}
+
+/**
+ * Whether a declaration has the attribute `#[nexus::<name>]`.
+ */
+public function has(const json::Value& $decl, const string& $name) : bool
+{
+    return tool($decl, $name) != null;
+}
+
+/**
+ * The value node of an attribute (`{"kind": "string", ...}`), nil when it has none.
+ */
+public function value(const json::Value& $tool) : json::Value
+{
+    return field($tool, 'value');
+}
+
+/**
+ * A string attribute value, or empty.
+ */
+public function string(const json::Value& $value) : string
+{
+    if (text($value, 'kind') != 'string') {
+        return '';
+    }
+    return text($value, 'text');
+}
+
+/**
+ * The string the tool `$name` on `$decl` holds, or `$fallback` when it has no such tool.
+ */
+public function option(const json::Value& $decl, const string& $name, const string& $fallback) : string
+{
+    json::Value $tool = guard tool($decl, $name) else {
+        return $fallback;
+    };
+    return string(value($tool));
+}
+
+/**
+ * The strings of a list attribute value.
+ */
+public function strings(const json::Value& $value) : array<string>
+{
+    array<string> $out = [];
+    foreach (items($value, 'items') as const &$item) {
+        $out[] = string($item);
+    }
+    return $out;
+}
+
+/**
+ * The strings of a plain JSON array of strings, skipping anything else.
+ */
+public function texts(const json::Value& $list) : array<string>
+{
+    array<string> $out = [];
+    foreach ($list->asArray() ?? array<json::Value>() as const &$item) {
+        string? $text = $item->asStr();
+        if ($text != null) {
+            string $t = guard $text;
+            $out[] = mv $t;
+        }
+    }
+    return $out;
+}
+
+/**
+ * The entries of a record attribute value, as key and value node.
+ */
+public function record(const json::Value& $value) : array<Entry>
+{
+    array<Entry> $out = [];
+    foreach (items($value, 'fields') as const &$f) {
+        $out[] = Entry(text($f, 'key'), field($f, 'value'));
+    }
+    return $out;
+}
+
+/**
+ * Whether the generated table should name `$d`: any non-generic class, struct or type alias the
+ * module can reach, so logs, `routes` and a failed resolve at boot can say which type they mean.
+ */
+public function nameable(const json::Value& $d) : bool
+{
+    return items($d, 'generics')->empty() && text($d, 'visibility') != 'private';
+}
+
+/**
+ * Whether the declaration `$d` conforms to the interface `$to`.
+ */
+public function conforms(const json::Value& $d, const string& $to) : bool
+{
+    foreach (items($d, 'conforms') as const &$c) {
+        if (types::name($c) == $to) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * The `handle()` method of the declaration `$d`, or null.
+ */
+public function handle(const json::Value& $d) : json::Value?
+{
+    foreach (items($d, 'methods') as const &$meth) {
+        if (text($meth, 'name') == 'handle' && text($meth, 'kind') == 'method') {
+            return $meth->clone();
+        }
+    }
+    return null;
+}
+
+/**
+ * Whether a `handle()` parameter is a borrow of `$type`.
+ */
+public function borrows(const json::Value& $param, const string& $type) : bool
+{
+    $t = field($param, 'type');
+    return text($t, 'kind') == 'ptr' && flag($t, 'borrow') && types::name(field($t, 'to')) == $type;
+}
+
+/**
+ * A rule class name or a list of them.
+ */
+public function classes(const json::Value& $value) : array<string>
+{
+    $one = string($value);
+    if (!$one->empty()) {
+        return [$one];
+    }
+    return strings($value);
+}

@@ -1,0 +1,70 @@
+/**
+ * Typed log records: what `#[nexus::log]` accepts, what it refuses, and the `nexus::log::record`
+ * overload it writes.
+ */
+
+use nexusgen::{Program, emitter};
+use ecotest::expect;
+
+internal function recDecls(const string& $tool, const string& $fields, const string& $kind = 'struct') : json::Value
+{
+    string $struct = "\{\"kind\":\"{$kind}\",\"name\":\"Throttled\",\"qualified\":\"shop::Throttled\",\"visibility\":\"public\",\"file\":\"src/Throttled.eco\",\"line\":4,\"generics\":[],\"tools\":[{$tool}],\"conforms\":[],\"fields\":[{$fields}],\"constructors\":[],\"methods\":[]}";
+    string $text = "\{\"modules\":[\{\"name\":\"shop\",\"declarations\":[{$struct}]}]}";
+    $doc = guard json::parse($text);
+    return $doc;
+}
+
+internal function recTool(const string& $level, const string& $message) : string
+{
+    return "\{\"namespace\":\"nexus\",\"name\":\"log\",\"value\":\{\"kind\":\"record\",\"fields\":[\{\"key\":\"level\",\"value\":\{\"kind\":\"string\",\"text\":\"{$level}\"}},\{\"key\":\"message\",\"value\":\{\"kind\":\"string\",\"text\":\"{$message}\"}}]}}";
+}
+
+internal function recField(const string& $name, const string& $type, const string& $tools) : string
+{
+    return "\{\"name\":\"{$name}\",\"visibility\":\"public\",\"static\":false,\"type\":{$type},\"default\":false,\"line\":7,\"tools\":[{$tools}]}";
+}
+
+test a_record_writes_its_record_overload
+{
+    $account = recField('account', '{"kind":"string"}', '');
+    $attempts = recField('attemptCount', '{"kind":"prim","name":"int32"}', '');
+    $retry = recField('retryIn', '{"kind":"named","name":"std::time::duration"}', '{"namespace":"nexus","name":"name","value":{"kind":"string","text":"retry"}}');
+    $note = recField('note', '{"kind":"optional","of":{"kind":"string"}}', '');
+    $secret = recField('password', '{"kind":"string"}', '{"namespace":"nexus","name":"sensitive","value":null}');
+    $p = Program(recDecls(recTool('warn', "login throttled, it's 11"), "{$account},{$attempts},{$retry},{$note},{$secret}"));
+    expect($p->problems)->empty();
+    expect($p->logs)->size(1);
+    expect(emitter::render($p))
+        ->has('namespace nexus::log;')
+        ->has('public function record(const shop::Throttled& $r) : nexus::log::Record')
+        ->has("$f['account'] = $r->account;")
+        ->has("$f['attempt_count'] = $r->attemptCount;")
+        ->has("$f['retry'] = $r->retryIn;")
+        ->has('if ($r->note != null)')
+        ->has('$v = guard $r->note;')
+        ->has("$f['password'] = '[redacted]';")
+        ->has("return nexus::log::Record(.warn, 'login throttled, it\\'s 11', mv $f);");
+}
+
+test a_record_needs_a_level_and_a_message
+{
+    $loud = Program(recDecls(recTool('loud', 'x'), ''));
+    expect($loud->problems)->size(1);
+    expect($loud->problems[0])->has('src/Throttled.eco:4')->has('level: "trace|debug|info|warn|error"');
+    $mute = Program(recDecls(recTool('info', ''), ''));
+    expect($mute->problems[0])->has('logs no message');
+}
+
+test a_record_field_must_be_loggable
+{
+    $list = recField('tags', '{"kind":"array","of":{"kind":"string"}}', '');
+    $p = Program(recDecls(recTool('info', 'x'), $list));
+    expect($p->problems)->size(1);
+    expect($p->problems[0])->has('src/Throttled.eco:7')->has('field $tags has type array<string>');
+}
+
+test a_record_is_a_struct
+{
+    $p = Program(recDecls(recTool('info', 'x'), '', 'class'));
+    expect($p->problems[0])->has('is not one');
+}

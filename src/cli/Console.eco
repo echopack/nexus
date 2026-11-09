@@ -6,9 +6,8 @@ use std::thread;
 use nexus::log;
 
 /**
- * The app binary's command line: `serve`, `routes`, `doctor` and the
- * commands of the extensions, with `--mode` and `--env-file` on each.
- * `Kernel::main` hands the process here.
+ * The app binary's command line: `serve`, `routes`, `doctor` and the commands of the extensions,
+ * with `--mode` and `--env-file` on each. `Kernel::main` hands the process here.
  */
 public struct Console
 {
@@ -18,7 +17,7 @@ public struct Console
     public static function run(const array<Extension>& $extensions, const array<string>& $argv) : int32
     {
         string $name = Console::program($argv);
-        command::Command $app = command::Command($name, '', 'a nexus app');
+        $app = command::Command($name, '', 'a nexus app');
         command::Subcommand $serve = $app->command('serve', 'answer requests until stopped', 'Boots the app and serves it through its transport. SIGINT or SIGTERM stops it cleanly.');
         command::Subcommand $routes = $app->command('routes', 'list the route table', 'Boots the app and prints every route, most specific first.');
         command::Subcommand $doctor = $app->command('doctor', 'check that the app boots', 'Reads the config, wires the container, checks every route and command has a binding and warns about actions no route reaches.');
@@ -44,8 +43,8 @@ public struct Console
         $app->accept($noSchedule, $serve);
 
         // the commands of the extensions; an option two of them share is made once
-        Tables $tables = Tables::generated();
-        Commands $commands = Commands(Generated::of($tables->generated));
+        Tables $tables = .generated();
+        $commands = Commands(Generated($tables->generated));
         foreach ($extensions as $ext) {
             $ext->commands($commands);
         }
@@ -57,7 +56,7 @@ public struct Console
         map<string, command::Arg> $values = [];
         map<string, command::Arg> $lists = [];
         map<string, command::Flag> $flags = [];
-        foreach ($extra as $cmd) {
+        foreach ($extra as &$cmd) {
             command::Subcommand $sub = $app->command($cmd->name(), $cmd->summary(), $cmd->help());
             $app->accept($mode, $sub);
             $app->accept($envFile, $sub);
@@ -140,7 +139,7 @@ public struct Console
         }
         if ($subject == 'doctor') {
             int32 $unbound = 0;
-            foreach ($extra as $cmd) {
+            foreach ($extra as &$cmd) {
                 if (!$cmd->bound($k->services)) {
                     io::eprintln("{$name}: command {$cmd->name()} has no binding; bind its class in an extension's services");
                     $unbound = $unbound + 1;
@@ -155,7 +154,7 @@ public struct Console
             io::println("ok: {$k->router->count()} routes, {$extra->count()} commands, mode {$m->name()}");
             return 0;
         }
-        foreach ($extra as $cmd) {
+        foreach ($extra as &$cmd) {
             if ($cmd->name() != $subject) {
                 continue;
             }
@@ -164,8 +163,8 @@ public struct Console
                 $k->shutdown();
                 return 1;
             }
-            Invocation $in = Invocation($m);
-            $in->out = command::CLIContext::from($parsed, $app, .stdout);
+            $in = Invocation($m);
+            $in->out = .from($parsed, $app, .stdout);
             $in->positionals = $parsed->positionals;
             foreach ($cmd->options() as const &$o) {
                 if ($o->kind == OptionKind::flag) {
@@ -183,11 +182,11 @@ public struct Console
             return $code;
         }
 
-        Serve $options = Serve();
-        if (!$options->listen($parsed->value($listen))) {
+        $options = Serve();
+        guard $options->listen($parsed->value($listen)) else {
             io::eprintln("{$name}: --listen wants host:port");
             return 1;
-        }
+        };
         uint64 $w = str::uint($parsed->value($workers)) ?? 0;
         $options->workers = $w as uint32;
         $options->work = !$parsed->stated($noWork);
@@ -196,10 +195,9 @@ public struct Console
     }
 
     /**
-     * Serves until a signal arrives: starts the extensions' background
-     * work, serves through the transport, then stops the transport (its
-     * requests finish), drains the background work and shuts the kernel
-     * down.
+     * Serves until a signal arrives: starts the extensions' background work, serves through the
+     * transport, then stops the transport (its requests finish), drains the background work and
+     * shuts the kernel down.
      */
     public static function serve(Kernel $k, const Serve& $options, const string& $name) : int32
     {
@@ -218,7 +216,7 @@ public struct Console
             $k->shutdown();
             return 1;
         };
-        Flag $done = Flag();
+        $done = Flag();
         Logger $log = $k->log;
         thread::handle $ticker = guard thread::spawn(function[$done, $t, $log]() : void {
             while (!$done->raised()) {
@@ -246,9 +244,8 @@ public struct Console
     }
 
     /**
-     * Runs the extensions' background work without a transport until a
-     * signal arrives, then drains it: what a `work` command does. The
-     * command line shuts the kernel down after the command.
+     * Runs the extensions' background work without a transport until a signal arrives, then drains
+     * it: what a `work` command does. The command line shuts the kernel down after the command.
      */
     public static function background(Kernel $k, const Serve& $options, const string& $name) : int32
     {
@@ -271,8 +268,7 @@ public struct Console
     }
 
     /**
-     * Prints `$p` as a command's error, one line per field for a 422, and
-     * answers the exit code: 1.
+     * Prints `$p` as a command's error, one line per field for a 422, and answers the exit code: 1.
      */
     public static function report(command::CLIContext $out, const Problem& $p, Mode $mode) : int32
     {
@@ -288,8 +284,7 @@ public struct Console
     }
 
     /**
-     * The exit code for what a command's `handle()` returned: 0, or the
-     * problem reported and 1.
+     * The exit code for what a command's `handle()` returned: 0, or the problem reported and 1.
      */
     public static function outcome(command::CLIContext $out, status<Problem> $done, Mode $mode) : int32
     {
@@ -300,11 +295,8 @@ public struct Console
     }
 
     /**
-     * The route table as aligned text.
-     */
-    /**
-     * The actions `nexus gen` wrote a dispatcher for that no route of the
-     * running app reaches, sorted.
+     * The actions `nexus gen` wrote a dispatcher for that no route of the running app reaches,
+     * sorted.
      */
     public static function unrouted(Kernel $k) : array<string>
     {
@@ -322,6 +314,9 @@ public struct Console
         return $out;
     }
 
+    /**
+     * The route table as aligned text.
+     */
     public static function table(Kernel $k) : string
     {
         array<Route> $routes = $k->router->routes();
@@ -365,17 +360,16 @@ public struct Console
     }
 
     /**
-     * The root logger for a mode, read from the environment. Without
-     * settings it is pretty lines on stderr in dev, JSON lines on stdout in
-     * prod and nothing in testing.
+     * The root logger for a mode, read from the environment. Without settings it is pretty lines on
+     * stderr in dev, JSON lines on stdout in prod and nothing in testing.
      *
      * - `NEXUS_LOG`: the lowest level written, `info` by default.
      * - `NEXUS_LOG_FORMAT`: `pretty`, `logfmt` or `json` for the stream.
-     * - `NEXUS_LOG_FILE`: also append to this file, as JSON unless
-     *   `NEXUS_LOG_FORMAT` says otherwise; `NEXUS_LOG_ROTATE` (`never`,
-     *   `daily`, a size like `64mb`) and `NEXUS_LOG_KEEP` (5) rotate it.
-     * - `NEXUS_LOG_ASYNC`: a queue size; each sink gets a writer thread.
-     *   `NEXUS_LOG_OVERFLOW` (`block`, `drop`) says what a full queue does.
+     * - `NEXUS_LOG_FILE`: also append to this file, as JSON unless `NEXUS_LOG_FORMAT` says
+     *   otherwise; `NEXUS_LOG_ROTATE` (`never`, `daily`, a size like `64mb`) and `NEXUS_LOG_KEEP`
+     *   (5) rotate it.
+     * - `NEXUS_LOG_ASYNC`: a queue size; each sink gets a writer thread. `NEXUS_LOG_OVERFLOW`
+     *   (`block`, `drop`) says what a full queue does.
      */
     public static function logFor(Mode $m, const Env& $environment) : result<Logger, log::ConfigError>
     {
@@ -407,12 +401,12 @@ public struct Console
             uint32 $capacity = try Console::count('NEXUS_LOG_ASYNC', $q);
             log::Overflow $overflow = try log::Overflow::parse($environment->get('NEXUS_LOG_OVERFLOW') ?? 'block');
             array<log::Sink> $queuedSinks = [];
-            foreach ($sinks as $s) {
+            foreach ($sinks as const &$s) {
                 $queuedSinks[] = log::Async($s, $capacity as usize, $overflow);
             }
-            $sinks = $queuedSinks;
+            $sinks = mv $queuedSinks;
         }
-        return .ok(Logger($sinks, $level));
+        return .ok(Logger(mv $sinks, $level));
     }
 
     internal static function count(const string& $name, const string& $text) : result<uint32, log::ConfigError>

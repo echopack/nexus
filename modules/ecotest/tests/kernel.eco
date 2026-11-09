@@ -56,7 +56,7 @@ internal class KApp : nexus::Extension
 internal function kernelApi(const string& $base) : Api
 {
     array<nexus::Extension> $exts = [KApp()];
-    $app = TestApp::boot($exts);
+    $app = TestApp($exts);
     return Api(transport: KernelTransport($app->kernel), base: $base);
 }
 

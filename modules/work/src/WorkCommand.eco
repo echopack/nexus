@@ -1,25 +1,23 @@
 namespace nexus::work;
 
 /**
- * `work`: runs task workers and the scheduler, without serving HTTP, until
- * SIGINT or SIGTERM; then lets the running tasks finish within
- * `WORK_GRACE`.
+ * `work`: runs task workers and the scheduler, without serving HTTP, until SIGINT or SIGTERM; then
+ * lets the running tasks finish within `WORK_GRACE`.
  */
 public class WorkCommand : nexus::Command
 {
-    public function name() : string
+    public const function name() : string
     {
         return 'work';
     }
 
-    public function summary() : string
+    public const function summary() : string
     {
         return 'run task workers and the scheduler until stopped';
     }
 
     public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
     {
-        nexus::Serve $options = nexus::Serve();
-        return nexus::Console::background($kernel, $options, 'work');
+        return nexus::Console::background($kernel, nexus::Serve(), 'work');
     }
 }

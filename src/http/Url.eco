@@ -1,11 +1,10 @@
 namespace nexus;
 
 /**
- * A URL: absolute, `https://blog.example.com:8443/v1/posts/5?include=author#top`,
- * or origin-relative, `/v1/posts/5`. The path is kept escaped, as it goes
- * on the wire; the query holds decoded pairs and the fragment decoded
- * text, and `text()` escapes both again. The router builds its links as
- * one.
+ * A URL: absolute, `https://blog.example.com:8443/v1/posts/5?include=author#top`, or
+ * origin-relative, `/v1/posts/5`. The path is kept escaped, as it goes on the wire; the query holds
+ * decoded pairs and the fragment decoded text, and `text()` escapes both again. The router builds
+ * its links as one.
  *
  * ```echo
  * Url $next = $router->url<ListPosts>(['page' => '2'])->with('tag', 'echo');
@@ -28,8 +27,7 @@ public struct Url
     public uint16? $port = null;
 
     /**
-     * Escaped, `/files/a%20b`. Empty only for an absolute URL that has
-     * none.
+     * Escaped, `/files/a%20b`. Empty only for an absolute URL that has none.
      */
     public string $path = '';
 
@@ -54,10 +52,9 @@ public struct Url
     }
 
     /**
-     * Parses an absolute URL with a scheme and a host, or a path starting
-     * with `/`. Refuses spaces and control characters, a broken scheme,
-     * host, port or escape, user info before the host, and anything else
-     * (`mailto:x`, `posts/5`, `//host/x`).
+     * Parses an absolute URL with a scheme and a host, or a path starting with `/`. Refuses spaces
+     * and control characters, a broken scheme, host, port or escape, user info before the host, and
+     * anything else (`mailto:x`, `posts/5`, `//host/x`).
      */
     public static function parse(const string& $raw) : result<Url, UrlError>
     {
@@ -71,14 +68,14 @@ public struct Url
             }
         }
         usize $end = $raw->size();
-        Url $url = Url(path: '');
+        $url = Url(path: '');
         usize $hash = $raw->find('#');
         if ($hash < $end) {
             string $tail = $raw->sub($hash + 1, $end - $hash - 1);
             string $fragment = guard Percent::decode($tail) else {
                 return .error(.escape($raw));
             };
-            $url->fragment = $fragment;
+            $url->fragment = mv $fragment;
             $end = $hash;
         }
         usize $question = $raw->find('?');
@@ -212,10 +209,9 @@ public struct Url
     }
 
     /**
-     * This URL on `$base`'s origin and under its path: `/v1/posts/5` on
-     * `https://example.com/api` is `https://example.com/api/v1/posts/5`.
-     * The query and the fragment stay this URL's; an origin of its own is
-     * replaced.
+     * This URL on `$base`'s origin and under its path: `/v1/posts/5` on `https://example.com/api`
+     * is `https://example.com/api/v1/posts/5`. The query and the fragment stay this URL's; an
+     * origin of its own is replaced.
      */
     public const function on(const Url& $base) : Url
     {
@@ -233,8 +229,7 @@ public struct Url
     }
 
     /**
-     * The URL as text, escaped: what goes into a `Location` header or a
-     * link in a document.
+     * The URL as text, escaped: what goes into a `Location` header or a link in a document.
      */
     public const function text() : string
     {
@@ -275,8 +270,8 @@ public struct Url
     }
 
     /**
-     * A name, an IPv4 address or, bracketed, an IPv6 one. Bytes above
-     * ASCII pass, for a name not yet in punycode.
+     * A name, an IPv4 address or, bracketed, an IPv6 one. Bytes above ASCII pass, for a name not
+     * yet in punycode.
      */
     internal static function hostname(const string& $host, bool $bracketed) : bool
     {

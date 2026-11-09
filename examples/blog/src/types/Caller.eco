@@ -1,9 +1,8 @@
 namespace blog;
 
 /**
- * Who is calling, as `RequireUser` found them for this request: the
- * credential and the user it names. Actions read it with
- * `$payload->state<Caller>()`.
+ * Who is calling, as `RequireUser` found them for this request: the credential and the user it
+ * names. Actions read it with `$payload->state<Caller>()`.
  */
 public struct Caller
 {

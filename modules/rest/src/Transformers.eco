@@ -1,15 +1,13 @@
 namespace nexus::rest;
 
-
 /**
  * Transformers in the container and in the app's `TransformerNetwork`.
  */
 public struct Transformers
 {
     /**
-     * Registers a `T()` as the transformer of model `M` and binds it
-     * shared, as what actions and cruds ask for. One line per
-     * transformer, in any order:
+     * Registers a `T()` as the transformer of model `M` and binds it shared, as what actions and
+     * cruds ask for. One line per transformer, in any order:
      *
      * ```echo
      * nexus::rest::Transformers::add<User, UserTransformer>($s);
@@ -18,20 +16,18 @@ public struct Transformers
      */
     public static function add<M, T>(nexus::Services& $s) : void
     {
-        T $made = T();
-        Transformers::add<M, T>($s, $made);
+        Transformers::add<M, T>($s, T());
     }
 
     /**
-     * Registers `$made` as the transformer of model `M`: for one that
-     * takes constructor arguments.
+     * Registers `$made` as the transformer of model `M`: for one that takes constructor arguments.
      */
     public static function add<M, T>(nexus::Services& $s, T $made) : void
     {
         if (!$s->has<TransformerNetwork>()) {
             $s->bind<TransformerNetwork>(put: TransformerNetwork());
         }
-        TransformerNetwork $net = $s->get<TransformerNetwork>();
+        $net = $s->get<TransformerNetwork>();
         $net->add<M>($made);
         $s->bind<T>(put: $made);
     }

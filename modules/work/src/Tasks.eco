@@ -3,19 +3,17 @@ namespace nexus::work;
 use std::time;
 
 /**
- * Binds task types and puts tasks on the queue. The generated companions
- * call `push`: `SendWelcomeTask::push($payload, SendWelcome($user: 5))`. The task
- * goes to the request's (or task's) `Queue`, so with nexus-work-carbon it
- * is written on the same database session as the work that pushed it.
+ * Binds task types and puts tasks on the queue. The generated companions call `push`:
+ * `SendWelcomeTask::push($payload, $user: 5)`. The task goes to the request's (or task's) `Queue`,
+ * so with nexus-work-carbon it is written on the same database session as the work that pushed it.
  */
 public struct Tasks
 {
     /**
-     * Binds task type `T` from what `nexus gen` wrote: the queue it goes
-     * to, how often it is tried, and optionally a schedule, `every` (a
-     * duration like `15m`) or `cron` (five fields). A scheduled task is
-     * pushed with its defaults. List nexus-work before the extension that
-     * binds; a problem stops the boot.
+     * Binds task type `T` from what `nexus gen` wrote: the queue it goes to, how often it is tried,
+     * and optionally a schedule, `every` (a duration like `15m`) or `cron` (five fields). A
+     * scheduled task is pushed with its defaults. List nexus-work before the extension that binds;
+     * a problem stops the boot.
      *
      * ```echo
      * nexus::work::Tasks::bind<SendWelcome>($s, queue: 'mail', tries: 5);
@@ -35,8 +33,7 @@ public struct Tasks
             $s->fail(.extension('nexus-work', "{$name}: list nexus::work::Extension() before the extension that binds its tasks"));
             return;
         };
-        Codecs $codecs = $s->get<Codecs>();
-        Codec $codec = guard $codecs->find<T>() else {
+        Codec $codec = guard $s->get<Codecs>()->find<T>() else {
             $s->fail(.extension('nexus-work', "{$name}: nexus gen wrote nothing for it; is it a struct conforming to nexus::work::Task, and did nexus gen run?"));
             return;
         };
@@ -52,11 +49,7 @@ public struct Tasks
             $s->fail(.extension('nexus-work', "{$codec->name}: give every or cron, not both"));
             return;
         }
-        Kind $k = Kind($codec->name, $codec->run);
-        $k->queue = $queue;
-        $k->tries = $tries;
-        $k->every = $every;
-        $k->cron = $cron;
+        $k = Kind($codec->name, $codec->run, $queue: $queue, $tries: $tries, $every: $every, $cron: $cron);
         if ($k->scheduled()) {
             if ($codec->defaults->empty()) {
                 $s->fail(.extension('nexus-work', "{$codec->name} is scheduled, so every field needs a default to push it with"));
@@ -65,65 +58,47 @@ public struct Tasks
             $k->data = $codec->defaults;
         }
         guard Schedule::of($k) else ($e) {
-            $s->fail(.extension('nexus-work', $e));
+            $s->fail(.extension('nexus-work', "{$codec->name}: {$e}"));
             return;
         };
-        $w->kinds->bind<T>($k);
+        $w->kinds->bind<T>(mv $k);
     }
 
     /**
-     * Queues a task of type `T`, as its generated companion encoded it, on
-     * the queue `T` was bound with.
+     * Queues a task of type `T`, as its generated companion encoded it, on the queue `T` was bound
+     * with, to run once `$delay` has passed.
      */
-    public static function push<T>(nexus::Payload& $payload, const string& $data) : status<nexus::Problem>
+    public static function push<T>(nexus::Payload& $payload, const string& $data, after: time::duration $delay = .zero()) : status<nexus::Problem>
     {
-        return Tasks::push<T>($payload, $data, after: time::duration::zero());
-    }
-
-    /**
-     * Queues a task of type `T` to run once `$delay` has passed.
-     */
-    public static function push<T>(nexus::Payload& $payload, const string& $data, after: time::duration $delay) : status<nexus::Problem>
-    {
-        Work $w = $payload->get<Work>();
-        Kind $kind = guard $w->kinds->of<T>() else {
+        Kind $kind = guard $payload->get<Work>()->kinds->of<T>() else {
             return .error(.server('a task was pushed whose type no extension binds; bind it with $app->bindTask'));
         };
         return Tasks::push($payload, $kind, $data, after: $delay);
     }
 
-    public static function push(nexus::Payload& $payload, const Kind& $kind, const string& $data) : status<nexus::Problem>
+    /**
+     * Queues a task of `$kind` to run once `$delay` has passed.
+     */
+    public static function push(nexus::Payload& $payload, const Kind& $kind, const string& $data, after: time::duration $delay = .zero()) : status<nexus::Problem>
     {
-        return Tasks::push($payload, $kind, $data, after: time::duration::zero());
-    }
-
-    public static function push(nexus::Payload& $payload, const Kind& $kind, const string& $data, after: time::duration $delay) : status<nexus::Problem>
-    {
-        Work $w = $payload->get<Work>();
-        time::timestamp $now = $w->clock->now();
-        guard Tasks::store($payload, $kind, $data, $now + $delay, '') else ($p) {
-            return .error($p);
-        };
+        time::timestamp $now = $payload->get<Work>()->clock->now();
+        try Tasks::store($payload, $kind, $data, $now + $delay, '');
         return .ok;
     }
 
     /**
-     * Stores a task of `$kind` due at `$at`, under `$key` when it is not
-     * empty. False when a task with that key is already stored.
+     * Stores a task of `$kind` due at `$at`, under `$key` when it is not empty; `duplicate` when a
+     * task with that key is stored already.
      */
-    public static function store(nexus::Payload& $payload, const Kind& $kind, const string& $data, time::timestamp $at, const string& $key) : result<bool, nexus::Problem>
+    public static function store(nexus::Payload& $payload, const Kind& $kind, const string& $data, time::timestamp $at, const string& $key) : result<Pushed, nexus::Problem>
     {
-        Work $w = $payload->get<Work>();
-        time::timestamp $now = $w->clock->now();
+        time::timestamp $now = $payload->get<Work>()->clock->now();
         string $id = nexus::Kernel::id();
-        StoredTask $task = StoredTask($id: $id, $name: $kind->name, $queue: $kind->queue, $data: $data, $tries: $kind->tries, $key: $key, $createdAt: $now, $availableAt: $at);
-        Queue $q = $payload->get<Queue>();
-        bool $stored = guard $q->push($task) else ($p) {
-            return .error($p);
-        };
-        if ($stored) {
+        $task = StoredTask($id: $id, $name: $kind->name, $queue: $kind->queue, $data: $data, $tries: $kind->tries, $key: $key, $createdAt: $now, $availableAt: $at);
+        $pushed = try $payload->get<Queue>()->push($task);
+        if ($pushed == Pushed::stored) {
             $payload->log->debug('task pushed', ['task' => $kind->name, 'id' => $id]);
         }
-        return .ok($stored);
+        return .ok($pushed);
     }
 }

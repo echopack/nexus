@@ -1,8 +1,7 @@
 namespace blog;
 
 /**
- * Several posts at once. Each one follows the rules of `NewPost`; the
- * batch only says how many.
+ * Several posts at once. Each one follows the rules of `NewPost`; the batch only says how many.
  */
 #[nexus::input]
 public struct PostBatch

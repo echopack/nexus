@@ -4,11 +4,10 @@ use container::{Builder, Container};
 use std::time;
 
 /**
- * OAuth 2.1 for the MCP endpoint. Adds its guard to nexus-auth's (so list
- * it after nexus::auth::Extension), binds `Grants` per request on the
- * store, and with `stores: .memory` a `MemoryOAuth`. Serves the metadata,
- * registration, authorize, consent, token and revoke endpoints, and adds
- * `oauth:prune`.
+ * OAuth 2.1 for the MCP endpoint. Adds its guard to nexus-auth's (so list it after
+ * nexus::auth::Extension), binds `Grants` per request on the store, and with `stores: .memory` a
+ * `MemoryOAuth`. Serves the metadata, registration, authorize, consent, token and revoke endpoints,
+ * and adds `oauth:prune`.
  *
  * ```echo
  * nexus::auth::Extension('blog', stores: .provided),
@@ -19,15 +18,15 @@ use std::time;
  */
 public class Extension : nexus::Extension
 {
-    public Stores $stores;
+    public const Stores $stores;
     public calendar::Clock $clock;
     internal nexus::auth::Throttle $registrations;
 
-    public constructor(stores: Stores $stores = Stores::memory, clock: calendar::Clock $clock = calendar::SystemClock())
+    public constructor(stores: Stores $stores = .memory, clock: calendar::Clock $clock = calendar::SystemClock())
     {
         $this->stores = $stores;
         $this->clock = $clock;
-        $this->registrations = nexus::auth::Throttle(10, time::duration::mins(15));
+        $this->registrations = nexus::auth::Throttle(10, .mins(15));
     }
 
     public function name() : string
@@ -42,9 +41,7 @@ public class Extension : nexus::Extension
         };
         $guards->add(OAuthGuard());
         OAuthConfig $config = $s->get<OAuthConfig>();
-        guard Extension::urls($config) else ($e) {
-            return .error($e);
-        };
+        try Extension::urls($config);
         if ($this->stores == Stores::memory) {
             $s->bind<MemoryOAuth>(put: MemoryOAuth());
             $s->alias<OAuthStore, MemoryOAuth>();
@@ -102,12 +99,12 @@ public class Extension : nexus::Extension
     }
 
     /**
-     * Refuses a consent page or an issuer that is no URL, and an issuer
-     * that is not absolute, before the first request trips over it.
+     * Refuses a consent page or an issuer that is no URL, and an issuer that is not absolute,
+     * before the first request trips over it.
      */
     internal static function urls(const OAuthConfig& $config) : status<nexus::BootError>
     {
-        nexus::Url $consent = guard nexus::Url::parse($config->consent) else ($e) {
+        guard nexus::Url::parse($config->consent) else ($e) {
             return .error(.config([nexus::ConfigError::invalid('OAUTH_CONSENT', $e->message())]));
         };
         if ($config->issuer->empty()) {

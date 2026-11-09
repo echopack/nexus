@@ -18,7 +18,7 @@ public struct Pair
         $o['expires_in'] = json::int($this->expiresIn);
         $o['refresh_token'] = json::str($this->refresh);
         $o['scope'] = json::str($this->scope);
-        nexus::Response $res = nexus::Response(json: $o);
+        $res = nexus::Response(json: $o);
         $res->header('Cache-Control', 'no-store');
         $res->header('Pragma', 'no-cache');
         return $res;

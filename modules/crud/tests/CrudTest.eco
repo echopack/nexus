@@ -1,6 +1,5 @@
 /**
- * Crud on carbon's example blog models and the fake driver, with a
- * hand-written transformer.
+ * Crud on carbon's example blog models and the fake driver, with a hand-written transformer.
  */
 
 use blog::{Post, PostQuery, PostRepository, PostTable, UserRepository, CommentRepository, User, UserTable, Status};
@@ -12,13 +11,13 @@ use ecotest::expect;
 /**
  * Who is asking, handed to the transformer through the crud's context.
  */
-public struct TViewer
+internal struct TViewer
 {
     public string $name;
 }
 
 #[atomic]
-public class TPostTransformer : nexus::rest::Transformer<Post>
+internal class TPostTransformer : nexus::rest::Transformer<Post>
 {
     public constructor()
     {
@@ -31,8 +30,7 @@ public class TPostTransformer : nexus::rest::Transformer<Post>
 
     public function availableIncludes() : array<string>
     {
-        array<string> $out = ['author'];
-        return $out;
+        return ['author'];
     }
 
     public function defaultIncludes() : array<string>
@@ -48,7 +46,7 @@ public class TPostTransformer : nexus::rest::Transformer<Post>
         if ($item->wants('author') && $p->author->loaded()) {
             User? $u = $p->author->get();
             if ($u != null) {
-                User $user = guard $u;
+                $user = guard $u;
                 $item->text('author', $user->name);
             }
         }
@@ -56,17 +54,16 @@ public class TPostTransformer : nexus::rest::Transformer<Post>
 
     public function transform(const Post& $p, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
     {
-        TViewer? $viewer = $ctx->find<TViewer>();
-        if ($viewer != null) {
-            TViewer $v = guard $viewer;
-            $item->text('viewer', $v->name);
-        }
+        TViewer $viewer = guard $ctx->find<TViewer>() else {
+            return;
+        };
+        $item->text('viewer', $viewer->name);
     }
 }
 
-public type TCrud = nexus::crud::Crud<Post, PostQuery, int64, PostRepository, TPostTransformer>;
+internal type TCrud = nexus::crud::Crud<Post, PostQuery, int64, PostRepository, TPostTransformer>;
 
-class Rig
+internal class Rig
 {
     public fake::Driver<Mysql> $fake;
     public carbon::DB $db;
@@ -81,13 +78,13 @@ class Rig
         guard $this->db->register<PostRepository>();
         guard $this->db->register<CommentRepository>();
         guard blog::Carbon::check($this->db);
-        PostRepository $posts = guard $this->db->session()->repo<PostRepository>();
+        $posts = guard $this->db->session()->repo<PostRepository>();
         $this->posts = $posts;
     }
 
     public function crud() : TCrud
     {
-        TCrud $crud = TCrud($this->posts, $this->transformer);
+        $crud = TCrud($this->posts, $this->transformer);
         $crud->name = 'post';
         $crud->load = function(PostQuery $q, const EchoPack::Rest::Includes& $inc) : PostQuery {
             if ($inc->has('author')) {
@@ -99,26 +96,26 @@ class Rig
     }
 }
 
-class Seen
+internal class Seen
 {
     public array<string> $titles = [];
 }
 
-function payload(const string& $target) : nexus::Payload
+internal function payload(const string& $target) : nexus::Payload
 {
-    nexus::Request $req = nexus::Request(nexus::Method::get, $target);
-    container::Container $none = container::Builder()->seal();
-    return nexus::Payload($request: $req, $services: $none, $mode: nexus::Mode::testing, $log: nexus::Log([], nexus::Level::info));
+    $req = nexus::Request(nexus::Method::get, $target);
+    $none = container::Builder()->seal();
+    return nexus::Payload($request: $req, $services: $none, $mode: nexus::Mode::testing, $log: nexus::Logger([], .info));
 }
 
-function row(int64 $id, const string& $title) : array<Value>
+internal function row(int64 $id, const string& $title) : array<Value>
 {
     return PostTable()->row(Post($id: $id, $authorId: 7, $title: $title));
 }
 
-function listing() : nexus::crud::Listing<PostQuery>
+internal function listing() : nexus::crud::Listing<PostQuery>
 {
-    nexus::crud::Listing<PostQuery> $o = nexus::crud::Listing<PostQuery>();
+    $o = nexus::crud::Listing<PostQuery>();
     $o->orderable('created_at', PostTable::$createdAt);
     $o->orderable('title', PostTable::$title);
     $o->order = '-created_at';
@@ -129,19 +126,19 @@ function listing() : nexus::crud::Listing<PostQuery>
     return $o;
 }
 
-function body(result<nexus::Response, nexus::Problem> $r) : string
+internal function body(result<nexus::Response, nexus::Problem> $r) : string
 {
-    nexus::Response $res = guard $r else ($p) {
-        die("failed: {$p->detail(nexus::Mode::testing)}");
+    $res = guard $r else ($p) {
+        die("expected a response, got the problem: {$p->detail(nexus::Mode::testing)}");
     };
     return $res->body;
 }
 
 test a_page_in_the_default_order
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([row(2, 'b'), row(1, 'a')]);
-    nexus::Payload $payload = payload('/posts');
+    $payload = payload('/posts');
     string $d = body($r->crud()->list($payload, listing()));
     expect($r->fake->last())->has('ORDER BY `posts`.`created_at` DESC LIMIT 2');
     expect($d)->is('{"page":1,"size":2,"data":[{"id":2,"title":"b"},{"id":1,"title":"a"}]}');
@@ -149,11 +146,11 @@ test a_page_in_the_default_order
 
 test order_page_size_ids_and_counts_from_the_query
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([[Value::from(9)]])->rows([[Value::from(2)]])->rows([row(4, 'd')]);
-    nexus::Payload $payload = payload('/posts?order=title&page=2&size=1&ids=4,8&count=1');
+    $payload = payload('/posts?order=title&page=2&size=1&ids=4,8&count=1');
     string $d = body($r->crud()->list($payload, listing()));
-    array<string> $sql = $r->fake->texts();
+    $sql = $r->fake->texts();
     expect($sql[0])->has('SELECT COUNT(*)')->lacks('IN');
     expect($sql[1])->has('`posts`.`id` IN (?, ?)');
     expect($sql[2])->has('ORDER BY `posts`.`title` ASC LIMIT 1 OFFSET 1');
@@ -162,17 +159,17 @@ test order_page_size_ids_and_counts_from_the_query
 
 test bad_listing_parameters_are_422s
 {
-    Rig $r = Rig();
+    $r = Rig();
     array<string> $bad = ['/posts?order=views', '/posts?size=500', '/posts?page=0', '/posts?ids=1,x'];
     foreach ($bad as const &$target) {
-        nexus::Payload $payload = payload($target);
-        result<nexus::Response, nexus::Problem> $res = $r->crud()->list($payload, listing());
-        nexus::Problem $p = expect($res)->fails();
+        $payload = payload($target);
+        $res = $r->crud()->list($payload, listing());
+        $p = expect($res)->fails();
         expect($p->status())->is(422);
     }
-    nexus::Payload $plain = payload('/posts?ids=1');
-    nexus::crud::Listing<PostQuery> $noIds = nexus::crud::Listing<PostQuery>();
-    result<nexus::Response, nexus::Problem> $refused = $r->crud()->list($plain, $noIds);
+    $plain = payload('/posts?ids=1');
+    $noIds = nexus::crud::Listing<PostQuery>();
+    $refused = $r->crud()->list($plain, $noIds);
     expect($refused->failure()->status())->is(422);
     // nothing ran
     expect($r->fake->count())->is(0);
@@ -180,46 +177,46 @@ test bad_listing_parameters_are_422s
 
 test show_loads_what_the_request_includes
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([row(5, 'e')])->rows([UserTable()->row(User($id: 7, $email: 'ada@example.com', $name: 'Ada'))]);
-    nexus::Payload $payload = payload('/posts/5?include=author');
+    $payload = payload('/posts/5?include=author');
     expect(body($r->crud()->show($payload, 5)))->is('{"data":{"id":5,"title":"e","author":"Ada"}}');
     expect($r->fake->count())->is(2);
-    nexus::Payload $wrong = payload('/posts/5?include=comments');
+    $wrong = payload('/posts/5?include=comments');
     expect($r->crud()->show($wrong, 5)->failure()->status())->is(400);
 }
 
 test the_context_reaches_the_transformer
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([row(5, 'e')]);
-    nexus::Payload $payload = payload('/posts/5');
-    TCrud $crud = $r->crud();
+    $payload = payload('/posts/5');
+    $crud = $r->crud();
     $crud->context->set<TViewer>($name: 'Ada');
     expect(body($crud->show($payload, 5)))->is('{"data":{"id":5,"title":"e","viewer":"Ada"}}');
 }
 
 test a_missing_record_is_a_404
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([]);
-    nexus::Payload $payload = payload('/posts/9');
-    nexus::Problem $p = $r->crud()->show($payload, 9)->failure();
+    $payload = payload('/posts/9');
+    $p = $r->crud()->show($payload, 9)->failure();
     expect($p->status())->is(404);
     expect($p->detail(nexus::Mode::testing))->has('the post');
 }
 
 test create_runs_the_hooks_and_answers_the_model
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->written($insertId: 11);
-    nexus::Payload $payload = payload('/posts');
-    TCrud $crud = $r->crud();
-    Seen $seen = Seen();
+    $payload = payload('/posts');
+    $crud = $r->crud();
+    $seen = Seen();
     $crud->after = function[$seen](nexus::crud::Verb $v, const Post& $p) : void {
         $seen->titles[] = $p->title;
     };
-    nexus::Response $made = guard $crud->create($payload, Post($authorId: 7, $title: 'fresh'));
+    $made = guard $crud->create($payload, Post($authorId: 7, $title: 'fresh'));
     expect($made->status)->is(201);
     expect($made->body)->is('{"data":{"id":11,"title":"fresh"}}');
     expect($seen->titles)->is(['fresh']);
@@ -228,9 +225,9 @@ test create_runs_the_hooks_and_answers_the_model
 
 test the_repository_refusing_is_a_409
 {
-    Rig $r = Rig();
-    nexus::Payload $payload = payload('/posts');
-    nexus::Problem $p = $r->crud()->create($payload, Post($authorId: 7, $title: '   '))->failure();
+    $r = Rig();
+    $payload = payload('/posts');
+    $p = $r->crud()->create($payload, Post($authorId: 7, $title: '   '))->failure();
     expect($p->status())->is(409);
     expect($p->detail(nexus::Mode::testing))->has('a post needs a title');
     expect($r->fake->count())->is(0);
@@ -238,9 +235,9 @@ test the_repository_refusing_is_a_409
 
 test update_fills_and_saves
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([row(3, 'old')])->written();
-    nexus::Payload $payload = payload('/posts/3');
+    $payload = payload('/posts/3');
     string $p = body($r->crud()->update($payload, 3, function(Post& $post) : status<nexus::Problem> {
         $post->title = 'new';
         return .ok;
@@ -251,10 +248,10 @@ test update_fills_and_saves
 
 test authorize_guards_every_record
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([row(3, 'mine')]);
-    nexus::Payload $payload = payload('/posts/3');
-    TCrud $crud = $r->crud();
+    $payload = payload('/posts/3');
+    $crud = $r->crud();
     $crud->authorize = function(nexus::crud::Verb $v, const Post& $p) : status<nexus::Problem> {
         if ($v->writes()) {
             return .error(.forbidden('read only'));
@@ -268,22 +265,22 @@ test authorize_guards_every_record
 
 test delete_is_a_soft_delete_here
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([row(3, 'gone')])->written();
-    nexus::Payload $payload = payload('/posts/3');
+    $payload = payload('/posts/3');
     guard $r->crud()->delete($payload, 3);
     expect($r->fake->last())->is('UPDATE `posts` SET `updated_at` = ?, `deleted_at` = ? WHERE `posts`.`id` = ?');
 }
 
 test find_and_page_hand_back_models
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->fake->rows([row(5, 'e')])->rows([row(2, 'b'), row(1, 'a')]);
-    nexus::Payload $payload = payload('/posts/5');
-    Post $p = guard $r->crud()->find($payload, 5);
+    $payload = payload('/posts/5');
+    $p = guard $r->crud()->find($payload, 5);
     expect($p->title)->is('e');
-    nexus::Payload $l = payload('/posts?page=1');
-    nexus::crud::Page<Post> $page = guard $r->crud()->page($l, listing());
+    $l = payload('/posts?page=1');
+    $page = guard $r->crud()->page($l, listing());
     expect($page->models)->size(2);
     expect($page->models[1]->title)->is('a');
     expect($page->paged)->yes(says: 'the page is paged');
@@ -293,8 +290,8 @@ test find_and_page_hand_back_models
 
 test a_bad_include_stops_a_create_before_the_write
 {
-    Rig $r = Rig();
-    nexus::Payload $payload = payload('/posts?include=secrets');
+    $r = Rig();
+    $payload = payload('/posts?include=secrets');
     expect($r->crud()->create($payload, Post($authorId: 7, $title: 'fresh'))->failure()->status())->is(400);
     expect($r->fake->count())->is(0);
 }

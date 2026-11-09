@@ -1,9 +1,8 @@
 namespace nexus::auth;
 
 /**
- * Reads signed requests: `Authorization: Nexus-Sig id=..,ts=..,sig=..`,
- * and with `compat` also `X-AccessToken`, which signs the method, target
- * and time without the body.
+ * Reads signed requests: `Authorization: Nexus-Sig id=..,ts=..,sig=..`, and with `compat` also
+ * `X-AccessToken`, which signs the method, target and time without the body.
  */
 #[atomic]
 public class SignedGuard : Guard
@@ -29,7 +28,7 @@ public class SignedGuard : Guard
         if ($auth != null) {
             string $value = guard $auth;
             if ($value->starts(SignedHeader::SCHEME)) {
-                $h = SignedHeader::parse($value);
+                $h = .parse($value);
                 if ($h == null) {
                     return .error(.unauthorized('the signature header is malformed'));
                 }
@@ -39,7 +38,7 @@ public class SignedGuard : Guard
             string? $access = $payload->request->header('X-AccessToken');
             if ($access != null) {
                 string $value = guard $access;
-                $h = SignedHeader::access($value);
+                $h = .parse(accessToken: $value);
                 if ($h == null) {
                     return .error(.unauthorized('the access token is malformed'));
                 }
@@ -49,9 +48,7 @@ public class SignedGuard : Guard
             return .ok(null);
         }
         SignedHeader $header = guard $h;
-        Identity $id = guard $payload->get<Sessions>()->check($header, $payload->request) else ($p) {
-            return .error($p);
-        };
+        Identity $id = try $payload->get<Sessions>()->check($header, $payload->request);
         return .ok($id);
     }
 

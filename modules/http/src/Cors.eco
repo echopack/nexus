@@ -1,9 +1,8 @@
 namespace nexus::http;
 
 /**
- * Cross-origin resource sharing. Answers preflight requests itself and adds
- * the allow headers to every response for an allowed origin. Add it first
- * in an extension's `middleware` hook:
+ * Cross-origin resource sharing. Answers preflight requests itself and adds the allow headers to
+ * every response for an allowed origin. Add it first in an extension's `middleware` hook:
  *
  *     array<string> $origins = ['https://app.example.com'];
  *     $p->add(nexus::http::Cors($origins));
@@ -19,34 +18,31 @@ public class Cors : nexus::Middleware
     public int64 $maxAge = 600;
 
     /**
-     * Allows `$origins` exactly; `*` allows any origin (and then never sends
-     * credentials).
+     * Allows `$origins` exactly; `*` allows any origin (and then never sends credentials).
      */
     public constructor(array<string> $origins)
     {
-        $this->origins = $origins;
+        $this->origins = mv $origins;
     }
 
     public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
     {
-        string? $given = $payload->request->header('Origin');
-        if ($given == null) {
+        $origin = guard $payload->request->header('Origin') else {
             return $next->run($payload);
-        }
-        string $origin = guard $given;
+        };
         if (!$this->allows($origin)) {
             return $next->run($payload);
         }
         bool $preflight = $payload->request->method == nexus::Method::options && $payload->request->header('Access-Control-Request-Method') != null;
         if ($preflight) {
-            nexus::Response $r = nexus::Response(204);
+            $r = nexus::Response(204);
             $this->stamp($r, $origin);
             $r->header('Access-Control-Allow-Methods', str::join($this->methods, ', '));
             $r->header('Access-Control-Allow-Headers', str::join($this->headers, ', '));
             $r->header('Access-Control-Max-Age', str::from($this->maxAge));
             return $r;
         }
-        nexus::Response $r = $next->run($payload);
+        $r = $next->run($payload);
         $this->stamp($r, $origin);
         if (!$this->expose->empty()) {
             $r->header('Access-Control-Expose-Headers', str::join($this->expose, ', '));
@@ -64,7 +60,7 @@ public class Cors : nexus::Middleware
         return false;
     }
 
-    private function stamp(nexus::Response& $r, const string& $origin) : void
+    private const function stamp(nexus::Response& $r, const string& $origin) : void
     {
         bool $any = false;
         foreach ($this->origins as const &$o) {

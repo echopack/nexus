@@ -1,30 +1,26 @@
 namespace nexus;
 
 /**
- * Input messages in more than one language. Every refusal starts in
- * English; a catalog per locale says it in another language, and the
- * request picks the locale (`Accept-Language`; `LANG` on the command
- * line). The kernel binds one, filled with the English overrides that
- * `#[nexus::message]` and `#[nexus::label]` declare; an app adds its
- * catalogs in `boot()`:
+ * Input messages in more than one language. Every refusal starts in English; a catalog per locale
+ * says it in another language, and the request picks the locale (`Accept-Language`; `LANG` on the
+ * command line). The kernel binds one, filled with the English overrides that `#[nexus::message]`
+ * and `#[nexus::label]` declare; an app adds its catalogs in `boot()`:
  *
  * ```echo
  * nexus::Messages $m = $kernel->services->get<nexus::Messages>();
  * $m->add('de', guard json::parse(std::embed::text('../lang/de.json')));
  * ```
  *
- * A catalog is a JSON object of keys to messages, nested objects joined
- * with dots. A refusal of field `email` of `blog::Registration` with code
- * `min` on a `string` looks for, in each locale of the chain (`de-CH`,
- * `de`, then `en`):
+ * A catalog is a JSON object of keys to messages, nested objects joined with dots. A refusal of
+ * field `email` of `blog::Registration` with code `min` on a `string` looks for, in each locale of
+ * the chain (`de-CH`, `de`, then `en`):
  *
  * - `blog::Registration.email.min`, a message for this one field;
  * - `rule.min.string`, then `rule.min`.
  *
- * Its `{label}` is `label.blog::Registration.email`, then `label.email`,
- * then the English label. The holes are `{label}` and the rule's params
- * (`{min}`, `{max}`, `{values}`, `{other}`, `{date}`, `{value}`, `{size}`).
- * Nothing found leaves the English message.
+ * Its `{label}` is `label.blog::Registration.email`, then `label.email`, then the English label.
+ * The holes are `{label}` and the rule's params (`{min}`, `{max}`, `{values}`, `{other}`, `{date}`,
+ * `{value}`, `{size}`). Nothing found leaves the English message.
  */
 #[atomic]
 public class Messages
@@ -45,8 +41,8 @@ public class Messages
     }
 
     /**
-     * Adds the messages of `$catalog` to `$locale` (`de`, `de-CH`); a key
-     * given twice keeps the last.
+     * Adds the messages of `$catalog` to `$locale` (`de`, `de-CH`); a key given twice keeps the
+     * last.
      */
     public function add(const string& $locale, const json::Value& $catalog) : void
     {
@@ -79,14 +75,12 @@ public class Messages
     }
 
     /**
-     * The best locale with a catalog for an `Accept-Language` value,
-     * highest quality first: `de-CH` is taken as is, else as `de`. `en`
-     * when nothing fits.
+     * The best locale with a catalog for an `Accept-Language` value, highest quality first: `de-CH`
+     * is taken as is, else as `de`. `en` when nothing fits.
      */
     public const function pick(const string& $accept) : string
     {
-        array<string> $given = [];
-        array<float64> $weights = [];
+        array<Preference> $wanted = [];
         foreach (str::split($accept, ',') as const &$raw) {
             string $part = string::from(str::trim($raw));
             float64 $q = 1.0;
@@ -101,30 +95,17 @@ public class Messages
             if ($part->empty() || $part == '*' || $q <= 0.0) {
                 continue;
             }
-            $given[] = string::from(str::lower($part));
-            $weights[] = $q;
+            $wanted[] = Preference(string::from(str::lower($part)), $q);
         }
-        // highest quality first, the first listed winning ties
-        array<string> $tags = [];
-        array<bool> $taken = [];
-        foreach ($given as const &$_) {
-            $taken[] = false;
-        }
-        foreach ($given as const &$_) {
-            usize $best = $given->count();
-            foreach (0 .. $given->count() as $i) {
-                if (!$taken[$i] && ($best == $given->count() || $weights[$i] > $weights[$best])) {
-                    $best = $i;
-                }
+        // highest quality first; the sort is stable, so the first listed wins ties
+        $wanted->sort(by: function(const Preference& $a, const Preference& $b) : ordering {
+            return $b->q <=> $a->q;
+        });
+        foreach ($wanted as const &$w) {
+            if ($this->known->has($w->tag)) {
+                return $this->known->get($w->tag);
             }
-            $taken[$best] = true;
-            $tags[] = $given[$best];
-        }
-        foreach ($tags as const &$tag) {
-            if ($this->known->has($tag)) {
-                return $this->known->get($tag);
-            }
-            string $primary = Messages::primary($tag);
+            string $primary = Messages::primary($w->tag);
             if ($this->known->has($primary)) {
                 return $this->known->get($primary);
             }
@@ -133,8 +114,8 @@ public class Messages
     }
 
     /**
-     * The locale `$payload` speaks: its `Accept-Language`, or `LANG` (`de_CH.UTF-8`)
-     * for a command or a task.
+     * The locale `$payload` speaks: its `Accept-Language`, or `LANG` (`de_CH.UTF-8`) for a command
+     * or a task.
      */
     public const function locale(const Payload& $payload) : string
     {
@@ -159,8 +140,7 @@ public class Messages
     }
 
     /**
-     * `$p` with every field message in `$locale`; other problems as they
-     * are.
+     * `$p` with every field message in `$locale`; other problems as they are.
      */
     public const function translate(const Problem& $p, const string& $locale) : Problem
     {
@@ -172,7 +152,7 @@ public class Messages
         foreach ($fields as const &$f) {
             $out[] = $this->translate($f, $locale);
         }
-        return Problem::invalid($out);
+        return .invalid(mv $out);
     }
 
     /**
@@ -181,7 +161,7 @@ public class Messages
     public const function translate(const FieldError& $e, const string& $locale) : FieldError
     {
         FieldError $out = $e;
-        array<string> $chain = $this->chain($locale);
+        $chain = $this->chain($locale);
         string? $found = null;
         foreach ($chain as const &$l) {
             if ($found != null) {
@@ -218,8 +198,7 @@ public class Messages
     }
 
     /**
-     * Where to look for `$locale`: itself, its primary language, then
-     * English.
+     * Where to look for `$locale`: itself, its primary language, then English.
      */
     public const function chain(const string& $locale) : array<string>
     {
@@ -263,4 +242,13 @@ public class Messages
             }
         }
     }
+}
+
+/**
+ * One language range of an `Accept-Language` value, lower case, with its quality.
+ */
+internal struct Preference
+{
+    public string $tag;
+    public float64 $q;
 }

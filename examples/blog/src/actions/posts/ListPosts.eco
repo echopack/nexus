@@ -1,8 +1,8 @@
 namespace blog;
 
 /**
- * Posts, newest first, a page at a time: `?order=title`, `?tag=echo`,
- * `?ids=1,2`, `?count=1`, `?include=author`.
+ * Posts, newest first, a page at a time: `?order=title`, `?tag=echo`, `?ids=1,2`, `?count=1`,
+ * `?include=author`.
  */
 #[nexus::answers: { collection: "blog::PostTransformer" }]
 public class ListPosts : nexus::Action
@@ -18,7 +18,7 @@ public class ListPosts : nexus::Action
 
     public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
     {
-        nexus::crud::Listing<PostQuery> $o = nexus::crud::Listing<PostQuery>();
+        $o = nexus::crud::Listing<PostQuery>();
         $o->orderable('created_at', PostTable::$createdAt);
         $o->orderable('title', PostTable::$title);
         $o->order = '-created_at';
@@ -27,12 +27,10 @@ public class ListPosts : nexus::Action
             return PostTable::$id in $ids;
         };
         $o->filter = function(PostQuery $q, const nexus::Request& $req) : result<PostQuery, nexus::Problem> {
-            string? $tag = $req->query->get('tag');
-            if ($tag == null) {
+            $tag = guard $req->query->get('tag') else {
                 return .ok($q);
-            }
-            string $t = guard $tag;
-            return .ok($q->tagged($t));
+            };
+            return .ok($q->tagged($tag));
         };
         return $this->crud->list($payload, $o);
     }

@@ -4,53 +4,45 @@ use std::thread;
 use std::time;
 
 /**
- * The queue in memory: for tests, and for one process that may lose what
- * waits when it stops.
+ * The queue in memory: for tests, and for one process that may lose what waits when it stops.
  */
 #[atomic]
 public class MemoryQueue : Queue
 {
-    private thread::mutex<array<StoredTask>> $tasks;
+    private thread::mutex<array<StoredTask>> $tasks = thread::mutex<array<StoredTask>>(array<StoredTask>());
 
-    public constructor()
-    {
-        $this->tasks = thread::mutex<array<StoredTask>>(array<StoredTask>());
-    }
-
-    public function push(const StoredTask& $task) : result<bool, nexus::Problem>
+    public function push(const StoredTask& $task) : result<Pushed, nexus::Problem>
     {
         thread::locked<array<StoredTask>> $held = $this->tasks->lock();
         if (!$task->key->empty()) {
             foreach ($held->value as const &$j) {
                 if ($j->key == $task->key) {
-                    return .ok(false);
+                    return .ok(.duplicate);
                 }
             }
         }
         $held->value[] = $task;
-        return .ok(true);
+        return .ok(.stored);
     }
 
     public function claim(const array<string>& $queues, time::timestamp $now, time::timestamp $until) : result<StoredTask?, nexus::Problem>
     {
         thread::locked<array<StoredTask>> $held = $this->tasks->lock();
         usize $best = $held->value->count();
-        usize $i = 0;
-        while ($i < $held->value->count()) {
-            StoredTask $j = $held->value[$i];
+        foreach ($held->value as $i => const &$j) {
             if ($j->due($now) && MemoryQueue::listed($queues, $j->queue)) {
                 if ($best == $held->value->count() || $j->availableAt < $held->value[$best]->availableAt) {
                     $best = $i;
                 }
             }
-            $i = $i + 1;
         }
         if ($best == $held->value->count()) {
             return .ok(null);
         }
-        $held->value[$best]->attempts = $held->value[$best]->attempts + 1;
-        $held->value[$best]->reservedUntil = $until;
-        StoredTask $claimed = $held->value[$best];
+        StoredTask& $taken = $held->value[$best];
+        $taken->attempts = $taken->attempts + 1;
+        $taken->reservedUntil = $until;
+        StoredTask $claimed = $taken;
         return .ok($claimed);
     }
 
@@ -107,20 +99,18 @@ public class MemoryQueue : Queue
         return .ok($out);
     }
 
-    public function again(const string& $id, time::timestamp $now) : result<bool, nexus::Problem>
+    public function again(const string& $id, time::timestamp $now) : result<Requeued, nexus::Problem>
     {
         thread::locked<array<StoredTask>> $held = $this->tasks->lock();
-        usize $i = 0;
-        while ($i < $held->value->count()) {
-            if ($held->value[$i]->id == $id && $held->value[$i]->failedAt != null) {
-                $held->value[$i]->failedAt = null;
-                $held->value[$i]->attempts = 0;
-                $held->value[$i]->availableAt = $now;
-                return .ok(true);
+        foreach ($held->value as &$j) {
+            if ($j->id == $id && $j->failedAt != null) {
+                $j->failedAt = null;
+                $j->attempts = 0;
+                $j->availableAt = $now;
+                return .ok(.sent);
             }
-            $i = $i + 1;
         }
-        return .ok(false);
+        return .ok(.missing);
     }
 
     public function prune(time::timestamp $before) : result<uint64, nexus::Problem>
@@ -140,7 +130,7 @@ public class MemoryQueue : Queue
                 $kept[] = $j;
             }
         }
-        $held->value = $kept;
+        $held->value = mv $kept;
         return .ok($gone);
     }
 
@@ -159,7 +149,7 @@ public class MemoryQueue : Queue
     /**
      * Every task stored, for tests.
      */
-    public function all() : array<StoredTask>
+    public const function all() : array<StoredTask>
     {
         thread::locked<array<StoredTask>> $held = $this->tasks->lock();
         return $held->value;
@@ -180,16 +170,14 @@ public class MemoryQueue : Queue
      */
     internal static function held(const array<StoredTask>& $all, const StoredTask& $task) : usize?
     {
-        usize $i = 0;
-        while ($i < $all->count()) {
-            if ($all[$i]->id == $task->id) {
-                if ($all[$i]->attempts != $task->attempts) {
+        foreach ($all as $i => const &$t) {
+            if ($t->id == $task->id) {
+                if ($t->attempts != $task->attempts) {
                     return null;
                 }
                 usize $at = $i;
                 return $at;
             }
-            $i = $i + 1;
         }
         return null;
     }

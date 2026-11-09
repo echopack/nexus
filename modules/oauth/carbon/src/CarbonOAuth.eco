@@ -3,8 +3,7 @@ namespace nexus::oauth::carbon;
 use std::time;
 
 /**
- * nexus-oauth's store in the app's database, through a request's carbon
- * session.
+ * nexus-oauth's store in the app's database, through a request's carbon session.
  */
 public class CarbonOAuth : nexus::oauth::OAuthStore
 {
@@ -17,12 +16,8 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
 
     public function client(const string& $id) : result<nexus::oauth::Client?, nexus::Problem>
     {
-        ClientRowRepository $repo = guard $this->clientRepo() else ($p) {
-            return .error($p);
-        };
-        ClientRow? $found = guard $repo->find()->get($id) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        ClientRowRepository $repo = try $this->clientRepo();
+        ClientRow? $found = try $repo->find()->get($id);
         if ($found == null) {
             return .ok(null);
         }
@@ -32,80 +27,53 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
 
     public function register(const nexus::oauth::Client& $c) : status<nexus::Problem>
     {
-        ClientRowRepository $repo = guard $this->clientRepo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->create(ClientRow::of($c)) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        ClientRowRepository $repo = try $this->clientRepo();
+        try $repo->create(.of($c));
         return .ok;
     }
 
     public function touch(const string& $id, time::timestamp $at) : status<nexus::Problem>
     {
-        ClientRowRepository $repo = guard $this->clientRepo() else ($p) {
-            return .error($p);
-        };
-        hydrahon::Values $set = hydrahon::Values();
+        ClientRowRepository $repo = try $this->clientRepo();
+        $set = hydrahon::Values();
         $set[ClientRowTable::$usedAt] = $at;
-        guard $repo->find()->where(ClientRowTable::$id == $id)->update($set) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        try $repo->find()->where(ClientRowTable::$id == $id)->update($set);
         return .ok;
     }
 
     public function clients() : result<uint64, nexus::Problem>
     {
-        ClientRowRepository $repo = guard $this->clientRepo() else ($p) {
-            return .error($p);
-        };
-        uint64 $n = guard $repo->find()->count() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        ClientRowRepository $repo = try $this->clientRepo();
+        uint64 $n = try $repo->find()->count();
         return .ok($n);
     }
 
     public function sweep(time::timestamp $before) : status<nexus::Problem>
     {
-        ClientRowRepository $repo = guard $this->clientRepo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->find()->where(ClientRowTable::$usedAt->isNull())->where(ClientRowTable::$createdAt < $before)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        ClientRowRepository $repo = try $this->clientRepo();
+        try $repo->find()->where(ClientRowTable::$usedAt->isNull())->where(ClientRowTable::$createdAt < $before)->purge();
         return .ok;
     }
 
     public function keep(const nexus::oauth::Code& $c) : status<nexus::Problem>
     {
-        CodeRowRepository $repo = guard $this->codeRepo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->create(CodeRow::of($c)) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        CodeRowRepository $repo = try $this->codeRepo();
+        try $repo->create(.of($c));
         return .ok;
     }
 
     /**
-     * Reads the code, then deletes it; only the caller whose delete removed
-     * the row gets it.
+     * Reads the code, then deletes it; only the caller whose delete removed the row gets it.
      */
     public function take(const string& $hash) : result<nexus::oauth::Code?, nexus::Problem>
     {
-        CodeRowRepository $repo = guard $this->codeRepo() else ($p) {
-            return .error($p);
-        };
-        CodeRow? $found = guard $repo->find()->get($hash) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        CodeRowRepository $repo = try $this->codeRepo();
+        CodeRow? $found = try $repo->find()->get($hash);
         if ($found == null) {
             return .ok(null);
         }
         CodeRow $row = guard $found;
-        uint64 $gone = guard $repo->find()->where(CodeRowTable::$hash == $hash)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        uint64 $gone = try $repo->find()->where(CodeRowTable::$hash == $hash)->purge();
         if ($gone != 1) {
             return .ok(null);
         }
@@ -114,12 +82,8 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
 
     public function grant(const string& $id) : result<nexus::oauth::Grant?, nexus::Problem>
     {
-        GrantRowRepository $repo = guard $this->grantRepo() else ($p) {
-            return .error($p);
-        };
-        GrantRow? $found = guard $repo->find()->get($id) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        GrantRowRepository $repo = try $this->grantRepo();
+        GrantRow? $found = try $repo->find()->get($id);
         if ($found == null) {
             return .ok(null);
         }
@@ -129,56 +93,43 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
 
     public function open(const nexus::oauth::Grant& $g) : status<nexus::Problem>
     {
-        GrantRowRepository $repo = guard $this->grantRepo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->create(GrantRow::of($g)) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        GrantRowRepository $repo = try $this->grantRepo();
+        try $repo->create(.of($g));
         return .ok;
     }
 
     /**
-     * One update on the grant's id and the refresh hash it had: a second
-     * refresh with the same token changes no row.
+     * One update on the grant's id and the refresh hash it had: a second refresh with the same
+     * token changes no row.
      */
-    public function rotate(const nexus::oauth::Grant& $g, const string& $was) : result<bool, nexus::Problem>
+    public function rotate(const nexus::oauth::Grant& $g, const string& $was) : result<nexus::oauth::Rotation, nexus::Problem>
     {
-        GrantRowRepository $repo = guard $this->grantRepo() else ($p) {
-            return .error($p);
-        };
-        hydrahon::Values $set = hydrahon::Values();
+        GrantRowRepository $repo = try $this->grantRepo();
+        $set = hydrahon::Values();
         $set[GrantRowTable::$accessHash] = $g->accessHash;
         $set[GrantRowTable::$accessExpiresAt] = $g->accessExpiresAt;
         $set[GrantRowTable::$refreshHash] = $g->refreshHash;
         $set[GrantRowTable::$refreshExpiresAt] = $g->refreshExpiresAt;
         $set[GrantRowTable::$previousHash] = $g->previousHash;
         $set[GrantRowTable::$usedAt] = $g->usedAt;
-        uint64 $n = guard $repo->find()->where(GrantRowTable::$id == $g->id)->where(GrantRowTable::$refreshHash == $was)->update($set) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
-        return .ok($n == 1);
+        uint64 $n = try $repo->find()->where(GrantRowTable::$id == $g->id)->where(GrantRowTable::$refreshHash == $was)->update($set);
+        if ($n != 1) {
+            return .ok(.lost);
+        }
+        return .ok(.won);
     }
 
     public function drop(const string& $id) : status<nexus::Problem>
     {
-        GrantRowRepository $repo = guard $this->grantRepo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->find()->where(GrantRowTable::$id == $id)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        GrantRowRepository $repo = try $this->grantRepo();
+        try $repo->find()->where(GrantRowTable::$id == $id)->purge();
         return .ok;
     }
 
     public function grants(const string& $subject) : result<array<nexus::oauth::Grant>, nexus::Problem>
     {
-        GrantRowRepository $repo = guard $this->grantRepo() else ($p) {
-            return .error($p);
-        };
-        array<GrantRow> $rows = guard $repo->find()->where(GrantRowTable::$subject == $subject)->order(asc: GrantRowTable::$createdAt)->get() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        GrantRowRepository $repo = try $this->grantRepo();
+        array<GrantRow> $rows = try $repo->find()->where(GrantRowTable::$subject == $subject)->order(asc: GrantRowTable::$createdAt)->get();
         array<nexus::oauth::Grant> $out = [];
         foreach ($rows as const &$row) {
             $out[] = $row->grant();
@@ -188,42 +139,28 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
 
     public function prune(time::timestamp $now) : status<nexus::Problem>
     {
-        CodeRowRepository $codes = guard $this->codeRepo() else ($p) {
-            return .error($p);
-        };
-        guard $codes->find()->where(CodeRowTable::$expiresAt < $now)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
-        GrantRowRepository $grants = guard $this->grantRepo() else ($p) {
-            return .error($p);
-        };
-        guard $grants->find()->where(GrantRowTable::$refreshExpiresAt < $now)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        CodeRowRepository $codes = try $this->codeRepo();
+        try $codes->find()->where(CodeRowTable::$expiresAt < $now)->purge();
+        GrantRowRepository $grants = try $this->grantRepo();
+        try $grants->find()->where(GrantRowTable::$refreshExpiresAt < $now)->purge();
         return .ok;
     }
 
     internal function clientRepo() : result<ClientRowRepository, nexus::Problem>
     {
-        ClientRowRepository $repo = guard $this->session->repo<ClientRowRepository>() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        ClientRowRepository $repo = try $this->session->repo<ClientRowRepository>();
         return .ok($repo);
     }
 
     internal function codeRepo() : result<CodeRowRepository, nexus::Problem>
     {
-        CodeRowRepository $repo = guard $this->session->repo<CodeRowRepository>() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        CodeRowRepository $repo = try $this->session->repo<CodeRowRepository>();
         return .ok($repo);
     }
 
     internal function grantRepo() : result<GrantRowRepository, nexus::Problem>
     {
-        GrantRowRepository $repo = guard $this->session->repo<GrantRowRepository>() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        GrantRowRepository $repo = try $this->session->repo<GrantRowRepository>();
         return .ok($repo);
     }
 }

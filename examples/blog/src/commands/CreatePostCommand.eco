@@ -1,8 +1,7 @@
 namespace blog;
 
 /**
- * Publishes a post by the user `--author` names, with the same rules as
- * the API.
+ * Publishes a post by the user `--author` names, with the same rules as the API.
  */
 public class CreatePostCommand : nexus::Cli
 {
@@ -15,12 +14,8 @@ public class CreatePostCommand : nexus::Cli
 
     public function handle(nexus::Payload& $payload, command::CLIContext& $out, AuthoredPost $in) : status<nexus::Problem>
     {
-        User $author = guard $this->posts->author($in->author) else ($e) {
-            return .error($e);
-        };
-        Post $made = guard $this->posts->create($author, NewPost($title: $in->title, $body: $in->body, $tags: $in->tags)) else ($e) {
-            return .error($e);
-        };
+        $author = try $this->posts->author($in->author);
+        $made = try $this->posts->create($author, NewPost($title: $in->title, $body: $in->body, $tags: $in->tags));
         $out->line("published post #{$made->id} by {$author->name}");
         return .ok;
     }

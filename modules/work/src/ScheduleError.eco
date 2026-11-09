@@ -1,0 +1,36 @@
+namespace nexus::work;
+
+/**
+ * Why a task's schedule does not parse.
+ */
+public enum ScheduleError
+{
+    /**
+     * `every` is not a duration like 30s, 15m or 2h.
+     */
+    case duration(string $every);
+
+    /**
+     * `every` is not whole seconds, at least one.
+     */
+    case seconds(string $every);
+
+    /**
+     * The cron line does not parse.
+     */
+    case cron(CronError $why);
+}
+
+namespace str;
+
+/**
+ * What is wrong with the schedule, as the boot error says it.
+ */
+public function from(const nexus::work::ScheduleError& $e) : string
+{
+    return match ($e) {
+        nexus::work::ScheduleError::duration($every) => "'{$every}' is not a duration like 30s, 15m or 2h",
+        nexus::work::ScheduleError::seconds($every) => "'{$every}' must be whole seconds, at least one",
+        nexus::work::ScheduleError::cron($why) => str::from($why),
+    };
+}

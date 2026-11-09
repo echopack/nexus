@@ -1,8 +1,7 @@
 namespace nexus::oauth;
 
 /**
- * Disconnects a client the signed in user allowed: its tokens stop
- * working at once.
+ * Disconnects a client the signed in user allowed: its tokens stop working at once.
  */
 #[nexus::through: ["nexus::auth::Authenticate"]]
 public class DropGrant : nexus::Action
@@ -16,12 +15,8 @@ public class DropGrant : nexus::Action
 
     public function handle(nexus::Payload& $payload, string $id) : status<nexus::Problem>
     {
-        nexus::auth::Identity $me = guard $payload->state<nexus::auth::Identity>() else ($p) {
-            return .error($p);
-        };
-        Grant? $found = guard $this->store->grant($id) else ($p) {
-            return .error($p);
-        };
+        $me = try $payload->state<nexus::auth::Identity>();
+        Grant? $found = try $this->store->grant($id);
         Grant $g = guard $found else {
             return .error(.notFound('the grant'));
         };

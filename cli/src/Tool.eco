@@ -1,11 +1,10 @@
 namespace nexusgen;
 
 /**
- * A generator a dependency offers that `nexus gen` runs on its own decls
- * pass: carbongen writes `.carbon/` for carbon models, restgen writes
- * `.rest/` for rest resources. One runs only when the manifest wires its
- * directory behind its define, and reads the declarations from the file
- * nexus gen wrote instead of making a pass of its own.
+ * A generator a dependency offers that `nexus gen` runs on its own decls pass: carbongen writes
+ * `.carbon/` for carbon models, restgen writes `.rest/` for rest resources. One runs only when the
+ * manifest wires its directory behind its define, and reads the declarations from the file nexus
+ * gen wrote instead of making a pass of its own.
  */
 public enum Tool : uint8
 {
@@ -29,8 +28,7 @@ public enum Tool : uint8
     }
 
     /**
-     * The library that offers the tool, which the module must depend on
-     * directly to reach it.
+     * The library that offers the tool, which the module must depend on directly to reach it.
      */
     public const function library() : string
     {

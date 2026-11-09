@@ -1,16 +1,14 @@
 /**
- * nexus-rest with hand-written mappings: negotiated JSON and XML,
- * lists with meta, includes checked against the transformer, nested
- * models through the transformer network (cycles included), wrapped
- * references with meta, the depth limit, and the context handed down
- * the tree.
+ * nexus-rest with hand-written mappings: negotiated JSON and XML, lists with meta, includes checked
+ * against the transformer, nested models through the transformer network (cycles included), wrapped
+ * references with meta, the depth limit, and the context handed down the tree.
  */
 
 use nexus::testing::{TestApp, TestResponse};
 use container::{Builder, Container};
 use ecotest::expect;
 
-public class TOwner
+internal class TOwner
 {
     public int64 $id;
     public string $name;
@@ -24,7 +22,7 @@ public class TOwner
     }
 }
 
-public struct TItem
+internal struct TItem
 {
     public int64 $id;
     public string $name;
@@ -35,17 +33,17 @@ public struct TItem
 /**
  * Who is asking, as an action hands it to the transformers.
  */
-public struct TViewer
+internal struct TViewer
 {
     public int64 $id;
 }
 
 /**
- * Fields written by a hand-written `map`, what the generated mapping
- * does, and the viewer added by the `transform` hook.
+ * Fields written by a hand-written `map`, what the generated mapping does, and the viewer added by
+ * the `transform` hook.
  */
 #[atomic]
-public class TOwnerTransformer : nexus::rest::Transformer<TOwner>
+internal class TOwnerTransformer : nexus::rest::Transformer<TOwner>
 {
     public constructor()
     {
@@ -85,7 +83,7 @@ public class TOwnerTransformer : nexus::rest::Transformer<TOwner>
 }
 
 #[atomic]
-public class TItemTransformer : nexus::rest::Transformer<TItem>
+internal class TItemTransformer : nexus::rest::Transformer<TItem>
 {
     public constructor()
     {
@@ -114,13 +112,13 @@ public class TItemTransformer : nexus::rest::Transformer<TItem>
         $item->attribute('id', $m->id);
         $item->text('name', $m->name);
         $item->texts('tags', $m->tags, item: 'tag');
-        nexus::rest::Meta $meta = nexus::rest::Meta();
+        $meta = nexus::rest::Meta();
         $meta->with('is_cached', json::bool(true));
         $item->includeReference<TOwner>('holder', $m->owner, $meta);
     }
 }
 
-class TShow : nexus::Action
+internal class TShow : nexus::Action
 {
     public TItemTransformer $items;
 
@@ -131,13 +129,13 @@ class TShow : nexus::Action
 
     public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
     {
-        TItem $one = TItem($id: 1, $name: 'one', $tags: ['a', 'b']);
+        $one = TItem($id: 1, $name: 'one', $tags: ['a', 'b']);
         $one->owner = TOwner(7, 'Ann');
         return $this->items->createResponse($payload, $one);
     }
 }
 
-class TApp : nexus::Extension
+internal class TApp : nexus::Extension
 {
     public function name() : string
     {
@@ -157,7 +155,7 @@ class TApp : nexus::Extension
     }
 }
 
-function restTestRoutes(nexus::Services& $s) : void
+internal function restTestRoutes(nexus::Services& $s) : void
 {
     array<nexus::Method> $get = [nexus::Method::get];
     array<nexus::MiddlewareRef> $w = [];
@@ -165,53 +163,50 @@ function restTestRoutes(nexus::Services& $s) : void
         return true;
     };
     $s->route(nexus::Route($get, '/item', 'TShow', function(nexus::Payload& $payload) : nexus::Response {
-        TShow $a = $payload->get<TShow>();
-        result<nexus::Response, nexus::Problem> $result = $a->handle($payload);
-        return nexus::Reply::of($payload, $result);
+        $a = $payload->get<TShow>();
+        return nexus::Reply::of($payload, $a->handle($payload));
     }, $bound, $w));
     $s->route(nexus::Route($get, '/items', 'TList', function(nexus::Payload& $payload) : nexus::Response {
         array<TItem> $items = [TItem($id: 1, $name: 'one'), TItem($id: 2, $name: 'two')];
-        nexus::rest::Meta $meta = nexus::rest::Meta();
+        $meta = nexus::rest::Meta();
         $meta->with('total', json::int(41));
-        TItemTransformer $t = $payload->get<TItemTransformer>();
-        result<nexus::Response, nexus::Problem> $result = $t->createCollectionResponse($payload, $items, $meta);
-        return nexus::Reply::of($payload, $result);
+        $t = $payload->get<TItemTransformer>();
+        return nexus::Reply::of($payload, $t->createCollectionResponse($payload, $items, $meta));
     }, $bound, $w));
     $s->route(nexus::Route($get, '/viewed', 'TViewed', function(nexus::Payload& $payload) : nexus::Response {
-        TItem $one = TItem($id: 1, $name: 'one');
+        $one = TItem($id: 1, $name: 'one');
         $one->owner = TOwner(7, 'Ann');
-        nexus::rest::TransformerContext $ctx = nexus::rest::TransformerContext();
+        $ctx = nexus::rest::TransformerContext();
         $ctx->set<TViewer>($id: 7);
-        TItemTransformer $t = $payload->get<TItemTransformer>();
-        result<nexus::Response, nexus::Problem> $result = $t->createResponse($payload, $one, $ctx);
-        return nexus::Reply::of($payload, $result);
+        $t = $payload->get<TItemTransformer>();
+        return nexus::Reply::of($payload, $t->createResponse($payload, $one, $ctx));
     }, $bound, $w));
     $s->route(nexus::Route($get, '/cycle', 'TCycle', function(nexus::Payload& $payload) : nexus::Response {
-        TOwner $ann = TOwner(7, 'Ann');
+        $ann = TOwner(7, 'Ann');
         $ann->items = [TItem($id: 2, $name: 'two')];
-        TItem $one = TItem($id: 1, $name: 'one');
+        $one = TItem($id: 1, $name: 'one');
         $one->owner = $ann;
-        TItemTransformer $t = $payload->get<TItemTransformer>();
+        $t = $payload->get<TItemTransformer>();
         return nexus::Reply::of($payload, $t->createResponse($payload, $one));
     }, $bound, $w));
     $s->route(nexus::Route($get, '/orphan', 'TOrphan', function(nexus::Payload& $payload) : nexus::Response {
-        TItem $one = TItem($id: 1, $name: 'one');
-        TItemTransformer $t = $payload->get<TItemTransformer>();
+        $one = TItem($id: 1, $name: 'one');
+        $t = $payload->get<TItemTransformer>();
         return nexus::Reply::of($payload, $t->createResponse($payload, $one));
     }, $bound, $w));
     $s->route(nexus::Route($get, '/cached', 'TCached', function(nexus::Payload& $payload) : nexus::Response {
-        TItem $one = TItem($id: 1, $name: 'one');
-        nexus::rest::Meta $meta = nexus::rest::Meta();
+        $one = TItem($id: 1, $name: 'one');
+        $meta = nexus::rest::Meta();
         $meta->with('cached', json::bool(true));
-        nexus::rest::TransformerContext $ctx = nexus::rest::TransformerContext();
-        TItemTransformer $t = $payload->get<TItemTransformer>();
+        $ctx = nexus::rest::TransformerContext();
+        $t = $payload->get<TItemTransformer>();
         return nexus::Reply::of($payload, $t->createResponse($payload, $one, $meta, $ctx));
     }, $bound, $w));
     $s->route(nexus::Route($get, '/deep', 'TDeep', function(nexus::Payload& $payload) : nexus::Response {
-        TOwner $top = TOwner(1, 'top');
-        TOwner $at = $top;
+        $top = TOwner(1, 'top');
+        $at = $top;
         foreach (2 .. 20 as $i) {
-            TOwner $next = TOwner($i as int64, 'next');
+            $next = TOwner($i as int64, 'next');
             $at->boss = $next;
             $at = $next;
         }
@@ -223,43 +218,43 @@ function restTestRoutes(nexus::Services& $s) : void
             $path = "{$path}.boss";
         }
         array<TOwner> $owners = [$top];
-        nexus::rest::Meta $none = nexus::rest::Meta();
-        TOwnerTransformer $t = $payload->get<TOwnerTransformer>();
+        $none = nexus::rest::Meta();
+        $t = $payload->get<TOwnerTransformer>();
         return $t->createCollectionResponse($payload, $owners, $none, EchoPack::Rest::Includes::of($paths));
     }, $bound, $w));
 }
 
-function tApp() : TestApp
+internal function tApp() : TestApp
 {
     array<nexus::Extension> $exts = [TApp()];
-    return TestApp::boot($exts);
+    return TestApp($exts);
 }
 
 test an_item_answers_as_json_by_default
 {
-    TestResponse $r = tApp()->client()->get('/item');
+    $r = tApp()->client()->get('/item');
     $r->assertStatus(200)->assertHeader('Content-Type', 'application/json; charset=utf-8');
     $r->assertBody('{"data":{"id":1,"name":"one","tags":["a","b"]}}');
 }
 
 test xml_when_the_request_prefers_it
 {
-    TestResponse $r = tApp()->client()->with('Accept', 'application/xml')->get('/item?include=owner');
+    $r = tApp()->client()->with('Accept', 'application/xml')->get('/item?include=owner');
     $r->assertStatus(200)->assertHeader('Content-Type', 'application/xml; charset=utf-8');
     $r->assertBody('<?xml version="1.0" encoding="UTF-8"?><response><data id="1"><name>one</name><tags><tag>a</tag><tag>b</tag></tags><owner id="7"><name>Ann</name></owner></data></response>');
 }
 
 test lists_carry_their_meta_first
 {
-    TestResponse $list = tApp()->client()->get('/items');
+    $list = tApp()->client()->get('/items');
     $list->assertStatus(200)->assertBody('{"total":41,"data":[{"id":1,"name":"one","tags":[]},{"id":2,"name":"two","tags":[]}]}');
-    TestResponse $xml = tApp()->client()->with('Accept', 'application/xml')->get('/items');
+    $xml = tApp()->client()->with('Accept', 'application/xml')->get('/items');
     $xml->assertBodyContains('<total>41</total><data><item id="1"><name>one</name><tags/></item>');
 }
 
 test includes_are_checked_against_the_transformer
 {
-    TestApp $app = tApp();
+    $app = tApp();
     array<string> $owner = ['data', 'owner', 'name'];
     $app->client()->get('/item?include=owner')->assertStatus(200)->assertJson($owner, 'Ann');
     $app->client()->get('/item?include=owner.boss')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":["a","b"],"owner":{"id":7,"name":"Ann","boss":null}}}');
@@ -269,7 +264,7 @@ test includes_are_checked_against_the_transformer
 
 test nesting_stops_at_the_limit
 {
-    TestResponse $r = tApp()->client()->get('/deep');
+    $r = tApp()->client()->get('/deep');
     $r->assertStatus(200);
     // eight levels of boss below the top one, the ninth left out
     array<string> $eighth = ['data', '0', 'boss', 'boss', 'boss', 'boss', 'boss', 'boss', 'boss', 'boss', 'id'];
@@ -279,7 +274,7 @@ test nesting_stops_at_the_limit
 
 test the_context_reaches_nested_transformers
 {
-    TestApp $app = tApp();
+    $app = tApp();
     $app->client()->get('/viewed?include=owner')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":[],"owner":{"id":7,"name":"Ann","mine":true}}}');
     // without a context nothing knows the viewer
     $app->client()->get('/item?include=owner')->assertBodyContains('"owner":{"id":7,"name":"Ann"}}');
@@ -287,7 +282,7 @@ test the_context_reaches_nested_transformers
 
 test a_context_keeps_one_value_per_type
 {
-    nexus::rest::TransformerContext $ctx = nexus::rest::TransformerContext();
+    $ctx = nexus::rest::TransformerContext();
     expect($ctx->has<TViewer>())->no(says: 'a fresh context holds no viewer');
     expect($ctx->find<TViewer>())->none();
     $ctx->set<TViewer>($id: 1);
@@ -300,13 +295,13 @@ test a_context_keeps_one_value_per_type
 
 test the_network_resolves_cycles
 {
-    TestApp $app = tApp();
+    $app = tApp();
     $app->client()->get('/cycle?include=owner.items')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":[],"owner":{"id":7,"name":"Ann","items":[{"id":2,"name":"two","tags":[]}]}}}');
 }
 
 test a_network_holds_one_transformer_per_model
 {
-    nexus::rest::TransformerNetwork $net = nexus::rest::TransformerNetwork();
+    $net = nexus::rest::TransformerNetwork();
     expect($net->has<TOwner>())->no(says: 'a fresh network holds no TOwner transformer');
     expect($net->find<TOwner>())->none();
     $net->add<TOwner>(TOwnerTransformer());
@@ -317,7 +312,7 @@ test a_network_holds_one_transformer_per_model
 
 test a_reference_carries_meta_next_to_its_data
 {
-    TestApp $app = tApp();
+    $app = tApp();
     $app->client()->get('/cycle?include=holder')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":[],"holder":{"is_cached":true,"data":{"id":7,"name":"Ann"}}}}');
     $app->client()->with('Accept', 'application/xml')->get('/cycle?include=holder')->assertBody('<?xml version="1.0" encoding="UTF-8"?><response><data id="1"><name>one</name><tags/><holder><is_cached>true</is_cached><data id="7"><name>Ann</name></data></holder></data></response>');
 }
@@ -334,28 +329,27 @@ test an_item_answer_carries_meta_first
 
 test an_item_replaces_in_place_and_appends_new_keys
 {
-    nexus::rest::Item $item = nexus::rest::Item();
+    $item = nexus::rest::Item();
     $item->text('a', '1');
     $item->int('b', 2);
     $item->text('a', 'again');
     $item->bool('c', true);
     $item->remove('b');
     $item->remove('missing');
-    array<string> $keys = $item->keys();
-    expect($keys)->is(['a', 'c']);
+    expect($item->keys())->is(['a', 'c']);
     expect($item->has('a'))->yes(says: 'the item keeps a');
     expect($item->has('b'))->no(says: 'the item dropped b');
 }
 
 test an_item_writes_attributes_first_and_includes_last
 {
-    nexus::rest::Item $item = nexus::rest::Item();
+    $item = nexus::rest::Item();
     $item->text('name', 'one');
     $item->attribute('id', 1);
     $item->nil('gone');
-    nexus::rest::Out $o = nexus::rest::Out(EchoPack::Rest::Format::json, EchoPack::Rest::Includes());
-    nexus::rest::TransformerContext $ctx = nexus::rest::TransformerContext();
-    nexus::rest::Meta $none = nexus::rest::Meta();
+    $o = nexus::rest::Out(EchoPack::Rest::Format::json, EchoPack::Rest::Includes());
+    $ctx = nexus::rest::TransformerContext();
+    $none = nexus::rest::Meta();
     $o->begin($none);
     $o->open('thing');
     $item->flush($o, $ctx);
@@ -365,7 +359,7 @@ test an_item_writes_attributes_first_and_includes_last
 
 test an_include_the_request_did_not_ask_for_is_left_out
 {
-    nexus::rest::Item $item = nexus::rest::Item();
+    $item = nexus::rest::Item();
     TOwner? $none = null;
     $item->include<TOwner>('boss', $none);
     expect($item->has('boss'))->no(says: 'the unasked include boss is left out');
@@ -373,7 +367,7 @@ test an_include_the_request_did_not_ask_for_is_left_out
 
 test a_revealed_sensitive_key_is_written
 {
-    nexus::rest::Item $item = nexus::rest::Item();
+    $item = nexus::rest::Item();
     $item->protect(['email']);
     $item->reveal('email');
     $item->text('email', 'ann@example.com');
@@ -383,7 +377,7 @@ test a_revealed_sensitive_key_is_written
 #[tests: expects death]
 test a_sensitive_key_without_reveal_stops_the_program
 {
-    nexus::rest::Item $item = nexus::rest::Item();
+    $item = nexus::rest::Item();
     $item->protect(['email']);
     $item->text('email', 'ann@example.com');
 }

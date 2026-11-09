@@ -3,8 +3,8 @@ namespace nexus::oauth;
 use std::time;
 
 /**
- * Where clients, codes and grants are kept. `MemoryOAuth` keeps them in
- * the process; nexus-oauth-carbon in the app's database, per request.
+ * Where clients, codes and grants are kept. `MemoryOAuth` keeps them in the process;
+ * nexus-oauth-carbon in the app's database, per request.
  */
 public interface OAuthStore
 {
@@ -30,8 +30,7 @@ public interface OAuthStore
     function keep(const Code& $c) : status<nexus::Problem>;
 
     /**
-     * The code with hash `$hash`, removed as it is read: two callers never
-     * both get it.
+     * The code with hash `$hash`, removed as it is read: two callers never both get it.
      */
     function take(const string& $hash) : result<Code?, nexus::Problem>;
 
@@ -40,10 +39,10 @@ public interface OAuthStore
     function open(const Grant& $g) : status<nexus::Problem>;
 
     /**
-     * Saves `$g` when the stored grant still has refresh hash `$was`;
-     * false when another refresh got there first.
+     * Saves `$g` when the stored grant still has refresh hash `$was`, and says whether it did or
+     * another refresh got there first.
      */
-    function rotate(const Grant& $g, const string& $was) : result<bool, nexus::Problem>;
+    function rotate(const Grant& $g, const string& $was) : result<Rotation, nexus::Problem>;
 
     function drop(const string& $id) : status<nexus::Problem>;
 

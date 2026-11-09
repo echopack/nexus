@@ -23,14 +23,13 @@ public struct Next
     /**
      * Runs the next middleware, or the handler when none is left.
      */
-    public function run(Payload& $payload) : Response
+    public const function run(Payload& $payload) : Response
     {
         if ($this->at >= $this->chain->links->count()) {
             function<Response(Payload&)> $last = $this->chain->last;
             return $last($payload);
         }
         Middleware $m = $this->chain->links[$this->at];
-        Next $rest = Next($this->chain, $this->at + 1);
-        return $m->handle($payload, $rest);
+        return $m->handle($payload, Next($this->chain, $this->at + 1));
     }
 }

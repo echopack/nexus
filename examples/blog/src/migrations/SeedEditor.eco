@@ -1,8 +1,7 @@
 namespace blog;
 
 /**
- * The first author, so a fresh blog can take posts. The editor is its
- * admin.
+ * The first author, so a fresh blog can take posts. The editor is its admin.
  */
 #[carbon::migration: '20261102100200_seed_editor']
 public class SeedEditor : carbon::Migration

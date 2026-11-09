@@ -1,0 +1,126 @@
+/**
+ * Typed log records: structs tagged `#[nexus::log]`. For each one the generator writes
+ * `nexus::log::record(const R&)`, the overload `Logger::emit<R>` asks for, so
+ *
+ *     #[nexus::log: { level: "warn", message: "login throttled" }]
+ *     public struct LoginThrottled { public string $account; public int32 $attempts; }
+ *
+ * is logged with `$log->emit<LoginThrottled>($account, 11)`. Keys are the field names in
+ * snake_case, or what `#[nexus::name]` says; `#[nexus::sensitive]` fields log `[redacted]`; a null
+ * leaves its key out.
+ */
+
+namespace nexusgen::records;
+
+use nexusgen::{decl, names, types};
+
+/**
+ * Reads the record `$d` into `$p`, or records why it cannot be one.
+ */
+public function read(Program& $p, const json::Value& $d) : void
+{
+    $q = decl::text($d, 'qualified');
+    if (decl::text($d, 'kind') != 'struct') {
+        $p->fail($d, "#[nexus::log] goes on a struct whose fields are what it logs; {$q} is not one");
+        return;
+    }
+    if (!decl::items($d, 'generics')->empty()) {
+        $p->fail($d, "{$q} is generic; a log record is one concrete struct");
+        return;
+    }
+    $tool = guard decl::tool($d, 'log');
+    string $usage = '#[nexus::log] takes { level: "trace|debug|info|warn|error", message: "..." }';
+    string $level = '';
+    string $message = '';
+    foreach (decl::record(decl::value($tool)) as const &$e) {
+        if ($e->key == 'level') {
+            $level = decl::string($e->value);
+        } else if ($e->key == 'message') {
+            $message = decl::string($e->value);
+        } else {
+            $p->fail($d, "#[nexus::log] has no option {$e->key}; {$usage}");
+            return;
+        }
+    }
+    if ($level != 'trace' && $level != 'debug' && $level != 'info' && $level != 'warn' && $level != 'error') {
+        $p->fail($d, "{$q}: {$usage}");
+        return;
+    }
+    if ($message->empty()) {
+        $p->fail($d, "{$q} logs no message; {$usage}");
+        return;
+    }
+    $r = LogDecl($q, decl::text($d, 'file'), decl::int($d, 'line'), $level, $message);
+    foreach (decl::items($d, 'fields') as const &$f) {
+        if (decl::flag($f, 'static')) {
+            continue;
+        }
+        $name = decl::text($f, 'name');
+        $type = decl::field($f, 'type');
+        $bare = types::bare($type);
+        if (decl::text($f, 'visibility') == 'private') {
+            $p->failAt($d, $f, "field ${$name} is private; the generated record cannot read it");
+            return;
+        }
+        if (!loggable($bare)) {
+            $text = types::render($type);
+            $p->failAt($d, $f, "field ${$name} has type {$text}; a log record holds strings, integers, float64, bool, durations, timestamps, json::Value, nexus::log::Value and their nullables");
+            return;
+        }
+        $lf = LogField($name, decl::option($f, 'name', names::snake($name)));
+        if (types::optional($type)) {
+            $lf->unwrapped = types::render($bare);
+        }
+        $lf->sensitive = decl::has($f, 'sensitive');
+        $r->fields[] = mv $lf;
+    }
+    $p->logs[] = mv $r;
+}
+
+/**
+ * Whether `nexus::log::Fields` has a `[k] =` for a value of this type.
+ */
+internal function loggable(const json::Value& $t) : bool
+{
+    $kind = decl::text($t, 'kind');
+    if ($kind == 'string') {
+        return true;
+    }
+    if ($kind == 'prim') {
+        $n = decl::text($t, 'name');
+        return $n == 'bool' || $n == 'int32' || $n == 'int64' || $n == 'uint32' || $n == 'uint64' || $n == 'usize' || $n == 'float64';
+    }
+    $name = types::name($t);
+    return $name == 'json::Value' || $name == 'nexus::log::Value'
+        || $name == 'std::time::duration' || $name == 'time::duration'
+        || $name == 'std::time::timestamp' || $name == 'time::timestamp';
+}
+
+/**
+ * The `nexus::log::record` overload for `$r`.
+ */
+public function emit(Code& $code, const LogDecl& $r) : void
+{
+    $code->line('/**');
+    $code->line(" * The log record of {$r->qualified}.");
+    $code->line(' */');
+    $code->open("public function record(const {$r->qualified}& $r) : nexus::log::Record");
+    $code->line('nexus::log::Fields $f = [];');
+    foreach ($r->fields as const &$f) {
+        $key = names::quote($f->key);
+        if ($f->sensitive) {
+            $code->line("$f[{$key}] = '[redacted]';");
+        } else if ($f->unwrapped->empty()) {
+            $code->line("$f[{$key}] = $r->{$f->name};");
+        } else {
+            $code->open("if ($r->{$f->name} != null)");
+            $v = types::binding($f->unwrapped, '$v');
+            $code->line("{$v} = guard $r->{$f->name};");
+            $code->line("$f[{$key}] = $v;");
+            $code->close();
+        }
+    }
+    $message = names::literal($r->message);
+    $code->line("return nexus::log::Record(.{$r->level}, {$message}, mv $f);");
+    $code->close();
+}

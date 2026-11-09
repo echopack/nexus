@@ -6,8 +6,8 @@ namespace nexus::mcp;
 public struct Schema
 {
     /**
-     * `$text` parsed. The text is generated, so text that does not parse
-     * is a bug in the generator and stops the program.
+     * `$text` parsed. The text is generated, so text that does not parse is a bug in the generator
+     * and stops the program.
      */
     public static function of(const string& $text) : json::Value
     {

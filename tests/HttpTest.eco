@@ -17,7 +17,7 @@ test method_parses_and_prints
 
 test headers_are_case_insensitive
 {
-    Headers $h = Headers();
+    $h = Headers();
     $h->add('Content-Type', 'text/plain');
     $h->add('set-cookie', 'a=1');
     $h->add('Set-Cookie', 'b=2');
@@ -31,7 +31,7 @@ test headers_are_case_insensitive
 
 test query_decodes_pairs
 {
-    Query $q = Query(parse: 'a=1&tag=x&tag=y+z&enc=%41%2fb&flag&=empty');
+    $q = Query(parse: 'a=1&tag=x&tag=y+z&enc=%41%2fb&flag&=empty');
     expect($q->get('a'))->some('1');
     expect($q->all('tag'))->size(2);
     string $second = $q->all('tag')[1];
@@ -51,27 +51,27 @@ test percent_refuses_broken_escapes
 
 test request_splits_target
 {
-    Request $r = Request(Method::get, '/v1/posts/42?include=author');
+    $r = Request(.get, '/v1/posts/42?include=author');
     expect($r->path)->is('/v1/posts/42');
     expect($r->queryString)->is('include=author');
     expect($r->query->get('include'))->some('author');
-    Request $p = Request(Method::post, '/v1/posts', body: '{}', type: 'application/json; charset=utf-8');
+    $p = Request(.post, '/v1/posts', body: '{}', type: 'application/json; charset=utf-8');
     expect($p->contentType())->is('application/json');
 }
 
-test response_constructors
+test responses_build_from_text_redirects_and_json
 {
-    Response $t = Response(text: 'hi');
+    $t = Response(text: 'hi');
     expect($t->status)->is(200);
     string $ct = expect($t->header('Content-Type'))->some();
     expect($ct)->starts('text/plain');
-    Response $r = Response(redirect: '/login');
+    $r = Response(redirect: '/login');
     expect($r->status)->is(302);
-    Response $n = Response::noContent();
+    Response $n = .noContent();
     expect($n->status)->is(204);
     json::Value $doc = json::object();
     $doc['ok'] = true;
-    Response $j = Response(json: $doc, status: 201);
+    $j = Response(json: $doc, status: 201);
     expect($j->status)->is(201);
     expect($j->body)->is('{"ok":true}');
 }

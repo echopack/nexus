@@ -3,8 +3,8 @@ namespace nexus::auth;
 use std::time;
 
 /**
- * A signed session as its store keeps it. Its secret is not here: it is
- * derived from the id and the server's key whenever a request needs it.
+ * A signed session as its store keeps it. Its secret is not here: it is derived from the id and the
+ * server's key whenever a request needs it.
  */
 public struct StoredSession
 {

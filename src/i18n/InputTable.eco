@@ -2,8 +2,8 @@ namespace nexus;
 
 /**
  * One module's generated input table, found by the kernel with
- * `attr::of<InputTable>("nexus::inputs")`. It adds the module's message
- * overrides and the rule classes its inputs name.
+ * `attr::of<InputTable>("nexus::inputs")`. It adds the module's message overrides and the rule
+ * classes its inputs name.
  */
 public struct InputTable
 {

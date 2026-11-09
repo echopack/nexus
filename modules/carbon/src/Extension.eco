@@ -3,23 +3,18 @@ namespace nexus::carbon;
 use container::{Builder, Container};
 
 /**
- * A carbon database for the app. The app hands over how it opens, from
- * the `DatabaseConfig`, with its repositories registered; the extension
- * seals it, binds it as `carbon::DB`, and binds a `carbon::Session` per
- * request: one connection from the pool for the whole request, back in
- * the pool when the request ends. With the app's migrations it adds
- * `migrate`, `migrate:status`, `migrate:down` and `migrate:reset` to the
- * app binary.
+ * A carbon database for the app. The app hands over how it opens, from the `DatabaseConfig`, with
+ * its repositories registered; the extension seals it, binds it as `carbon::DB`, and binds a
+ * `carbon::Session` per request: one connection from the pool for the whole request, back in the
+ * pool when the request ends. With the app's migrations it adds `migrate`, `migrate:status`,
+ * `migrate:down` and `migrate:reset` to the app binary.
  *
  * ```echo
  * nexus::Kernel::main([
  *     nexus::http::Extension(),
  *     nexus::carbon::Extension(function(nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
- *         carbon::Source $pool = guard carbon::mysql::Source::parse($cfg->url) else ($e) {
- *             return .error($e);
- *         };
- *         return blog::Database::wire(carbon::DB($pool));
- *     }, blog::Carbon::migrations()),
+ *         return blog::database::open($cfg);
+ *     }, blog::database::migrations()),
  *     blog::App(),
  * ]);
  * ```
@@ -34,10 +29,9 @@ public class Extension : nexus::Extension
     internal carbon::ddl::Grammar $grammar;
 
     /**
-     * `$open` builds the database from its config and registers the
-     * repositories; it runs once, at boot, and an error stops the boot.
-     * `$migrations` is what carbongen lists in `Carbon::migrations()`, in
-     * the dialect of `$grammar`.
+     * `$open` builds the database from its config and registers the repositories; it runs once, at
+     * boot, and an error stops the boot. `$migrations` is what carbongen lists in
+     * `Carbon::migrations()`, in the dialect of `$grammar`.
      */
     public constructor(
         function<result<carbon::DB, carbon::Error>(DatabaseConfig)> $open,
@@ -45,8 +39,8 @@ public class Extension : nexus::Extension
         grammar: carbon::ddl::Grammar $grammar = carbon::ddl::Mysql()
     )
     {
-        $this->open = $open;
-        $this->steps = $migrations;
+        $this->open = mv $open;
+        $this->steps = mv $migrations;
         $this->grammar = $grammar;
     }
 
@@ -57,9 +51,9 @@ public class Extension : nexus::Extension
 
     public function services(nexus::Services& $s) : status<nexus::BootError>
     {
-        DatabaseConfig $config = $s->get<DatabaseConfig>();
-        function<result<carbon::DB, carbon::Error>(DatabaseConfig)> $open = $this->open;
-        carbon::DB $db = guard $open($config) else ($e) {
+        $config = $s->get<DatabaseConfig>();
+        $open = $this->open;
+        $db = guard $open($config) else ($e) {
             return .error(.extension('nexus-carbon', "the database did not open: {$e}"));
         };
         // from here on threads share it

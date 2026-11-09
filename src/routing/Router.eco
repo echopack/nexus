@@ -1,12 +1,11 @@
 namespace nexus;
 
 /**
- * The route table, both ways: which route answers a request, and where an
- * action answers, to link to it. Routes are matched most specific first
- * (literal segments before parameters before catch-alls), so declaration
- * order never matters. The kernel fills it at boot, then every worker
- * thread only reads it. It is bound in the container, so whatever links
- * to an action takes the router.
+ * The route table, both ways: which route answers a request, and where an action answers, to link
+ * to it. Routes are matched most specific first (literal segments before parameters before
+ * catch-alls), so declaration order never matters. The kernel fills it at boot, then every worker
+ * thread only reads it. It is bound in the container, so whatever links to an action takes the
+ * router.
  *
  * ```echo
  * $item->text('url', $this->router->url<ShowPost>(['id' => "{$p->id}"])->text());
@@ -18,22 +17,18 @@ public class Router
     private array<Placed> $placed = [];
 
     /**
-     * The linkable routes in the order they were added; an action's first
-     * is where its links go.
+     * The linkable routes in the order they were added; an action's first is where its links go.
      */
     private array<Placed> $links = [];
 
     private Url? $base = null;
 
     /**
-     * Adds a route. Refuses a broken pattern and a method plus path that is
-     * already taken.
+     * Adds a route. Refuses a broken pattern and a method plus path that is already taken.
      */
     public function add(Route $route) : status<RouteError>
     {
-        Pattern $pattern = guard Pattern::parse($route->path) else ($e) {
-            return .error($e);
-        };
+        Pattern $pattern = try Pattern::parse($route->path);
         foreach ($this->placed as const &$p) {
             if ($p->pattern->source != $pattern->source) {
                 continue;
@@ -66,29 +61,26 @@ public class Router
     }
 
     /**
-     * The route for `$method` on `$path`, with its parameters written into
-     * `$params`. Null when nothing answers; then `$allow` lists the methods
-     * that would have (empty when the path is unknown). HEAD falls back to
-     * GET.
+     * The route for `$method` on `$path`, with its parameters written into `$params`. Null when
+     * nothing answers; then `$allow` lists the methods that would have (empty when the path is
+     * unknown). HEAD falls back to GET.
      */
     public const function find(Method $method, const string& $path, map<string, string>& $params, array<Method>& $allow) : Route?
     {
         Route? $fallback = null;
         foreach ($this->placed as const &$p) {
-            map<string, string> $found = map<string, string>();
+            map<string, string> $found = [];
             if (!$p->pattern->matches($path, $found)) {
                 continue;
             }
             foreach ($p->route->methods as const &$m) {
                 if ($m == $method) {
-                    $params = $found;
-                    Route $hit = $p->route;
-                    return $hit;
+                    $params = mv $found;
+                    return $p->route;
                 }
                 if ($method == Method::head && $m == Method::get && $fallback == null) {
                     $params = $found;
-                    Route $get = $p->route;
-                    $fallback = $get;
+                    $fallback = $p->route;
                 }
                 Router::note($allow, $m);
             }
@@ -97,7 +89,7 @@ public class Router
             return $fallback;
         }
         if (!$allow->empty()) {
-            Router::note($allow, Method::options);
+            Router::note($allow, .options);
             bool $hasGet = false;
             foreach ($allow as const &$a) {
                 if ($a == Method::get) {
@@ -105,7 +97,7 @@ public class Router
                 }
             }
             if ($hasGet) {
-                Router::note($allow, Method::head);
+                Router::note($allow, .head);
             }
         }
         return null;
@@ -135,17 +127,15 @@ public class Router
      */
     public const function url<A>() : Url
     {
-        map<string, string> $none = map<string, string>();
+        map<string, string> $none = [];
         return $this->url<A>($none);
     }
 
     /**
-     * Where action `A` answers, as a path: its first route's pattern with
-     * `$params` filled in and escaped. An optional or catch-all parameter
-     * may be left out; a name the pattern does not have becomes a query
-     * pair, in name order. A missing required parameter, a value its
-     * constraint refuses or an action no route reaches is a bug and stops
-     * the program.
+     * Where action `A` answers, as a path: its first route's pattern with `$params` filled in and
+     * escaped. An optional or catch-all parameter may be left out; a name the pattern does not have
+     * becomes a query pair, in name order. A missing required parameter, a value its constraint
+     * refuses or an action no route reaches is a bug and stops the program.
      *
      * ```echo
      * $router->url<ShowPost>(['id' => '5'])->text();     // /v1/posts/5
@@ -166,27 +156,24 @@ public class Router
      */
     public const function absoluteUrl<A>() : Url
     {
-        map<string, string> $none = map<string, string>();
+        map<string, string> $none = [];
         return $this->absoluteUrl<A>($none);
     }
 
     /**
-     * `url<A>($params)` on the public origin, `APP_URL`; asking without
-     * one stops the program. For links in an answer to the client
-     * `url<A>()->on($request->url())` needs no configuration.
+     * `url<A>($params)` on the public origin, `APP_URL`; asking without one stops the program. For
+     * links in an answer to the client `url<A>()->on($request->url())` needs no configuration.
      */
     public const function absoluteUrl<A>(const map<string, string>& $params) : Url
     {
-        Url? $base = $this->base;
-        Url $origin = guard $base else {
+        Url $origin = guard $this->base else {
             die('nexus: an absolute link needs the public origin; set APP_URL');
         };
         return $this->url<A>($params)->on($origin);
     }
 
     /**
-     * Whether a route reaches action `A`, for a link that is only there
-     * when it does.
+     * Whether a route reaches action `A`, for a link that is only there when it does.
      */
     public const function routed<A>() : bool
     {
@@ -202,18 +189,16 @@ public class Router
     }
 
     /**
-     * Sets the public origin, `https://blog.example.com` or one with a
-     * path the app is mounted under, `https://example.com/api`. The kernel
-     * sets it from `APP_URL`; a relative one is a bug and stops the
-     * program.
+     * Sets the public origin, `https://blog.example.com` or one with a path the app is mounted
+     * under, `https://example.com/api`. The kernel sets it from `APP_URL`; a relative one is a bug
+     * and stops the program.
      */
     public function origin(const Url& $base) : void
     {
         if (!$base->absolute()) {
             die("nexus: the public origin {$base->text()} is not absolute");
         }
-        Url? $set = $base;
-        $this->base = $set;
+        $this->base = $base;
     }
 
     internal const function link(type_id $action) : usize
@@ -257,9 +242,9 @@ public class Router
         if ($path->empty()) {
             $path = '/';
         }
-        Url $url = Url(path: $path);
-        array<string> $taken = $at->pattern->names();
-        array<string> $names = $params->keys();
+        $url = Url(path: $path);
+        $taken = $at->pattern->names();
+        $names = $params->keys();
         $names->sort();
         foreach ($names as const &$name) {
             bool $inPath = false;

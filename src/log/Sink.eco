@@ -1,16 +1,16 @@
 namespace nexus::log;
 
 /**
- * Where log entries go. Sinks are shared by every thread, so `write` must
- * be safe to call concurrently.
+ * Where log entries go. Sinks are shared by every thread, so `write` must be safe to call
+ * concurrently.
  */
 public interface Sink
 {
     function write(const Entry& $e) : void;
 
     /**
-     * Writes out whatever the sink still holds. A logger flushes its sinks
-     * before the process exits.
+     * Writes out whatever the sink still holds. A logger flushes its sinks before the process
+     * exits.
      */
     function flush() : void
     {

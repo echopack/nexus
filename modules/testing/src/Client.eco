@@ -1,8 +1,8 @@
 namespace nexus::testing;
 
 /**
- * Sends requests straight into the kernel, no socket in between. Headers
- * set with `with` go on every request.
+ * Sends requests straight into the kernel, no socket in between. Headers set with `with` go on
+ * every request.
  */
 public class Client
 {
@@ -64,18 +64,16 @@ public class Client
     }
 
     /**
-     * Sends a request as built, plus the default headers it does not set
-     * itself.
+     * Sends a request as built, plus the default headers it does not set itself.
      */
     public function send(nexus::Request $request) : TestResponse
     {
-        nexus::Request $r = $request;
         foreach ($this->defaults->items as const &$h) {
-            if (!$r->headers->has($h->name)) {
-                $r->headers->add($h->name, $h->value);
+            if (!$request->headers->has($h->name)) {
+                $request->headers->add($h->name, $h->value);
             }
         }
-        $r->peer = '127.0.0.1:0';
-        return TestResponse($this->kernel->handle($r));
+        $request->peer = '127.0.0.1:0';
+        return TestResponse($this->kernel->handle(mv $request));
     }
 }

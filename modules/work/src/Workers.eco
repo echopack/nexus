@@ -4,9 +4,8 @@ use std::thread;
 use std::time;
 
 /**
- * Worker threads: each claims a due task, runs it, and looks again; an
- * idle one waits `WORK_POLL` between looks. `stop` lets every worker
- * finish the task it holds.
+ * Worker threads: each claims a due task, runs it, and looks again; an idle one waits `WORK_POLL`
+ * between looks. `stop` lets every worker finish the task it holds.
  */
 #[atomic]
 public class Workers
@@ -20,7 +19,7 @@ public class Workers
      */
     public function start(nexus::Kernel $k, Work $w, uint32 $count) : status<nexus::BootError>
     {
-        Workers $self = $this;
+        $self = $this;
         uint32 $i = 0;
         while ($i < $count) {
             thread::handle $t = guard thread::spawn(function[$self, $k, $w]() : void {
@@ -36,9 +35,8 @@ public class Workers
     }
 
     /**
-     * Asks every worker to stop once its task is done and waits for them,
-     * at most `$grace`. True when all stopped in time; the tasks of the
-     * others run again once their lease has passed.
+     * Asks every worker to stop once its task is done and waits for them, at most `$grace`. True
+     * when all stopped in time; the tasks of the others run again once their lease has passed.
      */
     public function stop(time::duration $grace) : bool
     {

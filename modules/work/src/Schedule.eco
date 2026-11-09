@@ -3,9 +3,8 @@ namespace nexus::work;
 use std::time;
 
 /**
- * When a scheduled task is due: every so long, counted from the Unix
- * epoch so every process agrees on the slots, or at the minutes a cron
- * line matches, in the extension's zone.
+ * When a scheduled task is due: every so long, counted from the Unix epoch so every process agrees
+ * on the slots, or at the minutes a cron line matches, in the extension's zone.
  */
 public struct Schedule
 {
@@ -16,39 +15,37 @@ public struct Schedule
     /**
      * The schedule of `$kind`, or null when it has none.
      */
-    public static function of(const Kind& $kind) : result<Schedule?, string>
+    public static function of(const Kind& $kind) : result<Schedule?, ScheduleError>
     {
         if (!$kind->every->empty()) {
             time::duration $d = guard nexus::Settings::span($kind->every) else {
-                return .error("{$kind->name}: '{$kind->every}' is not a duration like 30s, 15m or 2h");
+                return .error(.duration($kind->every));
             };
             int64 $secs = $d->as_secs();
             if ($secs < 1 || $d != time::duration::secs($secs)) {
-                return .error("{$kind->name}: '{$kind->every}' must be whole seconds, at least one");
+                return .error(.seconds($kind->every));
             }
-            Schedule $s = Schedule($text: "every {$kind->every}");
-            $s->everySecs = $secs;
+            $s = Schedule($text: "every {$kind->every}", $everySecs: $secs);
             return .ok($s);
         }
         if (!$kind->cron->empty()) {
             Cron $c = guard Cron::parse($kind->cron) else ($e) {
-                return .error("{$kind->name}: {$e}");
+                return .error(.cron($e));
             };
-            Schedule $s = Schedule($text: $kind->cron);
-            $s->cron = $c;
+            $s = Schedule($text: $kind->cron, $cron: $c);
             return .ok($s);
         }
         return .ok(null);
     }
 
     /**
-     * The latest slot after `$after` and no later than `$now`, or null when
-     * none fell in between. A cron line looks back at most a day.
+     * The latest slot after `$after` and no later than `$now`, or null when none fell in between. A
+     * cron line looks back at most a day.
      */
     public const function due(time::timestamp $after, time::timestamp $now, const calendar::Zone& $zone) : time::timestamp?
     {
         if ($this->everySecs > 0) {
-            time::timestamp $at = time::timestamp::from_unix_secs(Schedule::floor($now->unix_secs(), $this->everySecs));
+            time::timestamp $at = .from_unix_secs(Schedule::floor($now->unix_secs(), $this->everySecs));
             if ($at > $after) {
                 return $at;
             }
@@ -60,7 +57,7 @@ public struct Schedule
         int64 $minute = Schedule::floor($now->unix_secs(), 60);
         int32 $looked = 0;
         while ($looked < 1440) {
-            time::timestamp $at = time::timestamp::from_unix_secs($minute);
+            time::timestamp $at = .from_unix_secs($minute);
             if ($at <= $after) {
                 return null;
             }
@@ -80,7 +77,7 @@ public struct Schedule
     {
         if ($this->everySecs > 0) {
             int64 $slot = Schedule::floor($after->unix_secs(), $this->everySecs) + $this->everySecs;
-            return time::timestamp::from_unix_secs($slot);
+            return .from_unix_secs($slot);
         }
         Cron $c = guard $this->cron else {
             return null;
@@ -88,7 +85,7 @@ public struct Schedule
         int64 $minute = Schedule::floor($after->unix_secs(), 60) + 60;
         int64 $looked = 0;
         while ($looked < 527040) {
-            time::timestamp $at = time::timestamp::from_unix_secs($minute);
+            time::timestamp $at = .from_unix_secs($minute);
             if (Schedule::hits($c, $at, $zone)) {
                 return $at;
             }

@@ -3,9 +3,9 @@ namespace nexus;
 use container::{Builder, Container};
 
 /**
- * The commands an extension adds to the app binary, in `commands()`:
- * hand-written `nexus::Command`s, and `nexus::Cli` classes under the name
- * the app gives them, with the class bound like an action.
+ * The commands an extension adds to the app binary, in `commands()`: hand-written
+ * `nexus::Command`s, and `nexus::Cli` classes under the name the app gives them, with the class
+ * bound like an action.
  *
  * ```echo
  * public function commands(nexus::Commands& $cmds) : void
@@ -16,8 +16,8 @@ use container::{Builder, Container};
  * }
  * ```
  *
- * The command line reads these before the app boots, so `commands()`
- * only records; the bindings land in the container when it does.
+ * The command line reads these before the app boots, so `commands()` only records; the bindings
+ * land in the container when it does.
  */
 public class Commands
 {
@@ -44,8 +44,8 @@ public class Commands
     }
 
     /**
-     * Binds `nexus::Cli` class `C` once per run, built by `$make` from the
-     * container; `->name()` says what the command line calls it.
+     * Binds `nexus::Cli` class `C` once per run, built by `$make` from the container; `->name()`
+     * says what the command line calls it.
      */
     public function bindCommand<C>(function<C(Container)> $make) : CommandRef<C>
     {
@@ -56,8 +56,8 @@ public class Commands
     }
 
     /**
-     * Binds `nexus::Cli` class `C` once per run, built by `$make`, which
-     * needs nothing from the container.
+     * Binds `nexus::Cli` class `C` once per run, built by `$make`, which needs nothing from the
+     * container.
      */
     public function bindCommand<C>(function<C()> $make) : CommandRef<C>
     {
@@ -93,7 +93,7 @@ public class Commands
             $this->problems[] = "command {$name}: nexus gen wrote nothing for its class; is it a class conforming to nexus::Cli, and did nexus gen run?";
             return;
         };
-        function<Command(const string&)> $make = $maker->make;
+        $make = $maker->make;
         $this->list[] = $make($name);
     }
 
@@ -103,8 +103,7 @@ public class Commands
     internal const function bindInto(Builder& $b) : void
     {
         foreach ($this->bindings as const &$bind) {
-            function<void(Builder&)> $run = $bind;
-            $run($b);
+            $bind($b);
         }
     }
 

@@ -8,8 +8,8 @@ namespace nexus::app;
  * $app->bindTask<PruneAuth>()->cron('0 3 * * *');
  * ```
  *
- * Each call binds the task again with what is set so far; a scheduled task
- * is pushed with its defaults.
+ * Each call binds the task again with what is set so far; a scheduled task is pushed with its
+ * defaults.
  */
 public class TaskRef<T>
 {

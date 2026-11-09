@@ -1,8 +1,8 @@
 namespace nexus;
 
 /**
- * The route `bindAction` or `route` just added, for what goes on it next:
- * middleware that wraps only this route.
+ * The route `bindAction` or `route` just added, for what goes on it next: middleware that wraps
+ * only this route.
  *
  * ```echo
  * $s->bindAction<Export>(method: .get, path: '/v1/export')->middleware<Audit>();
@@ -20,11 +20,10 @@ public class ActionRef<A>
     }
 
     /**
-     * Wraps this route in middleware `M`, taken from the request's
-     * container each time, so it may depend on request-scoped services.
-     * Bind `M` like any other service. Middleware runs in the order it is
-     * added, after the global middleware and before the middleware the
-     * action names in `#[nexus::through]`.
+     * Wraps this route in middleware `M`, taken from the request's container each time, so it may
+     * depend on request-scoped services. Bind `M` like any other service. Middleware runs in the
+     * order it is added, after the global middleware and before the middleware the action names in
+     * `#[nexus::through]`.
      */
     public function middleware<M>() : ActionRef<A>
     {

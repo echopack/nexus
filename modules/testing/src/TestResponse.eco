@@ -1,29 +1,21 @@
 namespace nexus::testing;
 
 /**
- * A response with assertions. Every assertion stops the test with a message
- * that says what was expected and what came back; each returns the
- * response, so they chain.
+ * A response with assertions. Every assertion stops the test with a message that says what was
+ * expected and what came back; each returns the response, so they chain.
  */
 public class TestResponse
 {
-    public nexus::Response $response;
+    public const nexus::Response $response;
 
     public constructor(nexus::Response $response)
     {
-        $this->response = $response;
+        $this->response = mv $response;
     }
 
-    public const function status() : int32
-    {
-        return $this->response->status;
-    }
-
-    public const function body() : string
-    {
-        return $this->response->body;
-    }
-
+    /**
+     * The value of header `$name`, or null.
+     */
     public const function header(const string& $name) : string?
     {
         return $this->response->header($name);
@@ -34,13 +26,13 @@ public class TestResponse
      */
     public const function json() : json::Value
     {
-        json::Value $doc = guard json::parse($this->response->body) else ($e) {
+        $doc = guard json::parse($this->response->body) else ($e) {
             die("nexus-testing: the body is not JSON ({$e->message()}): {$this->response->body}");
         };
         return $doc;
     }
 
-    public function assertStatus(int32 $want) : TestResponse
+    public const function assertStatus(int32 $want) : TestResponse
     {
         if ($this->response->status != $want) {
             die("nexus-testing: expected status {$want}, got {$this->response->status}: {$this->response->body}");
@@ -48,7 +40,7 @@ public class TestResponse
         return $this;
     }
 
-    public function assertHeader(const string& $name, const string& $want) : TestResponse
+    public const function assertHeader(const string& $name, const string& $want) : TestResponse
     {
         string $got = $this->response->header($name) ?? '(none)';
         if ($got != $want) {
@@ -57,7 +49,7 @@ public class TestResponse
         return $this;
     }
 
-    public function assertBody(const string& $want) : TestResponse
+    public const function assertBody(const string& $want) : TestResponse
     {
         if ($this->response->body != $want) {
             die("nexus-testing: expected the body {$want}, got {$this->response->body}");
@@ -65,7 +57,7 @@ public class TestResponse
         return $this;
     }
 
-    public function assertBodyContains(const string& $part) : TestResponse
+    public const function assertBodyContains(const string& $part) : TestResponse
     {
         if (!$this->response->body->contains($part)) {
             die("nexus-testing: expected the body to contain {$part}: {$this->response->body}");
@@ -76,10 +68,9 @@ public class TestResponse
     /**
      * The string at a JSON path (`['data', 'title']`) is `$want`.
      */
-    public function assertJson(const array<string>& $path, const string& $want) : TestResponse
+    public const function assertJson(const array<string>& $path, const string& $want) : TestResponse
     {
-        json::Value $doc = $this->json();
-        string $got = TestResponse::text(TestResponse::walk($doc, $path));
+        string $got = TestResponse::text(TestResponse::walk($this->json(), $path));
         if ($got != $want) {
             string $at = str::join($path, '.');
             die("nexus-testing: expected {$at} to be {$want}, got {$got}");
@@ -90,15 +81,9 @@ public class TestResponse
     /**
      * The integer at a JSON path is `$want`.
      */
-    public function assertJson(const array<string>& $path, int64 $want) : TestResponse
+    public const function assertJson(const array<string>& $path, int64 $want) : TestResponse
     {
-        json::Value $doc = $this->json();
-        json::Value? $v = TestResponse::walk($doc, $path);
-        int64? $got = null;
-        if ($v != null) {
-            json::Value $there = guard $v;
-            $got = $there->asInt();
-        }
+        int64? $got = TestResponse::walk($this->json(), $path)?->asInt();
         if ($got == null || ($got ?? 0) != $want) {
             string $at = str::join($path, '.');
             die("nexus-testing: expected {$at} to be {$want}: {$this->response->body}");
@@ -109,9 +94,9 @@ public class TestResponse
     /**
      * The JSON body is an array with `$n` items.
      */
-    public function assertCount(usize $n) : TestResponse
+    public const function assertCount(usize $n) : TestResponse
     {
-        json::Value $doc = $this->json();
+        $doc = $this->json();
         if (!$doc->isArray() || $doc->count() != $n) {
             die("nexus-testing: expected a JSON array of {$n}: {$this->response->body}");
         }
@@ -119,17 +104,14 @@ public class TestResponse
     }
 
     /**
-     * The value at `$path` is an array with `$n` items: `['data']` for a
-     * rest document.
+     * The value at `$path` is an array with `$n` items: `['data']` for a rest document.
      */
-    public function assertCount(const array<string>& $path, usize $n) : TestResponse
+    public const function assertCount(const array<string>& $path, usize $n) : TestResponse
     {
         string $where = str::join($path, '.');
-        json::Value? $found = TestResponse::walk($this->json(), $path);
-        if ($found == null) {
+        $at = guard TestResponse::walk($this->json(), $path) else {
             die("nexus-testing: nothing at {$where}: {$this->response->body}");
-        }
-        json::Value $at = guard $found;
+        };
         if (!$at->isArray() || $at->count() != $n) {
             die("nexus-testing: expected an array of {$n} at {$where}: {$this->response->body}");
         }
@@ -139,7 +121,7 @@ public class TestResponse
     /**
      * The response is problem details with this status.
      */
-    public function assertProblem(int32 $status) : TestResponse
+    public const function assertProblem(int32 $status) : TestResponse
     {
         $this->assertStatus($status);
         string $type = $this->response->header('Content-Type') ?? '';
@@ -152,19 +134,13 @@ public class TestResponse
     /**
      * The response is a 422 that refuses `$field` with `$code`.
      */
-    public function assertInvalid(const string& $field, const string& $code) : TestResponse
+    public const function assertInvalid(const string& $field, const string& $code) : TestResponse
     {
         $this->assertProblem(422);
-        json::Value $doc = $this->json();
-        json::Value? $errors = $doc->get('errors');
-        if ($errors != null) {
-            json::Value $list = guard $errors;
-            foreach ($list->asArray() ?? array<json::Value>() as const &$e) {
-                string $f = TestResponse::text($e->get('field'));
-                string $c = TestResponse::text($e->get('code'));
-                if ($f == $field && $c == $code) {
-                    return $this;
-                }
+        $errors = $this->json()->get('errors')?->asArray() ?? array<json::Value>();
+        foreach ($errors as const &$e) {
+            if (TestResponse::text($e->get('field')) == $field && TestResponse::text($e->get('code')) == $code) {
+                return $this;
             }
         }
         die("nexus-testing: expected field {$field} refused with {$code}: {$this->response->body}");
@@ -176,19 +152,18 @@ public class TestResponse
      */
     public static function walk(const json::Value& $doc, const array<string>& $path) : json::Value?
     {
-        json::Value $at = $doc->clone();
+        $at = $doc->clone();
         foreach ($path as const &$step) {
             json::Value? $next = null;
             if ($at->isArray()) {
-                uint64? $i = str::uint($step);
-                if ($i != null) {
-                    uint64 $index = guard $i;
-                    $next = $at->at($index as usize);
-                }
+                uint64 $index = guard str::uint($step) else {
+                    return null;
+                };
+                $next = $at->at($index as usize);
             } else {
                 $next = $at->get($step);
             }
-            json::Value $found = guard $next else {
+            $found = guard $next else {
                 return null;
             };
             $at = $found;
@@ -198,15 +173,9 @@ public class TestResponse
 
     internal static function text(json::Value? $v) : string
     {
-        if ($v == null) {
+        $there = guard $v else {
             return '(missing)';
-        }
-        json::Value $there = guard $v;
-        string? $s = $there->asStr();
-        if ($s != null) {
-            string $text = guard $s;
-            return $text;
-        }
-        return json::dump($there->clone());
+        };
+        return $there->asStr() ?? json::dump($there->clone());
     }
 }

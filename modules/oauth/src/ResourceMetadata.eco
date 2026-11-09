@@ -1,8 +1,8 @@
 namespace nexus::oauth;
 
 /**
- * Protected resource metadata (RFC 9728), at the well-known path and at
- * the one for the MCP endpoint, which a 401 from `/mcp` points at.
+ * Protected resource metadata (RFC 9728), at the well-known path and at the one for the MCP
+ * endpoint, which a 401 from `/mcp` points at.
  */
 public class ResourceMetadata : nexus::Action
 {

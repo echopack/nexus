@@ -1,8 +1,8 @@
 namespace nexus::log;
 
 /**
- * When a `File` sink starts a fresh file. The full one moves to
- * `app.1.log`, the one before to `app.2.log`, up to the sink's `keep`.
+ * When a `File` sink starts a fresh file. The full one moves to `app.1.log`, the one before to
+ * `app.2.log`, up to the sink's `keep`.
  */
 public enum Rotate
 {
@@ -19,8 +19,8 @@ public enum Rotate
     case size(uint64 $bytes);
 
     /**
-     * `never`, `daily`, or a size: a number of bytes with an optional
-     * `kb`, `mb` or `gb` (powers of 1024).
+     * `never`, `daily`, or a size: a number of bytes with an optional `kb`, `mb` or `gb` (powers of
+     * 1024).
      */
     public static function parse(const string& $text) : result<Rotate, ConfigError>
     {

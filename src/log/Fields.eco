@@ -3,9 +3,8 @@ namespace nexus::log;
 use std::time;
 
 /**
- * The key/value pairs of an entry, in the order they were added. A key
- * that comes again replaces its value in place. A map literal of plain
- * values fills it, so a call reads like a map:
+ * The key/value pairs of an entry, in the order they were added. A key that comes again replaces
+ * its value in place. A map literal of plain values fills it, so a call reads like a map:
  *
  *     $log->info('post created', ['post' => $post->id, 'ms' => 1.5]);
  *

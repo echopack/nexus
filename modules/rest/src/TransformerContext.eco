@@ -1,10 +1,9 @@
 namespace nexus::rest;
 
 /**
- * What an action hands its transformers next to the model: one value per
- * type, read back by that type. A transformer that writes a field only
- * the signed-in owner may see asks for the viewer here; nested
- * transformers get the same context through `transformInto`.
+ * What an action hands its transformers next to the model: one value per type, read back by that
+ * type. A transformer that writes a field only the signed-in owner may see asks for the viewer
+ * here; nested transformers get the same context through `transformInto`.
  *
  * ```echo
  * // in an action
@@ -26,8 +25,8 @@ public class TransformerContext
     }
 
     /**
-     * Keeps `$value` as `T`, replacing one set before. Constructor args of
-     * `T` are gathered at the call: `set<UserContext>($user: $u)`.
+     * Keeps `$value` as `T`, replacing one set before. Constructor args of `T` are gathered at the
+     * call: `set<UserContext>($user: $u)`.
      */
     public function set<T>(construct T $value) : void
     {
@@ -35,8 +34,7 @@ public class TransformerContext
     }
 
     /**
-     * The value set as `T`. Missing stops the program; `find` when it
-     * may not be there.
+     * The value set as `T`. Missing stops the program; `find` when it may not be there.
      */
     public const function get<T>() : T
     {
@@ -51,12 +49,12 @@ public class TransformerContext
      */
     public const function find<T>() : T?
     {
-        type_id $id = type_id<T>();
+        $id = type_id<T>();
         if (!$this->values->has($id)) {
             return null;
         }
         unsafe {
-            Held<T> $held = assume<Held<T>>($this->values->get($id));
+            $held = assume<Held<T>>($this->values->get($id));
             return $held->value;
         }
     }
@@ -72,42 +70,40 @@ public class TransformerContext
     // nesting through the network --------------------------------------------
 
     /**
-     * `$m` nested under `$key` by the network's transformer of `M`, null
-     * when there is none: `"author": {…}`.
+     * `$m` nested under `$key` by the network's transformer of `M`, null when there is none:
+     * `"author": {…}`.
      */
     public const function transformInto<M>(Out& $o, const string& $key, M? $m) : void
     {
-        Transformer<M> $t = $o->transformer<M>();
+        $t = $o->transformer<M>();
         $t->transformInto($o, $this, $key, $m);
     }
 
     /**
-     * `$ms` nested under `$key` as a list, by the network's transformer
-     * of `M`.
+     * `$ms` nested under `$key` as a list, by the network's transformer of `M`.
      */
     public const function transformCollectionInto<M>(Out& $o, const string& $key, const array<M>& $ms) : void
     {
-        Transformer<M> $t = $o->transformer<M>();
+        $t = $o->transformer<M>();
         $t->transformCollectionInto($o, $this, $key, $ms);
     }
 
     /**
-     * `$m` nested under `$key` wrapped, `$meta`'s keys next to its
-     * `data`: `"user": {"is_cached": true, "data": {…}}`.
+     * `$m` nested under `$key` wrapped, `$meta`'s keys next to its `data`:
+     * `"user": {"is_cached": true, "data": {…}}`.
      */
     public const function transformReferenceInto<M>(Out& $o, const string& $key, M? $m, const Meta& $meta) : void
     {
-        Transformer<M> $t = $o->transformer<M>();
+        $t = $o->transformer<M>();
         $t->transformReferenceInto($o, $this, $key, $m, $meta);
     }
 
     /**
-     * `$ms` nested under `$key` wrapped, `$meta`'s keys next to the list
-     * under `data`.
+     * `$ms` nested under `$key` wrapped, `$meta`'s keys next to the list under `data`.
      */
     public const function transformReferenceCollectionInto<M>(Out& $o, const string& $key, const array<M>& $ms, const Meta& $meta) : void
     {
-        Transformer<M> $t = $o->transformer<M>();
+        $t = $o->transformer<M>();
         $t->transformReferenceCollectionInto($o, $this, $key, $ms, $meta);
     }
 }

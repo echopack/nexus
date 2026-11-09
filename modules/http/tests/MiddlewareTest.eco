@@ -5,7 +5,7 @@
 use container::{Builder, Container};
 use ecotest::expect;
 
-class MwHello : nexus::Action
+internal class MwHello : nexus::Action
 {
     public function handle() : nexus::Response
     {
@@ -13,7 +13,7 @@ class MwHello : nexus::Action
     }
 }
 
-class MwApp : nexus::Extension
+internal class MwApp : nexus::Extension
 {
     public function name() : string
     {
@@ -28,7 +28,7 @@ class MwApp : nexus::Extension
         array<nexus::Method> $m = [nexus::Method::get];
         array<nexus::MiddlewareRef> $w = [];
         function<nexus::Response(nexus::Payload&)> $d = function(nexus::Payload& $payload) : nexus::Response {
-            MwHello $a = $payload->get<MwHello>();
+            $a = $payload->get<MwHello>();
             return $a->handle();
         };
         function<bool(Container)> $b = function(Container $services) : bool {
@@ -46,23 +46,23 @@ class MwApp : nexus::Extension
     }
 }
 
-function mwKernel() : nexus::Kernel
+internal function mwKernel() : nexus::Kernel
 {
     array<nexus::Extension> $exts = [MwApp()];
     array<nexus::ConfigTable> $configs = [];
-    map<string, string> $vars = map<string, string>();
-    nexus::Tables $tables = nexus::Tables($configs: $configs);
-    nexus::Kernel $k = guard nexus::Kernel::boot($exts, nexus::Mode::testing, nexus::Log::silent(), nexus::Env(fixed: $vars), tables: $tables);
+    $vars = map<string, string>();
+    $tables = nexus::Tables($configs: $configs);
+    $k = guard nexus::Kernel::boot($exts, nexus::Mode::testing, nexus::Logger::silent(), nexus::Env(fixed: mv $vars), tables: $tables);
     return $k;
 }
 
 test cors_answers_preflight
 {
-    nexus::Kernel $k = mwKernel();
-    nexus::Request $pre = nexus::Request(nexus::Method::options, '/hello');
+    $k = mwKernel();
+    $pre = nexus::Request(nexus::Method::options, '/hello');
     $pre->headers->set('Origin', 'https://app.example.com');
     $pre->headers->set('Access-Control-Request-Method', 'GET');
-    nexus::Response $r = $k->handle($pre);
+    $r = $k->handle(mv $pre);
     expect($r->status)->is(204);
     expect($r->header('Access-Control-Allow-Origin'))->some('https://app.example.com');
     string $methods = expect($r->header('Access-Control-Allow-Methods'))->some();
@@ -71,25 +71,25 @@ test cors_answers_preflight
 
 test cors_stamps_allowed_origins_only
 {
-    nexus::Kernel $k = mwKernel();
-    nexus::Request $ok = nexus::Request(nexus::Method::get, '/hello');
+    $k = mwKernel();
+    $ok = nexus::Request(nexus::Method::get, '/hello');
     $ok->headers->set('Origin', 'https://app.example.com');
-    nexus::Response $r = $k->handle($ok);
+    $r = $k->handle(mv $ok);
     expect($r->body)->is('hi');
     expect($r->header('Access-Control-Allow-Origin'))->some('https://app.example.com');
-    nexus::Request $other = nexus::Request(nexus::Method::get, '/hello');
+    $other = nexus::Request(nexus::Method::get, '/hello');
     $other->headers->set('Origin', 'https://evil.example');
-    nexus::Response $r2 = $k->handle($other);
+    $r2 = $k->handle(mv $other);
     expect($r2->header('Access-Control-Allow-Origin'))->none();
 }
 
 test secure_headers_are_added
 {
-    nexus::Kernel $k = mwKernel();
-    nexus::Response $r = $k->handle(nexus::Request(nexus::Method::get, '/hello'));
+    $k = mwKernel();
+    $r = $k->handle(nexus::Request(nexus::Method::get, '/hello'));
     expect($r->header('X-Content-Type-Options'))->some('nosniff');
     expect($r->header('X-Frame-Options'))->some('DENY');
-    nexus::Response $missing = $k->handle(nexus::Request(nexus::Method::get, '/nope'));
+    $missing = $k->handle(nexus::Request(nexus::Method::get, '/nope'));
     expect($missing->status)->is(404);
     expect($missing->header('X-Content-Type-Options'))->some('nosniff');
 }

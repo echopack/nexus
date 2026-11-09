@@ -1,24 +1,24 @@
 /**
- * Events reach their listeners by type, in order, through the registry
- * the kernel boots with; the first problem stops the rest.
+ * Events reach their listeners by type, in order, through the registry the kernel boots with; the
+ * first problem stops the rest.
  */
 
 use std::thread;
 use nexus::{Kernel, Tables, Extension, Services, Events, ConfigTable, Mode, Logger, Env, Payload, Problem, Serve, BootError};
 use ecotest::expect;
 
-struct ESaid
+internal struct ESaid
 {
     public string $text;
 }
 
-struct EOther
+internal struct EOther
 {
     public int64 $n;
 }
 
 #[atomic]
-class ETrace
+internal class ETrace
 {
     public thread::mutex<array<string>> $seen = thread::mutex<array<string>>(array<string>());
     public atomic<int32> $started = atomic<int32>(0);
@@ -26,18 +26,18 @@ class ETrace
 
     public function add(const string& $line) : void
     {
-        thread::locked<array<string>> $l = $this->seen->lock();
+        $l = $this->seen->lock();
         $l->value[] = $line;
     }
 
     public function all() : array<string>
     {
-        thread::locked<array<string>> $l = $this->seen->lock();
+        $l = $this->seen->lock();
         return $l->value;
     }
 }
 
-class EApp : Extension
+internal class EApp : Extension
 {
     public ETrace $trace;
     public bool $refuse = false;
@@ -67,7 +67,7 @@ class EApp : Extension
     }
 }
 
-class EListeners : Extension
+internal class EListeners : Extension
 {
     public ETrace $trace;
     public bool $refuse;
@@ -108,35 +108,35 @@ class EListeners : Extension
     }
 }
 
-struct ECounted : nexus::Listener<EOther>
+internal struct ECounted : nexus::Listener<EOther>
 {
     public static function handle(Payload& $payload, const EOther& $e) : status<Problem>
     {
-        ETrace $trace = $payload->get<ETrace>();
+        $trace = $payload->get<ETrace>();
         $trace->add("counted {$e->n}");
         return .ok;
     }
 }
 
-function eBoot(array<Extension> $exts, ETrace $trace, bool $refuse) : Kernel
+internal function eBoot(array<Extension> $exts, ETrace $trace, bool $refuse) : Kernel
 {
     array<Extension> $all = [EListeners($trace, $refuse)];
-    foreach ($exts as $ext) {
+    foreach ($exts as const &$ext) {
         $all[] = $ext;
     }
     array<ConfigTable> $configs = [];
-    Tables $tables = Tables($configs: $configs);
-    map<string, string> $vars = map<string, string>();
-    Kernel $k = guard Kernel::boot($all, Mode::testing, Logger::silent(), Env(fixed: $vars), tables: $tables);
+    $tables = Tables($configs: $configs);
+    $vars = map<string, string>();
+    Kernel $k = guard Kernel::boot(mv $all, .testing, .silent(), Env(fixed: $vars), tables: $tables);
     return $k;
 }
 
 test listeners_run_in_order_by_type
 {
-    ETrace $trace = ETrace();
+    $trace = ETrace();
     array<Extension> $exts = [];
     Kernel $k = eBoot($exts, $trace, false);
-    Payload $payload = $k->background('test', 'abc');
+    $payload = $k->background('test', 'abc');
     guard Events::emit($payload, ESaid('hi'));
     guard Events::emit($payload, EOther(3));
     Kernel::finish($payload);
@@ -145,7 +145,7 @@ test listeners_run_in_order_by_type
     expect($seen[0])->is('first hi');
     expect($seen[2])->is('third hi');
     expect($seen[3])->is('counted 3');
-    Events $ev = $k->services->get<Events>();
+    $ev = $k->services->get<Events>();
     expect($ev->count<ESaid>())->is(3);
     expect($ev->count<EOther>())->is(1);
     expect($ev->listeners())->size(4);
@@ -155,7 +155,7 @@ test listeners_run_in_order_by_type
 
 test a_problem_stops_the_rest
 {
-    ETrace $trace = ETrace();
+    $trace = ETrace();
     array<Extension> $exts = [];
     Kernel $k = eBoot($exts, $trace, true);
     Payload $payload = $k->background('test', 'abc');
@@ -166,9 +166,9 @@ test a_problem_stops_the_rest
     expect($seen)->size(1);
 }
 
-test background_context_has_its_own_scope
+test a_background_payload_has_its_own_scope
 {
-    ETrace $trace = ETrace();
+    $trace = ETrace();
     array<Extension> $exts = [];
     Kernel $k = eBoot($exts, $trace, false);
     Payload $payload = $k->background('blog::SendWelcome', 'task1');
@@ -178,22 +178,22 @@ test background_context_has_its_own_scope
     Kernel::finish($payload);
 }
 
-test start_failure_drains_the_started
+test a_failed_start_drains_the_extensions_already_started
 {
-    ETrace $trace = ETrace();
-    EApp $ok = EApp($trace);
-    EApp $bad = EApp($trace);
+    $trace = ETrace();
+    $ok = EApp($trace);
+    $bad = EApp($trace);
     $bad->refuse = true;
     array<Extension> $exts = [$ok, $bad];
     Kernel $k = eBoot($exts, $trace, false);
-    Serve $o = Serve();
+    $o = Serve();
     status<BootError> $s = $k->start($o);
     expect(eStarted($s))->no(says: 'the kernel refuses to start when an extension does');
     expect($trace->started->load())->is(2);
     expect($trace->drained->load())->is(1);
 }
 
-function eRefused(status<Problem> $s) : int32
+internal function eRefused(status<Problem> $s) : int32
 {
     guard $s else ($p) {
         return $p->status();
@@ -201,7 +201,7 @@ function eRefused(status<Problem> $s) : int32
     return 0;
 }
 
-function eStarted(status<BootError> $s) : bool
+internal function eStarted(status<BootError> $s) : bool
 {
     guard $s else {
         return false;

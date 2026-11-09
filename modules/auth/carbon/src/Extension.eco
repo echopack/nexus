@@ -3,18 +3,17 @@ namespace nexus::auth::carbon;
 use container::{Builder, Container};
 
 /**
- * Keeps nexus-auth's tokens and sessions in the app's carbon database:
- * binds `TokenStore` and `SessionStore` on each request's
- * `carbon::Session`, and adds `auth:prune`. List it after nexus-carbon,
- * with nexus-auth set to `stores: .provided`; the app wires the tables
- * on its database and runs the migration with its own:
+ * Keeps nexus-auth's tokens and sessions in the app's carbon database: binds `TokenStore` and
+ * `SessionStore` on each request's `carbon::Session`, and adds `auth:prune`. List it after
+ * nexus-carbon, with nexus-auth set to `stores: .provided`; the app wires the tables on its
+ * database and runs the migration with its own:
  *
  * ```echo
  * // the database the app opens
- * guard nexus::auth::carbon::Tables::wire($db) else ($e) { return .error($e); };
+ * try nexus::auth::carbon::Tables::wire($db);
  *
  * // main.eco
- * nexus::carbon::Extension(open, blog::Database::migrations()),
+ * nexus::carbon::Extension(open, blog::database::migrations()),
  * nexus::auth::Extension('blog', stores: .provided),
  * nexus::auth::carbon::Extension(),
  * ```

@@ -4,8 +4,8 @@ use std::thread;
 use std::time;
 
 /**
- * Signed sessions kept in the process: for tests and single-process apps.
- * They are gone when it stops.
+ * Signed sessions kept in the process: for tests and single-process apps. They are gone when it
+ * stops.
  */
 #[atomic]
 public class MemorySessions : SessionStore
@@ -56,7 +56,7 @@ public class MemorySessions : SessionStore
     public function removeAll(const string& $subject) : status<nexus::Problem>
     {
         thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
-        array<string> $gone = array<string>();
+        array<string> $gone = [];
         foreach ($held->value as $id => const &$s) {
             if ($s->subject == $subject) {
                 $gone[] = $id;

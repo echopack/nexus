@@ -1,10 +1,9 @@
 namespace nexus::oauth;
 
 /**
- * An authorization request (`/oauth/authorize?...`), checked: a registered
- * client, one of its redirects, PKCE with S256, the one scope this server
- * grants and, when the client names it, this server's MCP endpoint as the
- * resource.
+ * An authorization request (`/oauth/authorize?...`), checked: a registered client, one of its
+ * redirects, PKCE with S256, the one scope this server grants and, when the client names it, this
+ * server's MCP endpoint as the resource.
  */
 public struct Asked
 {
@@ -15,8 +14,7 @@ public struct Asked
     public string $scope;
 
     /**
-     * `redirect_uri` was in the request, not filled in from the only one
-     * registered.
+     * `redirect_uri` was in the request, not filled in from the only one registered.
      */
     public bool $named;
 
@@ -27,7 +25,7 @@ public struct Asked
 
     public static function check(const string& $query, OAuthStore $store, const string& $issuer, const OAuthConfig& $config) : result<Asked, Denial>
     {
-        nexus::Query $q = nexus::Query(parse: $query);
+        $q = nexus::Query(parse: $query);
         string $clientId = $q->get('client_id') ?? '';
         Client? $found = guard $store->client($clientId) else ($p) {
             return .error(.shown($p));
@@ -50,7 +48,7 @@ public struct Asked
         if ($scope->empty()) {
             $scope = $config->scope;
         }
-        foreach (str::split($scope, ' ') as $part) {
+        foreach (str::split($scope, ' ') as const &$part) {
             string $word = string::from($part);
             if (!$word->empty() && $word != $config->scope) {
                 return .error(.back(Asked::refusal($redirect, 'invalid_scope', "this server grants {$config->scope} only", $state, $issuer)));
@@ -65,25 +63,25 @@ public struct Asked
     }
 
     /**
-     * Where the browser goes back to with `$name=$value` (a code or an
-     * error), plus the state and the issuer (RFC 9207).
+     * Where the browser goes back to with `$name=$value` (a code or an error), plus the state and
+     * the issuer (RFC 9207).
      */
     public const function back(const string& $name, const string& $value, const string& $issuer) : string
     {
-        nexus::Query $params = nexus::Query();
+        $params = nexus::Query();
         $params->add($name, $value);
-        return Asked::returning($this->redirect, $params, $this->state, $issuer);
+        return Asked::returning($this->redirect, mv $params, $this->state, $issuer);
     }
 
     internal static function refusal(const RedirectUri& $redirect, const string& $code, const string& $why, const string& $state, const string& $issuer) : string
     {
-        nexus::Query $params = nexus::Query();
+        $params = nexus::Query();
         $params->add('error', $code);
         $params->add('error_description', $why);
-        return Asked::returning($redirect, $params, $state, $issuer);
+        return Asked::returning($redirect, mv $params, $state, $issuer);
     }
 
-    internal static function returning(const RedirectUri& $redirect, nexus::Query $params, const string& $state, const string& $issuer) : string
+    internal static function returning(const RedirectUri& $redirect, mv nexus::Query $params, const string& $state, const string& $issuer) : string
     {
         if (!$state->empty()) {
             $params->add('state', $state);

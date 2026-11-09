@@ -1,9 +1,9 @@
 /**
- * nexus-work's queue in a carbon database, on carbon's fake driver: each
- * test queues what the database answers and reads back what was sent.
+ * nexus-work's queue in a carbon database, on carbon's fake driver: each test queues what the
+ * database answers and reads back what was sent.
  */
 
-use nexus::work::{Kind, Tasks, Failure, Queue, StoredTask, Runner, Work};
+use nexus::work::{Kind, Failure, Queue, StoredTask, Runner, Work, Pushed, Requeued};
 use nexus::work::carbon::{QueuedTask, QueuedTaskTable, CarbonQueue};
 use nexus::testing::TestApp;
 use carbon::fake;
@@ -11,17 +11,16 @@ use hydrahon::Mysql;
 use std::time;
 use ecotest::expect;
 
-const int64 START = 1793588340;
+internal const int64 START = 1793588340;
 
-function quiet() : Kind
+internal function quiet() : Kind
 {
-    Kind $k = Kind('TQuiet', function(nexus::Payload& $payload, const string& $data) : status<Failure> {
+    return Kind('TQuiet', function(nexus::Payload& $payload, const string& $data) : status<Failure> {
         return .ok;
     });
-    return $k;
 }
 
-class Rig
+internal class Rig
 {
     public fake::Driver<Mysql> $fake;
     public calendar::ManualClock $clock;
@@ -29,30 +28,26 @@ class Rig
 
     public constructor(bool $register)
     {
-        fake::Driver<Mysql> $driver = fake::Driver<Mysql>();
-        calendar::ManualClock $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        $driver = fake::Driver<Mysql>();
+        $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
         $this->fake = $driver;
         $this->clock = $clock;
-        nexus::carbon::Extension $db = nexus::carbon::Extension(function[$driver, $clock, $register](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
-            carbon::DB $made = carbon::DB($driver, clock: $clock);
+        $db = nexus::carbon::Extension(function[$driver, $clock, $register](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+            $made = carbon::DB($driver, clock: $clock);
             if ($register) {
-                guard nexus::work::carbon::Tables::wire($made) else ($e) {
-                    return .error($e);
-                };
+                try nexus::work::carbon::Tables::wire($made);
             }
             return .ok($made);
         });
         array<Kind> $kinds = [quiet()];
-        array<nexus::Extension> $exts = [$db, nexus::work::Extension(stores: .provided, clock: $clock, tasks: $kinds), nexus::work::carbon::Extension()];
-        map<string, string> $none = map<string, string>();
-        $this->app = TestApp::boot($exts, $none);
+        array<nexus::Extension> $exts = [$db, nexus::work::Extension(stores: .provided, clock: $clock, tasks: mv $kinds), nexus::work::carbon::Extension()];
+        $this->app = TestApp($exts);
     }
 
     public function queue() : Queue
     {
         nexus::Payload $payload = $this->app->kernel->background('test', 'q');
-        Queue $q = $payload->get<Queue>();
-        return $q;
+        return $payload->get<Queue>();
     }
 
     public function task(const string& $key) : StoredTask
@@ -62,22 +57,25 @@ class Rig
     }
 }
 
-function claimOne(Queue $q, time::timestamp $now) : StoredTask?
+internal function claimOne(Queue $q, time::timestamp $now) : StoredTask?
 {
     array<string> $queues = ['default', 'mail'];
     StoredTask? $j = guard $q->claim($queues, $now, $now + time::duration::mins(5));
     return $j;
 }
 
-function pushOne(Queue $q, const StoredTask& $j) : bool
+/**
+ * Whether the queue stored `$j`.
+ */
+internal function pushOne(Queue $q, const StoredTask& $j) : bool
 {
-    bool $stored = guard $q->push($j);
-    return $stored;
+    Pushed $p = guard $q->push($j);
+    return $p == Pushed::stored;
 }
 
 test a_push_inserts_a_row
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->written();
     expect(pushOne($r->queue(), $r->task('')))->yes(says: 'the push is stored');
     expect($r->fake->count())->is(1);
@@ -86,7 +84,7 @@ test a_push_inserts_a_row
 
 test a_keyed_push_is_stored_once
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->rows([])->written();
     expect(pushOne($r->queue(), $r->task('TQuiet@1')))->yes(says: 'the first keyed push is stored');
     expect($r->fake->texts()[0])->has('WHERE `nexus_tasks`.`unique_key` = ?');
@@ -98,7 +96,7 @@ test a_keyed_push_is_stored_once
 
 test a_claim_takes_a_due_row_by_its_attempt
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->rows([QueuedTaskTable()->row(QueuedTask::of($r->task('')))])->written(1);
     StoredTask $j = expect(claimOne($r->queue(), $r->clock->now()))->some();
     expect($j->id)->is('j1');
@@ -114,17 +112,16 @@ test a_claim_takes_a_due_row_by_its_attempt
 
 test a_claim_lost_to_another_worker_moves_on
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->rows([QueuedTaskTable()->row(QueuedTask::of($r->task('')))])->written(0);
     expect(claimOne($r->queue(), $r->clock->now()))->none();
 }
 
 test the_runner_claims_runs_and_deletes
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->rows([QueuedTaskTable()->row(QueuedTask::of($r->task('')))])->written(1)->written(1);
-    Work $w = $r->app->kernel->services->get<Work>();
-    expect(Runner::step($r->app->kernel, $w))->yes(says: 'the runner ran a task');
+    expect(Runner::step($r->app->kernel, $r->app->kernel->services->get<Work>()))->yes(says: 'the runner ran a task');
     expect($r->fake->last())->is('DELETE FROM `nexus_tasks` WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`attempts` = ?');
     expect($r->fake->pending())->is(0);
     expect($r->app->logged('task done'))->yes(says: "the log holds 'task done'");
@@ -132,7 +129,7 @@ test the_runner_claims_runs_and_deletes
 
 test a_done_scheduled_run_is_kept
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->written(1);
     StoredTask $j = $r->task('TQuiet@1');
     $j->attempts = 1;
@@ -142,7 +139,7 @@ test a_done_scheduled_run_is_kept
 
 test failures_retries_and_prunes
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->written()->written()->written(1)->written(4);
     Queue $q = $r->queue();
     StoredTask $j = $r->task('');
@@ -151,8 +148,8 @@ test failures_retries_and_prunes
     expect($r->fake->last())->is('UPDATE `nexus_tasks` SET `available_at` = ?, `reserved_until` = ?, `error` = ? WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`attempts` = ?');
     guard $q->fail($j, $r->clock->now(), 'gone');
     expect($r->fake->last())->starts('UPDATE `nexus_tasks` SET `failed_at` = ?');
-    bool $sent = guard $q->again('j1', $r->clock->now());
-    expect($sent)->yes(says: 'the failed task was sent back');
+    Requeued $sent = guard $q->again('j1', $r->clock->now());
+    expect($sent == Requeued::sent)->yes(says: 'the failed task was sent back');
     expect($r->fake->last())->is('UPDATE `nexus_tasks` SET `failed_at` = ?, `attempts` = ?, `available_at` = ? WHERE `nexus_tasks`.`id` = ? AND `nexus_tasks`.`failed_at` IS NOT NULL');
     uint64 $gone = guard $q->prune($r->clock->now());
     expect($gone)->is(4);
@@ -161,19 +158,17 @@ test failures_retries_and_prunes
 
 test boot_wants_the_table_wired
 {
-    fake::Driver<Mysql> $driver = fake::Driver<Mysql>();
-    nexus::carbon::Extension $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+    $driver = fake::Driver<Mysql>();
+    $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
         return .ok(carbon::DB($driver));
     });
     array<nexus::Extension> $exts = [$db, nexus::work::Extension(stores: .provided), nexus::work::carbon::Extension()];
-    map<string, string> $none = map<string, string>();
     expect(bootWhy($exts))->is('nexus-work-carbon: wire the tasks table on the database: nexus::work::carbon::Tables::wire($db)');
 }
 
-function bootWhy(array<nexus::Extension> $exts) : string
+internal function bootWhy(array<nexus::Extension> $exts) : string
 {
-    map<string, string> $none = map<string, string>();
-    guard TestApp::attempt($exts, $none) else ($e) {
+    guard TestApp::attempt($exts, map<string, string>()) else ($e) {
         return str::join($e->lines(), '; ');
     };
     return '';

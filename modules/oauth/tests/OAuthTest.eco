@@ -1,9 +1,8 @@
 /**
- * nexus-oauth end to end in process: registration, the authorize hop to
- * the consent page, approval by a signed in user, the code traded with
- * PKCE, the access token on the MCP endpoint (and nowhere else), refresh
- * rotation with reuse detection, revocation and the grants list, on memory
- * stores and a clock the tests move.
+ * nexus-oauth end to end in process: registration, the authorize hop to the consent page, approval
+ * by a signed in user, the code traded with PKCE, the access token on the MCP endpoint (and nowhere
+ * else), refresh rotation with reuse detection, revocation and the grants list, on memory stores
+ * and a clock the tests move.
  */
 
 use nexus::oauth::{Pkce, Register};
@@ -12,15 +11,15 @@ use nexus::testing::{TestApp, TestResponse};
 use std::time;
 use ecotest::expect;
 
-const KEY = 'a-test-key-of-at-least-thirty-two-chars';
-const START = 1700000000;
-const VERIFIER = 'a-verifier-of-at-least-forty-three-characters-0123456789';
-const REDIRECT = 'http://127.0.0.1:33418/callback';
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+internal const START = 1700000000;
+internal const VERIFIER = 'a-verifier-of-at-least-forty-three-characters-0123456789';
+internal const REDIRECT = 'http://127.0.0.1:33418/callback';
 
 /**
  * A tool that says who calls.
  */
-struct TWhoMcp
+internal struct TWhoMcp
 {
     public static function spec() : ToolSpec
     {
@@ -36,13 +35,13 @@ struct TWhoMcp
         function<bool(container::Container)> $bound = function(container::Container $services) : bool {
             return true;
         };
-        ToolSpec $t = ToolSpec('who', 'TWho', Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), $run, $bound);
+        $t = ToolSpec('who', 'TWho', Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), $run, $bound);
         $t->through = [nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')];
         return $t;
     }
 }
 
-class Rig
+internal class Rig
 {
     public TestApp $app;
     public calendar::ManualClock $clock;
@@ -51,7 +50,7 @@ class Rig
     public constructor()
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
-        $this->app = TestApp::boot(Rig::extensions($this->clock), Rig::vars('/consent'));
+        $this->app = TestApp(Rig::extensions($this->clock), Rig::vars('/consent'));
         $this->user = Rig::signIn($this->app);
     }
 
@@ -61,7 +60,7 @@ class Rig
     public constructor(consent: const string& $consent)
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
-        $this->app = TestApp::boot(Rig::extensions($this->clock), Rig::vars($consent));
+        $this->app = TestApp(Rig::extensions($this->clock), Rig::vars($consent));
         $this->user = Rig::signIn($this->app);
     }
 
@@ -96,7 +95,7 @@ class Rig
         $uris[] = json::str(REDIRECT);
         json::Value $o = json::object();
         $o['client_name'] = json::str('Test client');
-        $o['redirect_uris'] = $uris;
+        $o['redirect_uris'] = mv $uris;
         TestResponse $res = $this->app->client()->post('/oauth/register', json: $o);
         $res->assertStatus(201);
         json::Value $id = guard TestResponse::walk($res->json(), ['client_id']);
@@ -151,7 +150,7 @@ class Rig
         $o['jsonrpc'] = json::str('2.0');
         $o['id'] = json::int(1);
         $o['method'] = json::str('tools/call');
-        $o['params'] = $p;
+        $o['params'] = mv $p;
         return $this->app->client()->with('Authorization', "Bearer {$token}")->post('/mcp', json: $o);
     }
 
@@ -170,14 +169,14 @@ class Rig
         if ($q >= $url->size()) {
             return '';
         }
-        nexus::Query $pairs = nexus::Query(parse: $url->sub($q + 1, $url->size() - $q - 1));
+        $pairs = nexus::Query(parse: $url->sub($q + 1, $url->size() - $q - 1));
         return $pairs->get($name) ?? '';
     }
 }
 
 test the_metadata_names_the_endpoints
 {
-    Rig $r = Rig();
+    $r = Rig();
     TestResponse $server = $r->app->client()->with('Host', 'blog.test')->get('/.well-known/oauth-authorization-server');
     $server->assertStatus(200);
     $server->assertJson(['issuer'], 'http://blog.test');
@@ -191,20 +190,20 @@ test the_metadata_names_the_endpoints
 
 test registration_checks_what_a_client_asks_for
 {
-    Rig $r = Rig();
+    $r = Rig();
     string $id = $r->register();
     expect($id)->length(32);
 
     json::Value $far = json::arr();
     $far[] = json::str('http://evil.example/cb');
     json::Value $o = json::object();
-    $o['redirect_uris'] = $far;
+    $o['redirect_uris'] = mv $far;
     $r->app->client()->post('/oauth/register', json: $o)->assertStatus(400)->assertJson(['error'], 'invalid_redirect_uri');
 
     json::Value $ok = json::arr();
     $ok[] = json::str('https://app.example/cb');
     json::Value $secret = json::object();
-    $secret['redirect_uris'] = $ok;
+    $secret['redirect_uris'] = mv $ok;
     $secret['token_endpoint_auth_method'] = json::str('client_secret_basic');
     $r->app->client()->post('/oauth/register', json: $secret)->assertJson(['error'], 'invalid_client_metadata');
 
@@ -214,7 +213,7 @@ test registration_checks_what_a_client_asks_for
 
 test authorize_hands_the_browser_to_the_consent_page
 {
-    Rig $r = Rig();
+    $r = Rig();
     string $client = $r->register();
     string $query = $r->query($client);
     TestResponse $res = $r->app->client()->get("/oauth/authorize?{$query}");
@@ -238,13 +237,13 @@ test authorize_hands_the_browser_to_the_consent_page
 
 test the_consent_page_keeps_its_own_query_and_origin
 {
-    Rig $r = Rig(consent: '/consent?step=1');
+    $r = Rig(consent: '/consent?step=1');
     string $client = $r->register();
     string $query = $r->query($client);
     string $location = $r->app->client()->get("/oauth/authorize?{$query}")->header('Location') ?? '';
     expect($location)->is("http://localhost/consent?step=1&{$query}");
 
-    Rig $far = Rig(consent: 'https://app.example.com/approve');
+    $far = Rig(consent: 'https://app.example.com/approve');
     string $other = $far->register();
     string $asks = $far->query($other);
     string $there = $far->app->client()->get("/oauth/authorize?{$asks}")->header('Location') ?? '';
@@ -253,7 +252,7 @@ test the_consent_page_keeps_its_own_query_and_origin
 
 test a_consent_page_or_issuer_that_is_no_url_stops_the_boot
 {
-    calendar::ManualClock $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+    $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
     result<TestApp, nexus::BootError> $broken = TestApp::attempt(Rig::extensions($clock), Rig::vars('consent page'));
     nexus::BootError $consent = expect($broken)->fails();
     expect($consent->lines()[0])->has('OAUTH_CONSENT');
@@ -266,7 +265,7 @@ test a_consent_page_or_issuer_that_is_no_url_stops_the_boot
 
 test a_denied_request_goes_back_with_access_denied
 {
-    Rig $r = Rig();
+    $r = Rig();
     string $client = $r->register();
     string $back = $r->approve($r->query($client), false);
     expect(Rig::param($back, 'error'))->is('access_denied');
@@ -276,7 +275,7 @@ test a_denied_request_goes_back_with_access_denied
 
 test the_code_is_traded_once_with_its_verifier
 {
-    Rig $r = Rig();
+    $r = Rig();
     string $client = $r->register();
     string $back = $r->approve($r->query($client), true);
     string $code = Rig::param($back, 'code');
@@ -299,7 +298,7 @@ test the_code_is_traded_once_with_its_verifier
 
 test an_access_token_opens_mcp_and_nothing_else
 {
-    Rig $r = Rig();
+    $r = Rig();
     TestResponse $pair = $r->connect();
     string $access = Rig::field($pair, 'access_token');
     TestResponse $res = $r->who($access);
@@ -307,13 +306,13 @@ test an_access_token_opens_mcp_and_nothing_else
     $res->assertJson(['result', 'structuredContent', 'via'], 'oauth');
     $r->app->client()->with('Authorization', "Bearer {$access}")->get('/oauth/grants')->assertStatus(401);
 
-    $r->clock->advance(time::duration::mins(61));
+    $r->clock->advance(.mins(61));
     $r->who($access)->assertStatus(401);
 }
 
 test refresh_rotates_and_a_reused_token_ends_the_grant
 {
-    Rig $r = Rig();
+    $r = Rig();
     TestResponse $pair = $r->connect();
     string $client = Rig::param("x?{$r->query($r->register())}", 'client_id');
     string $firstAccess = Rig::field($pair, 'access_token');
@@ -340,7 +339,7 @@ test refresh_rotates_and_a_reused_token_ends_the_grant
 
 test revoking_and_disconnecting_end_the_grant
 {
-    Rig $r = Rig();
+    $r = Rig();
     string $access = Rig::field($r->connect(), 'access_token');
     $r->app->client()->post('/oauth/revoke', form: "token={$access}")->assertStatus(200);
     $r->who($access)->assertStatus(401);

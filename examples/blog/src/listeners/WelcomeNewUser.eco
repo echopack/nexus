@@ -7,6 +7,6 @@ public struct WelcomeNewUser : nexus::Listener<UserRegistered>
 {
     public static function handle(nexus::Payload& $payload, const UserRegistered& $e) : status<nexus::Problem>
     {
-        return SendWelcomeTask::push($payload, SendWelcome($user: $e->user));
+        return SendWelcomeTask::push($payload, $user: $e->user);
     }
 }

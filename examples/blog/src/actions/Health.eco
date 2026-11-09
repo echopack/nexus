@@ -14,7 +14,7 @@ public class Health : nexus::Action
 
     public function handle() : json::Value
     {
-        json::Value $o = json::object();
+        $o = json::object();
         $o['ok'] = true;
         $o['title'] = json::str($this->config->title);
         return $o;

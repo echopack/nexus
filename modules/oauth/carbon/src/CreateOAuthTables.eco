@@ -1,24 +1,22 @@
 namespace nexus::oauth::carbon;
 
 /**
- * `oauth_clients`, `oauth_codes` and `oauth_grants`. Add it to the app's
- * migrations with `nexus::oauth::carbon::Tables::migrations()`.
+ * `oauth_clients`, `oauth_codes` and `oauth_grants`. Add it to the app's migrations with
+ * `nexus::oauth::carbon::Tables::migrations()`.
  */
 #[carbon::migration: '20261102000600_create_oauth_tables']
 public class CreateOAuthTables : carbon::Migration
 {
     public function up(carbon::Migrating $m) : status<carbon::Error>
     {
-        guard $m->create(carbon::ddl::Table('oauth_clients')
+        try $m->create(carbon::ddl::Table('oauth_clients')
             ->string('id', 32)
             ->string('name', 190)
             ->text('redirect_uris')
             ->datetime('created_at')
             ->datetime('used_at', $nullable: true)
-            ->primary(['id'])) else ($e) {
-            return .error($e);
-        };
-        guard $m->create(carbon::ddl::Table('oauth_codes')
+            ->primary(['id']));
+        try $m->create(carbon::ddl::Table('oauth_codes')
             ->string('hash', 64)
             ->string('client', 32)
             ->string('subject', 190)
@@ -28,9 +26,7 @@ public class CreateOAuthTables : carbon::Migration
             ->string('scope', 190)
             ->datetime('expires_at')
             ->index(['expires_at'])
-            ->primary(['hash'])) else ($e) {
-            return .error($e);
-        };
+            ->primary(['hash']));
         return $m->create(carbon::ddl::Table('oauth_grants')
             ->string('id', 12)
             ->string('client', 32)
@@ -50,12 +46,8 @@ public class CreateOAuthTables : carbon::Migration
 
     public function down(carbon::Migrating $m) : status<carbon::Error>
     {
-        guard $m->drop('oauth_grants') else ($e) {
-            return .error($e);
-        };
-        guard $m->drop('oauth_codes') else ($e) {
-            return .error($e);
-        };
+        try $m->drop('oauth_grants');
+        try $m->drop('oauth_codes');
         return $m->drop('oauth_clients');
     }
 }

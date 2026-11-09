@@ -16,12 +16,8 @@ public class CarbonSessions : nexus::auth::SessionStore
 
     public function find(const string& $id) : result<nexus::auth::StoredSession?, nexus::Problem>
     {
-        AuthSessionRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        AuthSession? $found = guard $repo->find()->get($id) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthSessionRepository $repo = try $this->repo();
+        AuthSession? $found = try $repo->find()->get($id);
         if ($found == null) {
             return .ok(null);
         }
@@ -31,55 +27,37 @@ public class CarbonSessions : nexus::auth::SessionStore
 
     public function create(const nexus::auth::StoredSession& $session) : status<nexus::Problem>
     {
-        AuthSessionRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->create(AuthSession::of($session)) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthSessionRepository $repo = try $this->repo();
+        try $repo->create(.of($session));
         return .ok;
     }
 
     public function touch(const string& $id, time::timestamp $expiresAt) : status<nexus::Problem>
     {
-        AuthSessionRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        hydrahon::Values $set = hydrahon::Values();
+        AuthSessionRepository $repo = try $this->repo();
+        $set = hydrahon::Values();
         $set[AuthSessionTable::$expiresAt] = $expiresAt;
-        guard $repo->find()->where(AuthSessionTable::$id == $id)->update($set) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        try $repo->find()->where(AuthSessionTable::$id == $id)->update($set);
         return .ok;
     }
 
     public function remove(const string& $id) : status<nexus::Problem>
     {
-        AuthSessionRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->find()->where(AuthSessionTable::$id == $id)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthSessionRepository $repo = try $this->repo();
+        try $repo->find()->where(AuthSessionTable::$id == $id)->purge();
         return .ok;
     }
 
     public function removeAll(const string& $subject) : status<nexus::Problem>
     {
-        AuthSessionRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->find()->where(AuthSessionTable::$subject == $subject)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthSessionRepository $repo = try $this->repo();
+        try $repo->find()->where(AuthSessionTable::$subject == $subject)->purge();
         return .ok;
     }
 
     internal function repo() : result<AuthSessionRepository, nexus::Problem>
     {
-        AuthSessionRepository $repo = guard $this->session->repo<AuthSessionRepository>() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthSessionRepository $repo = try $this->session->repo<AuthSessionRepository>();
         return .ok($repo);
     }
 }

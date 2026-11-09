@@ -1,0 +1,54 @@
+namespace nexus::work;
+
+/**
+ * Why a cron line does not parse.
+ */
+public enum CronError
+{
+    /**
+     * The line does not have five fields.
+     */
+    case fields(string $line);
+
+    /**
+     * The step after the slash in `$text` is not a number.
+     */
+    case step(CronField $field, string $text);
+
+    /**
+     * The step after the slash in `$text` is zero.
+     */
+    case zeroStep(CronField $field, string $text);
+
+    /**
+     * `$part` has a dash but is not two numbers.
+     */
+    case range(CronField $field, string $part);
+
+    /**
+     * `$part` is not `*`, a number or a range.
+     */
+    case value(CronField $field, string $part);
+
+    /**
+     * `$part` names values outside the field, or runs backwards.
+     */
+    case outside(CronField $field, string $part);
+}
+
+namespace str;
+
+/**
+ * What is wrong with the line, as the boot error says it.
+ */
+public function from(const nexus::work::CronError& $e) : string
+{
+    return match ($e) {
+        nexus::work::CronError::fields($line) => "'{$line}' needs five fields: minute hour day month weekday",
+        nexus::work::CronError::step($field, $text) => "the {$field} step in '{$text}' is not a number",
+        nexus::work::CronError::zeroStep($field, $text) => "the {$field} step in '{$text}' is zero",
+        nexus::work::CronError::range($field, $part) => "'{$part}' is not a {$field} range",
+        nexus::work::CronError::value($field, $part) => "'{$part}' is not a {$field}",
+        nexus::work::CronError::outside($field, $part) => "'{$part}' is outside the {$field}s {$field->low()} to {$field->high()}",
+    };
+}

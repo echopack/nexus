@@ -2,15 +2,15 @@
  * The test client against a tiny app with a hand-written route table.
  */
 
-use nexus::testing::{TestApp, Client, TestResponse};
-use container::{Builder, Container};
+use nexus::testing::TestApp;
+use container::Container;
 use ecotest::expect;
 
-class TEcho : nexus::Action
+internal class TEcho : nexus::Action
 {
     public function handle(nexus::Payload& $payload) : nexus::Response
     {
-        json::Value $o = json::object();
+        $o = json::object();
         $o['method'] = json::str($payload->request->method->verb());
         $o['body'] = json::str($payload->request->body);
         $o['who'] = json::str($payload->request->header('X-Who') ?? '');
@@ -18,7 +18,7 @@ class TEcho : nexus::Action
     }
 }
 
-class TApp : nexus::Extension
+internal class TApp : nexus::Extension
 {
     public function name() : string
     {
@@ -35,12 +35,12 @@ class TApp : nexus::Extension
     }
 }
 
-function testingRoutes(nexus::Services& $s) : void
+internal function testingRoutes(nexus::Services& $s) : void
 {
     array<nexus::Method> $m = [nexus::Method::get, nexus::Method::post];
     array<nexus::MiddlewareRef> $w = [];
     function<nexus::Response(nexus::Payload&)> $d = function(nexus::Payload& $payload) : nexus::Response {
-        TEcho $a = $payload->get<TEcho>();
+        $a = $payload->get<TEcho>();
         return $a->handle($payload);
     };
     function<bool(Container)> $b = function(Container $services) : bool {
@@ -49,20 +49,20 @@ function testingRoutes(nexus::Services& $s) : void
     $s->route(nexus::Route($m, '/echo', 'TEcho', $d, $b, $w));
 }
 
-function tBoot() : TestApp
+internal function tBoot() : TestApp
 {
     array<nexus::Extension> $exts = [TApp()];
-    return TestApp::boot($exts);
+    return TestApp($exts);
 }
 
 test client_sends_and_asserts
 {
-    TestApp $app = tBoot();
-    Client $c = $app->client()->with('X-Who', 'tester');
+    $app = tBoot();
+    $c = $app->client()->with('X-Who', 'tester');
     array<string> $method = ['method'];
     array<string> $who = ['who'];
     $c->get('/echo')->assertStatus(200)->assertJson($method, 'GET')->assertJson($who, 'tester');
-    json::Value $doc = json::object();
+    $doc = json::object();
     $doc['a'] = 1;
     array<string> $body = ['body'];
     $c->post('/echo', json: $doc)->assertStatus(200)->assertJson($method, 'POST')->assertJson($body, '{"a":1}');
@@ -71,7 +71,7 @@ test client_sends_and_asserts
 
 test problems_assert
 {
-    TestApp $app = tBoot();
+    $app = tBoot();
     $app->client()->get('/nope')->assertProblem(404);
     $app->client()->delete('/echo')->assertProblem(405)->assertHeader('Allow', 'GET, POST, OPTIONS, HEAD');
 }
@@ -79,6 +79,6 @@ test problems_assert
 #[tests: expects death]
 test failed_assertion_stops_the_test
 {
-    TestApp $app = tBoot();
+    $app = tBoot();
     $app->client()->get('/echo')->assertStatus(500);
 }

@@ -1,11 +1,10 @@
 namespace nexus::work;
 
 /**
- * Marks a struct as a task: its public fields are its data, its
- * `handle()` the work, run on a worker with services from the task run's
- * own child container. `nexus gen` writes a `<Task>Task` companion,
- * `SendWelcomeTask::push($payload, SendWelcome($user: 5))`; the app binds it
- * with its queue, tries and schedule where it is wired:
+ * Marks a struct as a task: its public fields are its data, its `handle()` the work, run on a
+ * worker with services from the task run's own child container. `nexus gen` writes a `<Task>Task`
+ * companion, `SendWelcomeTask::push($payload, $user: 5)`; the app binds it with its queue, tries
+ * and schedule where it is wired:
  *
  * ```echo
  * public struct SendWelcome : nexus::work::Task

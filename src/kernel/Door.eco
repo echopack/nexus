@@ -1,9 +1,8 @@
 namespace nexus;
 
 /**
- * Which way work came into the app: an HTTP request, a command on the
- * command line, an MCP tool call or a task on a worker. Guards read it, so
- * a credential can be good for one door only.
+ * Which way work came into the app: an HTTP request, a command on the command line, an MCP tool
+ * call or a task on a worker. Guards read it, so a credential can be good for one door only.
  */
 public enum Door : uint8
 {

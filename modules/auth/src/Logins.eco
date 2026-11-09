@@ -3,26 +3,22 @@ namespace nexus::auth;
 use std::time;
 
 /**
- * Password logins with their throttles: per client address and per
- * account, failures only. Ask for it in the login action.
+ * Password logins with their throttles: per client address and per account, failures only. Ask for
+ * it in the login action.
  *
  * ```echo
- * guard $this->logins->attempt($payload, $in->email) else ($p) {
- *     return .error($p);
- * };
+ * try $this->logins->attempt($payload, $in->email);
  * User? $found = ...;
  * User $u = guard $found else {
  *     return .error($this->logins->unknown($in->password));
  * };
- * guard $this->logins->verify($payload, $in->email, $in->password, $u->passwordHash) else ($p) {
- *     return .error($p);
- * };
+ * try $this->logins->verify($payload, $in->email, $in->password, $u->passwordHash);
  * ```
  */
 #[atomic]
 public class Logins
 {
-    public Passwords $passwords;
+    public const Passwords $passwords;
     public Throttle $peers;
     public Throttle $accounts;
     public calendar::Clock $clock;
@@ -31,14 +27,13 @@ public class Logins
     {
         $this->passwords = $passwords;
         $this->clock = $clock;
-        $this->peers = Throttle(30, time::duration::mins(15));
-        $this->accounts = Throttle(10, time::duration::mins(15));
+        $this->peers = Throttle(30, .mins(15));
+        $this->accounts = Throttle(10, .mins(15));
     }
 
     /**
-     * Counts a login for `$account` from this request's address: a 429
-     * when either has failed too often. Call it before looking the account
-     * up, so a flood never reaches the database.
+     * Counts a login for `$account` from this request's address: a 429 when either has failed too
+     * often. Call it before looking the account up, so a flood never reaches the database.
      */
     public function attempt(nexus::Payload& $payload, const string& $account) : status<nexus::Problem>
     {
@@ -56,8 +51,8 @@ public class Logins
     }
 
     /**
-     * A 401 unless `$plain` is the password of `$encoded`; a login that
-     * went well gives its attempt back.
+     * A 401 unless `$plain` is the password of `$encoded`; a login that went well gives its attempt
+     * back.
      */
     public function verify(nexus::Payload& $payload, const string& $account, const string& $plain, const string& $encoded) : status<nexus::Problem>
     {
@@ -70,8 +65,7 @@ public class Logins
     }
 
     /**
-     * The answer for an account that does not exist, after the time a
-     * real check takes.
+     * The answer for an account that does not exist, after the time a real check takes.
      */
     public const function unknown(const string& $plain) : nexus::Problem
     {

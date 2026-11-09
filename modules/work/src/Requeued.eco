@@ -1,0 +1,10 @@
+namespace nexus::work;
+
+/**
+ * What became of sending a failed task back: sent, or missing when no failed task has that id.
+ */
+public enum Requeued
+{
+    case sent;
+    case missing;
+}

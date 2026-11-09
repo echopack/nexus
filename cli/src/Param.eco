@@ -11,8 +11,14 @@ public struct Param
     public string $typeText;
     public bool $hasDefault;
     public string $defaultText;
-    // the input struct of a Body<T> or QueryOf<T>, qualified
+
+    /**
+     * The input struct of a `Body<T>` or `QueryOf<T>`, qualified.
+     */
     public string $input = '';
-    // whether the path segment is `{name?}`
+
+    /**
+     * Whether the path segment is `{name?}`.
+     */
     public bool $optionalSegment = false;
 }

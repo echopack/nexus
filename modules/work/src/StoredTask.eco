@@ -3,8 +3,7 @@ namespace nexus::work;
 use std::time;
 
 /**
- * A task in the queue: what to run, how often it was tried, and where it
- * stands.
+ * A task in the queue: what to run, how often it was tried, and where it stands.
  */
 public struct StoredTask
 {
@@ -28,8 +27,8 @@ public struct StoredTask
     public int64 $attempts = 0;
 
     /**
-     * Pushes with the same key are one task, done or not: the scheduler's
-     * `name@slot`. Empty for none.
+     * Pushes with the same key are one task, done or not: the scheduler's `name@slot`. Empty for
+     * none.
      */
     public string $key = '';
     public time::timestamp $createdAt;

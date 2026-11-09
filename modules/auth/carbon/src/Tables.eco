@@ -1,13 +1,11 @@
 namespace nexus::auth::carbon;
 
 /**
- * The auth tables on the app's database: one call in the function that
- * opens it, before it is sealed.
+ * The auth tables on the app's database: one call in the function that opens it, before it is
+ * sealed.
  *
  * ```echo
- * guard nexus::auth::carbon::Tables::wire($db) else ($e) {
- *     return .error($e);
- * };
+ * try nexus::auth::carbon::Tables::wire($db);
  * ```
  */
 public struct Tables
@@ -17,9 +15,7 @@ public struct Tables
      */
     public static function wire(carbon::DB $db) : status<carbon::Error>
     {
-        guard Carbon::register($db) else ($e) {
-            return .error($e);
-        };
+        try Carbon::register($db);
         return Carbon::check($db);
     }
 

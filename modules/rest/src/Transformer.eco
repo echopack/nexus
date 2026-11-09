@@ -1,23 +1,19 @@
 namespace nexus::rest;
 
 /**
- * Turns a model into the answer of an action. A transformer is a plain,
- * shared `#[atomic]` class that conforms to this and to the mapping
- * `nexus gen` writes from the model's `#[nexus::expose]` fields
- * (`PostMapping`, or `UserAdminMapping` for a named shape). The mapping
- * brings `name()`, `map()` and the includes; the transformer's own
- * `transform()` hook gets every item after `map()` and may add, replace
- * or remove keys. The rest comes with it: `createResponse()` and
- * `createCollectionResponse()` answer with a response in the format the
- * request accepts, the model under `data`, and `transformInto()` and
- * `transformCollectionInto()` nest it inside another transformer's model,
- * `transformReferenceInto()` with meta keys next to its `data`.
+ * Turns a model into the answer of an action. A transformer is a plain, shared `#[atomic]` class
+ * that conforms to this and to the mapping `nexus gen` writes from the model's `#[nexus::expose]`
+ * fields (`PostMapping`, or `UserAdminMapping` for a named shape). The mapping brings `name()`,
+ * `map()` and the includes; the transformer's own `transform()` hook gets every item after `map()`
+ * and may add, replace or remove keys. The rest comes with it: `createResponse()` and
+ * `createCollectionResponse()` answer with a response in the format the request accepts, the model
+ * under `data`, and `transformInto()` and `transformCollectionInto()` nest it inside another
+ * transformer's model, `transformReferenceInto()` with meta keys next to its `data`.
  *
- * Transformers live in the app's `TransformerNetwork`, one per model,
- * registered with `Transformers::add`. One that nests another asks the
- * network for it through the `TransformerContext`, which also carries
- * what the action knows beyond the model (who is viewing, say) to every
- * `transform` down the tree.
+ * Transformers live in the app's `TransformerNetwork`, one per model, registered with
+ * `Transformers::add`. One that nests another asks the network for it through the
+ * `TransformerContext`, which also carries what the action knows beyond the model (who is viewing,
+ * say) to every `transform` down the tree.
  *
  * ```echo
  * // the model says what it exposes
@@ -36,7 +32,7 @@ namespace nexus::rest;
  *     public carbon::One<User> $author = .unloaded();
  * }
  *
- * // App::services
+ * // a provider's register
  * $app->bindTransformer<Post, PostTransformer>();
  *
  * #[atomic]
@@ -49,28 +45,27 @@ namespace nexus::rest;
  * }
  *
  * // in an action
- * Post $p = guard $this->posts->find($id) else ($e) { return .error($e); };
+ * $p = try $this->posts->find($id);
  * return $this->transformer->createResponse($payload, $p);
  * ```
  *
- * Without a mapping, a transformer writes `name()`, `map()`,
- * `availableIncludes()` and `defaultIncludes()` itself.
+ * Without a mapping, a transformer writes `name()`, `map()`, `availableIncludes()` and
+ * `defaultIncludes()` itself.
  */
 public interface Transformer<M>
 {
     /**
-     * The per-item hook: runs after the mapping wrote the model's exposed
-     * fields into `$item`, and may add, replace or remove keys. Does
-     * nothing unless the transformer has its own.
+     * The per-item hook: runs after the mapping wrote the model's exposed fields into `$item`, and
+     * may add, replace or remove keys. Does nothing unless the transformer has its own.
      */
     function transform(const M& $m, Item& $item, const TransformerContext& $ctx) : void
     {
     }
 
     /**
-     * Includes the `transform()` hook adds beyond the mapping's own,
-     * nested paths spelled out: `['author.posts']`. The generated
-     * mapping's `availableIncludes()` lists these after its relations.
+     * Includes the `transform()` hook adds beyond the mapping's own, nested paths spelled out:
+     * `['author.posts']`. The generated mapping's `availableIncludes()` lists these after its
+     * relations.
      */
     function extraIncludes() : array<string>
     {
@@ -79,17 +74,14 @@ public interface Transformer<M>
     }
 
     /**
-     * The includes the request asks for: a 400 for one
-     * `availableIncludes()` does not name. Check it before a write, so a
-     * bad `?include=` stops the request before anything changed.
+     * The includes the request asks for: a 400 for one `availableIncludes()` does not name. Check
+     * it before a write, so a bad `?include=` stops the request before anything changed.
      */
     function requestedIncludes(nexus::Payload& $payload) : result<EchoPack::Rest::Includes, nexus::Problem>
     {
-        array<string> $allowed = $this->availableIncludes();
-        array<string> $always = $this->defaultIncludes();
-        EchoPack::Rest::Allow $allow = EchoPack::Rest::Allow::of($allowed);
-        EchoPack::Rest::Allow $all = $allow->always($always);
-        EchoPack::Rest::Includes $found = guard $all->parse($payload->request->query->get('include') ?? '') else ($e) {
+        EchoPack::Rest::Allow $allow = .of($this->availableIncludes());
+        $all = $allow->always($this->defaultIncludes());
+        $found = guard $all->parse($payload->request->query->get('include') ?? '') else ($e) {
             return .error(.badRequest("include: {$e->message()}"));
         };
         return .ok($found);
@@ -101,7 +93,7 @@ public interface Transformer<M>
      */
     function createResponse(nexus::Payload& $payload, const M& $m, status: int32 $status = 200) : result<nexus::Response, nexus::Problem>
     {
-        TransformerContext $ctx = TransformerContext();
+        $ctx = TransformerContext();
         return $this->createResponse($payload, $m, $ctx, status: $status);
     }
 
@@ -110,19 +102,16 @@ public interface Transformer<M>
      */
     function createResponse(nexus::Payload& $payload, const M& $m, const TransformerContext& $ctx, status: int32 $status = 200) : result<nexus::Response, nexus::Problem>
     {
-        Meta $none = Meta();
+        $none = Meta();
         return $this->createResponse($payload, $m, $none, $ctx, status: $status);
     }
 
     /**
-     * `$m` as the answer, `$meta`'s keys before `data`, transformed with
-     * `$ctx`.
+     * `$m` as the answer, `$meta`'s keys before `data`, transformed with `$ctx`.
      */
     function createResponse(nexus::Payload& $payload, const M& $m, const Meta& $meta, const TransformerContext& $ctx, status: int32 $status = 200) : result<nexus::Response, nexus::Problem>
     {
-        EchoPack::Rest::Includes $inc = guard $this->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
+        $inc = try $this->requestedIncludes($payload);
         return .ok($this->createResponse($payload, $m, $meta, $ctx, mv $inc, status: $status));
     }
 
@@ -131,30 +120,29 @@ public interface Transformer<M>
      */
     function createResponse(nexus::Payload& $payload, const M& $m, EchoPack::Rest::Includes $inc, status: int32 $status = 200) : nexus::Response
     {
-        TransformerContext $ctx = TransformerContext();
+        $ctx = TransformerContext();
         return $this->createResponse($payload, $m, $ctx, mv $inc, status: $status);
     }
 
     /**
-     * `$m` as the answer, transformed with `$ctx`, includes already
-     * checked.
+     * `$m` as the answer, transformed with `$ctx`, includes already checked.
      */
     function createResponse(nexus::Payload& $payload, const M& $m, const TransformerContext& $ctx, EchoPack::Rest::Includes $inc, status: int32 $status = 200) : nexus::Response
     {
-        Meta $none = Meta();
+        $none = Meta();
         return $this->createResponse($payload, $m, $none, $ctx, mv $inc, status: $status);
     }
 
     /**
-     * `$m` as the answer, `$meta`'s keys before `data`, transformed with
-     * `$ctx`, includes already checked.
+     * `$m` as the answer, `$meta`'s keys before `data`, transformed with `$ctx`, includes already
+     * checked.
      */
     function createResponse(nexus::Payload& $payload, const M& $m, const Meta& $meta, const TransformerContext& $ctx, EchoPack::Rest::Includes $inc, status: int32 $status = 200) : nexus::Response
     {
-        Out $o = Out::of($payload, mv $inc);
+        $o = Out($payload, mv $inc);
         $o->begin($meta);
         $this->transformEntity($o, $ctx, $m);
-        nexus::Response $res = $o->end();
+        $res = $o->end();
         $res->status = $status;
         return $res;
     }
@@ -164,7 +152,7 @@ public interface Transformer<M>
      */
     function createCollectionResponse(nexus::Payload& $payload, const array<M>& $ms) : result<nexus::Response, nexus::Problem>
     {
-        Meta $none = Meta();
+        $none = Meta();
         return $this->createCollectionResponse($payload, $ms, $none);
     }
 
@@ -173,19 +161,16 @@ public interface Transformer<M>
      */
     function createCollectionResponse(nexus::Payload& $payload, const array<M>& $ms, const Meta& $meta) : result<nexus::Response, nexus::Problem>
     {
-        TransformerContext $ctx = TransformerContext();
+        $ctx = TransformerContext();
         return $this->createCollectionResponse($payload, $ms, $meta, $ctx);
     }
 
     /**
-     * `$ms` as the answer, `$meta`'s keys before `data`, transformed with
-     * `$ctx`.
+     * `$ms` as the answer, `$meta`'s keys before `data`, transformed with `$ctx`.
      */
     function createCollectionResponse(nexus::Payload& $payload, const array<M>& $ms, const Meta& $meta, const TransformerContext& $ctx) : result<nexus::Response, nexus::Problem>
     {
-        EchoPack::Rest::Includes $inc = guard $this->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
+        $inc = try $this->requestedIncludes($payload);
         return .ok($this->createCollectionResponse($payload, $ms, $meta, $ctx, mv $inc));
     }
 
@@ -194,31 +179,30 @@ public interface Transformer<M>
      */
     function createCollectionResponse(nexus::Payload& $payload, const array<M>& $ms, const Meta& $meta, EchoPack::Rest::Includes $inc, status: int32 $status = 200) : nexus::Response
     {
-        TransformerContext $ctx = TransformerContext();
+        $ctx = TransformerContext();
         return $this->createCollectionResponse($payload, $ms, $meta, $ctx, mv $inc, status: $status);
     }
 
     /**
-     * `$ms` as the answer, transformed with `$ctx`, includes already
-     * checked.
+     * `$ms` as the answer, transformed with `$ctx`, includes already checked.
      */
     function createCollectionResponse(nexus::Payload& $payload, const array<M>& $ms, const Meta& $meta, const TransformerContext& $ctx, EchoPack::Rest::Includes $inc, status: int32 $status = 200) : nexus::Response
     {
-        Out $o = Out::of($payload, mv $inc);
+        $o = Out($payload, mv $inc);
         $o->begin($meta);
         $o->list('');
         foreach ($ms as const &$m) {
             $this->transformEntity($o, $ctx, $m);
         }
         $o->close();
-        nexus::Response $res = $o->end();
+        $res = $o->end();
         $res->status = $status;
         return $res;
     }
 
     /**
-     * `$m` nested under `$key` of the model another transformer writes,
-     * null when there is none. Left out past the depth limit.
+     * `$m` nested under `$key` of the model another transformer writes, null when there is none.
+     * Left out past the depth limit.
      */
     function transformInto(Out& $o, const TransformerContext& $ctx, const string& $key, M? $m) : void
     {
@@ -253,9 +237,8 @@ public interface Transformer<M>
     }
 
     /**
-     * `$m` nested under `$key` wrapped, `$meta`'s keys next to its `data`
-     * (null when there is none): `"user": {"is_cached": true, "data": {…}}`.
-     * Left out past the depth limit.
+     * `$m` nested under `$key` wrapped, `$meta`'s keys next to its `data` (null when there is
+     * none): `"user": {"is_cached": true, "data": {…}}`. Left out past the depth limit.
      */
     function transformReferenceInto(Out& $o, const TransformerContext& $ctx, const string& $key, M? $m, const Meta& $meta) : void
     {
@@ -278,8 +261,8 @@ public interface Transformer<M>
     }
 
     /**
-     * `$ms` nested under `$key` wrapped, `$meta`'s keys next to the list
-     * under `data`. Left out past the depth limit.
+     * `$ms` nested under `$key` wrapped, `$meta`'s keys next to the list under `data`. Left out
+     * past the depth limit.
      */
     function transformReferenceCollectionInto(Out& $o, const TransformerContext& $ctx, const string& $key, const array<M>& $ms, const Meta& $meta) : void
     {
@@ -300,14 +283,13 @@ public interface Transformer<M>
     }
 
     /**
-     * `$m` as one entity: opened under its name, mapped, handed to the
-     * `transform()` hook, written, closed.
+     * `$m` as one entity: opened under its name, mapped, handed to the `transform()` hook, written,
+     * closed.
      */
     function transformEntity(Out& $o, const TransformerContext& $ctx, const M& $m) : void
     {
-        string $name = $this->name();
-        $o->open($name);
-        Item $item = Item::of($o);
+        $o->open($this->name());
+        $item = Item($o);
         $this->map($m, $item, $ctx);
         $this->transform($m, $item, $ctx);
         $item->flush($o, $ctx);

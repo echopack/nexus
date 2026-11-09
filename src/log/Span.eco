@@ -3,9 +3,8 @@ namespace nexus::log;
 use std::time;
 
 /**
- * A named, timed stretch of work. Everything written through its `$log`
- * carries the span, and when the span goes out of scope it writes
- * `<name> closed` with how long it was open in `ms`:
+ * A named, timed stretch of work. Everything written through its `$log` carries the span, and when
+ * the span goes out of scope it writes `<name> closed` with how long it was open in `ms`:
  *
  *     {
  *         log::Span $s = $log->span('import', ['file' => $path]);
@@ -27,9 +26,9 @@ public struct Span
     internal constructor(nexus::Logger $log, string $name, string $id, Level $close)
     {
         $this->log = $log;
-        $this->name = $name;
-        $this->id = $id;
-        $this->start = time::instant::now();
+        $this->name = mv $name;
+        $this->id = mv $id;
+        $this->start = .now();
         $this->close = $close;
     }
 
@@ -43,6 +42,9 @@ public struct Span
 
     destructor()
     {
+        if (!$this->log->enabled($this->close)) {
+            return;
+        }
         float64 $ms = ($this->start->elapsed()->as_micros() as float64) / 1000.0;
         $this->log->write($this->close, "{$this->name} closed", ['ms' => $ms]);
     }

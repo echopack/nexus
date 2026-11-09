@@ -1,9 +1,9 @@
 namespace nexus::log;
 
 /**
- * How much a log entry matters. A logger drops entries below its minimum,
- * and a build with `--define NEXUS_LOG_MAX_INFO` (or `_DEBUG`, `_WARN`,
- * `_ERROR`) compiles the levels below the cap away.
+ * How much a log entry matters. A logger drops entries below its minimum, and a build with
+ * `--define NEXUS_LOG_MAX_INFO` (or `_DEBUG`, `_WARN`, `_ERROR`) compiles the levels below the cap
+ * away.
  */
 public enum Level : uint8
 {
@@ -44,8 +44,7 @@ public enum Level : uint8
     }
 
     /**
-     * The name in capitals, padded to five, the way the pretty format
-     * lines levels up.
+     * The name in capitals, padded to five, the way the pretty format lines levels up.
      */
     public const function label() : string
     {
@@ -59,8 +58,7 @@ public enum Level : uint8
     }
 
     /**
-     * The lowest level this build still compiles, set by the
-     * `NEXUS_LOG_MAX_*` defines.
+     * The lowest level this build still compiles, set by the `NEXUS_LOG_MAX_*` defines.
      */
     public static function cap() : Level
     {

@@ -1,9 +1,9 @@
 namespace nexusgen;
 
 /**
- * A class conforming to `nexus::Cli`: its help from the docblock and the
- * `#[nexus::input]` struct its options fill (empty for a command that
- * takes none). The app names it when it adds the command.
+ * A class conforming to `nexus::Cli`: its help from the docblock and the `#[nexus::input]` struct
+ * its options fill (empty for a command that takes none). The app names it when it adds the
+ * command.
  */
 public struct CommandDecl
 {

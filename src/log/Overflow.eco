@@ -11,8 +11,8 @@ public enum Overflow
     case block;
 
     /**
-     * The entry is dropped and counted; the sink writes how many it
-     * dropped once there is room again.
+     * The entry is dropped and counted; the sink writes how many it dropped once there is room
+     * again.
      */
     case drop;
 

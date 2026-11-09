@@ -16,10 +16,8 @@ public class Me : nexus::Action
 
     public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
     {
-        Caller $me = guard $payload->state<Caller>() else ($p) {
-            return .error($p);
-        };
-        nexus::rest::TransformerContext $ctx = nexus::rest::TransformerContext();
+        $me = try $payload->state<Caller>();
+        $ctx = nexus::rest::TransformerContext();
         $ctx->set<UserContext>($user: $me->user);
         return $this->transformer->createResponse($payload, $me->user, $ctx);
     }

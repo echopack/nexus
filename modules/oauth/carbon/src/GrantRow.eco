@@ -3,8 +3,8 @@ namespace nexus::oauth::carbon;
 use std::time;
 
 /**
- * A row of `oauth_grants`: what a user allowed a client, with the hashes
- * of its current tokens and of the refresh token spent last.
+ * A row of `oauth_grants`: what a user allowed a client, with the hashes of its current tokens and
+ * of the refresh token spent last.
  */
 #[carbon::model: 'oauth_grants']
 public class GrantRow : carbon::Model<GrantRow, GrantRowRepository>
@@ -30,6 +30,10 @@ public class GrantRow : carbon::Model<GrantRow, GrantRowRepository>
         return $this->link;
     }
 
+    /**
+     * The row that keeps `$g`. A static, since carbon builds a model with its implicit constructor
+     * and refuses one written out.
+     */
     public static function of(const nexus::oauth::Grant& $g) : GrantRow
     {
         return GrantRow($id: $g->id, $client: $g->client, $subject: $g->subject, $scope: $g->scope,
@@ -38,6 +42,9 @@ public class GrantRow : carbon::Model<GrantRow, GrantRowRepository>
             $previousHash: $g->previousHash, $createdAt: $g->createdAt, $usedAt: $g->usedAt);
     }
 
+    /**
+     * The grant this row keeps.
+     */
     public const function grant() : nexus::oauth::Grant
     {
         return nexus::oauth::Grant($id: $this->id, $client: $this->client, $subject: $this->subject, $scope: $this->scope,

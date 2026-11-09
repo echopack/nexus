@@ -45,7 +45,7 @@ public class KernelTransport : Transport
             $in->headers->add('Content-Length', "{$length}");
         }
 
-        $started = std::time::instant::now();
+        std::time::instant $started = .now();
         $got = $this->kernel->handle(mv $in);
 
         $out = Response($got->status as int64);

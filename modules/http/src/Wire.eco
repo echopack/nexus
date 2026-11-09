@@ -6,8 +6,7 @@ namespace nexus::http;
 public struct Wire
 {
     /**
-     * The nexus method of a wire method, or null for a verb nexus does not
-     * route.
+     * The nexus method of a wire method, or null for a verb nexus does not route.
      */
     public static function method(const http::Method& $m) : nexus::Method?
     {
@@ -32,22 +31,22 @@ public struct Wire
     }
 
     /**
-     * The nexus request for a wire request, its peer the client behind
-     * `$proxies`, or null for an unknown verb.
+     * The nexus request for a wire request, its peer the client behind `$proxies`, or null for an
+     * unknown verb.
      */
     public static function request(const http::Request& $in, const Proxies& $proxies) : nexus::Request?
     {
-        nexus::Method $m = guard Wire::method($in->method) else {
+        $m = guard Wire::method($in->method) else {
             return null;
         };
-        nexus::Request $r = nexus::Request($m, $in->target);
+        $r = nexus::Request($m, $in->target);
         $r->path = $in->path;
         $r->queryString = $in->queryString;
-        nexus::Query $q = nexus::Query();
+        $q = nexus::Query();
         foreach ($in->query->pairs as const &$p) {
             $q->add($p->name, $p->value);
         }
-        $r->query = $q;
+        $r->query = mv $q;
         foreach ($in->headers->items as const &$h) {
             $r->headers->add($h->name, $h->value);
         }
@@ -61,7 +60,7 @@ public struct Wire
      */
     public static function response(const nexus::Response& $out) : http::Response
     {
-        http::Response $r = http::Response($out->status, $out->body);
+        $r = http::Response($out->status, $out->body);
         foreach ($out->headers->items as const &$h) {
             $r->headers->add($h->name, $h->value);
         }

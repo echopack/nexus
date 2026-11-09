@@ -1,11 +1,9 @@
 namespace nexus::auth;
 
 /**
- * Who a request's credential names: the subject the token or session was
- * issued to (a user id, as text), the guard that read it (`via`), the
- * credential's own id (to revoke it) and the scopes it carries.
- * `Authenticate` leaves it in the payload, and an app's middleware builds
- * its user on it:
+ * Who a request's credential names: the subject the token or session was issued to (a user id, as
+ * text), the guard that read it (`via`), the credential's own id (to revoke it) and the scopes it
+ * carries. `Authenticate` leaves it in the payload, and an app's middleware builds its user on it:
  *
  * ```echo
  * public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
@@ -14,7 +12,7 @@ namespace nexus::auth;
  *         return $payload->fail($p);
  *     };
  *     nexus::auth::Identity $id = guard $found else {
- *         return $payload->fail(nexus::Problem::unauthorized('this needs a signed in caller'));
+ *         return $payload->fail(.unauthorized('this needs a signed in caller'));
  *     };
  *     int64 $key = guard $id->number() else { ... };
  *     User? $user = guard $this->users->find()->get($key) else { ... };
@@ -40,8 +38,8 @@ public struct Identity
     }
 
     /**
-     * Whether the credential carries `$scope`. A credential issued without
-     * scopes carries every one.
+     * Whether the credential carries `$scope`. A credential issued without scopes carries every
+     * one.
      */
     public const function has(const string& $scope) : bool
     {

@@ -1,14 +1,14 @@
 namespace blog;
 
 /**
- * Every night at three (UTC), deletes the tokens and sessions that have
- * expired: what `auth:prune` does by hand.
+ * Every night at three (UTC), deletes the tokens and sessions that have expired: what `auth:prune`
+ * does by hand.
  */
 public struct PruneAuth : nexus::work::Task
 {
     public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
     {
-        carbon::DB $db = $payload->get<carbon::DB>();
+        $db = $payload->get<carbon::DB>();
         uint64 $tokens = guard nexus::auth::carbon::PruneCommand::tokens($db) else ($e) {
             return .error(.retry("pruning tokens: {$e}"));
         };

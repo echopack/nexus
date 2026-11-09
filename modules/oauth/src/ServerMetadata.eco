@@ -1,8 +1,7 @@
 namespace nexus::oauth;
 
 /**
- * Authorization server metadata (RFC 8414): the endpoints, PKCE with S256
- * and public clients only.
+ * Authorization server metadata (RFC 8414): the endpoints, PKCE with S256 and public clients only.
  */
 public class ServerMetadata : nexus::Action
 {

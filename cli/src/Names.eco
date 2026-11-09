@@ -1,275 +1,257 @@
-namespace nexusgen;
-
 /**
  * Spelling helpers for generated names.
  */
-public struct Names
+
+namespace nexusgen::names;
+
+/**
+ * `title` to `Title`.
+ */
+public function upper(const string& $name) : string
 {
-    /**
-     * `title` to `Title`.
-     */
-    public static function upper(const string& $name) : string
-    {
-        return str::ucfirst($name);
-    }
+    return str::ucfirst($name);
+}
 
-    /**
-     * `pageSize` to `PAGE_SIZE`.
-     */
-    public static function screaming(const string& $name) : string
-    {
-        string $out = '';
-        usize $i = 0;
-        while ($i < $name->size()) {
-            uint8 $c = $name->byte($i);
-            if ($c >= 65 && $c <= 90 && $i > 0) {
-                $out->push(95);
-            }
-            if ($c == 45) {
-                $out->push(95);
-            } else {
-                $out->push($c);
-            }
-            $i = $i + 1;
+/**
+ * `pageSize` to `PAGE_SIZE`.
+ */
+public function screaming(const string& $name) : string
+{
+    string $out = '';
+    usize $i = 0;
+    while ($i < $name->size()) {
+        uint8 $c = $name->byte($i);
+        if ($c >= 65 && $c <= 90 && $i > 0) {
+            $out->push(95);
         }
-        return str::upper($out);
-    }
-
-    /**
-     * The last segment of a qualified name.
-     */
-    public static function short(const string& $qualified) : string
-    {
-        usize $at = Names::lastSep($qualified);
-        if ($at >= $qualified->size()) {
-            return $qualified;
-        }
-        return $qualified->sub($at + 2, $qualified->size() - $at - 2);
-    }
-
-    /**
-     * The namespace of a qualified name, empty for the root.
-     */
-    public static function space(const string& $qualified) : string
-    {
-        usize $at = Names::lastSep($qualified);
-        if ($at >= $qualified->size()) {
-            return '';
-        }
-        return $qualified->sub(0, $at);
-    }
-
-    /**
-     * A module name as a namespace segment: `blog-app` to `blog_app`.
-     */
-    public static function segment(const string& $module) : string
-    {
-        string $out = '';
-        usize $i = 0;
-        while ($i < $module->size()) {
-            uint8 $c = $module->byte($i);
-            bool $ok = ($c >= 48 && $c <= 57) || ($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122) || $c == 95;
-            if ($ok) {
-                $out->push($c);
-            } else {
-                $out->push(95);
-            }
-            $i = $i + 1;
-        }
-        return $out;
-    }
-
-    /**
-     * Single-quoted Echo source for `$text`.
-     */
-    public static function quote(const string& $text) : string
-    {
-        string $out = "'";
-        usize $i = 0;
-        while ($i < $text->size()) {
-            uint8 $c = $text->byte($i);
-            if ($c == 39 || $c == 92) {
-                $out->push(92);
-            }
+        if ($c == 45) {
+            $out->push(95);
+        } else {
             $out->push($c);
-            $i = $i + 1;
         }
-        $out->push(39);
-        return $out;
+        $i = $i + 1;
     }
+    return str::upper($out);
+}
 
-    /**
-     * Whether `$name` is a word Echo reserves, which cannot be a label.
-     */
-    public static function reserved(const string& $name) : bool
-    {
-        array<string> $words = ['function', 'class', 'struct', 'enum', 'interface', 'namespace', 'use', 'public', 'private', 'internal', 'static', 'const', 'return', 'if', 'else', 'while', 'for', 'foreach', 'match', 'guard', 'test', 'null', 'true', 'false', 'mv', 'as', 'in', 'echo', 'die', 'type', 'map', 'operator', 'read'];
-        foreach ($words as const &$w) {
-            if ($w == $name) {
-                return true;
-            }
+/**
+ * The last segment of a qualified name.
+ */
+public function short(const string& $qualified) : string
+{
+    usize $at = lastSep($qualified);
+    if ($at >= $qualified->size()) {
+        return $qualified;
+    }
+    return $qualified->sub($at + 2, $qualified->size() - $at - 2);
+}
+
+/**
+ * The namespace of a qualified name, empty for the root.
+ */
+public function space(const string& $qualified) : string
+{
+    usize $at = lastSep($qualified);
+    if ($at >= $qualified->size()) {
+        return '';
+    }
+    return $qualified->sub(0, $at);
+}
+
+/**
+ * A module name as a namespace segment: `blog-app` to `blog_app`.
+ */
+public function segment(const string& $module) : string
+{
+    string $out = '';
+    usize $i = 0;
+    while ($i < $module->size()) {
+        uint8 $c = $module->byte($i);
+        bool $ok = ($c >= 48 && $c <= 57) || ($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122) || $c == 95;
+        if ($ok) {
+            $out->push($c);
+        } else {
+            $out->push(95);
         }
-        return false;
+        $i = $i + 1;
     }
+    return $out;
+}
 
-    /**
-     * `withAuthor` to `with-author`, an option name.
-     */
-    public static function kebab(const string& $name) : string
-    {
-        string $out = '';
-        usize $i = 0;
-        while ($i < $name->size()) {
-            uint8 $c = $name->byte($i);
-            if ($c >= 65 && $c <= 90) {
-                if ($i > 0) {
-                    $out->push(45);
-                }
-                $out->push($c + 32);
-            } else if ($c == 95) {
+/**
+ * Single-quoted Echo source for `$text`.
+ */
+public function quote(const string& $text) : string
+{
+    string $out = "'";
+    usize $i = 0;
+    while ($i < $text->size()) {
+        uint8 $c = $text->byte($i);
+        if ($c == 39 || $c == 92) {
+            $out->push(92);
+        }
+        $out->push($c);
+        $i = $i + 1;
+    }
+    $out->push(39);
+    return $out;
+}
+
+/**
+ * `withAuthor` to `with-author`, an option name.
+ */
+public function kebab(const string& $name) : string
+{
+    string $out = '';
+    usize $i = 0;
+    while ($i < $name->size()) {
+        uint8 $c = $name->byte($i);
+        if ($c >= 65 && $c <= 90) {
+            if ($i > 0) {
                 $out->push(45);
-            } else {
-                $out->push($c);
             }
-            $i = $i + 1;
+            $out->push($c + 32);
+        } else if ($c == 95) {
+            $out->push(45);
+        } else {
+            $out->push($c);
         }
-        return $out;
+        $i = $i + 1;
     }
+    return $out;
+}
 
-    /**
-     * `createdAt` to `created_at`, `BlogPost` to `blog_post`: a key on
-     * the wire.
-     */
-    public static function snake(const string& $name) : string
-    {
-        string $out = '';
-        usize $i = 0;
-        while ($i < $name->size()) {
-            uint8 $c = $name->byte($i);
-            if ($c >= 65 && $c <= 90) {
-                if ($i > 0) {
-                    $out->push(95);
-                }
-                $out->push($c + 32);
-            } else {
-                $out->push($c);
+/**
+ * `createdAt` to `created_at`, `BlogPost` to `blog_post`: a key on the wire.
+ */
+public function snake(const string& $name) : string
+{
+    string $out = '';
+    usize $i = 0;
+    while ($i < $name->size()) {
+        uint8 $c = $name->byte($i);
+        if ($c >= 65 && $c <= 90) {
+            if ($i > 0) {
+                $out->push(95);
             }
-            $i = $i + 1;
+            $out->push($c + 32);
+        } else {
+            $out->push($c);
         }
-        return $out;
+        $i = $i + 1;
     }
+    return $out;
+}
 
-    /**
-     * A docblock as prose: the comment marks gone, the lines of a paragraph
-     * joined by spaces, paragraphs by a blank line, and code samples left
-     * out.
-     */
-    public static function prose(const string& $doc) : string
-    {
-        array<string> $paragraphs = [];
-        string $current = '';
-        bool $fenced = false;
-        foreach (str::split($doc, "\n") as $raw) {
-            string $line = str::trim(string::from($raw));
-            if ($line->starts('/**')) {
-                $line = str::trim($line->sub(3, $line->size() - 3));
-            }
-            if ($line->ends('*/')) {
-                $line = str::trim($line->sub(0, $line->size() - 2));
-            }
-            if ($line->starts('*')) {
-                $line = str::trim($line->sub(1, $line->size() - 1));
-            }
-            if ($line->starts('```')) {
-                $fenced = !$fenced;
-                continue;
-            }
-            if ($fenced) {
-                continue;
-            }
-            if ($line->empty()) {
-                if (!$current->empty()) {
-                    $paragraphs[] = $current;
-                    $current = '';
-                }
-                continue;
-            }
+/**
+ * A docblock as prose: the comment marks gone, the lines of a paragraph joined by spaces,
+ * paragraphs by a blank line, and code samples left out.
+ */
+public function prose(const string& $doc) : string
+{
+    array<string> $paragraphs = [];
+    string $current = '';
+    bool $fenced = false;
+    foreach (str::split($doc, "\n") as const &$raw) {
+        string $line = str::trim(string::from($raw));
+        if ($line->starts('/**')) {
+            $line = str::trim($line->sub(3, $line->size() - 3));
+        }
+        if ($line->ends('*/')) {
+            $line = str::trim($line->sub(0, $line->size() - 2));
+        }
+        if ($line->starts('*')) {
+            $line = str::trim($line->sub(1, $line->size() - 1));
+        }
+        if ($line->starts('```')) {
+            $fenced = !$fenced;
+            continue;
+        }
+        if ($fenced) {
+            continue;
+        }
+        if ($line->empty()) {
             if (!$current->empty()) {
-                $current->push(32);
+                $paragraphs[] = $current;
+                $current = '';
             }
-            $current->append($line);
+            continue;
         }
         if (!$current->empty()) {
-            $paragraphs[] = $current;
+            $current->push(32);
         }
-        return str::join($paragraphs, "\n\n");
+        $current->append($line);
     }
-
-    /**
-     * The first paragraph of a docblock's prose.
-     */
-    public static function summary(const string& $doc) : string
-    {
-        string $text = Names::prose($doc);
-        usize $at = $text->find("\n");
-        if ($at >= $text->size()) {
-            return $text;
-        }
-        return $text->sub(0, $at);
+    if (!$current->empty()) {
+        $paragraphs[] = $current;
     }
+    return str::join($paragraphs, "\n\n");
+}
 
-    /**
-     * Echo source for `$text`: a single-quoted literal, or for text with
-     * line breaks its lines joined at run time.
-     */
-    public static function literal(const string& $text) : string
-    {
-        if ($text->find("\n") >= $text->size()) {
-            return Names::quote($text);
-        }
-        array<string> $lines = [];
-        foreach (str::split($text, "\n") as $raw) {
-            $lines[] = Names::quote(string::from($raw));
-        }
-        string $list = str::join($lines, ', ');
-        return "str::join([{$list}], \"\\n\")";
+/**
+ * The first paragraph of a docblock's prose.
+ */
+public function summary(const string& $doc) : string
+{
+    $text = prose($doc);
+    usize $at = $text->find("\n");
+    if ($at >= $text->size()) {
+        return $text;
     }
+    return $text->sub(0, $at);
+}
 
-    internal static function lastSep(const string& $q) : usize
-    {
-        usize $found = $q->size();
-        usize $i = 0;
-        while ($i + 1 < $q->size()) {
-            if ($q->byte($i) == 58 && $q->byte($i + 1) == 58) {
-                $found = $i;
-            }
-            $i = $i + 1;
-        }
-        return $found;
+/**
+ * Echo source for `$text`: a single-quoted literal, or for text with line breaks its lines joined
+ * at run time.
+ */
+public function literal(const string& $text) : string
+{
+    if ($text->find("\n") >= $text->size()) {
+        return quote($text);
     }
+    array<string> $lines = [];
+    foreach (str::split($text, "\n") as const &$raw) {
+        $lines[] = quote(string::from($raw));
+    }
+    $list = str::join($lines, ', ');
+    return "str::join([{$list}], \"\\n\")";
+}
 
-    /**
-     * A field name as words, as `nexus::FieldError::readable` makes it:
-     * `passwordConfirmation` is `password confirmation`.
-     */
-    public static function readable(const string& $name) : string
-    {
-        string $out = '';
-        usize $i = 0;
-        while ($i < $name->size()) {
-            uint8 $b = $name->byte($i);
-            if ($b >= 65 && $b <= 90) {
-                if ($i > 0) {
-                    $out->push(32);
-                }
-                $out->push($b + 32);
-            } else if ($b == 95 || $b == 45) {
+internal function lastSep(const string& $q) : usize
+{
+    usize $found = $q->size();
+    usize $i = 0;
+    while ($i + 1 < $q->size()) {
+        if ($q->byte($i) == 58 && $q->byte($i + 1) == 58) {
+            $found = $i;
+        }
+        $i = $i + 1;
+    }
+    return $found;
+}
+
+/**
+ * A field name as words, as `nexus::FieldError::readable` makes it: `passwordConfirmation` is
+ * `password confirmation`.
+ */
+public function readable(const string& $name) : string
+{
+    string $out = '';
+    usize $i = 0;
+    while ($i < $name->size()) {
+        uint8 $b = $name->byte($i);
+        if ($b >= 65 && $b <= 90) {
+            if ($i > 0) {
                 $out->push(32);
-            } else {
-                $out->push($b);
             }
-            $i = $i + 1;
+            $out->push($b + 32);
+        } else if ($b == 95 || $b == 45) {
+            $out->push(32);
+        } else {
+            $out->push($b);
         }
-        return $out;
+        $i = $i + 1;
     }
+    return $out;
 }

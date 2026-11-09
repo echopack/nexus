@@ -1,12 +1,10 @@
 namespace nexus;
 
 /**
- * Everything one request carries through middleware and the action: the
- * request, its own child container, the mode and a log stamped with the
- * request id. The container holds the services bound with `scope:` (a
- * database session, the repositories on it) and the state middleware
- * learned on the way, such as who signed the request. Middleware puts that
- * state, the action reads it:
+ * Everything one request carries through middleware and the action: the request, its own child
+ * container, the mode and a log stamped with the request id. The container holds the services bound
+ * with `scope:` (a database session, the repositories on it) and the state middleware learned on
+ * the way, such as who signed the request. Middleware puts that state, the action reads it:
  *
  * ```echo
  * #[nexus::through: ["blog::RequireUser"]]
@@ -14,9 +12,7 @@ namespace nexus;
  * {
  *     public function handle(nexus::Payload& $payload, nexus::Body<NewPost> $in) : result<nexus::Response, nexus::Problem>
  *     {
- *         Caller $me = guard $payload->state<Caller>() else ($p) {
- *             return .error($p);
- *         };
+ *         Caller $me = try $payload->state<Caller>();
  *         ...
  *     }
  * }
@@ -31,8 +27,7 @@ public struct Payload
     public string $action = '';
 
     /**
-     * How the work came in: `.http` for a request, `.cli`, `.mcp` or
-     * `.work` for the other doors.
+     * How the work came in: `.http` for a request, `.cli`, `.mcp` or `.work` for the other doors.
      */
     public Door $door = .http;
 
@@ -53,26 +48,34 @@ public struct Payload
     }
 
     /**
-     * What a middleware put for this request with `put`. None did is a
-     * mistake in the wiring, not in the request: a 500, logged, naming
-     * the action.
+     * What a middleware put for this request with `put`. None did is a mistake in the wiring, not
+     * in the request: a 500, logged, naming the action.
      */
     public function state<T>() : result<T, Problem>
     {
-        T? $found = $this->services->find<T>();
-        T $value = guard $found else {
+        T $value = guard $this->services->find<T>() else {
             return .error(.server("{$this->action} reads state no middleware put in its payload; name the middleware that puts it in the action's #[nexus::through]"));
         };
         return .ok($value);
     }
 
     /**
-     * Leaves `$value` for whatever runs later in this request: the state
-     * a middleware learned, for `state<T>()`.
+     * Leaves `$value` for whatever runs later in this request: the state a middleware learned, for
+     * `state<T>()`.
      */
-    public function put<T>(T $value) : void
+    public function put<T>(construct T $value) : void
     {
-        $this->services->put<T>($value);
+        $this->services->put<T>(mv $value);
+    }
+
+    /**
+     * Makes `$log` the logger of this work, for the action and for the scoped services that ask the
+     * container for a `nexus::Logger`.
+     */
+    public function useLog(Logger $log) : void
+    {
+        $this->log = $log;
+        $this->services->put<Logger>($log);
     }
 
     /**
@@ -84,27 +87,26 @@ public struct Payload
     }
 
     /**
-     * `$p` rendered for this request, logged first when it is the server's
-     * fault.
+     * `$p` rendered for this request, logged first when it is the server's fault.
      */
     public function fail(const Problem& $p) : Response
     {
         if ($p->fault()) {
-            $this->log->error('request failed', ['status' => $p->status(), 'detail' => $p->detail(Mode::dev)]);
+            $this->log->error('request failed', ['status' => $p->status(), 'detail' => $p->detail(.dev)]);
         }
         if ($p->fields()->empty()) {
             return $p->response($this->mode, $this->request->id);
         }
         string $locale = $this->locale();
-        Problem $shown = $this->localized($p, $locale);
-        Response $r = $shown->response($this->mode, $this->request->id);
+        $shown = $this->localized($p, $locale);
+        $r = $shown->response($this->mode, $this->request->id);
         $r->header('Content-Language', $locale);
         return $r;
     }
 
     /**
-     * `$p` with its field messages in the language this request speaks,
-     * through the bound `Messages`; as it is without one.
+     * `$p` with its field messages in the language this request speaks, through the bound
+     * `Messages`; as it is without one.
      */
     public function localized(const Problem& $p) : Problem
     {

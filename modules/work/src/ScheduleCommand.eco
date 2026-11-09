@@ -3,24 +3,23 @@ namespace nexus::work;
 use std::io;
 
 /**
- * `work:schedule`: lists the scheduled tasks with their schedule and when
- * they are next due.
+ * `work:schedule`: lists the scheduled tasks with their schedule and when they are next due.
  */
 public class ScheduleCommand : nexus::Command
 {
-    public function name() : string
+    public const function name() : string
     {
         return 'work:schedule';
     }
 
-    public function summary() : string
+    public const function summary() : string
     {
         return 'list the scheduled tasks and when they are next due';
     }
 
     public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
     {
-        Work $w = $kernel->services->get<Work>();
+        $w = $kernel->services->get<Work>();
         if ($w->planned->empty()) {
             io::println('no scheduled tasks');
             return 0;

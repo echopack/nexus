@@ -1,13 +1,13 @@
 namespace nexus::log;
 
 /**
- * How a sink spells an entry. A sink decides where lines go, a format
- * decides what they look like, so any sink can write any format.
+ * How a sink spells an entry. A sink decides where lines go, a format decides what they look like,
+ * so any sink can write any format.
  */
 public enum Format
 {
     /**
-     * For people at a terminal, with spans the way tracing prints them:
+     * For people at a terminal, each span with its fields before the message:
      *
      *     12:00:01.123 INFO  import{file=a.csv}: rows read n=5 req=abc
      */
@@ -21,8 +21,7 @@ public enum Format
     case logfmt;
 
     /**
-     * One JSON object per line: `t`, `lvl`, `msg`, the span keys, then the
-     * fields.
+     * One JSON object per line: `t`, `lvl`, `msg`, the span keys, then the fields.
      */
     case json;
 
@@ -39,8 +38,8 @@ public enum Format
     }
 
     /**
-     * The entry as one line without its newline. `$color` adds ANSI colours
-     * to the pretty format and changes nothing in the others.
+     * The entry as one line without its newline. `$color` adds ANSI colours to the pretty format
+     * and changes nothing in the others.
      */
     public const function render(const Entry& $e, bool $color) : string
     {
@@ -61,7 +60,7 @@ public enum Format
             $out->append($e->level->label());
         }
         $out->push(32);
-        Fields $plain = Fields();
+        $plain = Fields();
         if ($e->context != null) {
             Context $c = guard $e->context;
             Format::spans($c, $out, $plain, $color);

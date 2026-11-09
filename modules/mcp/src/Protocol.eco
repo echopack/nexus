@@ -1,9 +1,8 @@
 namespace nexus::mcp;
 
 /**
- * The MCP revisions spoken here. They differ in ways a stateless server
- * of tools never meets, so each gets the same answers; a client asking for
- * another is offered the latest.
+ * The MCP revisions spoken here. They differ in ways a stateless server of tools never meets, so
+ * each gets the same answers; a client asking for another is offered the latest.
  */
 public enum Protocol : uint8
 {
@@ -11,6 +10,9 @@ public enum Protocol : uint8
     case v20250618 = 2;
     case v20250326 = 3;
 
+    /**
+     * The revision as the protocol writes it, like `2025-11-25`.
+     */
     public const function name() : string
     {
         return match ($this) {
@@ -20,14 +22,20 @@ public enum Protocol : uint8
         };
     }
 
+    /**
+     * The newest revision spoken here.
+     */
     public static function latest() : Protocol
     {
-        return Protocol::v20251125;
+        return .v20251125;
     }
 
+    /**
+     * The revision `$text` names, or null when it is not spoken here.
+     */
     public static function parse(const string& $text) : Protocol?
     {
-        array<Protocol> $all = [Protocol::v20251125, Protocol::v20250618, Protocol::v20250326];
+        array<Protocol> $all = [.v20251125, .v20250618, .v20250326];
         foreach ($all as const &$p) {
             if ($p->name() == $text) {
                 return $p;

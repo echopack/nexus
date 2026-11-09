@@ -3,10 +3,9 @@ namespace nexus::oauth;
 use std::time;
 
 /**
- * What a user allowed a client: one access token and one refresh token at
- * a time, both named by the grant's id (`nxo_<id>_...`, `nxr_<id>_...`)
- * and kept as hashes. Refreshing replaces both; the refresh token just
- * spent is remembered, so if it comes back the grant ends.
+ * What a user allowed a client: one access token and one refresh token at a time, both named by the
+ * grant's id (`nxo_<id>_...`, `nxr_<id>_...`) and kept as hashes. Refreshing replaces both; the
+ * refresh token just spent is remembered, so if it comes back the grant ends.
  */
 public struct Grant
 {
@@ -20,8 +19,7 @@ public struct Grant
     public time::timestamp $refreshExpiresAt;
 
     /**
-     * The hash of the refresh token spent last, empty before the first
-     * refresh.
+     * The hash of the refresh token spent last, empty before the first refresh.
      */
     public string $previousHash = '';
     public time::timestamp $createdAt;

@@ -1,8 +1,8 @@
 namespace nexus;
 
 /**
- * What the process is for. `dev` shows problem details and logs pretty;
- * `prod` hides internals and logs JSON lines; `testing` is quiet.
+ * What the process is for. `dev` shows problem details and logs pretty; `prod` hides internals and
+ * logs JSON lines; `testing` is quiet.
  */
 public enum Mode : uint8
 {
@@ -27,6 +27,10 @@ public enum Mode : uint8
         return $this != Mode::prod;
     }
 
+    /**
+     * The mode a name means, any case: `dev` or `development`, `test` or `testing`, `prod` or
+     * `production`. Null for anything else.
+     */
     public static function parse(const string& $name) : Mode?
     {
         string $n = str::lower($name);

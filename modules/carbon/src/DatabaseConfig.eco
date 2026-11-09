@@ -1,10 +1,9 @@
 namespace nexus::carbon;
 
 /**
- * Where the database is: `DATABASE_URL`, in the environment or a `.env`
- * file. What the URL means is the app's to say, in the function it hands
- * the extension: `mysql://user:pass@host:3306/app?pool=16` for
- * carbon::mysql::Source.
+ * Where the database is: `DATABASE_URL`, in the environment or a `.env` file. What the URL means is
+ * the app's to say, in the function it hands the extension:
+ * `mysql://user:pass@host:3306/app?pool=16` for carbon::mysql::Source.
  */
 #[nexus::config: "database"]
 public struct DatabaseConfig

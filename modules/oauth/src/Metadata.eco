@@ -1,8 +1,7 @@
 namespace nexus::oauth;
 
 /**
- * The two metadata documents clients discover the server by, and the
- * origin they are written for.
+ * The two metadata documents clients discover the server by, and the origin they are written for.
  */
 public struct Metadata
 {
@@ -31,8 +30,7 @@ public struct Metadata
     }
 
     /**
-     * Protected resource metadata (RFC 9728): where to get a token for
-     * the MCP endpoint.
+     * Protected resource metadata (RFC 9728): where to get a token for the MCP endpoint.
      */
     public static function ofResource(const OAuthConfig& $config, const nexus::Request& $req) : json::Value
     {

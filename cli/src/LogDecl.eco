@@ -1,0 +1,15 @@
+namespace nexusgen;
+
+/**
+ * A struct tagged `#[nexus::log: { level: "warn", message: "..." }]`: a typed log record, its
+ * level, message and the fields it logs.
+ */
+public struct LogDecl
+{
+    public string $qualified;
+    public string $file;
+    public int64 $line;
+    public string $level;
+    public string $message;
+    public array<LogField> $fields = [];
+}

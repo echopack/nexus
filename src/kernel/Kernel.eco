@@ -3,10 +3,9 @@ namespace nexus;
 use std::time;
 
 /**
- * The running app: its extensions, the sealed container, the route table
- * and the global middleware. Boot it once, then call `handle` from any
- * number of threads; a transport does that for real traffic, a test does
- * it directly.
+ * The running app: its extensions, the sealed container, the route table and the global middleware.
+ * Boot it once, then call `handle` from any number of threads; a transport does that for real
+ * traffic, a test does it directly.
  */
 #[atomic]
 public class Kernel
@@ -32,20 +31,20 @@ public class Kernel
 
     internal constructor(array<Extension> $extensions, Mode $mode, Logger $log, Env $env, container::Container $services, Router $router, array<Middleware> $global, array<MiddlewareRef> $around, Generated $generated)
     {
-        $this->around = $around;
+        $this->around = mv $around;
         $this->generated = $generated;
-        $this->extensions = $extensions;
+        $this->extensions = mv $extensions;
         $this->mode = $mode;
         $this->log = $log;
         $this->env = $env;
         $this->services = $services;
         $this->router = $router;
-        $this->global = $global;
+        $this->global = mv $global;
     }
 
     /**
-     * Runs the app's command line (`serve`, `routes`, `doctor`) and exits
-     * the process with its code. The one call `main.eco` makes.
+     * Runs the app's command line (`serve`, `routes`, `doctor`) and exits the process with its
+     * code. The one call `main.eco` makes.
      */
     public static function main(const array<Extension>& $extensions) : void
     {
@@ -54,8 +53,7 @@ public class Kernel
     }
 
     /**
-     * Boots with the tables `nexus gen` wrote for every module of the
-     * program.
+     * Boots with the tables `nexus gen` wrote for every module of the program.
      */
     public static function boot(array<Extension> $extensions, Mode $mode, Logger $log, Env $env) : result<Kernel, BootError>
     {
@@ -63,13 +61,12 @@ public class Kernel
     }
 
     /**
-     * Boots with explicit tables, for tests that want generated tables
-     * of their own.
+     * Boots with explicit tables, for tests that want generated tables of their own.
      */
     public static function boot(array<Extension> $extensions, Mode $mode, Logger $log, Env $env, tables: const Tables& $tables) : result<Kernel, BootError>
     {
-        Generated $generated = Generated::of($tables->generated);
-        container::Builder $b = container::Builder();
+        $generated = Generated($tables->generated);
+        $b = container::Builder();
         // names for the line a failed resolve stops with
         foreach ($generated->names as $id => const &$name) {
             $b->name($id, $name);
@@ -81,41 +78,37 @@ public class Kernel
         $b->name<Request>('nexus::Request');
         $b->bind<Logger>(put: $log);
         $b->bind<Env>(put: $env);
-        Events $events = Events();
+        $events = Events();
         $b->bind<Events>(put: $events);
-        Messages $messages = Messages();
-        Inputs $inputs = Inputs($messages);
+        $messages = Messages();
+        $inputs = Inputs($messages);
         foreach ($tables->inputs as const &$t) {
-            function<void(Inputs)> $fill = $t->call;
+            $fill = $t->call;
             $fill($inputs);
         }
         $b->bind<Messages>(put: $messages);
         foreach ($tables->configs as const &$t) {
-            function<status<BootError>(Env, container::Builder&)> $load = $t->call;
-            guard $load($env, $b) else ($e) {
-                return .error($e);
-            };
+            $load = $t->call;
+            try $load($env, $b);
         }
         // the generated commands' classes first, so an extension may replace one
-        Commands $commands = Commands($generated);
-        foreach ($extensions as $ext) {
+        $commands = Commands($generated);
+        foreach ($extensions as &$ext) {
             $ext->commands($commands);
         }
         foreach ($commands->problems() as const &$p) {
             return .error(.extension('nexus', $p));
         }
         $commands->bindInto($b);
-        Services $s = Services($b, $generated, $events);
-        foreach ($extensions as $ext) {
-            guard $ext->services($s) else ($e) {
-                return .error($e);
-            };
+        $s = Services($b, $generated, $events);
+        foreach ($extensions as &$ext) {
+            try $ext->services($s);
             foreach ($s->problems as const &$p) {
                 return .error($p);
             }
         }
         // the router everything was handed while wiring, filled now
-        Router $router = $s->router;
+        $router = $s->router;
         foreach ($s->routes() as const &$r) {
             guard $router->add($r) else ($e) {
                 return .error(.route($e));
@@ -124,90 +117,88 @@ public class Kernel
         string $raw = $env->get('APP_URL') ?? '';
         if (!$raw->empty()) {
             Url $origin = guard Url::parse($raw) else ($e) {
-                return .error(.config([ConfigError::invalid('APP_URL', $e->message())]));
+                return .error(.config([.invalid('APP_URL', $e->message())]));
             };
             if (!$origin->absolute()) {
-                return .error(.config([ConfigError::invalid('APP_URL', "'{$raw}' is not absolute; give a scheme and a host")]));
+                return .error(.config([.invalid('APP_URL', "'{$raw}' is not absolute; give a scheme and a host")]));
             }
             $router->origin($origin);
         }
-        container::Container $root = $b->seal(warm: true);
+        $root = $b->seal(warm: true);
 
         foreach ($router->routes() as const &$r) {
-            function<bool(container::Container)> $bound = $r->bound;
+            $bound = $r->bound;
             if (!$bound($root)) {
                 return .error(.route(.unbound($r->action)));
             }
             foreach ($r->middleware as const &$ref) {
-                function<bool(container::Container)> $has = $ref->bound;
+                $has = $ref->bound;
                 if (!$has($root)) {
                     return .error(.extension('nexus', "{$r->action} goes through {$ref->name}, which is not bound; bind it in the app's services"));
                 }
             }
         }
         foreach ($s->around as const &$ref) {
-            function<bool(container::Container)> $has = $ref->bound;
+            $has = $ref->bound;
             if (!$has($root)) {
                 return .error(.extension('nexus', "every request goes through {$ref->name}, which is not bound; bind it in the app's services"));
             }
         }
         foreach ($inputs->rules as const &$rule) {
-            function<bool(container::Container)> $has = $rule->bound;
+            $has = $rule->bound;
             if (!$has($root)) {
                 return .error(.extension('nexus', "rule class {$rule->name} is not bound; bind it in the app's services like an action"));
             }
         }
 
-        Pipeline $p = Pipeline();
-        foreach ($extensions as $ext) {
+        $p = Pipeline();
+        foreach ($extensions as &$ext) {
             $ext->middleware($p, $root);
         }
-        Kernel $k = Kernel($extensions, $mode, $log, $env, $root, $router, $p->links, $s->around, $generated);
+        $k = Kernel(mv $extensions, $mode, $log, $env, $root, $router, $p->links, $s->around, $generated);
         // every binding once, in a throwaway request: a missing one, a cycle
         // or a once binding that takes a per-request one stops the boot here
         // with its chain, not some request later
-        Payload $probe = $k->background('boot', 'probe');
+        $probe = $k->background('boot', 'probe');
         $probe->services->probe();
         Kernel::finish($probe);
-        foreach ($extensions as $ext) {
-            guard $ext->boot($k) else ($e) {
-                return .error($e);
-            };
+        foreach ($k->extensions as &$ext) {
+            try $ext->boot($k);
         }
         return .ok($k);
     }
 
     /**
-     * Answers one request: the extensions' middleware, the app's, routing,
-     * the route's middleware, the action's `#[nexus::through]`, the action. Safe to call from many threads at once.
+     * Answers one request: the extensions' middleware, the app's, routing, the route's middleware,
+     * the action's `#[nexus::through]`, the action. Safe to call from many threads at once.
      */
     public function handle(Request $request) : Response
     {
-        time::instant $start = time::instant::now();
-        Request $req = $request;
+        time::instant $start = .now();
+        Request $req = mv $request;
         if (!Kernel::sane($req->header('X-Request-Id') ?? '')) {
-            $req->id = Kernel::freshId();
+            $req->id = Kernel::id();
         } else {
             $req->id = $req->header('X-Request-Id') ?? '';
         }
-        container::Container $scope = $this->services->child();
+        $scope = $this->services->child();
         $scope->put<Request>($req);
-        Logger $log = $this->log->with(['req' => $req->id]);
+        $log = $this->log->with(['req' => $req->id]);
         $scope->put<Logger>($log);
-        Payload $payload = Payload($req, $scope, $this->mode, $log);
+        $payload = Payload($req, $scope, $this->mode, $log);
 
         Kernel $self = $this;
         array<Middleware> $links = $this->global;
         if (!$this->around->empty()) {
-            foreach (MiddlewareRef::make($this->around, $scope) as $m) {
+            foreach (MiddlewareRef::make($this->around, $scope) as const &$m) {
                 $links[] = $m;
             }
         }
-        Chain $chain = Chain($links, function(Payload& $ctx) : Response {
+        $chain = Chain(mv $links, function(Payload& $ctx) : Response {
             return $self->route($ctx);
         });
-        Next $next = Next($chain);
-        Response $res = $next->run($payload);
+        $next = Next(mv $chain);
+        $res = $next->run($payload);
         $res->header('X-Request-Id', $req->id);
         if ($req->method == Method::head) {
             $res->body = '';
@@ -226,22 +217,21 @@ public class Kernel
     }
 
     /**
-     * A payload for work that is not a request: a task, a scheduled run, a
-     * command. It has its own child container, so services bound with
-     * `scope:` (a database session) are fresh, and a log stamped with
-     * `$what` and `$id`. Drop it with `finish` when the work is done.
+     * A payload for work that is not a request: a task, a scheduled run, a command. It has its own
+     * child container, so services bound with `scope:` (a database session) are fresh, and a log
+     * stamped with `$what` and `$id`. Drop it with `finish` when the work is done.
      */
     public function background(const string& $what, const string& $id) : Payload
     {
-        Request $req = Request(Method::post, "/{$what}");
+        $req = Request(.post, "/{$what}");
         $req->id = $id;
-        container::Container $scope = $this->services->child();
+        $scope = $this->services->child();
         $scope->put<Request>($req);
-        Logger $log = $this->log->with(['work' => $what, 'id' => $id]);
+        $log = $this->log->with(['work' => $what, 'id' => $id]);
         $scope->put<Logger>($log);
-        Payload $payload = Payload($req, $scope, $this->mode, $log);
+        $payload = Payload(mv $req, $scope, $this->mode, $log);
         $payload->action = $what;
-        $payload->door = Door::work;
+        $payload->door = .work;
         return $payload;
     }
 
@@ -258,7 +248,10 @@ public class Kernel
      */
     public static function id() : string
     {
-        return Kernel::freshId();
+        string $bytes = guard crypto::random(8) else {
+            return str::from(time::timestamp::now()->unix_nanos());
+        };
+        return crypto::hex($bytes);
     }
 
     /**
@@ -270,19 +263,17 @@ public class Kernel
     }
 
     /**
-     * Every extension's `start` hook, in order. When one fails, the ones
-     * already started are drained again.
+     * Every extension's `start` hook, in order. When one fails, the ones already started are
+     * drained again.
      */
     public function start(const Serve& $options) : status<BootError>
     {
         usize $i = 0;
         while ($i < $this->extensions->count()) {
-            Extension $ext = $this->extensions[$i];
-            guard $ext->start($this, $options) else ($e) {
+            guard $this->extensions[$i]->start($this, $options) else ($e) {
                 while ($i > 0) {
                     $i = $i - 1;
-                    Extension $back = $this->extensions[$i];
-                    $back->drain($this);
+                    $this->extensions[$i]->drain($this);
                 }
                 return .error($e);
             };
@@ -299,22 +290,19 @@ public class Kernel
         usize $n = $this->extensions->count();
         while ($n > 0) {
             $n = $n - 1;
-            Extension $ext = $this->extensions[$n];
-            $ext->drain($this);
+            $this->extensions[$n]->drain($this);
         }
     }
 
     /**
-     * Every extension's shutdown hook, last booted first, then the
-     * container's.
+     * Every extension's shutdown hook, last booted first, then the container's.
      */
     public function shutdown() : void
     {
         usize $n = $this->extensions->count();
         while ($n > 0) {
             $n = $n - 1;
-            Extension $ext = $this->extensions[$n];
-            $ext->shutdown($this);
+            $this->extensions[$n]->shutdown($this);
         }
         $this->services->drop();
         $this->log->flush();
@@ -325,7 +313,7 @@ public class Kernel
      */
     public function transport() : Transport?
     {
-        foreach ($this->extensions as $ext) {
+        foreach ($this->extensions as &$ext) {
             Transport? $t = $ext->transport();
             if ($t != null) {
                 return $t;
@@ -336,38 +324,36 @@ public class Kernel
 
     internal function route(Payload& $payload) : Response
     {
-        map<string, string> $params = map<string, string>();
+        map<string, string> $params = [];
         array<Method> $allow = [];
-        Route? $found = $this->router->find($payload->request->method, $payload->request->path, $params, $allow);
-        if ($found == null) {
+        Route $route = guard $this->router->find($payload->request->method, $payload->request->path, $params, $allow) else {
             if ($allow->empty()) {
-                return $payload->fail(Problem::notFound($payload->request->path));
+                return $payload->fail(.notFound($payload->request->path));
             }
             if ($payload->request->method == Method::options) {
                 array<string> $verbs = [];
                 foreach ($allow as const &$m) {
                     $verbs[] = $m->verb();
                 }
-                Response $opts = Response(204);
+                $opts = Response(204);
                 $opts->header('Allow', str::join($verbs, ', '));
                 return $opts;
             }
-            return $payload->fail(Problem::methodNotAllowed($allow));
-        }
-        Route $route = guard $found;
-        $payload->request->params = $params;
+            return $payload->fail(.methodNotAllowed(mv $allow));
+        };
+        $payload->request->params = mv $params;
         $payload->action = $route->action;
         if ($route->middleware->empty()) {
-            function<Response(Payload&)> $dispatch = $route->dispatch;
+            $dispatch = $route->dispatch;
             return $dispatch($payload);
         }
-        Next $next = Next(Chain(MiddlewareRef::make($route->middleware, $payload->services), $route->dispatch));
+        $next = Next(Chain(MiddlewareRef::make($route->middleware, $payload->services), $route->dispatch));
         return $next->run($payload);
     }
 
     /**
-     * Whether an incoming request id is safe to adopt: 1 to 64 characters of
-     * letters, digits, `-`, `_` and `.`.
+     * Whether an incoming request id is safe to adopt: 1 to 64 characters of letters, digits, `-`,
+     * `_` and `.`.
      */
     internal static function sane(const string& $id) : bool
     {
@@ -384,16 +370,5 @@ public class Kernel
             $i = $i + 1;
         }
         return true;
-    }
-
-    /**
-     * Sixteen hex characters of fresh randomness.
-     */
-    internal static function freshId() : string
-    {
-        string $bytes = guard crypto::random(8) else {
-            return str::from(time::timestamp::now()->unix_nanos());
-        };
-        return crypto::hex($bytes);
     }
 }

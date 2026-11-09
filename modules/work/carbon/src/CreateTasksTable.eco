@@ -1,8 +1,7 @@
 namespace nexus::work::carbon;
 
 /**
- * `nexus_tasks`. Add it to the app's migrations with
- * `nexus::work::carbon::Tables::migrations()`.
+ * `nexus_tasks`. Add it to the app's migrations with `nexus::work::carbon::Tables::migrations()`.
  */
 #[carbon::migration: '20261102000500_create_nexus_tasks']
 public class CreateTasksTable : carbon::Migration

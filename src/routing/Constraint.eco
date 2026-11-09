@@ -1,9 +1,8 @@
 namespace nexus;
 
 /**
- * What a path parameter admits. `nexus gen` derives it from the type of the
- * `handle()` parameter of the same name (`int64 $id` is `number`), or the
- * path says it: `{slug:slug}`.
+ * What a path parameter admits. `nexus gen` derives it from the type of the `handle()` parameter of
+ * the same name (`int64 $id` is `number`), or the path says it: `{slug:slug}`.
  */
 public enum Constraint : uint8
 {

@@ -7,12 +7,12 @@ use nexus::http::Wire;
 
 test request_converts
 {
-    http::Query $q = http::Query();
+    $q = http::Query();
     $q->add('page', '2');
-    http::Headers $h = http::Headers();
+    $h = http::Headers();
     $h->add('Content-Type', 'application/json');
-    http::Request $in = http::Request(http::Method::post, '/v1/posts?page=2', '/v1/posts', 'page=2', $q, 'HTTP/1.1', $h, '{}', '127.0.0.1:5000');
-    nexus::Request $r = expect(Wire::request($in))->some();
+    $in = http::Request(http::Method::post, '/v1/posts?page=2', '/v1/posts', 'page=2', mv $q, 'HTTP/1.1', mv $h, '{}', '127.0.0.1:5000');
+    $r = expect(Wire::request($in))->some();
     expect($r->method == nexus::Method::post)->yes(says: 'the method converted to post');
     expect($r->path)->is('/v1/posts');
     expect($r->query->get('page'))->some('2');
@@ -23,50 +23,50 @@ test request_converts
 
 test unknown_verb_is_null
 {
-    http::Request $in = http::Request(http::Method::other('BREW'), '/', '/', '', http::Query(), 'HTTP/1.1', http::Headers(), '', '');
+    $in = http::Request(http::Method::other('BREW'), '/', '/', '', http::Query(), 'HTTP/1.1', http::Headers(), '', '');
     expect(Wire::request($in))->none();
 }
 
 test response_converts
 {
-    nexus::Response $out = nexus::Response(text: 'hi', status: 201);
+    $out = nexus::Response(text: 'hi', status: 201);
     $out->headers->add('Set-Cookie', 'a=1');
     $out->headers->add('Set-Cookie', 'b=2');
-    http::Response $r = Wire::response($out);
+    $r = Wire::response($out);
     expect($r->status)->is(201);
     expect($r->body)->is('hi');
     expect($r->headers->all('Set-Cookie'))->size(2);
 }
 
-function forwarded(const string& $peer, const string& $xff) : http::Request
+internal function forwarded(const string& $peer, const string& $xff) : http::Request
 {
-    http::Headers $h = http::Headers();
+    $h = http::Headers();
     if (!$xff->empty()) {
         $h->add('X-Forwarded-For', $xff);
     }
-    return http::Request(http::Method::get, '/', '/', '', http::Query(), 'HTTP/1.1', $h, '', $peer);
+    return http::Request(http::Method::get, '/', '/', '', http::Query(), 'HTTP/1.1', mv $h, '', $peer);
 }
 
 test a_trusted_proxy_names_the_client
 {
-    nexus::http::Proxies $p = nexus::http::Proxies::parse(' 10.0.0.2, 10.0.0.3 ,');
+    $p = nexus::http::Proxies(parse: ' 10.0.0.2, 10.0.0.3 ,');
     expect($p->trusted)->size(2);
-    nexus::Request $r = expect(Wire::request(forwarded('10.0.0.2:40000', '203.0.113.9'), $p))->some();
+    $r = expect(Wire::request(forwarded('10.0.0.2:40000', '203.0.113.9'), $p))->some();
     expect($r->peer)->is('203.0.113.9');
     // what the client wrote itself stays to the left of what the proxies added
-    nexus::Request $chain = expect(Wire::request(forwarded('10.0.0.2:40000', '1.1.1.1, 203.0.113.9, 10.0.0.3'), $p))->some();
+    $chain = expect(Wire::request(forwarded('10.0.0.2:40000', '1.1.1.1, 203.0.113.9, 10.0.0.3'), $p))->some();
     expect($chain->peer)->is('203.0.113.9');
 }
 
 test anyone_else_cannot_claim_an_address
 {
-    nexus::http::Proxies $p = nexus::http::Proxies::parse('10.0.0.2');
-    nexus::Request $r = expect(Wire::request(forwarded('198.51.100.7:5000', '203.0.113.9'), $p))->some();
+    $p = nexus::http::Proxies(parse: '10.0.0.2');
+    $r = expect(Wire::request(forwarded('198.51.100.7:5000', '203.0.113.9'), $p))->some();
     expect($r->peer)->is('198.51.100.7:5000');
-    nexus::Request $none = expect(Wire::request(forwarded('10.0.0.2:40000', ''), $p))->some();
+    $none = expect(Wire::request(forwarded('10.0.0.2:40000', ''), $p))->some();
     expect($none->peer)->is('10.0.0.2:40000');
-    nexus::Request $all = expect(Wire::request(forwarded('10.0.0.2:40000', '10.0.0.2'), $p))->some();
+    $all = expect(Wire::request(forwarded('10.0.0.2:40000', '10.0.0.2'), $p))->some();
     expect($all->peer)->is('10.0.0.2');
-    nexus::Request $plain = expect(Wire::request(forwarded('10.0.0.2:40000', '203.0.113.9')))->some();
+    $plain = expect(Wire::request(forwarded('10.0.0.2:40000', '203.0.113.9')))->some();
     expect($plain->peer)->is('10.0.0.2:40000');
 }

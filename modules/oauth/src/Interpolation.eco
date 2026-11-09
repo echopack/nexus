@@ -1,0 +1,23 @@
+/**
+ * `str::from` for nexus-oauth values, so `"{$e}"` works.
+ */
+
+namespace str;
+
+/**
+ * Why a redirect URI is refused, as a sentence.
+ */
+public function from(const nexus::oauth::RedirectError& $e) : string
+{
+    return match ($e) {
+        nexus::oauth::RedirectError::notAbsolute($uri) => "'{$uri}' is not an absolute URI",
+        nexus::oauth::RedirectError::fragment($uri) => "{$uri} has a fragment",
+        nexus::oauth::RedirectError::spaces => 'a redirect URI has no spaces or control characters',
+        nexus::oauth::RedirectError::scheme($uri) => "'{$uri}' has no valid scheme",
+        nexus::oauth::RedirectError::forbidden($scheme) => "{$scheme}: is not a redirect",
+        nexus::oauth::RedirectError::noHost($uri) => "{$uri} has no host",
+        nexus::oauth::RedirectError::brokenHost($uri) => "{$uri} has a broken host",
+        nexus::oauth::RedirectError::remote($host) => "plain http is only for this machine (localhost, 127.0.0.1), not {$host}",
+        nexus::oauth::RedirectError::brokenPort($uri) => "{$uri} has a broken port",
+    };
+}

@@ -1,9 +1,9 @@
 /**
- * nexus-oauth's store in a carbon database, on carbon's fake driver: each
- * test queues what the database answers and reads back what was sent.
+ * nexus-oauth's store in a carbon database, on carbon's fake driver: each test queues what the
+ * database answers and reads back what was sent.
  */
 
-use nexus::oauth::{OAuthStore, Client, Code, Grant};
+use nexus::oauth::{OAuthStore, Client, Code, Grant, Rotation};
 use nexus::oauth::carbon::{ClientRow, ClientRowTable, CodeRow, CodeRowTable, GrantRow, GrantRowTable};
 use nexus::testing::TestApp;
 use carbon::fake;
@@ -11,10 +11,10 @@ use hydrahon::Mysql;
 use std::time;
 use ecotest::expect;
 
-const int64 START = 1793588340;
-const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+internal const int64 START = 1793588340;
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
 
-class Rig
+internal class Rig
 {
     public fake::Driver<Mysql> $fake;
     public calendar::ManualClock $clock;
@@ -22,22 +22,20 @@ class Rig
 
     public constructor(bool $register)
     {
-        fake::Driver<Mysql> $driver = fake::Driver<Mysql>();
-        calendar::ManualClock $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        $driver = fake::Driver<Mysql>();
+        $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
         $this->fake = $driver;
         $this->clock = $clock;
-        nexus::carbon::Extension $db = nexus::carbon::Extension(function[$driver, $clock, $register](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
-            carbon::DB $made = carbon::DB($driver, clock: $clock);
+        $db = nexus::carbon::Extension(function[$driver, $clock, $register](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+            $made = carbon::DB($driver, clock: $clock);
             if ($register) {
-                guard nexus::oauth::carbon::Tables::wire($made) else ($e) {
-                    return .error($e);
-                };
+                try nexus::oauth::carbon::Tables::wire($made);
             }
             return .ok($made);
         });
         array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::oauth::Extension(stores: .provided, clock: $clock), nexus::oauth::carbon::Extension()];
         map<string, string> $vars = ['AUTH_KEY' => KEY];
-        $this->app = TestApp::boot($exts, $vars);
+        $this->app = TestApp($exts, $vars);
     }
 
     public function store() : OAuthStore
@@ -61,60 +59,60 @@ class Rig
     }
 }
 
-function takeOne(OAuthStore $s, const string& $hash) : Code?
+internal function takeOne(OAuthStore $s, const string& $hash) : Code?
 {
     Code? $c = guard $s->take($hash);
     return $c;
 }
 
-function rotated(OAuthStore $s, const Grant& $g, const string& $was) : bool
+internal function rotated(OAuthStore $s, const Grant& $g, const string& $was) : Rotation
 {
-    bool $won = guard $s->rotate($g, $was);
-    return $won;
+    Rotation $done = guard $s->rotate($g, $was);
+    return $done;
 }
 
 test a_client_is_registered_with_its_redirects_on_lines
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->written();
     array<string> $uris = ['http://127.0.0.1/cb', 'https://app.example/cb'];
-    Client $c = Client($id: 'c1', $name: 'Tool', $redirects: $uris, $createdAt: $r->clock->now());
+    $c = Client($id: 'c1', $name: 'Tool', $redirects: mv $uris, $createdAt: $r->clock->now());
     guard $r->store()->register($c);
     expect($r->fake->last())->starts('INSERT INTO `oauth_clients`');
-    ClientRow $row = ClientRow::of($c);
+    ClientRow $row = .of($c);
     expect($row->redirectUris)->is("http://127.0.0.1/cb\nhttps://app.example/cb");
     expect($row->client()->redirects)->size(2);
 }
 
 test a_code_is_taken_by_the_delete_that_removes_it
 {
-    Rig $r = Rig(true);
-    $r->fake->rows([CodeRowTable()->row(CodeRow::of($r->code()))])->written(1);
+    $r = Rig(true);
+    $r->fake->rows([CodeRowTable()->row(.of($r->code()))])->written(1);
     Code $c = expect(takeOne($r->store(), 'h1'))->some();
     expect($c->subject)->is('7');
     expect($c->named)->yes(says: 'the code was taken for a named client');
     expect($r->fake->last())->is('DELETE FROM `oauth_codes` WHERE `oauth_codes`.`hash` = ?');
 
-    $r->fake->rows([CodeRowTable()->row(CodeRow::of($r->code()))])->written(0);
+    $r->fake->rows([CodeRowTable()->row(.of($r->code()))])->written(0);
     expect(takeOne($r->store(), 'h1'))->none();
 }
 
 test a_refresh_rotates_on_the_hash_it_read
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->written(1);
     Grant $g = $r->grant();
     $g->previousHash = 'r1';
     $g->refreshHash = 'r2';
-    expect(rotated($r->store(), $g, 'r1'))->yes(says: 'the rotation on the hash it read wins');
+    expect(rotated($r->store(), $g, 'r1') == Rotation::won)->yes(says: 'the rotation on the hash it read wins');
     expect($r->fake->last())->is('UPDATE `oauth_grants` SET `access_hash` = ?, `access_expires_at` = ?, `refresh_hash` = ?, `refresh_expires_at` = ?, `previous_hash` = ?, `used_at` = ? WHERE `oauth_grants`.`id` = ? AND `oauth_grants`.`refresh_hash` = ?');
     $r->fake->written(0);
-    expect(rotated($r->store(), $g, 'r1'))->no(says: 'a rotation that changed no row loses');
+    expect(rotated($r->store(), $g, 'r1') == Rotation::lost)->yes(says: 'a rotation that changed no row loses');
 }
 
 test prune_drops_expired_codes_and_grants
 {
-    Rig $r = Rig(true);
+    $r = Rig(true);
     $r->fake->written(2)->written(1);
     guard $r->store()->prune($r->clock->now());
     array<string> $sent = $r->fake->texts();
@@ -124,8 +122,8 @@ test prune_drops_expired_codes_and_grants
 
 test boot_refuses_a_database_without_the_tables
 {
-    fake::Driver<Mysql> $driver = fake::Driver<Mysql>();
-    nexus::carbon::Extension $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+    $driver = fake::Driver<Mysql>();
+    $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
         return .ok(carbon::DB($driver));
     });
     array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::oauth::Extension(stores: .provided), nexus::oauth::carbon::Extension()];

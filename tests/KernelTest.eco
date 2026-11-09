@@ -1,6 +1,6 @@
 /**
- * The kernel end to end, in process, with a generated table written the
- * way `nexus gen` writes one and an app that routes it with bindAction.
+ * The kernel end to end, in process, with a generated table written the way `nexus gen` writes one
+ * and an app that routes it with bindAction.
  */
 
 use nexus::{Kernel, Tables, Extension, Services, Generated, GeneratedTable, PathParam, Request, Response, Method, Mode, Logger, Env, Payload, Problem, Reply, Route, Router, ConfigTable, RouteError, Middleware, MiddlewareRef, Next, Pipeline, BootError};
@@ -8,15 +8,15 @@ use container::{Builder, Container};
 use ecotest::expect;
 
 #[atomic]
-class KGreeter
+internal class KGreeter
 {
-    public function greet(const string& $name) : string
+    public const function greet(const string& $name) : string
     {
         return "hello {$name}";
     }
 }
 
-class KHello : nexus::Action
+internal class KHello : nexus::Action
 {
     private KGreeter $greeter;
 
@@ -35,31 +35,31 @@ class KHello : nexus::Action
 }
 
 #[atomic]
-class KStamp : Middleware
+internal class KStamp : Middleware
 {
     public function handle(Payload& $payload, Next $next) : Response
     {
-        Response $r = $next->run($payload);
+        $r = $next->run($payload);
         $r->header('X-Stamp', 'global');
         return $r;
     }
 }
 
 #[atomic]
-class KAudit : Middleware
+internal class KAudit : Middleware
 {
     public function handle(Payload& $payload, Next $next) : Response
     {
         if ($payload->request->header('X-Deny') != null) {
-            return $payload->fail(Problem::forbidden('denied by audit'));
+            return $payload->fail(.forbidden('denied by audit'));
         }
-        Response $r = $next->run($payload);
+        $r = $next->run($payload);
         $r->header('X-Audit', $payload->action);
         return $r;
     }
 }
 
-class KApp : Extension
+internal class KApp : Extension
 {
     public bool $bindHello = true;
     public string $path = '/hello/{name}';
@@ -97,18 +97,18 @@ class KApp : Extension
 }
 
 // what nexus gen writes for KHello
-struct KHelloDispatch
+internal struct KHelloDispatch
 {
     public static function dispatch(Payload& $payload) : Response
     {
         string $name = $payload->param('name') ?? '';
-        KHello $action = $payload->get<KHello>();
-        result<string, Problem> $r = $action->handle($name);
-        return Reply::of($payload, $r);
+        $action = $payload->get<KHello>();
+        $r = $action->handle($name);
+        return Reply::of($payload, mv $r);
     }
 }
 
-function kGenerated() : array<GeneratedTable>
+internal function kGenerated() : array<GeneratedTable>
 {
     array<GeneratedTable> $tables = [];
     $tables[] = GeneratedTable('tests', function(Generated $g) : void {
@@ -121,18 +121,18 @@ function kGenerated() : array<GeneratedTable>
     return $tables;
 }
 
-function kBoot(KApp $app, nexus::log::Memory $sink) : result<Kernel, BootError>
+internal function kBoot(KApp $app, nexus::log::Memory $sink) : result<Kernel, BootError>
 {
     array<Extension> $exts = [$app];
     array<nexus::log::Sink> $sinks = [$sink];
     array<ConfigTable> $configs = [];
-    map<string, string> $vars = map<string, string>();
+    $vars = map<string, string>();
     array<GeneratedTable> $generated = kGenerated();
-    Tables $tables = Tables($configs: $configs, $generated: $generated);
-    return Kernel::boot($exts, Mode::testing, Logger($sinks, .debug), Env(fixed: $vars), tables: $tables);
+    $tables = Tables($configs: $configs, $generated: $generated);
+    return Kernel::boot($exts, .testing, Logger($sinks, .debug), Env(fixed: $vars), tables: $tables);
 }
 
-function kKernel() : Kernel
+internal function kKernel() : Kernel
 {
     Kernel $k = guard kBoot(KApp(), nexus::log::Memory());
     return $k;
@@ -141,7 +141,7 @@ function kKernel() : Kernel
 test get_runs_the_action_through_middleware
 {
     Kernel $k = kKernel();
-    Response $r = $k->handle(Request(Method::get, '/hello/bob'));
+    Response $r = $k->handle(Request(.get, '/hello/bob'));
     expect($r->status)->is(200);
     expect($r->body)->is('hello bob');
     expect($r->header('X-Stamp'))->some('global');
@@ -153,7 +153,7 @@ test get_runs_the_action_through_middleware
 test action_problem_renders_problem_json
 {
     Kernel $k = kKernel();
-    Response $r = $k->handle(Request(Method::get, '/hello/nobody'));
+    Response $r = $k->handle(Request(.get, '/hello/nobody'));
     expect($r->status)->is(404);
     expect($r->header('Content-Type'))->some('application/problem+json');
     expect($r->body)->has('"detail":"nobody not found"');
@@ -162,7 +162,7 @@ test action_problem_renders_problem_json
 test route_middleware_can_answer_early
 {
     Kernel $k = kKernel();
-    Request $req = Request(Method::get, '/hello/bob');
+    $req = Request(.get, '/hello/bob');
     $req->headers->set('X-Deny', '1');
     Response $r = $k->handle($req);
     expect($r->status)->is(403);
@@ -172,20 +172,20 @@ test route_middleware_can_answer_early
 test unknown_path_is_404_and_wrong_method_405
 {
     Kernel $k = kKernel();
-    Response $missing = $k->handle(Request(Method::get, '/nope'));
+    Response $missing = $k->handle(Request(.get, '/nope'));
     expect($missing->status)->is(404);
-    Response $wrong = $k->handle(Request(Method::post, '/hello/bob'));
+    Response $wrong = $k->handle(Request(.post, '/hello/bob'));
     expect($wrong->status)->is(405);
     expect($wrong->header('Allow'))->some('GET, OPTIONS, HEAD');
 }
 
-test head_and_options
+test head_and_options_are_answered
 {
     Kernel $k = kKernel();
-    Response $head = $k->handle(Request(Method::head, '/hello/bob'));
+    Response $head = $k->handle(Request(.head, '/hello/bob'));
     expect($head->status)->is(200);
     expect($head->body)->is('');
-    Response $opts = $k->handle(Request(Method::options, '/hello/bob'));
+    Response $opts = $k->handle(Request(.options, '/hello/bob'));
     expect($opts->status)->is(204);
     string $allow = expect($opts->header('Allow'))->some();
     expect($allow)->has('GET');
@@ -194,29 +194,29 @@ test head_and_options
 test incoming_request_id_is_adopted_when_sane
 {
     Kernel $k = kKernel();
-    Request $req = Request(Method::get, '/hello/bob');
+    $req = Request(.get, '/hello/bob');
     $req->headers->set('X-Request-Id', 'edge-123');
     Response $r = $k->handle($req);
     expect($r->header('X-Request-Id'))->some('edge-123');
-    Request $bad = Request(Method::get, '/hello/bob');
+    $bad = Request(.get, '/hello/bob');
     $bad->headers->set('X-Request-Id', 'no spaces allowed');
     Response $r2 = $k->handle($bad);
     string $fresh = expect($r2->header('X-Request-Id'))->some();
     expect($fresh)->isNot('no spaces allowed');
 }
 
-test access_log_line_per_request
+test every_request_writes_an_access_log_line
 {
-    nexus::log::Memory $sink = nexus::log::Memory();
+    $sink = nexus::log::Memory();
     Kernel $k = guard kBoot(KApp(), $sink);
-    $k->handle(Request(Method::get, '/hello/bob'));
+    $k->handle(Request(.get, '/hello/bob'));
     expect($sink->saw('GET /hello/bob 200'))->yes(says: 'the access log has a line for the request');
     expect($k->served())->is(1);
 }
 
 test unbound_action_fails_boot
 {
-    KApp $app = KApp();
+    $app = KApp();
     $app->bindHello = false;
     result<Kernel, BootError> $r = kBoot($app, nexus::log::Memory());
     BootError $e = expect($r)->fails();
@@ -224,7 +224,7 @@ test unbound_action_fails_boot
     expect($lines[0])->has('KHello');
 }
 
-test url_builder_escapes
+test url_builder_escapes_params
 {
     Kernel $k = kKernel();
     Router $router = $k->services->get<Router>();
@@ -242,8 +242,8 @@ test app_url_gives_absolute_links
     array<Extension> $exts = [KTwiceApp()];
     array<ConfigTable> $configs = [];
     map<string, string> $vars = ['APP_URL' => 'https://example.com/api/'];
-    Tables $tables = Tables($configs: $configs, $generated: kGenerated());
-    Kernel $k = guard Kernel::boot($exts, Mode::testing, Logger::silent(), Env(fixed: $vars), tables: $tables);
+    $tables = Tables($configs: $configs, $generated: kGenerated());
+    Kernel $k = guard Kernel::boot($exts, .testing, .silent(), Env(fixed: $vars), tables: $tables);
     expect($k->router->absoluteUrl<KHello>(['name' => 'ann'])->text())->is('https://example.com/api/hello/ann');
 }
 
@@ -251,13 +251,13 @@ test a_bad_app_url_stops_the_boot
 {
     array<Extension> $exts = [KTwiceApp()];
     array<ConfigTable> $configs = [];
-    Tables $tables = Tables($configs: $configs, $generated: kGenerated());
+    $tables = Tables($configs: $configs, $generated: kGenerated());
     map<string, string> $broken = ['APP_URL' => 'https://exa mple.com'];
-    result<Kernel, BootError> $r = Kernel::boot($exts, Mode::testing, Logger::silent(), Env(fixed: $broken), tables: $tables);
+    result<Kernel, BootError> $r = Kernel::boot($exts, .testing, .silent(), Env(fixed: $broken), tables: $tables);
     expect($r)->fails();
     expect($r->failure()->lines()[0])->has('APP_URL');
     map<string, string> $relative = ['APP_URL' => '/api'];
-    result<Kernel, BootError> $again = Kernel::boot($exts, Mode::testing, Logger::silent(), Env(fixed: $relative), tables: $tables);
+    result<Kernel, BootError> $again = Kernel::boot($exts, .testing, .silent(), Env(fixed: $relative), tables: $tables);
     expect($again)->fails();
     expect($again->failure()->lines()[0])->has('not absolute');
 }
@@ -274,7 +274,7 @@ test routes_carry_the_generated_name_and_middleware
 
 test a_path_without_the_handle_parameter_fails_boot
 {
-    KApp $app = KApp();
+    $app = KApp();
     $app->path = '/hello';
     result<Kernel, BootError> $r = kBoot($app, nexus::log::Memory());
     BootError $e = expect($r)->fails();
@@ -284,7 +284,7 @@ test a_path_without_the_handle_parameter_fails_boot
 
 test an_optional_segment_needs_an_optional_parameter
 {
-    KApp $app = KApp();
+    $app = KApp();
     $app->path = '/hello/{name?}';
     result<Kernel, BootError> $r = kBoot($app, nexus::log::Memory());
     BootError $e = expect($r)->fails();
@@ -292,15 +292,15 @@ test an_optional_segment_needs_an_optional_parameter
     expect($lines[0])->has('may be left out');
 }
 
-class KStray : nexus::Action
+internal class KStray : nexus::Action
 {
-    public function handle() : string
+    public const function handle() : string
     {
         return 'stray';
     }
 }
 
-class KStrayApp : Extension
+internal class KStrayApp : Extension
 {
     public function name() : string
     {
@@ -318,15 +318,15 @@ test an_action_without_a_dispatcher_fails_boot
 {
     array<Extension> $exts = [KStrayApp()];
     array<ConfigTable> $configs = [];
-    map<string, string> $vars = map<string, string>();
-    Tables $tables = Tables($configs: $configs);
-    result<Kernel, BootError> $r = Kernel::boot($exts, Mode::testing, Logger::silent(), Env(fixed: $vars), tables: $tables);
+    $vars = map<string, string>();
+    $tables = Tables($configs: $configs);
+    result<Kernel, BootError> $r = Kernel::boot($exts, .testing, .silent(), Env(fixed: $vars), tables: $tables);
     BootError $e = expect($r)->fails();
     array<string> $lines = $e->lines();
     expect($lines[0])->has('nexus gen wrote no dispatcher');
 }
 
-class KTwiceApp : Extension
+internal class KTwiceApp : Extension
 {
     public function name() : string
     {
@@ -347,18 +347,18 @@ class KTwiceApp : Extension
     }
 }
 
-test one_path_many_methods_and_a_second_path
+test one_path_takes_many_methods_and_another_path_the_same_action
 {
     array<Extension> $exts = [KTwiceApp()];
     array<ConfigTable> $configs = [];
-    map<string, string> $vars = map<string, string>();
+    $vars = map<string, string>();
     array<GeneratedTable> $generated = kGenerated();
-    Tables $tables = Tables($configs: $configs, $generated: $generated);
-    Kernel $k = guard Kernel::boot($exts, Mode::testing, Logger::silent(), Env(fixed: $vars), tables: $tables);
+    $tables = Tables($configs: $configs, $generated: $generated);
+    Kernel $k = guard Kernel::boot($exts, .testing, .silent(), Env(fixed: $vars), tables: $tables);
     expect($k->router->count())->is(2);
     // links go to the first path
     expect($k->router->url<KHello>(['name' => 'ann'])->text())->is('/hello/ann');
-    Response $r = $k->handle(Request(Method::get, '/hi/ann'));
+    Response $r = $k->handle(Request(.get, '/hi/ann'));
     expect($r->status)->is(200);
     expect($r->body)->is('hello ann');
 }

@@ -4,11 +4,9 @@ use container::{Builder, Container};
 use std::time;
 
 /**
- * Bearer tokens and signed sessions for the app. Binds `Guards` (signed,
- * then bearer, then the app's own), the `Authenticate` middleware,
- * `Tokens` and `Sessions` per request on the stores, `Passwords` and
- * `Logins`. `AUTH_KEY` must be set: signed session secrets are derived
- * from it.
+ * Bearer tokens and signed sessions for the app. Binds `Guards` (signed, then bearer, then the
+ * app's own), the `Authenticate` middleware, `Tokens` and `Sessions` per request on the stores,
+ * `Passwords` and `Logins`. `AUTH_KEY` must be set: signed session secrets are derived from it.
  *
  * ```echo
  * nexus::Kernel::main([
@@ -18,17 +16,17 @@ use std::time;
  * ]);
  * ```
  *
- * `$prefix` starts every token (`blog_3f9a1c2e5d7b_...`). With
- * `stores: .provided` another extension binds `TokenStore` and
- * `SessionStore`; `compat: true` also accepts `X-AccessToken` signatures.
+ * `$prefix` starts every token (`blog_3f9a1c2e5d7b_...`). With `stores: .provided` another
+ * extension binds `TokenStore` and `SessionStore`; `compat: true` also accepts `X-AccessToken`
+ * signatures.
  */
 public class Extension : nexus::Extension
 {
-    public string $prefix;
-    public Stores $stores;
-    public bool $compat;
+    public const string $prefix;
+    public const Stores $stores;
+    public const bool $compat;
     public calendar::Clock $clock;
-    public crypto::PasswordCost $cost;
+    public const crypto::PasswordCost $cost;
     public array<Guard> $guards;
 
     /**
@@ -38,10 +36,10 @@ public class Extension : nexus::Extension
 
     public constructor(
         const string& $prefix,
-        stores: Stores $stores = Stores::memory,
+        stores: Stores $stores = .memory,
         compat: bool $compat = false,
         clock: calendar::Clock $clock = calendar::SystemClock(),
-        cost: crypto::PasswordCost $cost = crypto::PasswordCost::standard(),
+        cost: crypto::PasswordCost $cost = .standard(),
         guards: array<Guard> $guards = array<Guard>()
     )
     {
@@ -50,8 +48,8 @@ public class Extension : nexus::Extension
         $this->compat = $compat;
         $this->clock = $clock;
         $this->cost = $cost;
-        $this->guards = $guards;
-        $this->window = time::duration::mins(5);
+        $this->guards = mv $guards;
+        $this->window = .mins(5);
     }
 
     public function name() : string
@@ -62,7 +60,7 @@ public class Extension : nexus::Extension
     public function services(nexus::Services& $s) : status<nexus::BootError>
     {
         AuthConfig $config = $s->get<AuthConfig>();
-        if (!Secrets::prefix($this->prefix)) {
+        if (!Secrets::isPrefix($this->prefix)) {
             return .error(.extension('nexus-auth', "the token prefix '{$this->prefix}' must be 1 to 16 lowercase letters and digits"));
         }
         if ($config->key->size() < 32) {
@@ -74,16 +72,14 @@ public class Extension : nexus::Extension
             $s->alias<TokenStore, MemoryTokens>();
             $s->alias<SessionStore, MemorySessions>();
         }
-        array<Guard> $all = [];
-        $all[] = SignedGuard($this->compat);
-        $all[] = BearerGuard();
-        foreach ($this->guards as $g) {
+        array<Guard> $all = [SignedGuard($this->compat), BearerGuard()];
+        foreach ($this->guards as const &$g) {
             $all[] = $g;
         }
-        Guards $guards = Guards($all);
+        $guards = Guards(mv $all);
         $s->bind<Guards>(put: $guards);
         $s->bind<Authenticate>(put: Authenticate($guards));
-        Passwords $passwords = Passwords($this->cost);
+        $passwords = Passwords($this->cost);
         $s->bind<Passwords>(put: $passwords);
         $s->bind<Logins>(put: Logins($passwords, $this->clock));
         string $prefix = $this->prefix;

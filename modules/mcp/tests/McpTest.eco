@@ -1,19 +1,19 @@
 /**
- * nexus-mcp through its extension: the endpoint's handshake, the tool
- * list and calls of a hand-written tool, and what is refused on the way,
- * with nexus-auth's memory tokens saying who calls.
+ * nexus-mcp through its extension: the endpoint's handshake, the tool list and calls of a
+ * hand-written tool, and what is refused on the way, with nexus-auth's memory tokens saying who
+ * calls.
  */
 
 use nexus::mcp::{ToolSpec, Tools, Schema};
 use ecotest::expect;
 use nexus::testing::{TestApp, TestResponse};
 
-const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
 
 /**
  * Says back what it is given.
  */
-class TEcho
+internal class TEcho
 {
     public function handle(nexus::Payload& $payload, const string& $text) : nexus::Response
     {
@@ -31,7 +31,7 @@ class TEcho
 /**
  * What `nexus gen` would write for a tool `echo_text` taking `text`.
  */
-struct TEchoMcp
+internal struct TEchoMcp
 {
     public static function spec() : ToolSpec
     {
@@ -41,7 +41,7 @@ struct TEchoMcp
         function<bool(container::Container)> $bound = function(container::Container $services) : bool {
             return $services->find<TEcho>() != null;
         };
-        ToolSpec $t = ToolSpec('echo_text', 'TEcho', Schema::of('{"type":"object","properties":{"text":{"type":"string","minLength":1}},"required":["text"],"additionalProperties":false}'), $run, $bound);
+        $t = ToolSpec('echo_text', 'TEcho', Schema::of('{"type":"object","properties":{"text":{"type":"string","minLength":1}},"required":["text"],"additionalProperties":false}'), $run, $bound);
         $t->title = 'Echo';
         $t->description = 'Says the text back.';
         $t->annotations = Schema::of('{"readOnlyHint":true}');
@@ -78,7 +78,7 @@ struct TEchoMcp
 }
 
 #[atomic]
-class TLocked : nexus::Middleware
+internal class TLocked : nexus::Middleware
 {
     public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
     {
@@ -86,7 +86,7 @@ class TLocked : nexus::Middleware
     }
 }
 
-class TExt : nexus::Extension
+internal class TExt : nexus::Extension
 {
     public bool $binds;
 
@@ -112,7 +112,7 @@ class TExt : nexus::Extension
     }
 }
 
-class Rig
+internal class Rig
 {
     public TestApp $app;
     public string $token;
@@ -122,7 +122,7 @@ class Rig
         map<string, string> $vars = ['AUTH_KEY' => KEY, 'MCP_NAME' => 'tests', 'MCP_INSTRUCTIONS' => 'Call echo_text.'];
         array<ToolSpec> $tools = [TEchoMcp::spec(), TEchoMcp::locked()];
         array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::mcp::Extension(tools: $tools), TExt(true)];
-        $this->app = TestApp::boot($exts, $vars);
+        $this->app = TestApp($exts, $vars);
         nexus::Payload $payload = $this->app->kernel->background('issue', 'test');
         nexus::auth::Issued $issued = guard $payload->get<nexus::auth::Tokens>()->issue('7');
         nexus::Kernel::finish($payload);
@@ -153,7 +153,7 @@ class Rig
 
 test a_caller_without_a_credential_is_pointed_at_oauth
 {
-    Rig $r = Rig();
+    $r = Rig();
     json::Value $o = json::object();
     $o['jsonrpc'] = json::str('2.0');
     $o['id'] = json::int(1);
@@ -165,7 +165,7 @@ test a_caller_without_a_credential_is_pointed_at_oauth
 
 test initialize_answers_the_asked_revision_and_the_server
 {
-    Rig $r = Rig();
+    $r = Rig();
     json::Value $p = json::object();
     $p['protocolVersion'] = json::str('2025-06-18');
     TestResponse $res = $r->rpc('initialize', $p);
@@ -181,7 +181,7 @@ test initialize_answers_the_asked_revision_and_the_server
 
 test tools_are_listed_with_their_schema
 {
-    Rig $r = Rig();
+    $r = Rig();
     TestResponse $res = $r->rpc('tools/list', json::object());
     $res->assertCount(['result', 'tools'], 2);
     $res->assertJson(['result', 'tools', '0', 'name'], 'echo_text');
@@ -193,7 +193,7 @@ test tools_are_listed_with_their_schema
 
 test a_call_runs_the_tool_on_the_mcp_door
 {
-    Rig $r = Rig();
+    $r = Rig();
     json::Value $args = json::object();
     $args['text'] = json::str('hello');
     TestResponse $res = $r->call('echo_text', $args);
@@ -206,7 +206,7 @@ test a_call_runs_the_tool_on_the_mcp_door
 
 test bad_arguments_are_a_tool_error_the_model_reads
 {
-    Rig $r = Rig();
+    $r = Rig();
     json::Value $unknown = json::object();
     $unknown['text'] = json::str('hi');
     $unknown['loud'] = json::bool(true);
@@ -225,7 +225,7 @@ test bad_arguments_are_a_tool_error_the_model_reads
 
 test a_tools_middleware_answers_for_it
 {
-    Rig $r = Rig();
+    $r = Rig();
     json::Value $args = json::object();
     $args['text'] = json::str('hello');
     TestResponse $res = $r->call('locked_echo', $args);
@@ -237,7 +237,7 @@ test a_tools_middleware_answers_for_it
 
 test the_endpoint_refuses_what_it_does_not_speak
 {
-    Rig $r = Rig();
+    $r = Rig();
     $r->rpc('resources/list', json::object())->assertJson(['error', 'code'], -32601);
     $r->app->client()->get('/mcp')->assertStatus(405)->assertHeader('Allow', 'POST');
     $r->app->client()->with('Authorization', "Bearer {$r->token}")->post('/mcp', body: '{}', type: 'text/plain')->assertStatus(415);
@@ -251,7 +251,7 @@ test boot_refuses_a_tool_without_a_binding
     map<string, string> $vars = ['AUTH_KEY' => KEY];
     array<ToolSpec> $tools = [TEchoMcp::spec()];
     array<nexus::Extension> $exts = [nexus::auth::Extension('test'), nexus::mcp::Extension(tools: $tools), TExt(false)];
-    result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
+    $r = TestApp::attempt($exts, $vars);
     expect($r)->fails();
 }
 
@@ -259,6 +259,6 @@ test boot_needs_nexus_auth
 {
     map<string, string> $vars = ['AUTH_KEY' => KEY];
     array<nexus::Extension> $exts = [nexus::mcp::Extension(), TExt(true)];
-    result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
+    $r = TestApp::attempt($exts, $vars);
     expect($r)->fails();
 }

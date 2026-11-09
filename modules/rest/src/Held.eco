@@ -1,8 +1,7 @@
 namespace nexus::rest;
 
 /**
- * An owning box so a value of any type can sit in a `TransformerContext`
- * or a `TransformerNetwork`.
+ * An owning box so a value of any type can sit in a `TransformerContext` or a `TransformerNetwork`.
  */
 #[atomic]
 internal class Held<T>

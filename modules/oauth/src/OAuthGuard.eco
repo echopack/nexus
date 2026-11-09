@@ -1,9 +1,8 @@
 namespace nexus::oauth;
 
 /**
- * Reads `Authorization: Bearer nxo_...`, the access tokens this server
- * issues. They open the MCP door only: anywhere else the token is a 401.
- * nexus-oauth adds this guard after nexus-auth's own.
+ * Reads `Authorization: Bearer nxo_...`, the access tokens this server issues. They open the MCP
+ * door only: anywhere else the token is a 401. nexus-oauth adds this guard after nexus-auth's own.
  */
 #[atomic]
 public class OAuthGuard : nexus::auth::Guard
@@ -30,9 +29,7 @@ public class OAuthGuard : nexus::auth::Guard
         if ($payload->door != nexus::Door::mcp) {
             return .error(.unauthorized('this token opens the MCP endpoint only'));
         }
-        nexus::auth::Identity $id = guard $payload->get<Grants>()->identify($text) else ($p) {
-            return .error($p);
-        };
+        nexus::auth::Identity $id = try $payload->get<Grants>()->identify($text);
         return .ok($id);
     }
 

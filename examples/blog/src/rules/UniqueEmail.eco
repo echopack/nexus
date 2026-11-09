@@ -1,8 +1,8 @@
 namespace blog;
 
 /**
- * An e-mail address nobody signed up with yet. The insert still answers a
- * 409 when two sign-ups race past this check.
+ * An e-mail address nobody signed up with yet. The insert still answers a 409 when two sign-ups
+ * race past this check.
  */
 public class UniqueEmail : nexus::Rule<string>
 {
@@ -16,7 +16,7 @@ public class UniqueEmail : nexus::Rule<string>
     public function check(const string& $email, nexus::Check $v) : void
     {
         // a database that does not answer leaves the decision to the insert
-        User? $found = guard $this->users->find()->where(UserTable::$email == $email)->first() else {
+        $found = guard $this->users->find()->where(UserTable::$email == $email)->first() else {
             return;
         };
         if ($found != null) {

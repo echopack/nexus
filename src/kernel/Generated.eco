@@ -1,10 +1,10 @@
 namespace nexus;
 
 /**
- * What `nexus gen` wrote for the program, keyed by type: how each action
- * runs, how each `nexus::Cli` class becomes a command, and the names of
- * the types that conform to a nexus interface. It holds no routes and no
- * command names; the extensions give those when they wire the app.
+ * What `nexus gen` wrote for the program, keyed by type: how each action runs, how each
+ * `nexus::Cli` class becomes a command, and the names of the types that conform to a nexus
+ * interface. It holds no routes and no command names; the extensions give those when they wire the
+ * app.
  */
 #[atomic]
 public class Generated
@@ -14,16 +14,21 @@ public class Generated
     internal map<type_id, string> $names = map<type_id, string>();
 
     /**
-     * Every module's table.
+     * Nothing registered yet.
      */
-    public static function of(const array<GeneratedTable>& $tables) : Generated
+    public constructor()
     {
-        Generated $g = Generated();
+    }
+
+    /**
+     * Filled from every module's table.
+     */
+    public constructor(const array<GeneratedTable>& $tables)
+    {
         foreach ($tables as const &$t) {
-            function<void(Generated)> $fill = $t->call;
-            $fill($g);
+            $fill = $t->call;
+            $fill($this);
         }
-        return $g;
     }
 
     /**
@@ -31,13 +36,12 @@ public class Generated
      */
     public function action<A>(const string& $name, array<PathParam> $params, function<Response(Payload&)> $dispatch) : void
     {
-        $this->actions[type_id<A>()] = Dispatcher($name, $params, $dispatch);
+        $this->actions[type_id<A>()] = Dispatcher($name, mv $params, $dispatch);
         $this->names[type_id<A>()] = $name;
     }
 
     /**
-     * Registers the middleware action `A` names in `#[nexus::through]`;
-     * after `action<A>`.
+     * Registers the middleware action `A` names in `#[nexus::through]`; after `action<A>`.
      */
     public function through<A>(array<MiddlewareRef> $refs) : void
     {
@@ -46,8 +50,8 @@ public class Generated
             return;
         }
         Dispatcher $d = $this->actions->get($id);
-        $d->through = $refs;
-        $this->actions[$id] = $d;
+        $d->through = mv $refs;
+        $this->actions[$id] = mv $d;
     }
 
     /**

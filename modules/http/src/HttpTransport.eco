@@ -1,8 +1,8 @@
 namespace nexus::http;
 
 /**
- * Serves the kernel over HTTP/1.1. Every request goes through one libhttp
- * wrap straight into `Kernel::handle`, on libhttp's worker threads.
+ * Serves the kernel over HTTP/1.1. Every request goes through one libhttp wrap straight into
+ * `Kernel::handle`, on libhttp's worker threads.
  */
 #[atomic]
 public class HttpTransport : nexus::Transport
@@ -20,17 +20,14 @@ public class HttpTransport : nexus::Transport
             $this->server->workers($options->workers as int32);
         }
         $this->server->maxBody($options->maxBody);
-        nexus::Mode $mode = $kernel->mode;
-        Proxies $proxies = Proxies::parse($kernel->services->get<HttpConfig>()->trustedProxies);
+        $mode = $kernel->mode;
+        $proxies = Proxies(parse: $kernel->services->get<HttpConfig>()->trustedProxies);
         $this->server->wrap(function[$kernel, $mode, $proxies](http::Request $req, http::Next $next) : http::Response {
-            nexus::Request? $in = Wire::request($req, $proxies);
-            if ($in == null) {
-                nexus::Response $refused = nexus::Problem::custom(nexus::ProblemDetail('about:blank', 501, 'Not Implemented', $detail: 'this method is not routed'))->response($mode, '');
+            $request = guard Wire::request($req, $proxies) else {
+                $refused = nexus::Problem::custom(nexus::ProblemDetail('about:blank', 501, 'Not Implemented', $detail: 'this method is not routed'))->response($mode, '');
                 return Wire::response($refused);
-            }
-            nexus::Request $request = guard $in;
-            nexus::Response $out = $kernel->handle($request);
-            return Wire::response($out);
+            };
+            return Wire::response($kernel->handle(mv $request));
         });
         int32 $port = $options->port as int32;
         guard $this->server->listen($options->host, $port) else ($e) {

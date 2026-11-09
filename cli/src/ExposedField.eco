@@ -8,15 +8,13 @@ public struct ExposedField
     public string $name;
 
     /**
-     * The key on the wire, `created_at` for `createdAt` unless `key:` says
-     * otherwise.
+     * The key on the wire, `created_at` for `createdAt` unless `key:` says otherwise.
      */
     public string $key;
 
     /**
-     * The `nexus::rest::Item` writer: `int`, `float`, `bool`, `text`,
-     * `time`, `texts`, `ints`, `value`, `enum`, `include` (a
-     * `carbon::One`) or `includeCollection` (a `carbon::Many`).
+     * The `nexus::rest::Item` writer: `int`, `float`, `bool`, `text`, `time`, `texts`, `ints`,
+     * `value`, `enum`, `include` (a `carbon::One`) or `includeCollection` (a `carbon::Many`).
      */
     public string $writer;
 
@@ -31,8 +29,8 @@ public struct ExposedField
     public bool $nullable = false;
 
     /**
-     * The cast an integer or float needs on its way to int64 or float64,
-     * like ` as int64`; empty when none.
+     * The cast an integer or float needs on its way to int64 or float64, like ` as int64`; empty
+     * when none.
      */
     public string $cast = '';
 

@@ -1,8 +1,7 @@
 namespace blog;
 
 /**
- * The blog's settings. Read from BLOG_TITLE and BLOG_PAGE_SIZE, in the
- * environment or a .env file.
+ * The blog's settings. Read from BLOG_TITLE and BLOG_PAGE_SIZE, in the environment or a .env file.
  */
 #[nexus::config: "blog"]
 public struct BlogConfig

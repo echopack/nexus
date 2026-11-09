@@ -1,16 +1,16 @@
 namespace nexus;
 
 /**
- * The decoded pairs of a query string or an urlencoded form, in order. A
- * name may repeat: `?tag=a&tag=b` is two values.
+ * The decoded pairs of a query string or an urlencoded form, in order. A name may repeat:
+ * `?tag=a&tag=b` is two values.
  */
 public struct Query
 {
     public array<QueryField> $pairs = [];
 
     /**
-     * Splits and percent-decodes `$raw` (no leading `?`). A `+` is a space.
-     * Pairs that do not decode are dropped.
+     * Splits and percent-decodes `$raw` (no leading `?`). A `+` is a space. Pairs that do not
+     * decode are dropped.
      */
     public constructor(parse: const string& $raw)
     {
@@ -18,7 +18,7 @@ public struct Query
         if ($raw->empty()) {
             return;
         }
-        array<string> $parts = str::split($raw, '&')->owned();
+        $parts = str::split($raw, '&')->owned();
         foreach ($parts as const &$piece) {
             if ($piece->empty()) {
                 continue;
@@ -30,14 +30,13 @@ public struct Query
                 $name = $piece->sub(0, $at);
                 $value = $piece->sub($at + 1, $piece->size() - $at - 1);
             }
-            string? $n = Percent::decode($name, plus: true);
-            string? $v = Percent::decode($value, plus: true);
-            if ($n == null || $v == null) {
+            string $decodedName = guard Percent::decode($name, plus: true) else {
                 continue;
-            }
-            string $dn = guard $n;
-            string $dv = guard $v;
-            $this->pairs[] = QueryField($dn, $dv);
+            };
+            string $decodedValue = guard Percent::decode($value, plus: true) else {
+                continue;
+            };
+            $this->pairs[] = QueryField(mv $decodedName, mv $decodedValue);
         }
     }
 

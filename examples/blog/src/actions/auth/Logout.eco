@@ -15,9 +15,7 @@ public class Logout : nexus::Action
 
     public function handle(nexus::Payload& $payload) : status<nexus::Problem>
     {
-        nexus::auth::Identity $me = guard $payload->state<nexus::auth::Identity>() else ($p) {
-            return .error($p);
-        };
+        $me = try $payload->state<nexus::auth::Identity>();
         return $this->guards->revoke($payload, $me);
     }
 }

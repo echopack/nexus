@@ -1,8 +1,7 @@
 namespace blog;
 
 /**
- * Signs in with an email and a password and answers with a bearer token,
- * shown this once.
+ * Signs in with an email and a password and answers with a bearer token, shown this once.
  */
 public class Login : nexus::Action
 {
@@ -17,13 +16,8 @@ public class Login : nexus::Action
 
     public function handle(nexus::Payload& $payload, nexus::Body<Credentials> $in) : result<nexus::Response, nexus::Problem>
     {
-        User $u = guard $this->signIn->check($payload, $in->value) else ($p) {
-            return .error($p);
-        };
-        
-        nexus::auth::Issued $issued = guard $this->tokens->issue("{$u->id}", 'login') else ($p) {
-            return .error($p);
-        };
+        $u = try $this->signIn->check($payload, $in->value);
+        $issued = try $this->tokens->issue("{$u->id}", 'login');
         return .ok(nexus::Response(json: $issued->json(), status: 201));
     }
 }

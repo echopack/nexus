@@ -1,7 +1,6 @@
 namespace blog;
 
 /**
- * List, show, create, update and delete of posts, answered through the
- * `PostTransformer`.
+ * List, show, create, update and delete of posts, answered through the `PostTransformer`.
  */
 public type PostCrud = nexus::crud::Crud<Post, PostQuery, int64, PostRepository, PostTransformer>;

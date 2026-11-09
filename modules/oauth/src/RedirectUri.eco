@@ -1,10 +1,9 @@
 namespace nexus::oauth;
 
 /**
- * A redirect URI a client registered. HTTPS anywhere, plain HTTP only to
- * this machine (a desktop app's loopback listener), or an app's own
- * scheme. A loopback URI matches on any port, since the listener picks
- * one when it starts (RFC 8252, section 7.3).
+ * A redirect URI a client registered. HTTPS anywhere, plain HTTP only to this machine (a desktop
+ * app's loopback listener), or an app's own scheme. A loopback URI matches on any port, since the
+ * listener picks one when it starts (RFC 8252, section 7.3).
  */
 public struct RedirectUri
 {
@@ -16,19 +15,22 @@ public struct RedirectUri
      */
     public const string $portless;
 
-    public static function parse(const string& $raw) : result<RedirectUri, string>
+    /**
+     * Reads a redirect URI as a client registers or asks for it.
+     */
+    public static function parse(const string& $raw) : result<RedirectUri, RedirectError>
     {
         usize $colon = $raw->find(':');
         if ($raw->empty() || $raw->size() > 2000 || $colon == $raw->size() || $colon == 0) {
-            return .error("'{$raw}' is not an absolute URI");
+            return .error(.notAbsolute($raw));
         }
         if ($raw->find('#') < $raw->size()) {
-            return .error("{$raw} has a fragment");
+            return .error(.fragment($raw));
         }
         foreach (0 .. $raw->size() as $i) {
             uint8 $b = $raw->byte($i);
             if ($b <= 32 || $b == 127) {
-                return .error('a redirect URI has no spaces or control characters');
+                return .error(.spaces);
             }
         }
         string $scheme = str::lower($raw->sub(0, $colon)->clone());
@@ -39,15 +41,15 @@ public struct RedirectUri
             uint8 $b = $scheme->byte($i);
             bool $letter = $b >= 97 && $b <= 122;
             if (!$letter && ($i == 0 || !(($b >= 48 && $b <= 57) || $b == 43 || $b == 45 || $b == 46))) {
-                return .error("'{$raw}' has no valid scheme");
+                return .error(.scheme($raw));
             }
         }
         if ($scheme == 'javascript' || $scheme == 'data' || $scheme == 'file' || $scheme == 'vbscript' || $scheme == 'about' || $scheme == 'blob') {
-            return .error("{$scheme}: is not a redirect");
+            return .error(.forbidden($scheme));
         }
         if ($scheme == 'https') {
             if (!$raw->sub($colon, $raw->size() - $colon)->clone()->starts('://') || $raw->size() <= $colon + 3) {
-                return .error("{$raw} has no host");
+                return .error(.noHost($raw));
             }
             return .ok(RedirectUri($text: $raw, $loopback: false, $portless: $raw));
         }
@@ -57,7 +59,7 @@ public struct RedirectUri
         }
         string $rest = $raw->sub($colon, $raw->size() - $colon)->clone();
         if (!$rest->starts('://')) {
-            return .error("{$raw} has no host");
+            return .error(.noHost($raw));
         }
         usize $start = $colon + 3;
         usize $end = $raw->size();
@@ -72,14 +74,14 @@ public struct RedirectUri
         string $authority = str::lower($raw->sub($start, $end - $start)->clone());
         // userinfo or a backslash would let `localhost:1@evil.com` pass as this machine
         if ($authority->find('@') < $authority->size() || $authority->find('\\') < $authority->size()) {
-            return .error("{$raw} has a broken host");
+            return .error(.brokenHost($raw));
         }
         string $host = $authority;
         usize $port = $authority->size();
         if ($authority->starts('[')) {
             usize $close = $authority->find(']');
             if ($close == $authority->size()) {
-                return .error("{$raw} has a broken host");
+                return .error(.brokenHost($raw));
             }
             $host = $authority->sub(0, $close + 1)->clone();
             if ($close + 1 < $authority->size()) {
@@ -90,16 +92,16 @@ public struct RedirectUri
             $host = $authority->sub(0, $port)->clone();
         }
         if ($host != 'localhost' && $host != '127.0.0.1' && $host != '[::1]') {
-            return .error("plain http is only for this machine (localhost, 127.0.0.1), not {$host}");
+            return .error(.remote($host));
         }
         if ($port < $authority->size()) {
             if ($authority->byte($port) != 58 || $port + 1 == $authority->size()) {
-                return .error("{$raw} has a broken port");
+                return .error(.brokenPort($raw));
             }
             foreach ($port + 1 .. $authority->size() as $i) {
                 uint8 $b = $authority->byte($i);
                 if ($b < 48 || $b > 57) {
-                    return .error("{$raw} has a broken port");
+                    return .error(.brokenPort($raw));
                 }
             }
         }
@@ -120,9 +122,8 @@ public struct RedirectUri
     }
 
     /**
-     * This URI with `$params` added, escaped, after a `?` or an `&`. The
-     * URI stays the text the client registered, since an app's own scheme
-     * (`com.example.app:/cb`) is no `nexus::Url`.
+     * This URI with `$params` added, escaped, after a `?` or an `&`. The URI stays the text the
+     * client registered, since an app's own scheme (`com.example.app:/cb`) is no `nexus::Url`.
      */
     public const function with(const nexus::Query& $params) : string
     {

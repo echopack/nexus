@@ -1,8 +1,8 @@
 namespace nexus;
 
 /**
- * A request method nexus routes. Closed on purpose: a transport answers an
- * unknown verb with 501 before the kernel sees it, so `==` works everywhere.
+ * A request method nexus routes. Closed on purpose: a transport answers an unknown verb with 501
+ * before the kernel sees it, so `==` works everywhere.
  */
 public enum Method : uint8
 {

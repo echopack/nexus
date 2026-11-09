@@ -2,33 +2,131 @@ namespace nexus::oauth;
 
 /**
  * An error in the shape OAuth asks for (RFC 6749, section 5.2):
- * `{"error": "invalid_grant", "error_description": "..."}`, not a problem
- * document, since clients read the code.
+ * `{"error": "invalid_grant", "error_description": "..."}`, not a problem document, since clients
+ * read the code. Each case is one code and carries its description; a `nexus::Problem` converts, so
+ * `try` passes a store's failure up as one.
  */
-public struct OAuthError
+public enum OAuthError
 {
-    public string $code;
-    public string $description;
-    public int32 $status = 400;
+    /**
+     * `invalid_request`, 400: a parameter is missing or not usable.
+     */
+    case invalidRequest(string $description);
 
-    public const function response() : nexus::Response
+    /**
+     * `invalid_client`, 401: the client did not say who it is, or is not registered.
+     */
+    case invalidClient(string $description);
+
+    /**
+     * `invalid_grant`, 400: the code or the refresh token does not hold.
+     */
+    case invalidGrant(string $description);
+
+    /**
+     * `unsupported_grant_type`, 400.
+     */
+    case unsupportedGrantType(string $description);
+
+    /**
+     * `invalid_redirect_uri`, 400: a registration names a redirect this server refuses (RFC 7591).
+     */
+    case invalidRedirectUri(string $description);
+
+    /**
+     * `invalid_client_metadata`, 400: a registration asks for something this server does not offer
+     * (RFC 7591).
+     */
+    case invalidClientMetadata(string $description);
+
+    /**
+     * `slow_down`, 429: one address tried too often.
+     */
+    case slowDown(string $description);
+
+    /**
+     * `temporarily_unavailable`, 503.
+     */
+    case unavailable(string $description);
+
+    /**
+     * `server_error`, 500: the store or the server failed.
+     */
+    case server;
+
+    /**
+     * A problem as an OAuth error: one of 500 and up is `server_error`, which says nothing more,
+     * anything else `invalid_request` with the problem's detail.
+     */
+    #[implicit]
+    public static function from(nexus::Problem $p) : OAuthError
     {
-        json::Value $o = json::object();
-        $o['error'] = json::str($this->code);
-        $o['error_description'] = json::str($this->description);
-        nexus::Response $res = nexus::Response(json: $o, status: $this->status);
-        $res->header('Cache-Control', 'no-store');
-        return $res;
+        if ($p->status() >= 500) {
+            return .server;
+        }
+        return .invalidRequest($p->detail(.prod));
     }
 
     /**
-     * A store or server failure as `server_error`, 500.
+     * The `error` code a client reads.
      */
-    public static function of(const nexus::Problem& $p) : OAuthError
+    public const function code() : string
     {
-        if ($p->status() >= 500) {
-            return OAuthError('server_error', 'the server could not answer; try again', 500);
-        }
-        return OAuthError('invalid_request', $p->detail(nexus::Mode::prod), 400);
+        return match ($this) {
+            OAuthError::invalidRequest($d) => 'invalid_request',
+            OAuthError::invalidClient($d) => 'invalid_client',
+            OAuthError::invalidGrant($d) => 'invalid_grant',
+            OAuthError::unsupportedGrantType($d) => 'unsupported_grant_type',
+            OAuthError::invalidRedirectUri($d) => 'invalid_redirect_uri',
+            OAuthError::invalidClientMetadata($d) => 'invalid_client_metadata',
+            OAuthError::slowDown($d) => 'slow_down',
+            OAuthError::unavailable($d) => 'temporarily_unavailable',
+            OAuthError::server => 'server_error',
+        };
+    }
+
+    /**
+     * The `error_description`, for the developer of the client.
+     */
+    public const function description() : string
+    {
+        return match ($this) {
+            OAuthError::invalidRequest($d) => $d,
+            OAuthError::invalidClient($d) => $d,
+            OAuthError::invalidGrant($d) => $d,
+            OAuthError::unsupportedGrantType($d) => $d,
+            OAuthError::invalidRedirectUri($d) => $d,
+            OAuthError::invalidClientMetadata($d) => $d,
+            OAuthError::slowDown($d) => $d,
+            OAuthError::unavailable($d) => $d,
+            OAuthError::server => 'the server could not answer; try again',
+        };
+    }
+
+    /**
+     * The HTTP status the error answers with.
+     */
+    public const function status() : int32
+    {
+        return match ($this) {
+            OAuthError::invalidClient($d) => 401,
+            OAuthError::slowDown($d) => 429,
+            OAuthError::unavailable($d) => 503,
+            OAuthError::server => 500,
+            else => 400,
+        };
+    }
+
+    /**
+     * The error as a JSON answer that is never cached.
+     */
+    public const function response() : nexus::Response
+    {
+        json::Value $o = json::object();
+        $o['error'] = json::str($this->code());
+        $o['error_description'] = json::str($this->description());
+        $res = nexus::Response(json: $o, status: $this->status());
+        $res->header('Cache-Control', 'no-store');
+        return $res;
     }
 }

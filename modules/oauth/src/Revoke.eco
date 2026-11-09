@@ -1,8 +1,8 @@
 namespace nexus::oauth;
 
 /**
- * Token revocation (RFC 7009): an access or a refresh token ends its
- * grant. A token that is unknown is no error.
+ * Token revocation (RFC 7009): an access or a refresh token ends its grant. A token that is unknown
+ * is no error.
  */
 public class Revoke : nexus::Action
 {
@@ -15,9 +15,9 @@ public class Revoke : nexus::Action
 
     public function handle(nexus::Payload& $payload) : nexus::Response
     {
-        nexus::Query $f = nexus::Query(parse: $payload->request->body);
+        $f = nexus::Query(parse: $payload->request->body);
         guard $this->grants->revoke($f->get('token') ?? '') else ($p) {
-            return OAuthError::of($p)->response();
+            return OAuthError::from($p)->response();
         };
         return nexus::Response(200);
     }

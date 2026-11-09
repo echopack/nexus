@@ -1,8 +1,7 @@
 namespace nexus::rest;
 
 /**
- * The top-level keys a list answer carries next to its `data`: `page`,
- * `size`, `total_count`.
+ * The top-level keys a list answer carries next to its `data`: `page`, `size`, `total_count`.
  */
 public struct Meta
 {
@@ -14,12 +13,11 @@ public struct Meta
     }
 
     /**
-     * Adds `$key`. Setting a key twice keeps the first position and the
-     * last value.
+     * Adds `$key`. Setting a key twice keeps the first position and the last value.
      */
     public function with(const string& $key, json::Value $value) : void
     {
-        $this->keys[$key] = $value;
+        $this->keys[$key] = mv $value;
     }
 
     public const function empty() : bool

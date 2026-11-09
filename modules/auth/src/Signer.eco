@@ -1,12 +1,11 @@
 namespace nexus::auth;
 
 /**
- * The client side of a signed session: the id and secret the login
- * answered with, signing each request. For tests, tools and clients
- * written in Echo.
+ * The client side of a signed session: the id and secret the login answered with, signing each
+ * request. For tests, tools and clients written in Echo.
  *
  * ```echo
- * nexus::auth::Signer $s = nexus::auth::Signer($id, $secret);
+ * $s = nexus::auth::Signer($id, $secret);
  * string $auth = $s->header('POST', '/v1/posts', $now, $body);
  * ```
  */

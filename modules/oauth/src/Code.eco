@@ -3,9 +3,9 @@ namespace nexus::oauth;
 use std::time;
 
 /**
- * An authorization code as the store keeps it: the hash of the code, who
- * allowed which client, where it may go back to and the PKCE challenge it
- * must be redeemed with. Single use, for a minute.
+ * An authorization code as the store keeps it: the hash of the code, who allowed which client,
+ * where it may go back to and the PKCE challenge it must be redeemed with. Single use, for a
+ * minute.
  */
 public struct Code
 {
@@ -15,8 +15,7 @@ public struct Code
     public string $redirect;
 
     /**
-     * The authorization request named its redirect, so the token request
-     * must too.
+     * The authorization request named its redirect, so the token request must too.
      */
     public bool $named;
     public string $challenge;

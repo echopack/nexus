@@ -1,13 +1,11 @@
 namespace nexus::rest;
 
 /**
- * Every transformer of the app, by the model it transforms. It is what
- * lets one transformer nest another without holding it: a post asks the
- * network for the transformer of `User` while it writes, so the order
- * they are registered in does not matter, and a user that nests their
- * posts again is fine (the depth limit of `Out` ends the cycle).
- * Filled while the app boots through `Transformers::add`, only read
- * afterwards.
+ * Every transformer of the app, by the model it transforms. It is what lets one transformer nest
+ * another without holding it: a post asks the network for the transformer of `User` while it
+ * writes, so the order they are registered in does not matter, and a user that nests their posts
+ * again is fine (the depth limit of `Out` ends the cycle). Filled while the app boots through
+ * `Transformers::add`, only read afterwards.
  *
  * ```echo
  * // in a transformer
@@ -25,12 +23,11 @@ public class TransformerNetwork
     }
 
     /**
-     * Registers `$t` as the transformer of `M`. A second one for the same
-     * model stops the program.
+     * Registers `$t` as the transformer of `M`. A second one for the same model stops the program.
      */
     public function add<M>(Transformer<M> $t) : void
     {
-        type_id $id = type_id<M>();
+        $id = type_id<M>();
         if ($this->byModel->has($id)) {
             die('nexus::rest::TransformerNetwork: a model was given a second transformer');
         }
@@ -53,12 +50,12 @@ public class TransformerNetwork
      */
     public const function find<M>() : Transformer<M>?
     {
-        type_id $id = type_id<M>();
+        $id = type_id<M>();
         if (!$this->byModel->has($id)) {
             return null;
         }
         unsafe {
-            Held<Transformer<M>> $held = assume<Held<Transformer<M>>>($this->byModel->get($id));
+            $held = assume<Held<Transformer<M>>>($this->byModel->get($id));
             return $held->value;
         }
     }

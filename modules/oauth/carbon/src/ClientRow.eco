@@ -3,8 +3,7 @@ namespace nexus::oauth::carbon;
 use std::time;
 
 /**
- * A row of `oauth_clients`: a registered client, its redirect URIs one per
- * line.
+ * A row of `oauth_clients`: a registered client, its redirect URIs one per line.
  */
 #[carbon::model: 'oauth_clients']
 public class ClientRow : carbon::Model<ClientRow, ClientRowRepository>
@@ -24,19 +23,27 @@ public class ClientRow : carbon::Model<ClientRow, ClientRowRepository>
         return $this->link;
     }
 
+    /**
+     * The row that keeps `$c`. A static, since carbon builds a model with its implicit constructor
+     * and refuses one written out.
+     */
     public static function of(const nexus::oauth::Client& $c) : ClientRow
     {
         return ClientRow($id: $c->id, $name: $c->name, $redirectUris: str::join($c->redirects, "\n"), $createdAt: $c->createdAt, $usedAt: $c->usedAt);
     }
 
+    /**
+     * The client this row keeps, its redirects split back into a list.
+     */
     public const function client() : nexus::oauth::Client
     {
         array<string> $redirects = [];
-        foreach (str::split($this->redirectUris, "\n") as $raw) {
+        foreach (str::split($this->redirectUris, "\n") as const &$raw) {
             string $uri = string::from($raw);
-            if (!$uri->empty()) {
-                $redirects[] = $uri;
+            if ($uri->empty()) {
+                continue;
             }
+            $redirects[] = mv $uri;
         }
         return nexus::oauth::Client($id: $this->id, $name: $this->name, $redirects: $redirects, $createdAt: $this->createdAt, $usedAt: $this->usedAt);
     }

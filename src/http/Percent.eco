@@ -6,8 +6,8 @@ namespace nexus;
 public struct Percent
 {
     /**
-     * Decodes `%XX` escapes. With `plus: true` (queries and forms) a `+` is
-     * a space. Null on a broken escape.
+     * Decodes `%XX` escapes. With `plus: true` (queries and forms) a `+` is a space. Null on a
+     * broken escape.
      */
     public static function decode(const string& $text, plus: bool $plus) : string?
     {
@@ -36,8 +36,7 @@ public struct Percent
             }
             $i = $i + 1;
         }
-        string? $done = $out;
-        return $done;
+        return mv $out;
     }
 
     /**
@@ -72,12 +71,12 @@ public struct Percent
     }
 
     /**
-     * Escapes each segment of a path but keeps the `/` between them, for a
-     * catch-all `{rest*}` value.
+     * Escapes each segment of a path but keeps the `/` between them, for a catch-all `{rest*}`
+     * value.
      */
     public static function path(const string& $text) : string
     {
-        array<string> $parts = str::split($text, '/')->owned();
+        $parts = str::split($text, '/')->owned();
         array<string> $out = [];
         foreach ($parts as const &$p) {
             $out[] = Percent::encode($p);

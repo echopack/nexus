@@ -1,10 +1,9 @@
 namespace nexus;
 
 /**
- * A parsed path pattern: `/v1/posts/{id:number}`, `/files/{path*}`,
- * `/archive/{year}/{month?}`. Literal segments match exactly, parameters
- * match one decoded segment, a `?` parameter may be missing at the end and a
- * `*` parameter takes the rest of the path.
+ * A parsed path pattern: `/v1/posts/{id:number}`, `/files/{path*}`, `/archive/{year}/{month?}`.
+ * Literal segments match exactly, parameters match one decoded segment, a `?` parameter may be
+ * missing at the end and a `*` parameter takes the rest of the path.
  */
 public struct Pattern
 {
@@ -12,16 +11,15 @@ public struct Pattern
     public array<Segment> $segments = [];
 
     /**
-     * Parses `$source`. Refuses a pattern that does not start with `/`, a
-     * broken brace, an unknown constraint, a repeated name, or a required
-     * segment after an optional or catch-all one.
+     * Parses `$source`. Refuses a pattern that does not start with `/`, a broken brace, an unknown
+     * constraint, a repeated name, or a required segment after an optional or catch-all one.
      */
     public static function parse(const string& $source) : result<Pattern, RouteError>
     {
         if (!$source->starts('/')) {
             return .error(.pattern($source, 'must start with /'));
         }
-        Pattern $p = Pattern($source);
+        $p = Pattern($source);
         if ($source == '/') {
             return .ok($p);
         }
@@ -29,7 +27,7 @@ public struct Pattern
         if ($body->ends('/')) {
             $body = $body->sub(0, $body->size() - 1);
         }
-        array<string> $parts = str::split($body, '/')->owned();
+        $parts = str::split($body, '/')->owned();
         array<string> $names = [];
         bool $tail = false;
         foreach ($parts as const &$part) {
@@ -43,19 +41,17 @@ public struct Pattern
                 if ($part->contains('{') || $part->contains('}')) {
                     return .error(.pattern($source, 'mixes text and a parameter in one segment'));
                 }
-                string? $decoded = Percent::decode($part);
-                if ($decoded == null) {
+                string $literal = guard Percent::decode($part) else {
                     return .error(.pattern($source, 'has a broken escape'));
-                }
-                string $literal = guard $decoded;
-                $p->segments[] = Segment(SegmentKind::literal, $literal);
+                };
+                $p->segments[] = Segment(.literal, mv $literal);
                 continue;
             }
             if (!$part->ends('}')) {
                 return .error(.pattern($source, "segment '{$part}' does not close its brace"));
             }
             string $inner = $part->sub(1, $part->size() - 2);
-            SegmentKind $kind = SegmentKind::param;
+            SegmentKind $kind = .param;
             if ($inner->ends('*')) {
                 $kind = SegmentKind::rest;
                 $inner = $inner->sub(0, $inner->size() - 1);
@@ -66,16 +62,14 @@ public struct Pattern
                 $tail = true;
             }
             string $name = $inner;
-            Constraint $constraint = Constraint::any;
+            Constraint $constraint = .any;
             usize $colon = $inner->find(':');
             if ($colon < $inner->size()) {
                 $name = $inner->sub(0, $colon);
                 string $cname = $inner->sub($colon + 1, $inner->size() - $colon - 1);
-                Constraint? $c = Constraint::parse($cname);
-                if ($c == null) {
+                Constraint $picked = guard Constraint::parse($cname) else {
                     return .error(.pattern($source, "unknown constraint '{$cname}'"));
-                }
-                Constraint $picked = guard $c;
+                };
                 $constraint = $picked;
                 if ($kind == SegmentKind::param && $constraint != Constraint::any) {
                     $kind = SegmentKind::constrained;
@@ -96,12 +90,12 @@ public struct Pattern
     }
 
     /**
-     * Matches `$path` (no query) and writes the captured parameters into
-     * `$out`. A trailing slash is ignored.
+     * Matches `$path` (no query) and writes the captured parameters into `$out`. A trailing slash
+     * is ignored.
      */
     public const function matches(const string& $path, map<string, string>& $out) : bool
     {
-        array<string> $parts = Pattern::split($path);
+        $parts = Pattern::split($path);
         usize $n = $parts->count();
         usize $i = 0;
         foreach ($this->segments as const &$seg) {
@@ -111,11 +105,9 @@ public struct Pattern
                     if (!$rest->empty()) {
                         $rest->push(47);
                     }
-                    string? $d = Percent::decode($parts[$i]);
-                    if ($d == null) {
+                    string $piece = guard Percent::decode($parts[$i]) else {
                         return false;
-                    }
-                    string $piece = guard $d;
+                    };
                     $rest->append($piece);
                     $i = $i + 1;
                 }
@@ -128,11 +120,9 @@ public struct Pattern
                 }
                 return false;
             }
-            string? $decoded = Percent::decode($parts[$i]);
-            if ($decoded == null) {
+            string $value = guard Percent::decode($parts[$i]) else {
                 return false;
-            }
-            string $value = guard $decoded;
+            };
             if ($seg->kind == SegmentKind::literal) {
                 if ($value != $seg->text) {
                     return false;
@@ -163,8 +153,8 @@ public struct Pattern
     }
 
     /**
-     * Whether this pattern should be tried before `$other`: compared segment
-     * by segment on the routing rank, the more specific one first.
+     * Whether this pattern should be tried before `$other`: compared segment by segment on the
+     * routing rank, the more specific one first.
      */
     public const function before(const Pattern& $other) : bool
     {

@@ -14,12 +14,8 @@ public class CarbonTokens : nexus::auth::TokenStore
 
     public function find(const string& $id) : result<nexus::auth::StoredToken?, nexus::Problem>
     {
-        AuthTokenRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        AuthToken? $found = guard $repo->find()->get($id) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthTokenRepository $repo = try $this->repo();
+        AuthToken? $found = try $repo->find()->get($id);
         if ($found == null) {
             return .ok(null);
         }
@@ -29,42 +25,28 @@ public class CarbonTokens : nexus::auth::TokenStore
 
     public function create(const nexus::auth::StoredToken& $token) : status<nexus::Problem>
     {
-        AuthTokenRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->create(AuthToken::of($token)) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthTokenRepository $repo = try $this->repo();
+        try $repo->create(.of($token));
         return .ok;
     }
 
     public function remove(const string& $id) : status<nexus::Problem>
     {
-        AuthTokenRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->find()->where(AuthTokenTable::$id == $id)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthTokenRepository $repo = try $this->repo();
+        try $repo->find()->where(AuthTokenTable::$id == $id)->purge();
         return .ok;
     }
 
     public function removeAll(const string& $subject) : status<nexus::Problem>
     {
-        AuthTokenRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        guard $repo->find()->where(AuthTokenTable::$subject == $subject)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthTokenRepository $repo = try $this->repo();
+        try $repo->find()->where(AuthTokenTable::$subject == $subject)->purge();
         return .ok;
     }
 
     internal function repo() : result<AuthTokenRepository, nexus::Problem>
     {
-        AuthTokenRepository $repo = guard $this->session->repo<AuthTokenRepository>() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        AuthTokenRepository $repo = try $this->session->repo<AuthTokenRepository>();
         return .ok($repo);
     }
 }

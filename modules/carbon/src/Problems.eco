@@ -6,15 +6,15 @@ namespace nexus::carbon;
 public struct Problems
 {
     /**
-     * `$e` as a problem: no row is a 404, a duplicate, a broken reference
-     * or a stale version a 409, a refusal from a repository hook a 409
-     * with its message, a lost or exhausted connection and a deadlock a
-     * 503, everything else a 500 whose cause only dev and test show.
+     * `$e` as a problem: no row is a 404, a duplicate, a broken reference or a stale version a 409,
+     * a refusal from a repository hook a 409 with its message, a lost or exhausted connection and a
+     * deadlock a 503, everything else a 500 whose cause only dev and test show.
+     *
+     * A function answering `result<T, nexus::Problem>` forwards a database failure with `try`,
+     * which converts through the extension below:
      *
      * ```echo
-     * Post $post = guard $posts->get($id) else ($e) {
-     *     return .error(nexus::carbon::Problems::of($e));
-     * };
+     * Post $post = try $posts->get($id);
      * ```
      */
     public static function of(const carbon::Error& $e) : nexus::Problem
@@ -35,7 +35,7 @@ public struct Problems
             else => {
             },
         };
-        carbon::Fault $fault = $e->fault();
+        $fault = $e->fault();
         if ($fault == carbon::Fault::duplicate) {
             return .conflict('a record with these values exists already');
         }
@@ -46,5 +46,20 @@ public struct Problems
             return .unavailable('the database is busy; try again');
         }
         return .server("database: {$e}");
+    }
+}
+
+/**
+ * Lets `try` forward a `carbon::Error` from a function that answers with a `nexus::Problem`.
+ */
+extension nexus::Problem
+{
+    /**
+     * `$e` as a problem, the way `Problems::of` reads it.
+     */
+    #[implicit]
+    public static function from(carbon::Error $e) : nexus::Problem
+    {
+        return Problems::of($e);
     }
 }

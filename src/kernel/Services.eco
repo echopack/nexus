@@ -3,10 +3,9 @@ namespace nexus;
 use container::{Builder, Container, Entry};
 
 /**
- * What an extension wires the app with in `services()`: the container
- * (every `bind` of `container::Builder` works here too), the routes and
- * the listeners, in one place. `nexus gen` only knows how each action
- * runs; where it answers is said here.
+ * What an extension wires the app with in `services()`: the container (every `bind` of
+ * `container::Builder` works here too), the routes and the listeners, in one place. `nexus gen`
+ * only knows how each action runs; where it answers is said here.
  *
  * ```echo
  * public function services(nexus::Services& $s) : status<nexus::BootError>
@@ -25,8 +24,7 @@ use container::{Builder, Container, Entry};
 public class Services
 {
     /**
-     * The container being built, for what this class does not pass on
-     * (`install`, `overlay`).
+     * The container being built, for what this class does not pass on (`install`, `overlay`).
      */
     public Builder $builder;
 
@@ -41,9 +39,8 @@ public class Services
     public Events $events;
 
     /**
-     * The route table, bound in the container. It is empty while the app
-     * is wired and filled at boot, so take it now and build links when a
-     * request comes.
+     * The route table, bound in the container. It is empty while the app is wired and filled at
+     * boot, so take it now and build links when a request comes.
      */
     public Router $router;
 
@@ -104,8 +101,7 @@ public class Services
     }
 
     /**
-     * Binds `T` once per request (per child container), built from the
-     * container.
+     * Binds `T` once per request (per child container), built from the container.
      */
     public function bind<T>(scope: function<T(Container)> $make) : Entry<T>
     {
@@ -153,8 +149,7 @@ public class Services
     }
 
     /**
-     * Replaces the binding of `T`, fresh on every `get`, built from the
-     * container.
+     * Replaces the binding of `T`, fresh on every `get`, built from the container.
      */
     public function replace<T>(each: function<T(Container)> $make) : Entry<T>
     {
@@ -170,8 +165,7 @@ public class Services
     }
 
     /**
-     * Replaces the binding of `T`, once per request, built from the
-     * container.
+     * Replaces the binding of `T`, once per request, built from the container.
      */
     public function replace<T>(scope: function<T(Container)> $make) : Entry<T>
     {
@@ -195,8 +189,7 @@ public class Services
     }
 
     /**
-     * The already built `T` (a `put` or a `param`); a factory that has not
-     * run stops the program.
+     * The already built `T` (a `put` or a `param`); a factory that has not run stops the program.
      */
     public function get<T>() : T
     {
@@ -222,8 +215,7 @@ public class Services
     // actions ----------------------------------------------------------------
 
     /**
-     * Routes `$method` `$path` to action `A`, built with `A()` once per
-     * request.
+     * Routes `$method` `$path` to action `A`, built with `A()` once per request.
      */
     public function bindAction<A>(method: Method $method, path: const string& $path) : ActionRef<A>
     {
@@ -234,8 +226,7 @@ public class Services
     }
 
     /**
-     * Routes `$method` `$path` to action `A`, built by `$make` once per
-     * request.
+     * Routes `$method` `$path` to action `A`, built by `$make` once per request.
      */
     public function bindAction<A>(method: Method $method, path: const string& $path, function<A(Container)> $make) : ActionRef<A>
     {
@@ -244,14 +235,13 @@ public class Services
     }
 
     /**
-     * Routes `$method` `$path` to action `A`, bound already (by a
-     * `bindAction` or a `bind`). The same path again adds the method to
-     * that route; another path gives `A` a second route.
+     * Routes `$method` `$path` to action `A`, bound already (by a `bindAction` or a `bind`). The
+     * same path again adds the method to that route; another path gives `A` a second route.
      */
     public function route<A>(method: Method $method, path: const string& $path) : ActionRef<A>
     {
         type_id $id = type_id<A>();
-        foreach ($this->wirings as $w) {
+        foreach ($this->wirings as &$w) {
             if ($w->action == $id && $w->source == $path) {
                 $w->route->methods[] = $method;
                 return ActionRef<A>($this, $w);
@@ -259,24 +249,24 @@ public class Services
         }
         array<Method> $methods = [$method];
         string $name = $this->generated->nameOf<A>("the action at {$method->verb()} {$path}");
-        function<bool(Container)> $bound = function(Container $services) : bool {
+        $bound = function(Container $services) : bool {
             return $services->has<A>();
         };
-        function<Response(Payload&)> $none = function(Payload& $payload) : Response {
-            return $payload->fail(Problem::notFound($payload->request->path));
+        $none = function(Payload& $payload) : Response {
+            return $payload->fail(.notFound($payload->request->path));
         };
-        Wiring $w = Wiring($id, $path, Route($methods, $path, $name, $none, $bound));
+        $w = Wiring($id, $path, Route(mv $methods, $path, $name, $none, $bound));
         $w->route->type = $id;
         Dispatcher $d = guard $this->generated->dispatcher<A>() else {
             $this->problems[] = .route(.undispatched($name));
             return ActionRef<A>($this, $w);
         };
-        string $constrained = Services::constrain($path, $d->params);
+        $constrained = Services::constrain($path, $d->params);
         guard Services::fits($name, $constrained, $d->params) else ($e) {
             $this->problems[] = .route($e);
             return ActionRef<A>($this, $w);
         };
-        $w->route->path = $constrained;
+        $w->route->path = mv $constrained;
         $w->route->dispatch = $d->dispatch;
         $w->through = $d->through;
         $this->wirings[] = $w;
@@ -284,8 +274,8 @@ public class Services
     }
 
     /**
-     * Adds a route built by hand, with its own dispatch: for a test, or
-     * for an action `nexus gen` does not see.
+     * Adds a route built by hand, with its own dispatch: for a test, or for an action `nexus gen`
+     * does not see.
      */
     public function route(Route $route) : void
     {
@@ -293,10 +283,9 @@ public class Services
     }
 
     /**
-     * Wraps every request in middleware `M`, taken from the request's
-     * container each time, so it may depend on request-scoped services.
-     * It runs after the extensions' own middleware and before routing, in
-     * the order added; tasks and commands do not go through it.
+     * Wraps every request in middleware `M`, taken from the request's container each time, so it
+     * may depend on request-scoped services. It runs after the extensions' own middleware and
+     * before routing, in the order added; tasks and commands do not go through it.
      */
     public function middleware<M>() : void
     {
@@ -317,8 +306,7 @@ public class Services
     }
 
     /**
-     * Runs `$listener` whenever an `E` is emitted; `$name` is what logs
-     * call it.
+     * Runs `$listener` whenever an `E` is emitted; `$name` is what logs call it.
      */
     public function on<E>(const string& $name, function<status<Problem>(Payload&, const E&)> $listener) : void
     {
@@ -328,8 +316,8 @@ public class Services
     // problems ---------------------------------------------------------------
 
     /**
-     * Records why the app cannot boot, for a helper that has no status to
-     * return; the kernel stops after `services()` with the first one.
+     * Records why the app cannot boot, for a helper that has no status to return; the kernel stops
+     * after `services()` with the first one.
      */
     public function fail(BootError $why) : void
     {
@@ -346,8 +334,7 @@ public class Services
     }
 
     /**
-     * Writes the constraint an integer parameter implies into `{name}`
-     * segments that state none.
+     * Writes the constraint an integer parameter implies into `{name}` segments that state none.
      */
     internal static function constrain(const string& $path, const array<PathParam>& $params) : string
     {
@@ -363,14 +350,12 @@ public class Services
     }
 
     /**
-     * Whether `$path` gives every path parameter `handle()` reads, and
-     * leaves out only the ones it may do without.
+     * Whether `$path` gives every path parameter `handle()` reads, and leaves out only the ones it
+     * may do without.
      */
     internal static function fits(const string& $action, const string& $path, const array<PathParam>& $params) : status<RouteError>
     {
-        Pattern $pattern = guard Pattern::parse($path) else ($e) {
-            return .error($e);
-        };
+        Pattern $pattern = try Pattern::parse($path);
         foreach ($params as const &$p) {
             bool $found = false;
             foreach ($pattern->segments as const &$seg) {

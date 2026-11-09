@@ -3,14 +3,13 @@ namespace nexus::rest;
 use std::time;
 
 /**
- * The keys of one model on their way out: what the generated mapping
- * wrote, open to the transformer's `transform()` before anything is
- * written. Setting a key that is already there replaces it in place, a
- * new key goes last, `remove` takes one out. Attributes are written
- * first and includes last, whatever order they were set in.
+ * The keys of one model on their way out: what the generated mapping wrote, open to the
+ * transformer's `transform()` before anything is written. Setting a key that is already there
+ * replaces it in place, a new key goes last, `remove` takes one out. Attributes are written first
+ * and includes last, whatever order they were set in.
  *
- * A key of a field the model marks `#[nexus::sensitive]` is refused
- * unless it was revealed first, so a slip in a hook cannot leak it.
+ * A key of a field the model marks `#[nexus::sensitive]` is refused unless it was revealed first,
+ * so a slip in a hook cannot leak it.
  *
  * ```echo
  * public function transform(const User& $u, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
@@ -37,26 +36,25 @@ public struct Item
     private map<string, bool> $sensitive = [];
     private map<string, bool> $revealed = [];
 
+    /**
+     * An item that knows of no includes, for a test or a hand-written writer.
+     */
     public constructor()
     {
     }
 
     /**
-     * An item for the model `$o` is about to write, knowing what the
-     * request includes on it.
+     * An item for the model `$o` is about to write, knowing what the request includes on it.
      */
-    public static function of(const Out& $o) : Item
+    public constructor(const Out& $o)
     {
-        Item $item = Item();
-        $item->wanted = $o->wantedHere();
-        return $item;
+        $this->wanted = $o->wantedHere();
     }
 
     // fields -----------------------------------------------------------------
 
     /**
-     * A scalar XML writes into the start tag, `<post id="1">`; a plain key
-     * in JSON.
+     * A scalar XML writes into the start tag, `<post id="1">`; a plain key in JSON.
      */
     public function attribute(const string& $key, int64 $v) : void
     {
@@ -120,8 +118,8 @@ public struct Item
     }
 
     /**
-     * An instant in UTC, `2026-10-13T14:06:00Z` unless `$stamp` says
-     * otherwise; null when there is none.
+     * An instant in UTC, `2026-10-13T14:06:00Z` unless `$stamp` says otherwise; null when there is
+     * none.
      */
     public function time(const string& $key, time::timestamp? $at, EchoPack::Rest::Stamp $stamp = EchoPack::Rest::Stamp::zulu) : void
     {
@@ -163,7 +161,7 @@ public struct Item
     public function value(const string& $key, const json::Value& $v) : void
     {
         string $k = $key;
-        json::Value $copy = $v->clone();
+        $copy = $v->clone();
         $this->put($key, .value, function[$k, $copy](Out& $o, const TransformerContext& $ctx) : void {
             $o->value($k, $copy);
         });
@@ -180,8 +178,8 @@ public struct Item
     }
 
     /**
-     * `$m` nested under `$key` by the network's transformer of `M`, null
-     * when there is none. Left out unless the request wants `$key`.
+     * `$m` nested under `$key` by the network's transformer of `M`, null when there is none. Left
+     * out unless the request wants `$key`.
      */
     public function include<M>(const string& $key, M? $m) : void
     {
@@ -195,8 +193,8 @@ public struct Item
     }
 
     /**
-     * `$ms` nested under `$key` as a list by the network's transformer of
-     * `M`. Left out unless the request wants `$key`.
+     * `$ms` nested under `$key` as a list by the network's transformer of `M`. Left out unless the
+     * request wants `$key`.
      */
     public function includeCollection<M>(const string& $key, const array<M>& $ms) : void
     {
@@ -211,8 +209,8 @@ public struct Item
     }
 
     /**
-     * `$m` nested under `$key` wrapped, `$meta`'s keys next to its
-     * `data`. Left out unless the request wants `$key`.
+     * `$m` nested under `$key` wrapped, `$meta`'s keys next to its `data`. Left out unless the
+     * request wants `$key`.
      */
     public function includeReference<M>(const string& $key, M? $m, const Meta& $meta) : void
     {
@@ -278,9 +276,8 @@ public struct Item
     }
 
     /**
-     * Marks `$keys` sensitive: writing one stops the program unless it
-     * was revealed. The generated mapping calls this with every
-     * `#[nexus::sensitive]` field of the model.
+     * Marks `$keys` sensitive: writing one stops the program unless it was revealed. The generated
+     * mapping calls this with every `#[nexus::sensitive]` field of the model.
      */
     public function protect(const array<string>& $keys) : void
     {
@@ -294,9 +291,9 @@ public struct Item
     /**
      * Writes every key into `$o`: attributes, values, then includes.
      */
-    public function flush(Out& $o, const TransformerContext& $ctx) : void
+    public const function flush(Out& $o, const TransformerContext& $ctx) : void
     {
-        foreach ([Place::attribute, Place::value, Place::include] as $place) {
+        foreach ([Place::attribute, Place::value, Place::include] as const &$place) {
             foreach ($this->slots as const &$s) {
                 if ($s->place == $place) {
                     $s->write($o, $ctx);
@@ -313,10 +310,10 @@ public struct Item
         foreach ($this->slots as &$s) {
             if ($s->key == $key) {
                 $s->place = $place;
-                $s->write = $write;
+                $s->write = mv $write;
                 return;
             }
         }
-        $this->slots[] = Slot($key: $key, $place: $place, $write: $write);
+        $this->slots[] = Slot($key: $key, $place: $place, $write: mv $write);
     }
 }

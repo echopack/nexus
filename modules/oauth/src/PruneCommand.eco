@@ -5,12 +5,12 @@ namespace nexus::oauth;
  */
 public class PruneCommand : nexus::Command
 {
-    public function name() : string
+    public const function name() : string
     {
         return 'oauth:prune';
     }
 
-    public function summary() : string
+    public const function summary() : string
     {
         return 'drop expired OAuth codes and grants';
     }
@@ -18,7 +18,7 @@ public class PruneCommand : nexus::Command
     public function run(nexus::Kernel $k, const nexus::Invocation& $in) : int32
     {
         nexus::Payload $payload = $k->background('oauth:prune', nexus::Kernel::id());
-        $payload->door = nexus::Door::cli;
+        $payload->door = .cli;
         Grants $grants = $payload->get<Grants>();
         status<nexus::Problem> $done = $grants->store->prune($grants->clock->now());
         nexus::Kernel::finish($payload);

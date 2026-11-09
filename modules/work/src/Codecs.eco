@@ -1,8 +1,8 @@
 namespace nexus::work;
 
 /**
- * Every `Codec` of the program, keyed by task type; filled from the tables
- * `nexus gen` writes when the app boots.
+ * Every `Codec` of the program, keyed by task type; filled from the tables `nexus gen` writes when
+ * the app boots.
  */
 #[atomic]
 public class Codecs
@@ -14,7 +14,7 @@ public class Codecs
      */
     public function add<T>(Codec $c) : void
     {
-        $this->byType[type_id<T>()] = $c;
+        $this->byType[type_id<T>()] = mv $c;
     }
 
     /**
@@ -22,7 +22,7 @@ public class Codecs
      */
     public const function find<T>() : Codec?
     {
-        type_id $id = type_id<T>();
+        $id = type_id<T>();
         if (!$this->byType->has($id)) {
             return null;
         }

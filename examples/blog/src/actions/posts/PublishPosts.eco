@@ -18,16 +18,9 @@ public class PublishPosts : nexus::Action
 
     public function handle(nexus::Payload& $payload, nexus::Body<PostBatch> $in) : result<nexus::Response, nexus::Problem>
     {
-        Caller $me = guard $payload->state<Caller>() else ($p) {
-            return .error($p);
-        };
-        EchoPack::Rest::Includes $inc = guard $this->transformer->requestedIncludes($payload) else ($p) {
-            return .error($p);
-        };
-        array<Post> $made = guard $this->posts->createAll($me->user, $in->value->posts) else ($p) {
-            return .error($p);
-        };
-        nexus::rest::Meta $none = nexus::rest::Meta();
-        return .ok($this->transformer->createCollectionResponse($payload, $made, $none, mv $inc, status: 201));
+        $me = try $payload->state<Caller>();
+        $inc = try $this->transformer->requestedIncludes($payload);
+        $made = try $this->posts->createAll($me->user, $in->value->posts);
+        return .ok($this->transformer->createCollectionResponse($payload, $made, nexus::rest::Meta(), mv $inc, status: 201));
     }
 }

@@ -3,8 +3,7 @@ namespace blog;
 use container::Container;
 
 /**
- * Users and signing in: registering, tokens and sessions, who is asking
- * and whether they may.
+ * Users and signing in: registering, tokens and sessions, who is asking and whether they may.
  */
 public class AuthProvider : nexus::Provider
 {

@@ -1,9 +1,9 @@
 namespace nexus::auth;
 
 /**
- * What a signed request sends: `Authorization: Nexus-Sig
- * id=<session>,ts=<unix seconds>,sig=<hex>`, or in compat mode the
- * `X-AccessToken` header, base64 JSON of `{token, timestamp, signature}`.
+ * What a signed request sends: `Authorization: Nexus-Sig id=<session>,ts=<unix
+ * seconds>,sig=<hex>`, or in compat mode the `X-AccessToken` header, base64 JSON of
+ * `{token, timestamp, signature}`.
  */
 public struct SignedHeader
 {
@@ -15,8 +15,7 @@ public struct SignedHeader
     public const string SCHEME = 'Nexus-Sig ';
 
     /**
-     * The fields of a `Nexus-Sig` authorization value; null when it is
-     * not one, or misses a field.
+     * The fields of a `Nexus-Sig` authorization value; null when it is not one, or misses a field.
      */
     public static function parse(const string& $value) : SignedHeader?
     {
@@ -55,7 +54,7 @@ public struct SignedHeader
     /**
      * The fields of an `X-AccessToken` value; null when it does not decode.
      */
-    public static function access(const string& $value) : SignedHeader?
+    public static function parse(accessToken: const string& $value) : SignedHeader?
     {
         string $raw = guard crypto::unbase64(str::trim($value)) else {
             return null;

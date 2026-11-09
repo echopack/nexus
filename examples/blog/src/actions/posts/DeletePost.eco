@@ -15,9 +15,7 @@ public class DeletePost : nexus::Action
 
     public function handle(nexus::Payload& $payload, int64 $id) : status<nexus::Problem>
     {
-        Caller $me = guard $payload->state<Caller>() else ($p) {
-            return .error($p);
-        };
+        $me = try $payload->state<Caller>();
         $this->crud->authorize = Post::authorizeFor($me->user);
         return $this->crud->delete($payload, $id);
     }

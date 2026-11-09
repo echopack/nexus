@@ -1,9 +1,9 @@
 namespace nexus;
 
 /**
- * What a `Command` was run with: the values of its options, the flags and
- * lists given, the positional words, the mode the kernel booted in, and
- * where to print (libcommand's terminal output; a buffer in tests).
+ * What a `Command` was run with: the values of its options, the flags and lists given, the
+ * positional words, the mode the kernel booted in, and where to print (libcommand's terminal
+ * output; a buffer in tests).
  */
 public struct Invocation
 {
@@ -18,7 +18,7 @@ public struct Invocation
     public constructor(Mode $mode)
     {
         $this->mode = $mode;
-        $this->out = command::CLIContext::plain();
+        $this->out = .plain();
     }
 
     /**

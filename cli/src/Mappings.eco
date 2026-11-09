@@ -1,200 +1,200 @@
-namespace nexusgen;
+/**
+ * Writes one mapping interface per shape of each model with `#[nexus::expose]` fields:
+ * `PostMapping` for the default shape, `UserAdminMapping` for `admin`. A transformer conforms to
+ * one next to `nexus::rest::Transformer<M>` and gets `name()`, `map()`, `availableIncludes()` and
+ * `defaultIncludes()` from it; its own `transform()` hook runs on what `map()` wrote.
+ */
+
+namespace nexusgen::mappings;
+
+use nexusgen::{names, types};
 
 /**
- * Writes one mapping interface per shape of each model with
- * `#[nexus::expose]` fields: `PostMapping` for the default shape,
- * `UserAdminMapping` for `admin`. A transformer conforms to one next to
- * `nexus::rest::Transformer<M>` and gets `name()`, `map()`,
- * `availableIncludes()` and `defaultIncludes()` from it; its own
- * `transform()` hook runs on what `map()` wrote.
+ * `PostMapping`, `UserAdminMapping`.
  */
-public struct Mappings
+public function name(const MappedDecl& $m, const ShapeDecl& $shape) : string
 {
-    /**
-     * `PostMapping`, `UserAdminMapping`.
-     */
-    public static function name(const MappedDecl& $m, const ShapeDecl& $shape) : string
-    {
-        string $short = Names::short($m->qualified);
-        string $upper = Names::upper($shape->name);
-        return "{$short}{$upper}Mapping";
+    $short = names::short($m->qualified);
+    $upper = names::upper($shape->name);
+    return "{$short}{$upper}Mapping";
+}
+
+/**
+ * The mapping interface of `$m` in `$shape`.
+ */
+public function mapping(Code& $code, const Program& $p, const MappedDecl& $m, const ShapeDecl& $shape) : void
+{
+    string $q = $m->qualified;
+    $iface = name($m, $shape);
+    string $what = 'its default shape';
+    if (!$shape->name->empty()) {
+        $what = "the shape '{$shape->name}'";
     }
+    $code->line('/**');
+    $code->line(" * How a {$q} is written in {$what}: conform a");
+    $code->line(" * nexus::rest::Transformer<{$q}> to it as well.");
+    $code->line(' */');
+    $code->open("public interface {$iface}");
 
-    public static function mapping(Code& $code, const Program& $p, const MappedDecl& $m, const ShapeDecl& $shape) : void
-    {
-        string $q = $m->qualified;
-        string $iface = Mappings::name($m, $shape);
-        string $what = 'its default shape';
-        if (!$shape->name->empty()) {
-            $what = "the shape '{$shape->name}'";
+    $entity = names::quote(names::snake(names::short($q)));
+    $code->open('function name() : string');
+    $code->line("return {$entity};");
+    $code->close();
+    $code->blank();
+
+    array<string> $available = [];
+    array<string> $always = [];
+    foreach ($m->fields as const &$f) {
+        if (!$m->holds($f, $shape) || ($f->writer != 'include' && $f->writer != 'includeCollection')) {
+            continue;
         }
-        $code->line('/**');
-        $code->line(" * How a {$q} is written in {$what}: conform a");
-        $code->line(" * nexus::rest::Transformer<{$q}> to it as well.");
-        $code->line(' */');
-        $code->open("public interface {$iface}");
-
-        string $entity = Names::quote(Names::snake(Names::short($q)));
-        $code->open('function name() : string');
-        $code->line("return {$entity};");
-        $code->close();
-        $code->blank();
-
-        array<string> $available = [];
-        array<string> $always = [];
-        foreach ($m->fields as const &$f) {
-            if (!$m->holds($f, $shape) || ($f->writer != 'include' && $f->writer != 'includeCollection')) {
-                continue;
-            }
-            $available[] = Names::quote($f->key);
-            if ($f->always) {
-                $always[] = Names::quote($f->key);
-            }
+        $available[] = names::quote($f->key);
+        if ($f->always) {
+            $always[] = names::quote($f->key);
         }
-        string $availableList = str::join($available, ', ');
-        $code->open('function availableIncludes() : array<string>');
-        $code->line("array<string> $out = [{$availableList}];");
-        $code->begin('foreach ($this->extraIncludes() as const &$extra)');
-        $code->line('$out[] = $extra;');
-        $code->close();
-        $code->line('return $out;');
-        $code->close();
-        $code->blank();
-
-        string $alwaysList = str::join($always, ', ');
-        $code->open('function defaultIncludes() : array<string>');
-        $code->line("array<string> $out = [{$alwaysList}];");
-        $code->line('return $out;');
-        $code->close();
-        $code->blank();
-
-        $code->open("function map(const {$q}& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void");
-        if (!$m->sensitive->empty()) {
-            array<string> $keys = [];
-            foreach ($m->sensitive as const &$k) {
-                $keys[] = Names::quote($k);
-            }
-            string $keyList = str::join($keys, ', ');
-            $code->line("$item->protect([{$keyList}]);");
-        }
-        int32 $n = 0;
-        foreach ($m->fields as const &$f) {
-            if ($m->holds($f, $shape)) {
-                if ($f->sensitive) {
-                    // only a sensitive shape gets here: the reader refused the rest
-                    string $sk = Names::quote($f->key);
-                    $code->line("$item->reveal({$sk});");
-                }
-                Mappings::field($code, $p, $f, $n);
-                $n = $n + 1;
-            }
-        }
-        $code->close();
-        $code->close();
-        $code->blank();
     }
+    $availableList = str::join($available, ', ');
+    $code->open('function availableIncludes() : array<string>');
+    $code->line("array<string> $out = [{$availableList}];");
+    $code->begin('foreach ($this->extraIncludes() as const &$extra)');
+    $code->line('$out[] = $extra;');
+    $code->close();
+    $code->line('return $out;');
+    $code->close();
+    $code->blank();
 
-    /**
-     * The lines writing one field; `$n` keeps the locals apart.
-     */
-    internal static function field(Code& $code, const Program& $p, const ExposedField& $f, int32 $n) : void
-    {
-        string $key = Names::quote($f->key);
-        string $from = "$m->{$f->name}";
-        if ($f->writer == 'include') {
-            $code->begin("if ({$from}->loaded())");
-            $code->line("$item->include<{$f->of}>({$key}, {$from}->get());");
-            $code->close();
-            return;
-        }
-        if ($f->writer == 'includeCollection') {
-            $code->begin("if ({$from}->loaded())");
-            $code->line("$item->includeCollection<{$f->of}>({$key}, {$from}->get());");
-            $code->close();
-            return;
-        }
-        if (!$f->nullable) {
-            Mappings::write($code, $p, $f, $from, $n);
-            return;
-        }
-        // a copy first: guard on a field of a temporary is refused
-        $code->line("{$f->type}? $v{$n} = {$from};");
-        $code->begin("if ($v{$n} == null)");
-        $code->line("$item->nil({$key});");
-        $code->next('else');
-        $code->line("{$f->type} $w{$n} = guard $v{$n};");
-        Mappings::write($code, $p, $f, "$w{$n}", $n);
-        $code->close();
+    $alwaysList = str::join($always, ', ');
+    $code->open('function defaultIncludes() : array<string>');
+    if ($always->empty()) {
+        $code->line('return array<string>();');
+    } else {
+        $code->line("return [{$alwaysList}];");
     }
+    $code->close();
+    $code->blank();
 
-    /**
-     * Writes the present value `$value` of `$f`.
-     */
-    internal static function write(Code& $code, const Program& $p, const ExposedField& $f, const string& $value, int32 $n) : void
-    {
-        string $key = Names::quote($f->key);
-        if ($f->writer == 'enum') {
-            Mappings::enumeration($code, $p, $f, $value, $n);
-            return;
+    $code->open("function map(const {$q}& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void");
+    if (!$m->sensitive->empty()) {
+        array<string> $keys = [];
+        foreach ($m->sensitive as const &$k) {
+            $keys[] = names::quote($k);
         }
-        string $v = $value;
-        if (!$f->cast->empty()) {
-            // a cast reads a local, never a field
-            $code->line("{$f->type} $c{$n} = {$value};");
-            $v = "$c{$n}{$f->cast}";
-        }
-        if ($f->attribute) {
-            $code->line("$item->attribute({$key}, {$v});");
-            return;
-        }
-        if ($f->writer == 'time') {
-            if (!$f->stamp->empty()) {
-                $code->line("$item->time({$key}, {$v}, EchoPack::Rest::Stamp::{$f->stamp});");
-            } else {
-                $code->line("$item->time({$key}, {$v});");
+        $keyList = str::join($keys, ', ');
+        $code->line("$item->protect([{$keyList}]);");
+    }
+    int32 $n = 0;
+    foreach ($m->fields as const &$f) {
+        if ($m->holds($f, $shape)) {
+            if ($f->sensitive) {
+                // only a sensitive shape gets here: the reader refused the rest
+                $sk = names::quote($f->key);
+                $code->line("$item->reveal({$sk});");
             }
-            return;
+            field($code, $p, $f, $n);
+            $n = $n + 1;
         }
-        if (($f->writer == 'texts' || $f->writer == 'ints') && !$f->item->empty()) {
-            string $item = Names::quote($f->item);
-            $code->line("$item->{$f->writer}({$key}, {$v}, item: {$item});");
-            return;
-        }
-        $code->line("$item->{$f->writer}({$key}, {$v});");
     }
+    $code->close();
+    $code->close();
+    $code->blank();
+}
 
-    /**
-     * A backed enum as its wire value, one branch per case.
-     */
-    internal static function enumeration(Code& $code, const Program& $p, const ExposedField& $f, const string& $value, int32 $n) : void
-    {
-        EnumDecl $e = $p->enumOf($f->of);
-        string $key = Names::quote($f->key);
-        string $writer = 'int';
+/**
+ * The lines writing one field; `$n` keeps the locals apart.
+ */
+internal function field(Code& $code, const Program& $p, const ExposedField& $f, int32 $n) : void
+{
+    $key = names::quote($f->key);
+    string $from = "$m->{$f->name}";
+    if ($f->writer == 'include') {
+        $code->begin("if ({$from}->loaded())");
+        $code->line("$item->include<{$f->of}>({$key}, {$from}->get());");
+        $code->close();
+        return;
+    }
+    if ($f->writer == 'includeCollection') {
+        $code->begin("if ({$from}->loaded())");
+        $code->line("$item->includeCollection<{$f->of}>({$key}, {$from}->get());");
+        $code->close();
+        return;
+    }
+    if (!$f->nullable) {
+        write($code, $p, $f, $from, $n);
+        return;
+    }
+    // a copy first: guard on a field of a temporary is refused
+    $v = types::binding("{$f->type}?", "$v{$n}");
+    $w = types::binding($f->type, "$w{$n}");
+    $code->line("{$v} = {$from};");
+    $code->begin("if ($v{$n} == null)");
+    $code->line("$item->nil({$key});");
+    $code->next('else');
+    $code->line("{$w} = guard $v{$n};");
+    write($code, $p, $f, "$w{$n}", $n);
+    $code->close();
+}
+
+/**
+ * Writes the present value `$value` of `$f`.
+ */
+internal function write(Code& $code, const Program& $p, const ExposedField& $f, const string& $value, int32 $n) : void
+{
+    $key = names::quote($f->key);
+    if ($f->writer == 'enum') {
+        enumeration($code, $p, $f, $value);
+        return;
+    }
+    string $v = $value;
+    if (!$f->cast->empty()) {
+        // a cast reads a local, never a field
+        $c = types::binding($f->type, "$c{$n}");
+        $code->line("{$c} = {$value};");
+        $v = "$c{$n}{$f->cast}";
+    }
+    if ($f->attribute) {
+        $code->line("$item->attribute({$key}, {$v});");
+        return;
+    }
+    if ($f->writer == 'time') {
+        if (!$f->stamp->empty()) {
+            $code->line("$item->time({$key}, {$v}, EchoPack::Rest::Stamp::{$f->stamp});");
+        } else {
+            $code->line("$item->time({$key}, {$v});");
+        }
+        return;
+    }
+    if (($f->writer == 'texts' || $f->writer == 'ints') && !$f->item->empty()) {
+        $item = names::quote($f->item);
+        $code->line("$item->{$f->writer}({$key}, {$v}, item: {$item});");
+        return;
+    }
+    $code->line("$item->{$f->writer}({$key}, {$v});");
+}
+
+/**
+ * A backed enum as its wire value, one branch per case.
+ */
+internal function enumeration(Code& $code, const Program& $p, const ExposedField& $f, const string& $value) : void
+{
+    $e = $p->enumOf($f->of);
+    $key = names::quote($f->key);
+    string $writer = 'int';
+    if ($e->text) {
+        $writer = 'text';
+    }
+    if ($f->attribute) {
+        $writer = 'attribute';
+    }
+    if ($e->cases->empty()) {
+        return;
+    }
+    $code->begin("$item->{$writer}({$key}, match ({$value})");
+    foreach ($e->cases as const &$c) {
+        string $wire = "{$c->number}";
         if ($e->text) {
-            $writer = 'text';
+            $wire = names::quote($c->text);
         }
-        if ($f->attribute) {
-            $writer = 'attribute';
-        }
-        $code->line("{$f->of} $e{$n} = {$value};");
-        bool $first = true;
-        foreach ($e->cases as const &$c) {
-            string $wire = "{$c->number}";
-            if ($e->text) {
-                $wire = Names::quote($c->text);
-            }
-            string $test = "if ($e{$n} == {$f->of}::{$c->name})";
-            if ($first) {
-                $code->begin($test);
-                $first = false;
-            } else {
-                $code->next("else {$test}");
-            }
-            $code->line("$item->{$writer}({$key}, {$wire});");
-        }
-        if (!$first) {
-            $code->close();
-        }
+        $code->line(".{$c->name} => {$wire},");
     }
+    $code->close(');');
 }

@@ -11,7 +11,7 @@ public class Chain
 
     public constructor(array<Middleware> $links, function<Response(Payload&)> $last)
     {
-        $this->links = $links;
+        $this->links = mv $links;
         $this->last = $last;
     }
 }

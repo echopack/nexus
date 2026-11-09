@@ -1,8 +1,8 @@
 namespace nexus::mcp;
 
 /**
- * Every `Offer` of the program, keyed by the type it runs; filled from the
- * tables `nexus gen` writes when the app boots.
+ * Every `Offer` of the program, keyed by the type it runs; filled from the tables `nexus gen`
+ * writes when the app boots.
  */
 #[atomic]
 public class Offers
@@ -14,7 +14,7 @@ public class Offers
      */
     public function add<T>(Offer $o) : void
     {
-        $this->byType[type_id<T>()] = $o;
+        $this->byType[type_id<T>()] = mv $o;
     }
 
     /**
@@ -22,7 +22,7 @@ public class Offers
      */
     public const function find<T>() : Offer?
     {
-        type_id $id = type_id<T>();
+        $id = type_id<T>();
         if (!$this->byType->has($id)) {
             return null;
         }

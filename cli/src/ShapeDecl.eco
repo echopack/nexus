@@ -1,9 +1,8 @@
 namespace nexusgen;
 
 /**
- * One shape of a model: the default one (empty name) or one its
- * `#[nexus::shapes]` declares. Only a sensitive shape may expose a
- * `#[nexus::sensitive]` field.
+ * One shape of a model: the default one (empty name) or one its `#[nexus::shapes]` declares. Only a
+ * sensitive shape may expose a `#[nexus::sensitive]` field.
  */
 public struct ShapeDecl
 {

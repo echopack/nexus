@@ -1,11 +1,10 @@
 namespace nexus::auth;
 
 /**
- * Reads one kind of credential. `identify` is null when the request
- * carries none of its kind, so the next guard may look; a credential of
- * its kind that does not hold (unknown, expired, tampered with) is a 401
- * right away, never an anonymous request. Guards are shared by every
- * worker thread: `#[atomic]`, no per-request state in fields.
+ * Reads one kind of credential. `identify` is null when the request carries none of its kind, so
+ * the next guard may look; a credential of its kind that does not hold (unknown, expired, tampered
+ * with) is a 401 right away, never an anonymous request. Guards are shared by every worker thread:
+ * `#[atomic]`, no per-request state in fields.
  */
 public interface Guard
 {

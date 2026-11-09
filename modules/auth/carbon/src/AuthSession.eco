@@ -3,8 +3,8 @@ namespace nexus::auth::carbon;
 use std::time;
 
 /**
- * A row of `auth_sessions`: a signed session by its id. Its secret is
- * derived from the id, never stored.
+ * A row of `auth_sessions`: a signed session by its id. Its secret is derived from the id, never
+ * stored.
  */
 #[carbon::model: 'auth_sessions']
 public class AuthSession : carbon::Model<AuthSession, AuthSessionRepository>
@@ -27,11 +27,18 @@ public class AuthSession : carbon::Model<AuthSession, AuthSessionRepository>
         return $this->link;
     }
 
+    /**
+     * The row that keeps `$s`. A static, since carbon builds a model with its implicit constructor
+     * and refuses one written out.
+     */
     public static function of(const nexus::auth::StoredSession& $s) : AuthSession
     {
         return AuthSession($id: $s->id, $subject: $s->subject, $scopes: $s->scopes, $createdAt: $s->createdAt, $expiresAt: $s->expiresAt);
     }
 
+    /**
+     * The session this row keeps.
+     */
     public const function stored() : nexus::auth::StoredSession
     {
         return nexus::auth::StoredSession($id: $this->id, $subject: $this->subject, $scopes: $this->scopes, $createdAt: $this->createdAt, $expiresAt: $this->expiresAt);

@@ -1,41 +1,40 @@
 namespace nexus::testing;
 
 /**
- * A booted app for tests: the kernel with the program's generated route and
- * config tables, fixed config values instead of the environment, and a log
- * that keeps every entry.
+ * A booted app for tests: the kernel with the program's generated route and config tables, fixed
+ * config values instead of the environment, and a log that keeps every entry.
  *
- *     TestApp $app = TestApp::boot($extensions, ['BLOG_KEY' => 'k']);
- *     $app->client()->get('/health')->assertStatus(200);
+ * ```echo
+ * $app = TestApp($extensions, ['BLOG_KEY' => 'k']);
+ * $app->client()->get('/health')->assertStatus(200);
+ * ```
  */
 public class TestApp
 {
     public nexus::Kernel $kernel;
-    public nexus::MemorySink $log;
-
-    internal constructor(nexus::Kernel $kernel, nexus::MemorySink $log)
-    {
-        $this->kernel = $kernel;
-        $this->log = $log;
-    }
+    public nexus::log::Memory $log;
 
     /**
-     * Boots `$extensions` with nothing but `$vars` as config. A failed boot
-     * stops the test with every reason.
+     * Boots `$extensions` with nothing but `$vars` as config. A failed boot stops the test with
+     * every reason; `attempt` hands the reasons back.
      */
-    public static function boot(const array<nexus::Extension>& $extensions, map<string, string> $vars) : TestApp
+    public constructor(const array<nexus::Extension>& $extensions, map<string, string> $vars = [])
     {
-        TestApp $app = guard TestApp::attempt($extensions, $vars) else ($e) {
+        $app = guard TestApp::attempt($extensions, mv $vars) else ($e) {
             string $lines = str::join($e->lines(), '; ');
             die("nexus-testing: the app did not boot: {$lines}");
         };
-        return $app;
+        $this->kernel = $app->kernel;
+        $this->log = $app->log;
     }
 
-    public static function boot(const array<nexus::Extension>& $extensions) : TestApp
+    /**
+     * The app around a kernel that booted, logging into `$log`.
+     */
+    internal constructor(booted: nexus::Kernel $kernel, nexus::log::Memory $log)
     {
-        map<string, string> $none = map<string, string>();
-        return TestApp::boot($extensions, $none);
+        $this->kernel = $kernel;
+        $this->log = $log;
     }
 
     /**
@@ -43,19 +42,17 @@ public class TestApp
      */
     public static function attempt(const array<nexus::Extension>& $extensions, map<string, string> $vars) : result<TestApp, nexus::BootError>
     {
-        nexus::MemorySink $sink = nexus::MemorySink();
-        array<nexus::Sink> $sinks = [$sink];
-        nexus::Log $log = nexus::Log($sinks, nexus::Level::debug);
-        nexus::Kernel $k = guard nexus::Kernel::boot($extensions, nexus::Mode::testing, $log, nexus::Env(fixed: $vars)) else ($e) {
-            return .error($e);
-        };
-        return .ok(TestApp($k, $sink));
+        $sink = nexus::log::Memory();
+        array<nexus::log::Sink> $sinks = [$sink];
+        $log = nexus::Logger($sinks, .trace);
+        $k = try nexus::Kernel::boot($extensions, nexus::Mode::testing, $log, nexus::Env(fixed: mv $vars));
+        return .ok(TestApp(booted: $k, $sink));
     }
 
     /**
      * A client with no default headers.
      */
-    public function client() : Client
+    public const function client() : Client
     {
         return Client($this->kernel);
     }
@@ -66,5 +63,51 @@ public class TestApp
     public function logged(const string& $message) : bool
     {
         return $this->log->saw($message);
+    }
+
+    /**
+     * Whether a log entry with exactly this message was written at `$level`.
+     */
+    public function logged(nexus::log::Level $level, const string& $message) : bool
+    {
+        return $this->log->saw($level, $message);
+    }
+
+    /**
+     * Stops the test unless an entry with exactly this message was written at `$level`.
+     */
+    public function assertLogged(nexus::log::Level $level, const string& $message) : TestApp
+    {
+        if (!$this->logged($level, $message)) {
+            string $got = $this->logLines();
+            die("nexus-testing: expected a {$level->name()} log entry '{$message}', got: {$got}");
+        }
+        return $this;
+    }
+
+    /**
+     * Stops the test if an entry with exactly this message was written.
+     */
+    public function assertNotLogged(const string& $message) : TestApp
+    {
+        if ($this->logged($message)) {
+            die("nexus-testing: expected no log entry '{$message}'");
+        }
+        return $this;
+    }
+
+    /**
+     * Every message so far, for a failure that says what was logged instead.
+     */
+    private function logLines() : string
+    {
+        array<string> $all = [];
+        foreach ($this->log->entries() as const &$e) {
+            $all[] = "{$e->level->name()} {$e->message}";
+        }
+        if ($all->empty()) {
+            return '(nothing)';
+        }
+        return str::join($all, '; ');
     }
 }

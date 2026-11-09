@@ -1,24 +1,23 @@
 namespace nexus::auth;
 
 /**
- * The app's guards, in the order they look at a request. Middleware asks
- * them who is calling (`Authenticate`, or the app's own that loads its
- * user too); what they found is kept in the payload's container, so a
- * second ask in the same request does not run them again.
+ * The app's guards, in the order they look at a request. Middleware asks them who is calling
+ * (`Authenticate`, or the app's own that loads its user too); what they found is kept in the
+ * payload's container, so a second ask in the same request does not run them again.
  */
 #[atomic]
 public class Guards
 {
     public array<Guard> $guards;
 
-    public constructor(array<Guard> $guards)
+    public constructor(mv array<Guard> $guards)
     {
-        $this->guards = $guards;
+        $this->guards = mv $guards;
     }
 
     /**
-     * Adds `$g` after the others; for an extension that brings a guard of
-     * its own, from its `services` after nexus-auth's.
+     * Adds `$g` after the others; for an extension that brings a guard of its own, from its
+     * `services` after nexus-auth's.
      */
     public function add(Guard $g) : void
     {
@@ -36,9 +35,7 @@ public class Guards
             return .ok($r->identity);
         }
         foreach ($this->guards as $g) {
-            Identity? $found = guard $g->identify($payload) else ($p) {
-                return .error($p);
-            };
+            Identity? $found = try $g->identify($payload);
             if ($found != null) {
                 $payload->put<Resolved>(Resolved($found));
                 return .ok($found);
@@ -49,8 +46,8 @@ public class Guards
     }
 
     /**
-     * Ends the credential `$id` came with: the logout of a token or a
-     * session, whichever guard read it.
+     * Ends the credential `$id` came with: the logout of a token or a session, whichever guard read
+     * it.
      */
     public function revoke(nexus::Payload& $payload, const Identity& $id) : status<nexus::Problem>
     {

@@ -3,8 +3,8 @@ namespace nexus::log;
 use std::time;
 
 /**
- * One log entry as sinks see it: when, how bad, what, the context it was
- * written in and the fields of the call itself.
+ * One log entry as sinks see it: when, how bad, what, the context it was written in and the fields
+ * of the call itself.
  */
 public struct Entry
 {
@@ -15,12 +15,11 @@ public struct Entry
     public Fields $fields;
 
     /**
-     * Every field, the context's from the root down, then the call's. A
-     * nearer value wins.
+     * Every field, the context's from the root down, then the call's. A nearer value wins.
      */
     public const function all() : Fields
     {
-        Fields $out = Fields();
+        $out = Fields();
         if ($this->context != null) {
             Context $c = guard $this->context;
             $c->collect($out);
@@ -34,28 +33,22 @@ public struct Entry
      */
     public const function span() : string
     {
-        if ($this->context == null) {
-            return '';
-        }
-        Context $c = guard $this->context;
-        return $c->span;
+        return $this->context?->span ?? '';
     }
 
+    /**
+     * The id of the innermost span, or empty.
+     */
     public const function spanId() : string
     {
-        if ($this->context == null) {
-            return '';
-        }
-        Context $c = guard $this->context;
-        return $c->spanId;
+        return $this->context?->spanId ?? '';
     }
 
+    /**
+     * The id of the span around the innermost one, or empty.
+     */
     public const function parentId() : string
     {
-        if ($this->context == null) {
-            return '';
-        }
-        Context $c = guard $this->context;
-        return $c->parentId;
+        return $this->context?->parentId ?? '';
     }
 }

@@ -1,8 +1,6 @@
 array<nexus::Extension> $extensions = [
     nexus::http::Extension(),
-    nexus::carbon::Extension(function(nexus::carbon::DatabaseConfig $config) : result<carbon::DB, carbon::Error> {
-        return blog::Database::open($config);
-    }, blog::Database::migrations()),
+    nexus::carbon::Extension((nexus::carbon::DatabaseConfig $config) => blog::database::open($config), blog::database::migrations()),
     nexus::auth::Extension('blog', stores: .provided),
     nexus::auth::carbon::Extension(),
     nexus::oauth::Extension(stores: .provided),

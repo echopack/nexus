@@ -10,7 +10,7 @@ public class PostsProvider : nexus::Provider
     public function register(nexus::App $app) : void
     {
         $app->bindRepository<PostRepository>();
-        $app->bind<PostService>(scoped: (Container $c) => PostService($c->get<PostRepository>(), $c->get<UserRepository>()));
+        $app->bind<PostService>(scoped: (Container $c) => PostService($c->get<PostRepository>(), $c->get<UserRepository>(), $c->get<nexus::Logger>()));
 
         $app->bindAction<ShowPost>((Container $c) => ShowPost($c->get<PostCrud>()))
             ->route([.get], '/v1/posts/{id}')
@@ -35,7 +35,7 @@ public class PostsProvider : nexus::Provider
         // a post links to ShowPost through the router, which boot fills
         $app->bindTransformer<Post, PostTransformer>(PostTransformer($app->router()));
         $app->bind<PostCrud>(scoped: function(Container $c) : PostCrud {
-            PostCrud $crud = PostCrud($c->get<PostRepository>(), $c->get<PostTransformer>());
+            $crud = PostCrud($c->get<PostRepository>(), $c->get<PostTransformer>());
             $crud->name = 'post';
             $crud->load = function(PostQuery $q, const EchoPack::Rest::Includes& $inc) : PostQuery {
                 if ($inc->has('author')) {

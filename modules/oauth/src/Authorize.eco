@@ -1,10 +1,9 @@
 namespace nexus::oauth;
 
 /**
- * Where a client sends the user: the request is checked, then the browser
- * goes to the app's consent page (`OAUTH_CONSENT`) with the same query.
- * A request whose client or redirect is in doubt is a 400 here; anything
- * else wrong goes back to the client as an OAuth error.
+ * Where a client sends the user: the request is checked, then the browser goes to the app's consent
+ * page (`OAUTH_CONSENT`) with the same query. A request whose client or redirect is in doubt is a
+ * 400 here; anything else wrong goes back to the client as an OAuth error.
  */
 public class Authorize : nexus::Action
 {
@@ -21,7 +20,7 @@ public class Authorize : nexus::Action
     {
         string $issuer = Metadata::issuer($this->config, $payload->request);
         Asked $asked = guard Asked::check($payload->request->queryString, $this->store, $issuer, $this->config) else ($d) {
-            return Authorize::denied($d);
+            return $d->answer();
         };
         // the extension checked the consent page at boot
         nexus::Url $consent = guard nexus::Url::parse($this->config->consent) else ($e) {
@@ -33,21 +32,10 @@ public class Authorize : nexus::Action
             };
             $consent = $consent->on($base);
         }
-        nexus::Query $asks = nexus::Query(parse: $asked->query);
+        $asks = nexus::Query(parse: $asked->query);
         foreach ($asks->pairs as const &$p) {
             $consent->query->add($p->name, $p->value);
         }
         return .ok(nexus::Response(redirect: $consent));
-    }
-
-    /**
-     * A denial as an action's answer: the problem, or the redirect back.
-     */
-    public static function denied(const Denial& $d) : result<nexus::Response, nexus::Problem>
-    {
-        return match ($d) {
-            Denial::shown($p) => .error($p),
-            Denial::back($location) => .ok(nexus::Response(redirect: $location)),
-        };
     }
 }

@@ -7,12 +7,12 @@ use std::io;
  */
 public class FailedCommand : nexus::Command
 {
-    public function name() : string
+    public const function name() : string
     {
         return 'work:failed';
     }
 
-    public function summary() : string
+    public const function summary() : string
     {
         return 'list the tasks that gave up';
     }
@@ -20,9 +20,8 @@ public class FailedCommand : nexus::Command
     public function run(nexus::Kernel $kernel, const nexus::Invocation& $in) : int32
     {
         nexus::Payload $payload = $kernel->background('work:failed', nexus::Kernel::id());
-        Queue $q = $payload->get<Queue>();
-        array<StoredTask> $failed = guard $q->failed(100) else ($p) {
-            io::eprintln("work:failed: {$p->detail(nexus::Mode::dev)}");
+        array<StoredTask> $failed = guard $payload->get<Queue>()->failed(100) else ($p) {
+            io::eprintln("work:failed: {$p->detail(.dev)}");
             nexus::Kernel::finish($payload);
             return 1;
         };

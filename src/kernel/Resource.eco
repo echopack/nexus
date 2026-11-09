@@ -1,9 +1,8 @@
 namespace nexus;
 
 /**
- * Something an action can return that knows its JSON form, for small
- * fixed answers such as an issued token. Models go through a nexus-rest
- * transformer, which answers with a `Response` itself.
+ * Something an action can return that knows its JSON form, for small fixed answers such as an
+ * issued token. Models go through a nexus-rest transformer, which answers with a `Response` itself.
  */
 public interface Resource
 {

@@ -1,9 +1,8 @@
 namespace nexus;
 
 /**
- * Why a request did not succeed. Every handler, decoder and middleware
- * speaks it; the responder renders it as RFC 9457 problem details
- * (`application/problem+json`).
+ * Why a request did not succeed. Every handler, decoder and middleware speaks it; the responder
+ * renders it as RFC 9457 problem details (`application/problem+json`).
  */
 public enum Problem
 {
@@ -77,8 +76,8 @@ public enum Problem
     }
 
     /**
-     * The occurrence-specific explanation. An internal cause is only told
-     * when the mode reveals internals.
+     * The occurrence-specific explanation. An internal cause is only told when the mode reveals
+     * internals.
      */
     public const function detail(Mode $mode) : string
     {
@@ -112,7 +111,7 @@ public enum Problem
      */
     public const function json(Mode $mode, const string& $requestId) : json::Value
     {
-        json::Value $o = json::object();
+        $o = json::object();
         $o['type'] = json::str($this->type());
         $o['title'] = json::str($this->title());
         $o['status'] = json::int($this->status() as int64);
@@ -125,34 +124,34 @@ public enum Problem
         }
         array<FieldError> $fields = $this->fields();
         if (!$fields->empty()) {
-            json::Value $list = json::arr();
+            $list = json::arr();
             foreach ($fields as const &$f) {
                 $list[] = $f->json();
             }
-            $o['errors'] = $list;
+            $o['errors'] = mv $list;
         }
         ProblemDetail? $custom = $this->custom();
-        if ($custom != null) {
-            ProblemDetail $d = guard $custom;
-            ordered_map<string, json::Value>? $more = $d->extra->asObject();
-            if ($more != null) {
-                ordered_map<string, json::Value> $members = guard $more;
-                foreach ($members as $k => const &$v) {
-                    $o[$k] = $v->clone();
-                }
-            }
+        if ($custom == null) {
+            return $o;
+        }
+        ProblemDetail $d = guard $custom;
+        ordered_map<string, json::Value> $members = guard $d->extra->asObject() else {
+            return $o;
+        };
+        foreach ($members as $k => const &$v) {
+            $o[$k] = $v->clone();
         }
         return $o;
     }
 
     /**
-     * The problem as a response: problem+json body, plus `Allow` or
-     * `Retry-After` where the status calls for one.
+     * The problem as a response: problem+json body, plus `Allow` or `Retry-After` where the status
+     * calls for one.
      */
     public const function response(Mode $mode, const string& $requestId) : Response
     {
-        Response $r = Response($this->status(), json::dump($this->json($mode, $requestId)), type: 'application/problem+json');
-        array<Method> $allow = $this->allowed();
+        $r = Response($this->status(), json::dump($this->json($mode, $requestId)), type: 'application/problem+json');
+        $allow = $this->allowed();
         if (!$allow->empty()) {
             array<string> $verbs = [];
             foreach ($allow as const &$m) {
@@ -220,7 +219,7 @@ public enum Problem
     public static function field(const string& $field, const string& $code, const string& $message) : Problem
     {
         array<FieldError> $one = [FieldError($field, $code, $message)];
-        return Problem::invalid($one);
+        return .invalid(mv $one);
     }
 
     internal static function hidden(const string& $cause, Mode $mode) : string

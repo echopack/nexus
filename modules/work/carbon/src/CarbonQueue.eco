@@ -3,12 +3,10 @@ namespace nexus::work::carbon;
 use std::time;
 
 /**
- * The queue in `nexus_tasks`, through a request's or task's carbon session.
- * A claim reads a few due rows, then takes one with an update that only
- * holds while its attempt count is still the one read: of two workers
- * after the same row, one updates it and the other moves on. Every later
- * change names the attempt too, so a worker whose lease ran out changes
- * nothing.
+ * The queue in `nexus_tasks`, through a request's or task's carbon session. A claim reads a few due
+ * rows, then takes one with an update that only holds while its attempt count is still the one
+ * read: of two workers after the same row, one updates it and the other moves on. Every later
+ * change names the attempt too, so a worker whose lease ran out changes nothing.
  */
 public class CarbonQueue : nexus::work::Queue
 {
@@ -19,35 +17,29 @@ public class CarbonQueue : nexus::work::Queue
         $this->session = $session;
     }
 
-    public function push(const nexus::work::StoredTask& $task) : result<bool, nexus::Problem>
+    public function push(const nexus::work::StoredTask& $task) : result<nexus::work::Pushed, nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
+        $repo = try $this->repo();
         if (!$task->key->empty()) {
-            QueuedTask? $have = guard $repo->find()->where(QueuedTaskTable::$uniqueKey == $task->key)->first() else ($e) {
-                return .error(nexus::carbon::Problems::of($e));
-            };
+            QueuedTask? $have = try $repo->find()->where(QueuedTaskTable::$uniqueKey == $task->key)->first();
             if ($have != null) {
-                return .ok(false);
+                return .ok(.duplicate);
             }
         }
         guard $repo->create(QueuedTask::of($task)) else ($e) {
             // another process stored the same key in between
             if ($e->duplicate() && !$task->key->empty()) {
-                return .ok(false);
+                return .ok(.duplicate);
             }
             return .error(nexus::carbon::Problems::of($e));
         };
-        return .ok(true);
+        return .ok(.stored);
     }
 
     public function claim(const array<string>& $queues, time::timestamp $now, time::timestamp $until) : result<nexus::work::StoredTask?, nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        array<QueuedTask> $due = guard $repo->find()
+        $repo = try $this->repo();
+        array<QueuedTask> $due = try $repo->find()
             ->where(QueuedTaskTable::$queue in $queues)
             ->where(QueuedTaskTable::$doneAt->isNull())
             ->where(QueuedTaskTable::$failedAt->isNull())
@@ -55,16 +47,12 @@ public class CarbonQueue : nexus::work::Queue
             ->where(QueuedTaskTable::$reservedUntil->isNull() || QueuedTaskTable::$reservedUntil < $now)
             ->order(asc: QueuedTaskTable::$availableAt)
             ->limit(5)
-            ->get() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
-        foreach ($due as $row) {
-            hydrahon::Values $set = hydrahon::Values();
+            ->get();
+        foreach ($due as const &$row) {
+            $set = hydrahon::Values();
             $set[QueuedTaskTable::$attempts] = $row->attempts + 1;
             $set[QueuedTaskTable::$reservedUntil] = $until;
-            uint64 $taken = guard $repo->find()->where(QueuedTaskTable::$id == $row->id)->where(QueuedTaskTable::$attempts == $row->attempts)->update($set) else ($e) {
-                return .error(nexus::carbon::Problems::of($e));
-            };
+            uint64 $taken = try $repo->find()->where(QueuedTaskTable::$id == $row->id)->where(QueuedTaskTable::$attempts == $row->attempts)->update(mv $set);
             if ($taken == 1) {
                 nexus::work::StoredTask $task = $row->stored();
                 $task->attempts = $row->attempts + 1;
@@ -77,53 +65,41 @@ public class CarbonQueue : nexus::work::Queue
 
     public function done(const nexus::work::StoredTask& $task, time::timestamp $now) : status<nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
+        $repo = try $this->repo();
         if ($task->key->empty()) {
-            guard $repo->find()->where(QueuedTaskTable::$id == $task->id)->where(QueuedTaskTable::$attempts == $task->attempts)->purge() else ($e) {
-                return .error(nexus::carbon::Problems::of($e));
-            };
+            try $repo->find()->where(QueuedTaskTable::$id == $task->id)->where(QueuedTaskTable::$attempts == $task->attempts)->purge();
             return .ok;
         }
-        hydrahon::Values $set = hydrahon::Values();
+        $set = hydrahon::Values();
         $set[QueuedTaskTable::$doneAt] = $now;
         $set[QueuedTaskTable::$reservedUntil] = CarbonQueue::never();
-        return $this->change($repo, $task, $set);
+        return $this->change($repo, $task, mv $set);
     }
 
     public function retry(const nexus::work::StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        hydrahon::Values $set = hydrahon::Values();
+        $repo = try $this->repo();
+        $set = hydrahon::Values();
         $set[QueuedTaskTable::$availableAt] = $at;
         $set[QueuedTaskTable::$reservedUntil] = CarbonQueue::never();
         $set[QueuedTaskTable::$error] = $error;
-        return $this->change($repo, $task, $set);
+        return $this->change($repo, $task, mv $set);
     }
 
     public function fail(const nexus::work::StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        hydrahon::Values $set = hydrahon::Values();
+        $repo = try $this->repo();
+        $set = hydrahon::Values();
         $set[QueuedTaskTable::$failedAt] = $now;
         $set[QueuedTaskTable::$reservedUntil] = CarbonQueue::never();
         $set[QueuedTaskTable::$error] = $error;
-        return $this->change($repo, $task, $set);
+        return $this->change($repo, $task, mv $set);
     }
 
     public function failed(uint64 $limit) : result<array<nexus::work::StoredTask>, nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        array<QueuedTask> $rows = guard $repo->find()->where(QueuedTaskTable::$failedAt->isNotNull())->order(desc: QueuedTaskTable::$failedAt)->limit($limit)->get() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        $repo = try $this->repo();
+        array<QueuedTask> $rows = try $repo->find()->where(QueuedTaskTable::$failedAt->isNotNull())->order(desc: QueuedTaskTable::$failedAt)->limit($limit)->get();
         array<nexus::work::StoredTask> $out = [];
         foreach ($rows as const &$r) {
             $out[] = $r->stored();
@@ -131,51 +107,40 @@ public class CarbonQueue : nexus::work::Queue
         return .ok($out);
     }
 
-    public function again(const string& $id, time::timestamp $now) : result<bool, nexus::Problem>
+    public function again(const string& $id, time::timestamp $now) : result<nexus::work::Requeued, nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        hydrahon::Values $set = hydrahon::Values();
+        $repo = try $this->repo();
+        $set = hydrahon::Values();
         $set[QueuedTaskTable::$failedAt] = CarbonQueue::never();
         $set[QueuedTaskTable::$attempts] = 0;
         $set[QueuedTaskTable::$availableAt] = $now;
-        uint64 $n = guard $repo->find()->where(QueuedTaskTable::$id == $id)->where(QueuedTaskTable::$failedAt->isNotNull())->update($set) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
-        return .ok($n == 1);
+        uint64 $n = try $repo->find()->where(QueuedTaskTable::$id == $id)->where(QueuedTaskTable::$failedAt->isNotNull())->update(mv $set);
+        if ($n == 1) {
+            return .ok(.sent);
+        }
+        return .ok(.missing);
     }
 
     public function prune(time::timestamp $before) : result<uint64, nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        uint64 $n = guard $repo->find()->where(QueuedTaskTable::$doneAt < $before)->purge() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        $repo = try $this->repo();
+        uint64 $n = try $repo->find()->where(QueuedTaskTable::$doneAt < $before)->purge();
         return .ok($n);
     }
 
     public function waiting() : result<uint64, nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->repo() else ($p) {
-            return .error($p);
-        };
-        uint64 $n = guard $repo->find()->where(QueuedTaskTable::$doneAt->isNull())->where(QueuedTaskTable::$failedAt->isNull())->count() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        $repo = try $this->repo();
+        uint64 $n = try $repo->find()->where(QueuedTaskTable::$doneAt->isNull())->where(QueuedTaskTable::$failedAt->isNull())->count();
         return .ok($n);
     }
 
     /**
      * Applies `$set` to `$task`'s row while the claim it names still holds.
      */
-    internal function change(QueuedTaskRepository $repo, const nexus::work::StoredTask& $task, hydrahon::Values $set) : status<nexus::Problem>
+    internal function change(QueuedTaskRepository $repo, const nexus::work::StoredTask& $task, mv hydrahon::Values $set) : status<nexus::Problem>
     {
-        guard $repo->find()->where(QueuedTaskTable::$id == $task->id)->where(QueuedTaskTable::$attempts == $task->attempts)->update($set) else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        try $repo->find()->where(QueuedTaskTable::$id == $task->id)->where(QueuedTaskTable::$attempts == $task->attempts)->update(mv $set);
         return .ok;
     }
 
@@ -189,9 +154,7 @@ public class CarbonQueue : nexus::work::Queue
 
     internal function repo() : result<QueuedTaskRepository, nexus::Problem>
     {
-        QueuedTaskRepository $repo = guard $this->session->repo<QueuedTaskRepository>() else ($e) {
-            return .error(nexus::carbon::Problems::of($e));
-        };
+        QueuedTaskRepository $repo = try $this->session->repo<QueuedTaskRepository>();
         return .ok($repo);
     }
 }

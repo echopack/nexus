@@ -1,0 +1,59 @@
+namespace nexus::work;
+
+/**
+ * One of the five fields of a cron line, with the values it allows.
+ */
+public enum CronField
+{
+    case minute;
+    case hour;
+    case day;
+    case month;
+
+    /**
+     * 0 to 7, where 0 and 7 are both Sunday.
+     */
+    case weekday;
+
+    /**
+     * The lowest value the field allows.
+     */
+    public const function low() : int64
+    {
+        return match ($this) {
+            CronField::day => 1,
+            CronField::month => 1,
+            else => 0,
+        };
+    }
+
+    /**
+     * The highest value the field allows.
+     */
+    public const function high() : int64
+    {
+        return match ($this) {
+            CronField::minute => 59,
+            CronField::hour => 23,
+            CronField::day => 31,
+            CronField::month => 12,
+            CronField::weekday => 7,
+        };
+    }
+}
+
+namespace str;
+
+/**
+ * The field's name, as an error message says it.
+ */
+public function from(const nexus::work::CronField& $f) : string
+{
+    return match ($f) {
+        nexus::work::CronField::minute => 'minute',
+        nexus::work::CronField::hour => 'hour',
+        nexus::work::CronField::day => 'day',
+        nexus::work::CronField::month => 'month',
+        nexus::work::CronField::weekday => 'weekday',
+    };
+}

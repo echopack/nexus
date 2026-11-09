@@ -1,8 +1,7 @@
 namespace nexus::oauth;
 
 /**
- * The consent page's answer: the query `/oauth/authorize` received, and
- * whether the user allows it.
+ * The consent page's answer: the query `/oauth/authorize` received, and whether the user allows it.
  */
 #[nexus::input]
 public struct Approval

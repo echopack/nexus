@@ -1,10 +1,9 @@
 namespace nexus;
 
 /**
- * What the inputs of the program bring to boot: the English messages and
- * labels `#[nexus::message]` and `#[nexus::label]` declare, and the rule
- * classes they name, each of which the app has to bind. The generated
- * `#[nexus::inputs]` table of each module fills it.
+ * What the inputs of the program bring to boot: the English messages and labels `#[nexus::message]`
+ * and `#[nexus::label]` declare, and the rule classes they name, each of which the app has to bind.
+ * The generated `#[nexus::inputs]` table of each module fills it.
  */
 public class Inputs
 {

@@ -1,8 +1,8 @@
 namespace nexus;
 
 /**
- * Turns what an action returned into a response. The generated dispatcher
- * picks the overload from the declared return type of `handle()`.
+ * Turns what an action returned into a response. The generated dispatcher picks the overload from
+ * the declared return type of `handle()`.
  */
 public struct Reply
 {
@@ -35,7 +35,7 @@ public struct Reply
         guard $s else ($p) {
             return $payload->fail($p);
         };
-        return Response::noContent();
+        return .noContent();
     }
 
     public static function of(Payload& $payload, Response $r) : Response
@@ -67,8 +67,8 @@ public struct Reply
         array<T> $values = guard $r else ($p) {
             return $payload->fail($p);
         };
-        json::Value $list = json::arr();
-        foreach ($values as $v) {
+        $list = json::arr();
+        foreach ($values as const &$v) {
             $list[] = $v->json();
         }
         return Response(json: $list);

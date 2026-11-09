@@ -1,9 +1,8 @@
 namespace nexus;
 
 /**
- * A piece of an app: a library (nexus-http, nexus-carbon) or the app
- * itself. Extensions are listed in `main.eco`, in order; the app comes
- * last so its bindings may replace anything earlier.
+ * A piece of an app: a library (nexus-http, nexus-carbon) or the app itself. Extensions are listed
+ * in `main.eco`, in order; the app comes last so its bindings may replace anything earlier.
  *
  * Every hook has a default, so an extension writes only what it needs.
  */
@@ -15,11 +14,10 @@ public interface Extension
     function name() : string;
 
     /**
-     * Wires the app, by hand: services into the container, actions onto
-     * routes, listeners onto events. Runs before the container is sealed,
-     * after every #[nexus::config] struct is bound, so
-     * `$s->get<DatabaseConfig>()` reads one. An error stops the boot:
-     * the place for work that can fail, such as opening a database.
+     * Wires the app, by hand: services into the container, actions onto routes, listeners onto
+     * events. Runs before the container is sealed, after every #[nexus::config] struct is bound, so
+     * `$s->get<DatabaseConfig>()` reads one. An error stops the boot: the place for work that can
+     * fail, such as opening a database.
      */
     function services(Services& $s) : status<BootError>
     {
@@ -27,17 +25,15 @@ public interface Extension
     }
 
     /**
-     * The commands this extension adds to the app binary, next to
-     * `serve`, `routes` and `doctor`. Runs before the app boots, so it
-     * only records.
+     * The commands this extension adds to the app binary, next to `serve`, `routes` and `doctor`.
+     * Runs before the app boots, so it only records.
      */
     function commands(Commands& $cmds) : void
     {
     }
 
     /**
-     * Adds global middleware. Runs after the container is sealed, so
-     * middleware can come from it.
+     * Adds global middleware. Runs after the container is sealed, so middleware can come from it.
      */
     function middleware(Pipeline& $p, container::Container $services) : void
     {
@@ -52,8 +48,7 @@ public interface Extension
     }
 
     /**
-     * The transport this extension provides, if any. `serve` uses the
-     * first one it finds.
+     * The transport this extension provides, if any. `serve` uses the first one it finds.
      */
     function transport() : Transport?
     {
@@ -61,9 +56,9 @@ public interface Extension
     }
 
     /**
-     * Runs when `serve` (or a command that serves, like `work`) starts,
-     * before the transport listens: the place to start background work,
-     * such as task workers. `$options` says what was asked for.
+     * Runs when `serve` (or a command that serves, like `work`) starts, before the transport
+     * listens: the place to start background work, such as task workers. `$options` says what was
+     * asked for.
      */
     function start(Kernel $kernel, const Serve& $options) : status<BootError>
     {
@@ -71,9 +66,8 @@ public interface Extension
     }
 
     /**
-     * Runs when serving stops, in reverse order, after the transport has
-     * let its last request finish: stop what `start` started and wait for
-     * it, within its grace.
+     * Runs when serving stops, in reverse order, after the transport has let its last request
+     * finish: stop what `start` started and wait for it, within its grace.
      */
     function drain(Kernel $kernel) : void
     {

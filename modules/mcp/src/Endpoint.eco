@@ -1,14 +1,12 @@
 namespace nexus::mcp;
 
 /**
- * The MCP endpoint: one JSON-RPC message per POST, one JSON answer. It
- * speaks `initialize`, `ping`, `tools/list` and `tools/call`; a
- * notification gets a bare 202.
+ * The MCP endpoint: one JSON-RPC message per POST, one JSON answer. It speaks `initialize`, `ping`,
+ * `tools/list` and `tools/call`; a notification gets a bare 202.
  *
- * Every message needs a signed in caller, read by nexus-auth's guards on
- * the MCP door (so a credential good for MCP only works here). Without
- * one the answer is a 401 whose `WWW-Authenticate` names the OAuth
- * metadata, which is how a client finds the sign in.
+ * Every message needs a signed in caller, read by nexus-auth's guards on the MCP door (so a
+ * credential good for MCP only works here). Without one the answer is a 401 whose
+ * `WWW-Authenticate` names the OAuth metadata, which is how a client finds the sign in.
  */
 public class Endpoint : nexus::Action
 {
@@ -33,13 +31,12 @@ public class Endpoint : nexus::Action
         if ($payload->request->contentType() != 'application/json') {
             return Answer::error(json::nil(), .invalidRequest('send the JSON-RPC message as Content-Type: application/json'), 415);
         }
-        $payload->door = nexus::Door::mcp;
+        $payload->door = .mcp;
         nexus::auth::Identity? $who = guard $this->guards->identify($payload) else ($p) {
             return $this->challenge($payload, $p);
         };
         if ($who == null) {
-            nexus::Problem $none = nexus::Problem::unauthorized('this needs a signed in caller');
-            return $this->challenge($payload, $none);
+            return $this->challenge($payload, .unauthorized('this needs a signed in caller'));
         }
         Call $call = guard Call::parse($payload->request->body) else ($e) {
             return Answer::error(json::nil(), $e);
@@ -62,9 +59,13 @@ public class Endpoint : nexus::Action
         return Answer::error($call->id, .methodNotFound($call->method));
     }
 
-    internal function initialize(const json::Value& $params) : json::Value
+    /**
+     * The `initialize` result: the revision the client asked for when it is spoken here, else the
+     * latest, and what this server is.
+     */
+    internal const function initialize(const json::Value& $params) : json::Value
     {
-        Protocol $version = Protocol::parse(Call::text($params, 'protocolVersion')) ?? Protocol::latest();
+        Protocol $version = .parse(Call::text($params, 'protocolVersion')) ?? .latest();
         json::Value $tools = json::object();
         $tools['listChanged'] = json::bool(false);
         json::Value $capabilities = json::object();
@@ -86,12 +87,11 @@ public class Endpoint : nexus::Action
     }
 
     /**
-     * Runs the tool the call names on this request's payload, through the
-     * middleware its class names. Arguments the tool does not take, what a
-     * middleware refuses and what its input decoder refuses come back as a
-     * tool error the model can correct.
+     * Runs the tool the call names on this request's payload, through the middleware its class
+     * names. Arguments the tool does not take, what a middleware refuses and what its input decoder
+     * refuses come back as a tool error the model can correct.
      */
-    internal function call(nexus::Payload& $payload, const Call& $call) : nexus::Response
+    internal const function call(nexus::Payload& $payload, const Call& $call) : nexus::Response
     {
         string $name = Call::text($call->params, 'name');
         ToolSpec $spec = guard $this->tools->find($name) else {
@@ -110,28 +110,27 @@ public class Endpoint : nexus::Action
         }
         foreach (($args->asObject() ?? ordered_map<string, json::Value>()) as $key => const &$value) {
             if (!$spec->takes($key)) {
-                nexus::Response $refused = $payload->fail(nexus::Problem::field($key, 'unknown', "{$name} takes no {$key}"));
+                nexus::Response $refused = $payload->fail(.field($key, 'unknown', "{$name} takes no {$key}"));
                 return Answer::result($call->id, Answer::tool($refused));
             }
         }
         $payload->action = $spec->owner;
-        nexus::Fields $fields = nexus::Fields(json: $spec->unmap($args));
+        $fields = nexus::Fields(json: $spec->unmap($args));
         function<nexus::Response(nexus::Payload&, nexus::Fields&)> $run = $spec->call;
         if ($spec->through->empty()) {
             return Answer::result($call->id, Answer::tool($run($payload, $fields)));
         }
         array<nexus::Middleware> $links = nexus::MiddlewareRef::make($spec->through, $payload->services);
-        nexus::Next $next = nexus::Next(nexus::Chain($links, function[$run, $fields](nexus::Payload& $p) : nexus::Response {
+        $next = nexus::Next(nexus::Chain($links, function[$run, $fields](nexus::Payload& $p) : nexus::Response {
             return $run($p, $fields);
         }));
         return Answer::result($call->id, Answer::tool($next->run($payload)));
     }
 
     /**
-     * No usable credential: the problem, with a pointer to the OAuth
-     * metadata when it is a 401.
+     * No usable credential: the problem, with a pointer to the OAuth metadata when it is a 401.
      */
-    internal function challenge(nexus::Payload& $payload, const nexus::Problem& $p) : nexus::Response
+    internal const function challenge(nexus::Payload& $payload, const nexus::Problem& $p) : nexus::Response
     {
         nexus::Response $res = $payload->fail($p);
         if ($res->status == 401) {

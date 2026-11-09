@@ -9,7 +9,7 @@ public class CreateAuthTables : carbon::Migration
 {
     public function up(carbon::Migrating $m) : status<carbon::Error>
     {
-        guard $m->create(carbon::ddl::Table('auth_tokens')
+        try $m->create(carbon::ddl::Table('auth_tokens')
             ->string('id', 12)
             ->string('hash', 64)
             ->string('subject', 190)
@@ -18,9 +18,7 @@ public class CreateAuthTables : carbon::Migration
             ->datetime('created_at')
             ->datetime('expires_at', $nullable: true)
             ->index(['subject'])
-            ->primary(['id'])) else ($e) {
-            return .error($e);
-        };
+            ->primary(['id']));
         return $m->create(carbon::ddl::Table('auth_sessions')
             ->string('id', 32)
             ->string('subject', 190)
@@ -34,9 +32,7 @@ public class CreateAuthTables : carbon::Migration
 
     public function down(carbon::Migrating $m) : status<carbon::Error>
     {
-        guard $m->drop('auth_sessions') else ($e) {
-            return .error($e);
-        };
+        try $m->drop('auth_sessions');
         return $m->drop('auth_tokens');
     }
 }

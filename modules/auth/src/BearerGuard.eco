@@ -1,9 +1,8 @@
 namespace nexus::auth;
 
 /**
- * Reads `Authorization: Bearer <prefix>_<id>_<secret>`. A bearer token in
- * another shape (another prefix) is left to the guards after it; when none
- * claims it, the request has no credential.
+ * Reads `Authorization: Bearer <prefix>_<id>_<secret>`. A bearer token in another shape (another
+ * prefix) is left to the guards after it; when none claims it, the request has no credential.
  */
 #[atomic]
 public class BearerGuard : Guard
@@ -28,9 +27,7 @@ public class BearerGuard : Guard
         if (Token::parse($tokens->prefix, $text) == null) {
             return .ok(null);
         }
-        Identity $id = guard $tokens->check($text) else ($p) {
-            return .error($p);
-        };
+        Identity $id = try $tokens->check($text);
         return .ok($id);
     }
 

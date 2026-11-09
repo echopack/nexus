@@ -1,72 +1,69 @@
 namespace nexus::work;
 
 /**
- * A task's fields as a JSON object: written by the generated `encode`,
- * read back by the generated `decode`, which notes every missing or
- * mistyped field and answers them together from `done()`.
+ * A task's fields as a JSON object: written by the generated `encode`, read back by the generated
+ * `decode`, which notes every missing or mistyped field and answers them together from `done()`.
  */
 public struct TaskData
 {
-    internal json::Value $object = json::Value::object();
-    internal array<string> $errors = [];
+    internal json::Value $object = .object();
+    internal array<FieldError> $errors = [];
 
     /**
      * Reads a task's data; it must be a JSON object.
      */
-    public static function parse(const string& $text) : result<TaskData, string>
+    public static function parse(const string& $text) : result<TaskData, DataError>
     {
-        json::Value $v = guard json::parse($text) else ($e) {
-            return .error('the task data is not JSON');
+        json::Value $v = guard json::parse($text) else {
+            return .error(.notJson);
         };
         if (!$v->isObject()) {
-            return .error('the task data is not a JSON object');
+            return .error(.notObject);
         }
-        TaskData $p = TaskData();
-        $p->object = $v;
-        return .ok($p);
+        return .ok(TaskData($object: mv $v));
     }
 
     public function put(const string& $name, int64 $value) : void
     {
-        $this->object[$name] = json::Value::int($value);
+        $this->object[$name] = .int($value);
     }
 
     public function put(const string& $name, float64 $value) : void
     {
-        $this->object[$name] = json::Value::float($value);
+        $this->object[$name] = .float($value);
     }
 
     public function put(const string& $name, bool $value) : void
     {
-        $this->object[$name] = json::Value::bool($value);
+        $this->object[$name] = .bool($value);
     }
 
     public function put(const string& $name, const string& $value) : void
     {
-        $this->object[$name] = json::Value::str($value);
+        $this->object[$name] = .str($value);
     }
 
     public function put(const string& $name, const array<string>& $value) : void
     {
-        json::Value $list = json::Value::arr();
+        json::Value $list = .arr();
         foreach ($value as const &$s) {
-            $list[] = json::Value::str($s);
+            $list[] = .str($s);
         }
-        $this->object[$name] = $list;
+        $this->object[$name] = mv $list;
     }
 
     public function put(const string& $name, const array<int64>& $value) : void
     {
-        json::Value $list = json::Value::arr();
+        json::Value $list = .arr();
         foreach ($value as const &$n) {
-            $list[] = json::Value::int($n);
+            $list[] = .int($n);
         }
-        $this->object[$name] = $list;
+        $this->object[$name] = mv $list;
     }
 
     public function nil(const string& $name) : void
     {
-        $this->object[$name] = json::Value::nil();
+        $this->object[$name] = .nil();
     }
 
     /**
@@ -84,7 +81,7 @@ public struct TaskData
         };
         string? $s = $v->asStr();
         if ($s == null) {
-            $this->errors[] = "{$name} is not a string";
+            $this->errors[] = .mistyped($name, 'a string');
         }
         return $s;
     }
@@ -96,7 +93,7 @@ public struct TaskData
         };
         bool? $b = $v->asBool();
         if ($b == null) {
-            $this->errors[] = "{$name} is not true or false";
+            $this->errors[] = .mistyped($name, 'true or false');
         }
         return $b;
     }
@@ -108,7 +105,7 @@ public struct TaskData
         };
         float64? $f = $v->asFloat();
         if ($f == null) {
-            $this->errors[] = "{$name} is not a number";
+            $this->errors[] = .mistyped($name, 'a number');
         }
         return $f;
     }
@@ -120,7 +117,7 @@ public struct TaskData
         };
         int64? $n = $v->asInt();
         if ($n == null) {
-            $this->errors[] = "{$name} is not an integer";
+            $this->errors[] = .mistyped($name, 'an integer');
         }
         return $n;
     }
@@ -131,7 +128,7 @@ public struct TaskData
             return null;
         };
         if ($n < -2147483648 || $n > 2147483647) {
-            $this->errors[] = "{$name} does not fit an int32";
+            $this->errors[] = .overflow($name, 'an int32');
             return null;
         }
         int32 $out = $n as int32;
@@ -144,7 +141,7 @@ public struct TaskData
             return null;
         };
         if ($n < 0 || $n > 65535) {
-            $this->errors[] = "{$name} does not fit a uint16";
+            $this->errors[] = .overflow($name, 'a uint16');
             return null;
         }
         uint16 $out = $n as uint16;
@@ -157,7 +154,7 @@ public struct TaskData
             return null;
         };
         if ($n < 0 || $n > 4294967295) {
-            $this->errors[] = "{$name} does not fit a uint32";
+            $this->errors[] = .overflow($name, 'a uint32');
             return null;
         }
         uint32 $out = $n as uint32;
@@ -170,7 +167,7 @@ public struct TaskData
             return null;
         };
         if ($n < 0) {
-            $this->errors[] = "{$name} is negative";
+            $this->errors[] = .negative($name);
             return null;
         }
         uint64 $out = $n as uint64;
@@ -183,16 +180,16 @@ public struct TaskData
             return null;
         };
         array<json::Value> $items = guard $v->asArray() else {
-            $this->errors[] = "{$name} is not a list";
+            $this->errors[] = .mistyped($name, 'a list');
             return null;
         };
         array<string> $out = [];
         foreach ($items as const &$item) {
             string $s = guard $item->asStr() else {
-                $this->errors[] = "{$name} holds something that is not a string";
+                $this->errors[] = .item($name, 'a string');
                 return null;
             };
-            $out[] = $s;
+            $out[] = mv $s;
         }
         return $out;
     }
@@ -203,13 +200,13 @@ public struct TaskData
             return null;
         };
         array<json::Value> $items = guard $v->asArray() else {
-            $this->errors[] = "{$name} is not a list";
+            $this->errors[] = .mistyped($name, 'a list');
             return null;
         };
         array<int64> $out = [];
         foreach ($items as const &$item) {
             int64 $n = guard $item->asInt() else {
-                $this->errors[] = "{$name} holds something that is not an integer";
+                $this->errors[] = .item($name, 'an integer');
                 return null;
             };
             $out[] = $n;
@@ -218,33 +215,25 @@ public struct TaskData
     }
 
     /**
-     * Every field problem noted, as one message.
+     * Every field error noted, together.
      */
-    public const function done() : status<string>
+    public const function done() : status<DataError>
     {
         if ($this->errors->empty()) {
             return .ok;
         }
-        return .error(str::join($this->errors, '; '));
+        return .error(.fields($this->errors));
     }
 
     /**
-     * The field's value when it is there and not null; notes a missing
-     * required one.
+     * The field's value when it is there and not null; notes a missing required one.
      */
     internal function present(const string& $name, bool $required) : json::Value?
     {
-        json::Value? $found = $this->object->get($name);
-        if ($found == null) {
-            if ($required) {
-                $this->errors[] = "{$name} is missing";
-            }
-            return null;
-        }
-        json::Value $v = guard $found;
+        json::Value $v = $this->object->get($name) ?? .nil();
         if ($v->isNull()) {
             if ($required) {
-                $this->errors[] = "{$name} is missing";
+                $this->errors[] = .missing($name);
             }
             return null;
         }

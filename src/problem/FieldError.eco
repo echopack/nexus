@@ -1,17 +1,15 @@
 namespace nexus;
 
 /**
- * Why one input field was refused. `$code` is stable for clients to switch
- * on (`required`, `type`, `min`, `max`, `email`, `oneOf`, ...) and
- * `$params` holds what the rule was given (`min: 3`); `$message` is for
- * people, in English until `nexus::Messages` renders it in the request's
+ * Why one input field was refused. `$code` is stable for clients to switch on (`required`, `type`,
+ * `min`, `max`, `email`, `oneOf`, ...) and `$params` holds what the rule was given (`min: 3`);
+ * `$message` is for people, in English until `nexus::Messages` renders it in the request's
  * language.
  */
 public struct FieldError
 {
     /**
-     * Where the field is in the whole input: `title`, `posts.1.title`,
-     * `tags.2`.
+     * Where the field is in the whole input: `title`, `posts.1.title`, `tags.2`.
      */
     public string $field;
     public string $code;
@@ -19,22 +17,21 @@ public struct FieldError
     public ordered_map<string, string> $params;
 
     /**
-     * The input type the field belongs to, `blog::NewPost`, and the field's
-     * own name there, without the path: what message catalogs are keyed by.
+     * The input type the field belongs to, `blog::NewPost`, and the field's own name there, without
+     * the path: what message catalogs are keyed by.
      */
     public string $input = '';
     public string $name = '';
 
     /**
-     * What the field holds: `string`, `integer`, `number`, `boolean`,
-     * `list`, `date`, `timestamp`, `enum` or `object`. A rule like `min`
-     * reads differently for each.
+     * What the field holds: `string`, `integer`, `number`, `boolean`, `list`, `date`, `timestamp`,
+     * `enum` or `object`. A rule like `min` reads differently for each.
      */
     public string $kind = '';
 
     /**
-     * How the message calls the field, in English: `#[nexus::label]`, or
-     * the field's name made readable.
+     * How the message calls the field, in English: `#[nexus::label]`, or the field's name made
+     * readable.
      */
     public string $label = '';
 
@@ -55,15 +52,15 @@ public struct FieldError
 
     public const function json() : json::Value
     {
-        json::Value $o = json::object();
+        $o = json::object();
         $o['field'] = json::str($this->field);
         $o['code'] = json::str($this->code);
         $o['message'] = json::str($this->message);
-        json::Value $p = json::object();
+        $p = json::object();
         foreach ($this->params as $k => const &$v) {
             $p[$k] = json::str($v);
         }
-        $o['params'] = $p;
+        $o['params'] = mv $p;
         return $o;
     }
 
@@ -72,30 +69,9 @@ public struct FieldError
      */
     public static function fill(const string& $template, const string& $label, const ordered_map<string, string>& $params) : string
     {
-        string $out = FieldError::swap($template, '{label}', $label);
+        string $out = str::replace($template, '{label}', $label);
         foreach ($params as $k => const &$v) {
-            $out = FieldError::swap($out, "\{{$k}}", $v);
-        }
-        return $out;
-    }
-
-    /**
-     * `$text` with every `$find` replaced by `$with`.
-     */
-    internal static function swap(const string& $text, const string& $find, const string& $with) : string
-    {
-        string $out = '';
-        usize $i = 0;
-        usize $n = $text->size();
-        while ($i < $n) {
-            usize $at = $text->find($find, $i);
-            if ($at >= $n) {
-                $out->append($text->sub($i, $n - $i));
-                break;
-            }
-            $out->append($text->sub($i, $at - $i));
-            $out->append($with);
-            $i = $at + $find->size();
+            $out = str::replace($out, "\{{$k}}", $v);
         }
         return $out;
     }

@@ -1,12 +1,10 @@
 namespace nexus::work;
 
 /**
- * A five-field cron line: minute, hour, day of month, month, weekday
- * (0 or 7 is Sunday). A field is `*`, a number, a range `a-b`, any of
- * those with a step after a slash (`8-18/2`, every second hour from 8 to
- * 18), or a comma list of them. When both
- * the day of month and the weekday are restricted, a day matching either
- * one matches, as cron has it.
+ * A five-field cron line: minute, hour, day of month, month, weekday (0 or 7 is Sunday). A field is
+ * `*`, a number, a range `a-b`, any of those with a step after a slash (`8-18/2`, every second hour
+ * from 8 to 18), or a comma list of them. When both the day of month and the weekday are
+ * restricted, a day matching either one matches, as cron has it.
  */
 public struct Cron
 {
@@ -19,7 +17,10 @@ public struct Cron
     internal bool $anyDay = true;
     internal bool $anyWeekday = true;
 
-    public static function parse(const string& $text) : result<Cron, string>
+    /**
+     * Reads a five-field line.
+     */
+    public static function parse(const string& $text) : result<Cron, CronError>
     {
         array<string> $fields = [];
         foreach (str::split(str::trim($text), ' ') as const &$f) {
@@ -28,35 +29,18 @@ public struct Cron
             }
         }
         if ($fields->count() != 5) {
-            return .error("'{$text}' needs five fields: minute hour day month weekday");
+            return .error(.fields($text));
         }
-        Cron $c = Cron($text: $text);
-        array<bool> $m = guard Cron::field($fields[0], 0, 59, 'minute') else ($e) {
-            return .error($e);
-        };
-        array<bool> $h = guard Cron::field($fields[1], 0, 23, 'hour') else ($e) {
-            return .error($e);
-        };
-        array<bool> $d = guard Cron::field($fields[2], 1, 31, 'day') else ($e) {
-            return .error($e);
-        };
-        array<bool> $mo = guard Cron::field($fields[3], 1, 12, 'month') else ($e) {
-            return .error($e);
-        };
-        array<bool> $w = guard Cron::field($fields[4], 0, 7, 'weekday') else ($e) {
-            return .error($e);
-        };
+        array<bool> $minutes = try Cron::field($fields[0], .minute);
+        array<bool> $hours = try Cron::field($fields[1], .hour);
+        array<bool> $days = try Cron::field($fields[2], .day);
+        array<bool> $months = try Cron::field($fields[3], .month);
+        array<bool> $weekdays = try Cron::field($fields[4], .weekday);
         // 7 is Sunday too
-        if ($w[7]) {
-            $w[0] = true;
+        if ($weekdays[7]) {
+            $weekdays[0] = true;
         }
-        $c->minutes = $m;
-        $c->hours = $h;
-        $c->days = $d;
-        $c->months = $mo;
-        $c->weekdays = $w;
-        $c->anyDay = $fields[2] == '*';
-        $c->anyWeekday = $fields[4] == '*';
+        $c = Cron($text: $text, $minutes: mv $minutes, $hours: mv $hours, $days: mv $days, $months: mv $months, $weekdays: mv $weekdays, $anyDay: $fields[2] == '*', $anyWeekday: $fields[4] == '*');
         return .ok($c);
     }
 
@@ -82,11 +66,13 @@ public struct Cron
     }
 
     /**
-     * The values one field allows, indexed by value, from `$low` to `$high`.
+     * The values `$field` allows, indexed by value, from its lowest to its highest.
      */
-    internal static function field(const string& $text, int64 $low, int64 $high, const string& $what) : result<array<bool>, string>
+    internal static function field(const string& $text, CronField $field) : result<array<bool>, CronError>
     {
-        array<bool> $on = [];
+        int64 $low = $field->low();
+        int64 $high = $field->high();
+        array<bool> $on = arr::room<bool>(($high + 1) as usize);
         int64 $i = 0;
         while ($i <= $high) {
             $on[] = false;
@@ -100,10 +86,10 @@ public struct Cron
             if ($slash < $part->size()) {
                 $range = $part->sub(0, $slash);
                 uint64 $s = guard str::uint($part->sub($slash + 1, $part->size() - $slash - 1)) else {
-                    return .error("the {$what} step in '{$text}' is not a number");
+                    return .error(.step($field, $text));
                 };
                 if ($s == 0) {
-                    return .error("the {$what} step in '{$text}' is zero");
+                    return .error(.zeroStep($field, $text));
                 }
                 $step = $s as int64;
             }
@@ -113,16 +99,16 @@ public struct Cron
                 usize $dash = $range->find('-');
                 if ($dash < $range->size()) {
                     uint64 $a = guard str::uint($range->sub(0, $dash)) else {
-                        return .error("'{$part}' is not a {$what} range");
+                        return .error(.range($field, $part));
                     };
                     uint64 $b = guard str::uint($range->sub($dash + 1, $range->size() - $dash - 1)) else {
-                        return .error("'{$part}' is not a {$what} range");
+                        return .error(.range($field, $part));
                     };
                     $from = $a as int64;
                     $to = $b as int64;
                 } else {
                     uint64 $one = guard str::uint($range) else {
-                        return .error("'{$part}' is not a {$what}");
+                        return .error(.value($field, $part));
                     };
                     $from = $one as int64;
                     $to = $from;
@@ -133,7 +119,7 @@ public struct Cron
                 }
             }
             if ($from < $low || $to > $high || $from > $to) {
-                return .error("'{$part}' is outside the {$what}s {$low} to {$high}");
+                return .error(.outside($field, $part));
             }
             int64 $v = $from;
             while ($v <= $to) {

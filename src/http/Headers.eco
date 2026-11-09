@@ -1,8 +1,8 @@
 namespace nexus;
 
 /**
- * The headers of a request or response, in order. Names compare without
- * regard to case; a name may repeat (`Set-Cookie`).
+ * The headers of a request or response, in order. Names compare without regard to case; a name may
+ * repeat (`Set-Cookie`).
  */
 public struct Headers
 {

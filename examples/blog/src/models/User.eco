@@ -3,9 +3,9 @@ namespace blog;
 use std::time;
 
 /**
- * Someone who writes posts, and signs in to do it. Everyone sees the
- * default shape (`UserMapping`); the email (sensitive) and the role are
- * only in the `admin` shape (`UserAdminMapping`), which only admins get.
+ * Someone who writes posts, and signs in to do it. Everyone sees the default shape (`UserMapping`);
+ * the email (sensitive) and the role are only in the `admin` shape (`UserAdminMapping`), which only
+ * admins get.
  */
 #[carbon::model: 'users']
 #[nexus::shapes: [{ name: 'admin', sensitive: true }]]

@@ -1,9 +1,8 @@
 namespace nexusgen;
 
 /**
- * An action (or an MCP tool class, which is read the same way): its
- * `handle()` parameters and return type, and whether nexus gen writes the
- * code that offers it as a tool.
+ * An action (or an MCP tool class, which is read the same way): its `handle()` parameters and
+ * return type, and whether nexus gen writes the code that offers it as a tool.
  */
 public struct ActionDecl
 {
@@ -13,11 +12,12 @@ public struct ActionDecl
     public array<Param> $params = [];
 
     /**
-     * The transformer `#[nexus::answers]` names, and whether it answers
-     * one model (`response`) or a list (`collection`).
+     * The transformer `#[nexus::answers]` names, and whether it answers one model (`response`) or a
+     * list (`collection`).
      */
     public string $answers = '';
     public string $answersAs = '';
+
     /**
      * The middleware `#[nexus::through]` names, outermost first.
      */
@@ -26,8 +26,7 @@ public struct ActionDecl
     public string $returnText = '';
 
     /**
-     * Whether it can be offered over MCP; the app offers it, under the
-     * name it picks.
+     * Whether it can be offered over MCP; the app offers it, under the name it picks.
      */
     public bool $offered = false;
     public ToolMeta $tool = ToolMeta();

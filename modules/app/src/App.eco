@@ -3,10 +3,9 @@ namespace nexus;
 use container::{Container, Entry};
 
 /**
- * The app's wiring: the container, the actions and a helper per door the
- * other modules bring. The app lists its providers, one per part of it,
- * and hands them to both hooks: the command line reads the commands
- * before the boot, the rest is wired at boot.
+ * The app's wiring: the container, the actions and a helper per door the other modules bring. The
+ * app lists its providers, one per part of it, and hands them to both hooks: the command line reads
+ * the commands before the boot, the rest is wired at boot.
  *
  * ```echo
  * public function providers() : array<nexus::Provider>
@@ -28,11 +27,10 @@ use container::{Container, Entry};
  * }
  * ```
  *
- * A binding names its lifetime: `scoped:` once per request, `shared:`
- * once for the whole app, `factory:` fresh on every get. A loader is a
- * short callback that builds the type, from the container when it needs
- * something; an action is built per request. Links to any action come
- * from `nexus::Router`, bound like any other service:
+ * A binding names its lifetime: `scoped:` once per request, `shared:` once for the whole app,
+ * `factory:` fresh on every get. A loader is a short callback that builds the type, from the
+ * container when it needs something; an action is built per request. Links to any action come from
+ * `nexus::Router`, bound like any other service:
  *
  * ```echo
  * $app->bind<PostService>(scoped: (Container $c) => PostService($c->get<PostRepository>(), $c->get<UserRepository>()));
@@ -44,10 +42,9 @@ use container::{Container, Entry};
  *     ->route([.get], '/v1/posts/{id}');
  * ```
  *
- * The boot builds every binding once in a throwaway request, so a missing
- * binding, a cycle or a shared service that takes a per-request one stops
- * the boot with its chain. List nexus-mcp and nexus-work before the app
- * when it offers tools or binds tasks; a helper that finds its module
+ * The boot builds every binding once in a throwaway request, so a missing binding, a cycle or a
+ * shared service that takes a per-request one stops the boot with its chain. List nexus-mcp and
+ * nexus-work before the app when it offers tools or binds tasks; a helper that finds its module
  * missing stops the boot with a line that says so.
  */
 public class App
@@ -57,15 +54,10 @@ public class App
      */
     public nexus::Services $services;
 
-    public constructor(nexus::Services $services)
-    {
-        $this->services = $services;
-    }
-
     /**
      * Wiring for `$providers`, each registered in order.
      */
-    public constructor(nexus::Services $services, const array<Provider>& $providers)
+    public constructor(nexus::Services $services, const array<Provider>& $providers = array<Provider>())
     {
         $this->services = $services;
         foreach ($providers as $p) {
@@ -82,8 +74,8 @@ public class App
     }
 
     /**
-     * Lets each of `$providers` add its commands, from the extension's
-     * `commands()`; the command line reads them before the app boots.
+     * Lets each of `$providers` add its commands, from the extension's `commands()`; the command
+     * line reads them before the app boots.
      */
     public static function commands(nexus::Commands& $cmds, const array<Provider>& $providers) : void
     {
@@ -95,8 +87,8 @@ public class App
     // the container ----------------------------------------------------------
 
     /**
-     * Binds `T` once per request, built by `$make` from the container;
-     * the usual lifetime for a service.
+     * Binds `T` once per request, built by `$make` from the container; the usual lifetime for a
+     * service.
      */
     public function bind<T>(scoped: function<T(Container)> $make) : Entry<T>
     {
@@ -104,8 +96,7 @@ public class App
     }
 
     /**
-     * Binds `T` once per request, built by `$make`, which needs nothing
-     * from the container.
+     * Binds `T` once per request, built by `$make`, which needs nothing from the container.
      */
     public function bind<T>(scoped: function<T()> $make) : Entry<T>
     {
@@ -113,9 +104,8 @@ public class App
     }
 
     /**
-     * Binds `T` once for the whole app, built by `$make` from the container
-     * the first time it is asked for. It must not take a per-request
-     * service; the boot stops when it does.
+     * Binds `T` once for the whole app, built by `$make` from the container the first time it is
+     * asked for. It must not take a per-request service; the boot stops when it does.
      */
     public function bind<T>(shared: function<T(Container)> $make) : Entry<T>
     {
@@ -123,8 +113,7 @@ public class App
     }
 
     /**
-     * Binds `T` once for the whole app, built by `$make`, which needs
-     * nothing from the container.
+     * Binds `T` once for the whole app, built by `$make`, which needs nothing from the container.
      */
     public function bind<T>(shared: function<T()> $make) : Entry<T>
     {
@@ -132,8 +121,7 @@ public class App
     }
 
     /**
-     * Binds `T` fresh on every `get`, built by `$make` from the container;
-     * nothing keeps it.
+     * Binds `T` fresh on every `get`, built by `$make` from the container; nothing keeps it.
      */
     public function bind<T>(factory: function<T(Container)> $make) : Entry<T>
     {
@@ -141,8 +129,7 @@ public class App
     }
 
     /**
-     * Binds `T` fresh on every `get`, built by `$make`, which needs nothing
-     * from the container.
+     * Binds `T` fresh on every `get`, built by `$make`, which needs nothing from the container.
      */
     public function bind<T>(factory: function<T()> $make) : Entry<T>
     {
@@ -182,8 +169,8 @@ public class App
     }
 
     /**
-     * Replaces the binding of `T` an earlier extension made, once per request,
-     * with one that needs nothing from the container.
+     * Replaces the binding of `T` an earlier extension made, once per request, with one that needs
+     * nothing from the container.
      */
     public function replace<T>(scoped: function<T()> $make) : Entry<T>
     {
@@ -199,8 +186,8 @@ public class App
     }
 
     /**
-     * Replaces the binding of `T` an earlier extension made, once for the whole app,
-     * with one that needs nothing from the container.
+     * Replaces the binding of `T` an earlier extension made, once for the whole app, with one that
+     * needs nothing from the container.
      */
     public function replace<T>(shared: function<T()> $make) : Entry<T>
     {
@@ -216,8 +203,8 @@ public class App
     }
 
     /**
-     * Replaces the binding of `T` an earlier extension made, fresh on every `get`,
-     * with one that needs nothing from the container.
+     * Replaces the binding of `T` an earlier extension made, fresh on every `get`, with one that
+     * needs nothing from the container.
      */
     public function replace<T>(factory: function<T()> $make) : Entry<T>
     {
@@ -235,8 +222,8 @@ public class App
     // actions and events -----------------------------------------------------
 
     /**
-     * Binds action `A` once per request, built by `$make` from the
-     * container; `->route()` says where it answers.
+     * Binds action `A` once per request, built by `$make` from the container; `->route()` says
+     * where it answers.
      */
     public function bindAction<A>(function<A(Container)> $make) : nexus::app::ActionRef<A>
     {
@@ -245,8 +232,7 @@ public class App
     }
 
     /**
-     * Binds action `A` once per request, built by `$make`, which needs
-     * nothing from the container.
+     * Binds action `A` once per request, built by `$make`, which needs nothing from the container.
      */
     public function bindAction<A>(function<A()> $make) : nexus::app::ActionRef<A>
     {
@@ -255,8 +241,7 @@ public class App
     }
 
     /**
-     * The action `A` bound already, by a `bind` or another extension, to
-     * route it.
+     * The action `A` bound already, by a `bind` or another extension, to route it.
      */
     public function action<A>() : nexus::app::ActionRef<A>
     {
@@ -264,24 +249,23 @@ public class App
     }
 
     /**
-     * The route table, to build links with: empty while the app is wired,
-     * so keep it and ask for links when a request comes. A loader takes it
-     * from the container instead, `$c->get<nexus::Router>()`.
+     * The route table, to build links with: empty while the app is wired, so keep it and ask for
+     * links when a request comes. A loader takes it from the container instead,
+     * `$c->get<nexus::Router>()`.
      *
      * ```echo
      * $app->bindTransformer<Post, PostTransformer>(PostTransformer($app->router()));
      * ```
      */
-    public function router() : nexus::Router
+    public const function router() : nexus::Router
     {
         return $this->services->router;
     }
 
     /**
-     * Wraps every request in middleware `M`, taken from the request's
-     * container each time, so it may take per-request services; bind `M`
-     * like any other. An action names the middleware only it goes through
-     * in `#[nexus::through]` instead.
+     * Wraps every request in middleware `M`, taken from the request's container each time, so it
+     * may take per-request services; bind `M` like any other. An action names the middleware only
+     * it goes through in `#[nexus::through]` instead.
      *
      * ```echo
      * $app->bind<ServerTiming>(scoped: () => ServerTiming());
@@ -304,8 +288,7 @@ public class App
     // transformers and repositories ------------------------------------------
 
     /**
-     * Registers a `T()` as the transformer of model `M`, shared, in the
-     * app's transformer network.
+     * Registers a `T()` as the transformer of model `M`, shared, in the app's transformer network.
      */
     public function bindTransformer<M, T>() : void
     {
@@ -313,8 +296,7 @@ public class App
     }
 
     /**
-     * Registers `$made` as the transformer of model `M`: for one that
-     * takes constructor arguments.
+     * Registers `$made` as the transformer of model `M`: for one that takes constructor arguments.
      */
     public function bindTransformer<M, T>(T $made) : void
     {
@@ -322,8 +304,7 @@ public class App
     }
 
     /**
-     * Binds repository `R` per request, from the request's database
-     * session.
+     * Binds repository `R` per request, from the request's database session.
      */
     public function bindRepository<R>() : void
     {
@@ -333,8 +314,8 @@ public class App
     // tools and tasks ---------------------------------------------------------
 
     /**
-     * Binds MCP tool class `T` once per call, built by `$make` from the
-     * container; `->offer()` says what MCP calls it.
+     * Binds MCP tool class `T` once per call, built by `$make` from the container; `->offer()` says
+     * what MCP calls it.
      */
     public function bindTool<T>(function<T(Container)> $make) : nexus::app::ToolRef<T>
     {
@@ -343,8 +324,8 @@ public class App
     }
 
     /**
-     * Binds MCP tool class `T` once per call, built by `$make`, which
-     * needs nothing from the container.
+     * Binds MCP tool class `T` once per call, built by `$make`, which needs nothing from the
+     * container.
      */
     public function bindTool<T>(function<T()> $make) : nexus::app::ToolRef<T>
     {
@@ -353,8 +334,8 @@ public class App
     }
 
     /**
-     * Binds task type `T` on the `default` queue, tried three times;
-     * `->queue()`, `->tries()`, `->every()` and `->cron()` change that.
+     * Binds task type `T` on the `default` queue, tried three times; `->queue()`, `->tries()`,
+     * `->every()` and `->cron()` change that.
      */
     public function bindTask<T>() : nexus::app::TaskRef<T>
     {

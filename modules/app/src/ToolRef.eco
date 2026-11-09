@@ -1,8 +1,7 @@
 namespace nexus::app;
 
 /**
- * The MCP tool class `bindTool` just bound, for the name MCP offers it
- * under:
+ * The MCP tool class `bindTool` just bound, for the name MCP offers it under:
  *
  * ```echo
  * $app->bindTool<CreatePostTool>((Container $c) => CreatePostTool($c->get<PostService>()))
@@ -19,9 +18,8 @@ public class ToolRef<T>
     }
 
     /**
-     * Offers the tool as `$name`. The description defaults to `T`'s
-     * docblock; the arguments are its input's fields, named as the input
-     * names them.
+     * Offers the tool as `$name`. The description defaults to `T`'s docblock; the arguments are its
+     * input's fields, named as the input names them.
      */
     public function offer(
         const string& $name,

@@ -1,0 +1,48 @@
+namespace nexus::work;
+
+/**
+ * Why one field of a task's data does not read.
+ */
+public enum FieldError
+{
+    /**
+     * A required field is absent or null.
+     */
+    case missing(string $name);
+
+    /**
+     * The field holds another JSON type than `$want`, like `an integer`.
+     */
+    case mistyped(string $name, string $want);
+
+    /**
+     * The integer does not fit `$type`, like `an int32`.
+     */
+    case overflow(string $name, string $type);
+
+    /**
+     * An unsigned field holds a negative integer.
+     */
+    case negative(string $name);
+
+    /**
+     * A list holds an item that is not `$want`.
+     */
+    case item(string $name, string $want);
+}
+
+namespace str;
+
+/**
+ * The field and what is wrong with it.
+ */
+public function from(const nexus::work::FieldError& $e) : string
+{
+    return match ($e) {
+        nexus::work::FieldError::missing($name) => "{$name} is missing",
+        nexus::work::FieldError::mistyped($name, $want) => "{$name} is not {$want}",
+        nexus::work::FieldError::overflow($name, $type) => "{$name} does not fit {$type}",
+        nexus::work::FieldError::negative($name) => "{$name} is negative",
+        nexus::work::FieldError::item($name, $want) => "{$name} holds something that is not {$want}",
+    };
+}

@@ -1,0 +1,17 @@
+namespace nexus::oauth;
+
+/**
+ * How the rotation of a grant on a refresh went.
+ */
+public enum Rotation
+{
+    /**
+     * The grant still had the refresh hash that was read, and now holds the new tokens.
+     */
+    case won;
+
+    /**
+     * Another refresh rotated the grant first; nothing was saved.
+     */
+    case lost;
+}

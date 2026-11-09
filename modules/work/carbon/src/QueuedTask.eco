@@ -31,6 +31,10 @@ public class QueuedTask : carbon::Model<QueuedTask, QueuedTaskRepository>
         return $this->link;
     }
 
+    /**
+     * The row for `$j`. A static, not a constructor: the model keeps its memberwise constructor,
+     * which carbon reads rows back with.
+     */
     public static function of(const nexus::work::StoredTask& $j) : QueuedTask
     {
         string? $key = null;

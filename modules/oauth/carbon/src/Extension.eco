@@ -3,15 +3,14 @@ namespace nexus::oauth::carbon;
 use container::{Builder, Container};
 
 /**
- * Keeps nexus-oauth's clients, codes and grants in the app's carbon
- * database: binds `OAuthStore` on each request's `carbon::Session`. List
- * it after nexus-carbon, with nexus-oauth set to `stores: .provided`; the
- * app wires the tables on its database and runs the migration with its
+ * Keeps nexus-oauth's clients, codes and grants in the app's carbon database: binds `OAuthStore` on
+ * each request's `carbon::Session`. List it after nexus-carbon, with nexus-oauth set to
+ * `stores: .provided`; the app wires the tables on its database and runs the migration with its
  * own:
  *
  * ```echo
  * // the database the app opens
- * guard nexus::oauth::carbon::Tables::wire($db) else ($e) { return .error($e); };
+ * try nexus::oauth::carbon::Tables::wire($db);
  *
  * // main.eco
  * nexus::oauth::Extension(stores: .provided),

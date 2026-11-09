@@ -1,9 +1,9 @@
 namespace nexus::log;
 
 /**
- * What a logger stamps on every entry: one node per `with` or `span`,
- * pointing at its parent. Nodes never change once built, so children and
- * entries share them across threads instead of copying the fields.
+ * What a logger stamps on every entry: one node per `with` or `span`, pointing at its parent. Nodes
+ * never change once built, so children and entries share them across threads instead of copying the
+ * fields.
  */
 #[atomic]
 public class Context
@@ -21,8 +21,7 @@ public class Context
     public const bool $opens;
 
     /**
-     * The innermost span at this node, its id and its parent's id. Empty
-     * outside any span.
+     * The innermost span at this node, its id and its parent's id. Empty outside any span.
      */
     public const string $span;
     public const string $spanId;
@@ -34,20 +33,11 @@ public class Context
     public constructor(Context? $parent, Fields $fields)
     {
         $this->parent = $parent;
-        $this->fields = $fields;
+        $this->fields = mv $fields;
         $this->opens = false;
-        string $span = '';
-        string $id = '';
-        string $up = '';
-        if ($parent != null) {
-            Context $p = guard $parent;
-            $span = $p->span;
-            $id = $p->spanId;
-            $up = $p->parentId;
-        }
-        $this->span = $span;
-        $this->spanId = $id;
-        $this->parentId = $up;
+        $this->span = $parent?->span ?? '';
+        $this->spanId = $parent?->spanId ?? '';
+        $this->parentId = $parent?->parentId ?? '';
     }
 
     /**
@@ -56,21 +46,16 @@ public class Context
     public constructor(Context? $parent, Fields $fields, span: string $name, id: string $id)
     {
         $this->parent = $parent;
-        $this->fields = $fields;
+        $this->fields = mv $fields;
         $this->opens = true;
-        $this->span = $name;
-        $this->spanId = $id;
-        string $up = '';
-        if ($parent != null) {
-            Context $p = guard $parent;
-            $up = $p->spanId;
-        }
-        $this->parentId = $up;
+        $this->span = mv $name;
+        $this->spanId = mv $id;
+        $this->parentId = $parent?->spanId ?? '';
     }
 
     /**
-     * Adds the fields of every node from the root down to this one into
-     * `$into`; a nearer node's value wins.
+     * Adds the fields of every node from the root down to this one into `$into`; a nearer node's
+     * value wins.
      */
     public const function collect(Fields& $into) : void
     {

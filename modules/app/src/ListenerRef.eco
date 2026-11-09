@@ -17,8 +17,7 @@ public class ListenerRef<L>
     }
 
     /**
-     * Runs `L::handle` whenever an `E` is emitted. Call it again for
-     * another event `L` handles.
+     * Runs `L::handle` whenever an `E` is emitted. Call it again for another event `L` handles.
      */
     public function on<E>() : ListenerRef<L>
     {

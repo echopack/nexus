@@ -1,10 +1,9 @@
 namespace nexus;
 
 /**
- * One option of a `Command`: a flag (`--force`), a value (`--to <id>`), a
- * list (`--tag <t>`, given again for each) or a positional word
- * (`posts:show <id>`). Two commands may share an option by name, as long
- * as they spell it the same way.
+ * One option of a `Command`: a flag (`--force`), a value (`--to <id>`), a list (`--tag <t>`, given
+ * again for each) or a positional word (`posts:show <id>`). Two commands may share an option by
+ * name, as long as they spell it the same way.
  */
 public struct CommandOption
 {
@@ -32,8 +31,8 @@ public struct CommandOption
      */
     public constructor(flag: string $name, string $summary)
     {
-        $this->name = $name;
-        $this->summary = $summary;
+        $this->name = mv $name;
+        $this->summary = mv $summary;
         $this->kind = OptionKind::flag;
     }
 
@@ -42,10 +41,10 @@ public struct CommandOption
      */
     public constructor(value: string $name, string $metavar, string $summary, string $fallback = '')
     {
-        $this->name = $name;
-        $this->metavar = $metavar;
-        $this->summary = $summary;
-        $this->fallback = $fallback;
+        $this->name = mv $name;
+        $this->metavar = mv $metavar;
+        $this->summary = mv $summary;
+        $this->fallback = mv $fallback;
         $this->kind = OptionKind::value;
     }
 
@@ -54,21 +53,20 @@ public struct CommandOption
      */
     public constructor(list: string $name, string $metavar, string $summary)
     {
-        $this->name = $name;
-        $this->metavar = $metavar;
-        $this->summary = $summary;
+        $this->name = mv $name;
+        $this->metavar = mv $metavar;
+        $this->summary = mv $summary;
         $this->kind = OptionKind::list;
     }
 
     /**
-     * A word after the command's name; positionals are read in the order
-     * the command lists them.
+     * A word after the command's name; positionals are read in the order the command lists them.
      */
     public constructor(positional: string $name, string $metavar, string $summary, bool $required)
     {
-        $this->name = $name;
-        $this->metavar = $metavar;
-        $this->summary = $summary;
+        $this->name = mv $name;
+        $this->metavar = mv $metavar;
+        $this->summary = mv $summary;
         $this->required = $required;
         $this->kind = OptionKind::positional;
     }

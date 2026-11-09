@@ -5,11 +5,11 @@
 use nexus::{Problem, ProblemDetail, FieldError, Method, Mode, Response};
 use ecotest::expect;
 
-test not_found_document
+test not_found_renders_a_problem_document
 {
-    Problem $p = Problem::notFound('post');
+    Problem $p = .notFound('post');
     expect($p->status())->is(404);
-    Response $r = $p->response(Mode::prod, 'req1');
+    $r = $p->response(.prod, 'req1');
     expect($r->status)->is(404);
     expect($r->header('Content-Type'))->some('application/problem+json');
     expect($r->body)->is('{"type":"about:blank","title":"Not Found","status":404,"detail":"post not found","requestId":"req1"}');
@@ -17,30 +17,30 @@ test not_found_document
 
 test server_cause_is_hidden_in_prod
 {
-    Problem $p = Problem::server('db exploded');
+    Problem $p = .server('db exploded');
     expect($p->fault())->yes(says: 'a server problem is a fault');
-    expect($p->detail(Mode::dev))->is('db exploded');
-    expect($p->detail(Mode::prod))->is('the server failed to answer this request');
+    expect($p->detail(.dev))->is('db exploded');
+    expect($p->detail(.prod))->is('the server failed to answer this request');
 }
 
 test invalid_lists_fields
 {
-    Problem $p = Problem::field('title', 'min', 'at least 3 characters');
-    json::Value $doc = $p->json(Mode::dev, '');
+    Problem $p = .field('title', 'min', 'at least 3 characters');
+    $doc = $p->json(.dev, '');
     expect($p->status())->is(422);
     expect($doc['errors'][0]['code']->asStr())->some('min');
 }
 
 test method_not_allowed_sets_allow
 {
-    array<Method> $allow = [Method::get, Method::head];
-    Response $r = Problem::methodNotAllowed($allow)->response(Mode::dev, '');
+    array<Method> $allow = [.get, .head];
+    Response $r = Problem::methodNotAllowed($allow)->response(.dev, '');
     expect($r->header('Allow'))->some('GET, HEAD');
 }
 
 test too_many_sets_retry_after
 {
-    Response $r = Problem::tooMany(30)->response(Mode::dev, '');
+    Response $r = Problem::tooMany(30)->response(.dev, '');
     expect($r->header('Retry-After'))->some('30');
 }
 
@@ -48,9 +48,9 @@ test custom_problem_keeps_extras
 {
     json::Value $extra = json::object();
     $extra['balance'] = 30;
-    ProblemDetail $d = ProblemDetail('https://example.com/probs/out-of-credit', 403, 'You do not have enough credit.', $detail: 'balance is 30, cost is 50', $extra: $extra);
-    Problem $p = Problem::custom($d);
-    json::Value $doc = $p->json(Mode::prod, '');
+    $d = ProblemDetail('https://example.com/probs/out-of-credit', 403, 'You do not have enough credit.', $detail: 'balance is 30, cost is 50', $extra: $extra);
+    Problem $p = .custom($d);
+    $doc = $p->json(.prod, '');
     expect($doc['balance']->asInt())->some(30);
     expect($p->status())->is(403);
     expect($doc['type']->asStr())->some('https://example.com/probs/out-of-credit');

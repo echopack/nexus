@@ -3,10 +3,9 @@ namespace nexus::oauth;
 use std::time;
 
 /**
- * Dynamic client registration (RFC 7591). Anyone may register, since
- * registering grants nothing: ten tries per address in fifteen minutes,
- * at most `OAUTH_CLIENTS` clients, and clients never used are swept after
- * an hour.
+ * Dynamic client registration (RFC 7591). Anyone may register, since registering grants nothing:
+ * ten tries per address in fifteen minutes, at most `OAUTH_CLIENTS` clients, and clients never used
+ * are swept after an hour.
  */
 public class Register : nexus::Action
 {
@@ -27,7 +26,7 @@ public class Register : nexus::Action
     {
         time::timestamp $now = $this->clock->now();
         if (!$this->throttle->take($payload->request->peer, $now)) {
-            return OAuthError('slow_down', 'too many registrations from this address; try again later', 429)->response();
+            return OAuthError::slowDown('too many registrations from this address; try again later')->response();
         }
         json::Value $body = guard json::parse($payload->request->body) else {
             return Register::refuse('the body is not JSON');
@@ -51,37 +50,36 @@ public class Register : nexus::Action
         }
         array<string> $uris = Register::texts($body, 'redirect_uris');
         if ($uris->empty() || $uris->count() > 10) {
-            return OAuthError('invalid_redirect_uri', 'redirect_uris needs one to ten URIs')->response();
+            return OAuthError::invalidRedirectUri('redirect_uris needs one to ten URIs')->response();
         }
         foreach ($uris as const &$u) {
-            RedirectUri $checked = guard RedirectUri::parse($u) else ($e) {
-                return OAuthError('invalid_redirect_uri', $e)->response();
+            guard RedirectUri::parse($u) else ($e) {
+                return OAuthError::invalidRedirectUri("{$e}")->response();
             };
         }
         guard $this->store->sweep($now - time::duration::hours(1)) else ($p) {
-            return OAuthError::of($p)->response();
+            return OAuthError::from($p)->response();
         };
         uint64 $count = guard $this->store->clients() else ($p) {
-            return OAuthError::of($p)->response();
+            return OAuthError::from($p)->response();
         };
         if ($count >= $this->config->clients as uint64) {
-            return OAuthError('temporarily_unavailable', 'too many clients are registered right now; try again later', 503)->response();
+            return OAuthError::unavailable('too many clients are registered right now; try again later')->response();
         }
-        Client $client = Client($id: nexus::auth::Secrets::hex(16), $name: Register::clean(Register::text($body, 'client_name')),
-            $redirects: $uris, $createdAt: $now);
+        $client = Client($id: nexus::auth::Secrets::hex(16), $name: Register::clean(Register::text($body, 'client_name')),
+            $redirects: mv $uris, $createdAt: $now);
         guard $this->store->register($client) else ($p) {
-            return OAuthError::of($p)->response();
+            return OAuthError::from($p)->response();
         };
         $this->throttle->refund($payload->request->peer);
-        nexus::Response $res = nexus::Response(json: $client->json(), status: 201);
+        $res = nexus::Response(json: $client->json(), status: 201);
         $res->header('Cache-Control', 'no-store');
         return $res;
     }
 
     /**
-     * A name the consent page can show: no control characters and nothing
-     * that turns the text around it, at most 100 bytes, `MCP client` when
-     * nothing is left.
+     * A name the consent page can show: no control characters and nothing that turns the text
+     * around it, at most 100 bytes, `MCP client` when nothing is left.
      */
     public static function clean(const string& $raw) : string
     {
@@ -119,7 +117,7 @@ public class Register : nexus::Action
 
     internal static function refuse(const string& $why) : nexus::Response
     {
-        return OAuthError('invalid_client_metadata', $why)->response();
+        return OAuthError::invalidClientMetadata($why)->response();
     }
 
     internal static function text(const json::Value& $o, const string& $key) : string

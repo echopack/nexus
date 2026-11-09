@@ -1,9 +1,8 @@
 namespace nexus::work;
 
 /**
- * What `nexus gen` wrote for one task type: its name (the struct's
- * qualified name), how its data runs, and the data of the task with
- * every default, empty when a field has none.
+ * What `nexus gen` wrote for one task type: its name (the struct's qualified name), how its data
+ * runs, and the data of the task with every default, empty when a field has none.
  */
 public struct Codec
 {

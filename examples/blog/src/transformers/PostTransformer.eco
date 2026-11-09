@@ -1,8 +1,8 @@
 namespace blog;
 
 /**
- * A post as the API shows it: what `Post` exposes (`PostMapping`, its
- * author when the request includes `author`), and the link to itself.
+ * A post as the API shows it: what `Post` exposes (`PostMapping`, its author when the request
+ * includes `author`), and the link to itself.
  */
 #[atomic]
 public class PostTransformer : nexus::rest::Transformer<Post>, PostMapping

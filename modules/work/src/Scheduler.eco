@@ -4,11 +4,10 @@ use std::thread;
 use std::time;
 
 /**
- * Pushes scheduled tasks when they are due. Each push carries the key
- * `name@slot`, and the queue keeps a key once, so any number of processes
- * may schedule and a slot still runs once. Slots missed while nothing
- * ran are not caught up, except the one a restart lands in within a
- * minute. Once an hour it deletes done runs older than `WORK_KEEP`.
+ * Pushes scheduled tasks when they are due. Each push carries the key `name@slot`, and the queue
+ * keeps a key once, so any number of processes may schedule and a slot still runs once. Slots
+ * missed while nothing ran are not caught up, except the one a restart lands in within a minute.
+ * Once an hour it deletes done runs older than `WORK_KEEP`.
  */
 #[atomic]
 public class Scheduler
@@ -30,27 +29,25 @@ public class Scheduler
     }
 
     /**
-     * Pushes every scheduled task due by `$now` that this scheduler has not
-     * pushed yet; answers how many the queue stored (another process may
-     * have stored a slot first).
+     * Pushes every scheduled task due by `$now` that this scheduler has not pushed yet; answers how
+     * many the queue stored (another process may have stored a slot first).
      */
     public function tick(nexus::Kernel $k, time::timestamp $now) : uint32
     {
         uint32 $stored = 0;
         foreach ($this->work->planned as const &$p) {
-            time::timestamp $after = $this->lastOf($p->kind->name);
-            time::timestamp $slot = guard $p->schedule->due($after, $now, $this->work->zone) else {
+            time::timestamp $slot = guard $p->schedule->due($this->lastOf($p->kind->name), $now, $this->work->zone) else {
                 continue;
             };
             int64 $secs = $slot->unix_secs();
             string $key = "{$p->kind->name}@{$secs}";
             nexus::Payload $payload = $k->background('scheduler', nexus::Kernel::id());
-            bool $fresh = guard Tasks::store($payload, $p->kind, $p->kind->data, $slot, $key) else ($e) {
-                $payload->log->error('cannot push a scheduled task', ['task' => $p->kind->name, 'detail' => $e->detail(nexus::Mode::dev)]);
+            Pushed $pushed = guard Tasks::store($payload, $p->kind, $p->kind->data, $slot, $key) else ($e) {
+                $payload->log->error('cannot push a scheduled task', ['task' => $p->kind->name, 'detail' => $e->detail(.dev)]);
                 nexus::Kernel::finish($payload);
                 continue;
             };
-            if ($fresh) {
+            if ($pushed == Pushed::stored) {
                 $payload->log->info('scheduled', ['task' => $p->kind->name, 'slot' => $secs]);
                 $stored = $stored + 1;
             }
@@ -67,12 +64,12 @@ public class Scheduler
      */
     public function start(nexus::Kernel $k) : status<nexus::BootError>
     {
-        Scheduler $self = $this;
-        calendar::Clock $clock = $this->work->clock;
+        $self = $this;
+        $clock = $this->work->clock;
         thread::handle $t = guard thread::spawn(function[$self, $k, $clock]() : void {
             while (!$self->halt->raised()) {
                 $self->tick($k, $clock->now());
-                Workers::nap($self->halt, time::duration::secs(1));
+                Workers::nap($self->halt, .secs(1));
             }
         }) else {
             return .error(.extension('nexus-work', 'cannot start the scheduler thread'));
@@ -92,7 +89,7 @@ public class Scheduler
         $held->value = array<thread::handle>();
     }
 
-    internal function lastOf(const string& $name) : time::timestamp
+    internal const function lastOf(const string& $name) : time::timestamp
     {
         thread::locked<map<string, time::timestamp>> $held = $this->last->lock();
         if ($held->value->has($name)) {
@@ -112,9 +109,8 @@ public class Scheduler
         }
         $held->value = $now;
         nexus::Payload $payload = $k->background('scheduler', nexus::Kernel::id());
-        Queue $q = $payload->get<Queue>();
-        uint64 $gone = guard $q->prune($now - $this->work->config->keep) else ($e) {
-            $payload->log->error('cannot prune done tasks', ['detail' => $e->detail(nexus::Mode::dev)]);
+        uint64 $gone = guard $payload->get<Queue>()->prune($now - $this->work->config->keep) else ($e) {
+            $payload->log->error('cannot prune done tasks', ['detail' => $e->detail(.dev)]);
             nexus::Kernel::finish($payload);
             return;
         };

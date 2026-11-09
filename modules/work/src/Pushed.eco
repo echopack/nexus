@@ -1,0 +1,11 @@
+namespace nexus::work;
+
+/**
+ * What became of a push: stored, or not stored because a task with the same non-empty key is stored
+ * already, done or not.
+ */
+public enum Pushed
+{
+    case stored;
+    case duplicate;
+}

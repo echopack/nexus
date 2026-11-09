@@ -15,6 +15,6 @@ public struct PostRepository : carbon::Repository<Post, PostQuery, int64>, PostW
                 return .error(.refused(carbon::Refusal('a post needs a title')));
             }
         }
-        return .ok();
+        return .ok;
     }
 }

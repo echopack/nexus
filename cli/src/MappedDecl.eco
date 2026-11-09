@@ -1,8 +1,8 @@
 namespace nexusgen;
 
 /**
- * A model or struct with `#[nexus::expose]` fields: its shapes, the fields
- * each one writes, and the keys of every `#[nexus::sensitive]` field.
+ * A model or struct with `#[nexus::expose]` fields: its shapes, the fields each one writes, and the
+ * keys of every `#[nexus::sensitive]` field.
  */
 public struct MappedDecl
 {

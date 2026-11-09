@@ -1,8 +1,8 @@
 namespace nexus::auth;
 
 /**
- * A signed session just opened: the only time its secret is sent. Answers
- * as `{"id": "...", "secret": "...", "expires_at": "..."}`.
+ * A signed session just opened: the only time its secret is sent. Answers as
+ * `{"id": "...", "secret": "...", "expires_at": "..."}`.
  */
 public struct Opened : nexus::Resource
 {

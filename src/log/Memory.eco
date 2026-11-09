@@ -19,7 +19,7 @@ public class Memory : Sink
     /**
      * A copy of every entry so far, oldest first.
      */
-    public function entries() : array<Entry>
+    public const function entries() : array<Entry>
     {
         thread::locked<array<Entry>> $held = $this->entries->lock();
         return $held->value->clone();

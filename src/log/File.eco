@@ -13,15 +13,13 @@ internal struct Handle
 }
 
 /**
- * Appends lines to a file, never coloured, and starts a fresh one by size
- * or by day, the way spdlog's rotating and daily sinks do:
+ * Appends lines to a file, never coloured, and starts a fresh one by size or by day:
  *
  *     log::File $f = guard log::File::open('var/app.log', .json, $rotate: .daily, $keep: 7);
  *
- * On rotation `app.log` becomes `app.1.log`, `app.1.log` becomes
- * `app.2.log` and so on; the file past `keep` is removed. Every line is
- * flushed as it is written, so a crash loses nothing; wrap the sink in
- * `Async` when that costs too much.
+ * On rotation `app.log` becomes `app.1.log`, `app.1.log` becomes `app.2.log` and so on; the file
+ * past `keep` is removed. Every line is flushed as it is written, so a crash loses nothing; wrap
+ * the sink in `Async` when that costs too much.
  */
 #[atomic]
 public class File : Sink
@@ -34,16 +32,16 @@ public class File : Sink
 
     internal constructor(fs::path $path, Format $format, Rotate $rotate, uint32 $keep, Handle $handle)
     {
-        $this->path = $path;
+        $this->path = mv $path;
         $this->format = $format;
         $this->rotate = $rotate;
         $this->keep = $keep;
-        $this->handle = thread::mutex<Handle>($handle);
+        $this->handle = thread::mutex<Handle>(mv $handle);
     }
 
     /**
-     * Opens `$path` for appending, creating it when missing. The day of an
-     * existing file is the day it was last written.
+     * Opens `$path` for appending, creating it when missing. The day of an existing file is the day
+     * it was last written.
      */
     public static function open(fs::path $path, Format $format, Rotate $rotate = .never, uint32 $keep = 5) : result<File, FileError>
     {
@@ -99,7 +97,13 @@ public class File : Sink
      */
     public const function older(uint32 $n) : fs::path
     {
-        return $this->path->dirname() / "{$this->path->stem()}.{$n}{$this->path->extension()}";
+        string $name = "{$this->path->stem()}.{$n}";
+        string $ext = $this->path->extension();
+        if (!$ext->empty()) {
+            $name->push(46);
+            $name->append($ext);
+        }
+        return $this->path->dirname() / $name;
     }
 
     // shifts the older files up by one, moves the current one to .1 and reopens
@@ -121,7 +125,7 @@ public class File : Sink
             io::eprintln("nexus: cannot reopen {$this->path->string()}: {$err}");
             return;
         };
-        $h->file = $f;
+        $h->file = mv $f;
         $h->size = 0;
     }
 }

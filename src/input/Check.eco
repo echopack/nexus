@@ -3,10 +3,9 @@ namespace nexus;
 use std::time;
 
 /**
- * Where an input's rules write what they refuse. The decoders `nexus gen`
- * writes point it at a field (`at`) and call a rule method per rule; a rule
- * class (`nexus::Rule<T>`) gets it to refuse in its own words. Every
- * nested input gets its own `Check` over the same list of refusals, so one
+ * Where an input's rules write what they refuse. The decoders `nexus gen` writes point it at a
+ * field (`at`) and call a rule method per rule; a rule class (`nexus::Rule<T>`) gets it to refuse
+ * in its own words. Every nested input gets its own `Check` over the same list of refusals, so one
  * 422 answers for the whole request.
  *
  * ```echo
@@ -26,8 +25,7 @@ public class Check
     public string $input = '';
 
     /**
-     * Where this input sits in the whole one: empty at the top,
-     * `posts.1` for the second of a list.
+     * Where this input sits in the whole one: empty at the top, `posts.1` for the second of a list.
      */
     public string $prefix = '';
 
@@ -39,8 +37,8 @@ public class Check
     public string $label = '';
 
     /**
-     * The path of the field the next rule checks, when it differs from
-     * `name`: `tags.2` for one item of a list.
+     * The path of the field the next rule checks, when it differs from `name`: `tags.2` for one
+     * item of a list.
      */
     private string $at = '';
     private Refusals $sink;
@@ -60,10 +58,9 @@ public class Check
     }
 
     /**
-     * The check of a nested input at `$path` below this one, writing into
-     * the same refusals.
+     * The check of a nested input at `$path` below this one, writing into the same refusals.
      */
-    public function child(const string& $path) : Check
+    public const function child(const string& $path) : Check
     {
         return Check(sink: $this->sink, prefix: $this->join($path));
     }
@@ -107,8 +104,7 @@ public class Check
     }
 
     /**
-     * Ok when nothing was refused, otherwise one `invalid` problem listing
-     * every refusal.
+     * Ok when nothing was refused, otherwise one `invalid` problem listing every refusal.
      */
     public const function done() : status<Problem>
     {
@@ -121,12 +117,11 @@ public class Check
     // refusing ---------------------------------------------------------------
 
     /**
-     * Refuses the current field with `$code`. `$message` may name
-     * `{label}` and any of `$params`.
+     * Refuses the current field with `$code`. `$message` may name `{label}` and any of `$params`.
      */
     public function fail(const string& $code, const string& $message) : void
     {
-        ordered_map<string, string> $none = ordered_map<string, string>();
+        $none = ordered_map<string, string>();
         $this->current($code, $message, $none);
     }
 
@@ -136,12 +131,12 @@ public class Check
     }
 
     /**
-     * Refuses field `$field` of this input, for a rule on the whole input
-     * that blames one field: `$v->fail(field: 'ends', 'after', '...')`.
+     * Refuses field `$field` of this input, for a rule on the whole input that blames one field:
+     * `$v->fail(field: 'ends', 'after', '...')`.
      */
     public function fail(field: const string& $field, const string& $code, const string& $message) : void
     {
-        ordered_map<string, string> $none = ordered_map<string, string>();
+        $none = ordered_map<string, string>();
         $this->add($this->join($field), $field, $code, '', '', $message, $none);
     }
 
@@ -151,8 +146,7 @@ public class Check
     }
 
     /**
-     * Refuses field `$name` with a built-in rule's English message, for the
-     * readers of `Fields`.
+     * Refuses field `$name` with a built-in rule's English message, for the readers of `Fields`.
      */
     public function refuse(const string& $name, const string& $code, const string& $kind, const ordered_map<string, string>& $params) : void
     {
@@ -178,7 +172,7 @@ public class Check
 
     public function rule(const string& $code) : void
     {
-        ordered_map<string, string> $none = ordered_map<string, string>();
+        $none = ordered_map<string, string>();
         $this->rule($code, $none);
     }
 
@@ -221,8 +215,8 @@ public class Check
     }
 
     /**
-     * A plausible mail address: one `@`, something before it, a dot in the
-     * domain after it, no spaces.
+     * A plausible mail address: one `@`, something before it, a dot in the domain after it, no
+     * spaces.
      */
     public function email(const string& $value) : void
     {
@@ -440,7 +434,7 @@ public class Check
     public function oneOf(int64 $value, const array<int64>& $allowed) : void
     {
         array<string> $shown = [];
-        foreach ($allowed as $a) {
+        foreach ($allowed as const &$a) {
             if ($a == $value) {
                 return;
             }
@@ -453,7 +447,7 @@ public class Check
     {
         array<string> $shown = [];
         bool $hit = false;
-        foreach ($refused as $r) {
+        foreach ($refused as const &$r) {
             if ($r == $value) {
                 $hit = true;
             }
@@ -465,8 +459,8 @@ public class Check
     }
 
     /**
-     * `gt`, `gte`, `lt` or `lte` against `$than`; `$shown` is what the
-     * message names (a number, or the other field's value).
+     * `gt`, `gte`, `lt` or `lte` against `$than`; `$shown` is what the message names (a number, or
+     * the other field's value).
      */
     public function compare(const string& $code, float64 $value, float64 $than, const string& $shown) : void
     {
@@ -507,8 +501,8 @@ public class Check
     // dates ------------------------------------------------------------------
 
     /**
-     * `after`, `before`, `afterOrEqual` or `beforeOrEqual` against
-     * `$other`; `$shown` is what the message names.
+     * `after`, `before`, `afterOrEqual` or `beforeOrEqual` against `$other`; `$shown` is what the
+     * message names.
      */
     public function date(const string& $code, const calendar::Date& $value, const calendar::Date& $other, const string& $shown) : void
     {
@@ -585,7 +579,7 @@ public class Check
     public function distinct(const array<int64>& $values) : void
     {
         map<int64, bool> $seen = [];
-        foreach ($values as $v) {
+        foreach ($values as const &$v) {
             if ($seen->has($v)) {
                 $this->rule('distinct');
                 return;
@@ -621,8 +615,8 @@ public class Check
     }
 
     /**
-     * Required when `$other` is in the input: `$given` says whether this
-     * field is, `$otherGiven` whether the other one is.
+     * Required when `$other` is in the input: `$given` says whether this field is, `$otherGiven`
+     * whether the other one is.
      */
     public function requiredWith(bool $given, bool $otherGiven, const string& $other) : void
     {
@@ -688,9 +682,8 @@ public class Check
     // messages ---------------------------------------------------------------
 
     /**
-     * The English message of a built-in rule, before `nexus::Messages`
-     * renders it in another language. `{label}` and the rule's params are
-     * holes.
+     * The English message of a built-in rule, before `nexus::Messages` renders it in another
+     * language. `{label}` and the rule's params are holes.
      */
     public static function english(const string& $code, const string& $kind) : string
     {
@@ -794,7 +787,7 @@ public class Check
         if ($shown->empty()) {
             $shown = FieldError::readable($name);
         }
-        FieldError $e = FieldError($path, $code, FieldError::fill($template, $shown, $params));
+        $e = FieldError($path, $code, FieldError::fill($template, $shown, $params));
         $e->params = mv $params;
         $e->input = $this->input;
         $e->name = $name;
@@ -825,14 +818,14 @@ public class Check
 
     internal static function one(const string& $k, const string& $v) : ordered_map<string, string>
     {
-        ordered_map<string, string> $m = ordered_map<string, string>();
+        $m = ordered_map<string, string>();
         $m[$k] = $v;
         return $m;
     }
 
     internal static function two(const string& $k1, const string& $v1, const string& $k2, const string& $v2) : ordered_map<string, string>
     {
-        ordered_map<string, string> $m = ordered_map<string, string>();
+        $m = ordered_map<string, string>();
         $m[$k1] = $v1;
         $m[$k2] = $v2;
         return $m;
@@ -843,9 +836,9 @@ public class Check
      */
     internal static function ordered(const map<string, string>& $params) : ordered_map<string, string>
     {
-        array<string> $keys = $params->keys();
+        $keys = $params->keys();
         $keys->sort();
-        ordered_map<string, string> $m = ordered_map<string, string>();
+        $m = ordered_map<string, string>();
         foreach ($keys as const &$k) {
             $m[$k] = $params->get($k);
         }
@@ -880,8 +873,8 @@ public class Check
     }
 
     /**
-     * Whether `$value` is letters only, plus digits and `-`/`_` when asked.
-     * Bytes past ASCII belong to letters beyond it.
+     * Whether `$value` is letters only, plus digits and `-`/`_` when asked. Bytes past ASCII belong
+     * to letters beyond it.
      */
     internal static function only(const string& $value, bool $digits, bool $dashes) : bool
     {

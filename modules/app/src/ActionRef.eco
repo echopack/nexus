@@ -1,11 +1,10 @@
 namespace nexus::app;
 
 /**
- * The action `bindAction` just bound, for where it answers and what goes
- * around it: routes, middleware on every one of them, and an offer as an
- * MCP tool. The middleware the action itself needs it names in
- * `#[nexus::through]`, which runs on every route and as a tool; the
- * routes' `->middleware<M>()` runs outside of that, on the routes only.
+ * The action `bindAction` just bound, for where it answers and what goes around it: routes,
+ * middleware on every one of them, and an offer as an MCP tool. The middleware the action itself
+ * needs it names in `#[nexus::through]`, which runs on every route and as a tool; the routes'
+ * `->middleware<M>()` runs outside of that, on the routes only.
  *
  * ```echo
  * $app->bindAction<UpdatePost>((Container $c) => UpdatePost($c->get<PostService>(), $c->get<PostTransformer>()))
@@ -26,8 +25,8 @@ public class ActionRef<A>
     }
 
     /**
-     * Answers `$methods` at `$path` with this action. Call it again for
-     * another path; the middleware of this ref wraps every route.
+     * Answers `$methods` at `$path` with this action. Call it again for another path; the
+     * middleware of this ref wraps every route.
      */
     public function route(array<nexus::Method> $methods, const string& $path) : ActionRef<A>
     {
@@ -48,8 +47,8 @@ public class ActionRef<A>
     }
 
     /**
-     * Wraps every route of this action in middleware `M`, taken from the
-     * request's container each time.
+     * Wraps every route of this action in middleware `M`, taken from the request's container each
+     * time.
      */
     public function middleware<M>() : ActionRef<A>
     {
@@ -64,10 +63,9 @@ public class ActionRef<A>
     }
 
     /**
-     * Offers the action as MCP tool `$name` too: its path parameters and
-     * its input's fields are the tool's arguments. The description
-     * defaults to the action's docblock; `map` renames arguments, tool
-     * argument to the name `handle()` uses (`['post' => 'id']`).
+     * Offers the action as MCP tool `$name` too: its path parameters and its input's fields are the
+     * tool's arguments. The description defaults to the action's docblock; `map` renames arguments,
+     * tool argument to the name `handle()` uses (`['post' => 'id']`).
      */
     public function tool(
         const string& $name,

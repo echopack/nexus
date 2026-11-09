@@ -1,12 +1,11 @@
 namespace nexus::oauth;
 
 /**
- * `OAUTH_ISSUER` is the app's public origin (`https://blog.example.com`);
- * empty takes it from each request. `OAUTH_CONSENT` is the app's page that
- * asks the user, relative to the issuer or absolute. Access tokens last
- * `OAUTH_ACCESS`, refresh tokens `OAUTH_REFRESH` from their last use;
- * at most `OAUTH_CLIENTS` clients are registered at once. `OAUTH_SCOPE` is
- * the one scope granted, `OAUTH_NAME` what the metadata calls the app.
+ * `OAUTH_ISSUER` is the app's public origin (`https://blog.example.com`); empty takes it from each
+ * request. `OAUTH_CONSENT` is the app's page that asks the user, relative to the issuer or
+ * absolute. Access tokens last `OAUTH_ACCESS`, refresh tokens `OAUTH_REFRESH` from their last use;
+ * at most `OAUTH_CLIENTS` clients are registered at once. `OAUTH_SCOPE` is the one scope granted,
+ * `OAUTH_NAME` what the metadata calls the app.
  */
 #[nexus::config: "oauth"]
 public struct OAuthConfig

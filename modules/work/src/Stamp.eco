@@ -12,7 +12,7 @@ internal struct Stamp
      */
     public static function text(time::timestamp $t) : string
     {
-        calendar::Zoned $z = guard calendar::Zoned::of($t, calendar::Zone::utc()) else {
+        calendar::Zoned $z = guard calendar::Zoned::of($t, .utc()) else {
             return str::from($t->unix_secs());
         };
         return $z->format(calendar::Format::rfc3339());

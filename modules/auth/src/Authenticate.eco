@@ -1,9 +1,9 @@
 namespace nexus::auth;
 
 /**
- * Lets only signed in callers through: a 401 for anybody else, and for a
- * credential that does not hold. It leaves the caller's `Identity` for the
- * action, which names it in `#[nexus::through]` and reads it as state:
+ * Lets only signed in callers through: a 401 for anybody else, and for a credential that does not
+ * hold. It leaves the caller's `Identity` for the action, which names it in `#[nexus::through]` and
+ * reads it as state:
  *
  * ```echo
  * #[nexus::through: ["nexus::auth::Authenticate"]]
@@ -11,16 +11,14 @@ namespace nexus::auth;
  * {
  *     public function handle(nexus::Payload& $payload) : status<nexus::Problem>
  *     {
- *         nexus::auth::Identity $me = guard $payload->state<nexus::auth::Identity>() else ($p) {
- *             return .error($p);
- *         };
+ *         $me = try $payload->state<nexus::auth::Identity>();
  *         ...
  *     }
  * }
  * ```
  *
- * An app with users of its own writes a middleware like this one that
- * loads its user too, with the repository in its constructor.
+ * An app with users of its own writes a middleware like this one that loads its user too, with the
+ * repository in its constructor.
  */
 #[atomic]
 public class Authenticate : nexus::Middleware
@@ -38,7 +36,7 @@ public class Authenticate : nexus::Middleware
             return $payload->fail($p);
         };
         Identity $id = guard $found else {
-            return $payload->fail(nexus::Problem::unauthorized('this needs a signed in caller'));
+            return $payload->fail(.unauthorized('this needs a signed in caller'));
         };
         $payload->put<Identity>($id);
         return $next->run($payload);

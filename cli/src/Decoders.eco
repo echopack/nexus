@@ -1,538 +1,548 @@
-namespace nexusgen;
+/**
+ * Writes the decoder of each `#[nexus::input]`: `decode()` for the doors, `read()` for a nested
+ * input. Per field it reads the value with its `Fields` reader, normalises it, runs every rule,
+ * then the field's rule classes once its own rules passed; after the fields, the rules that compare
+ * two of them; once every field passed, the input's own rule classes. Everything refused lands in
+ * one `nexus::Check`.
+ */
+
+namespace nexusgen::decoders;
+
+use nexusgen::{decl, names, rules, types};
 
 /**
- * Writes the decoder of each `#[nexus::input]`: `decode()` for the doors,
- * `read()` for a nested input. Per field it reads the value with its
- * `Fields` reader, normalises it, runs every rule, then the field's rule
- * classes once its own rules passed; after the fields, the rules that
- * compare two of them; once every field passed, the input's own rule
- * classes. Everything refused lands in one `nexus::Check`.
+ * The `<Input>Decoder` struct of `$t`.
  */
-public struct Decoders
+public function write(Code& $code, const Program& $p, const TypeDecl& $t) : void
 {
-    public static function decoder(Code& $code, const Program& $p, const TypeDecl& $t) : void
-    {
-        string $short = Names::short($t->qualified);
-        string $q = $t->qualified;
-        $code->line('/**');
-        $code->line(" * Reads and checks a {$q} from request fields.");
-        $code->line(' */');
-        $code->open("public struct {$short}Decoder");
+    $short = names::short($t->qualified);
+    string $q = $t->qualified;
+    $code->line('/**');
+    $code->line(" * Reads and checks a {$q} from request fields.");
+    $code->line(' */');
+    $code->open("public struct {$short}Decoder");
 
-        $code->open("public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<{$q}, nexus::Problem>");
-        $code->line("{$q}? $value = {$short}Decoder::read($payload, $f);");
-        $code->begin('guard $f->done() else ($p)');
-        $code->line('return .error($p);');
-        $code->close(';');
-        $code->line("{$q} $out = guard $value;");
-        $code->line('return .ok($out);');
-        $code->close();
-        $code->blank();
+    $code->line('/**');
+    $code->line(" * A {$q} from `$f`, or the problem holding everything refused.");
+    $code->line(' */');
+    $code->open("public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<{$q}, nexus::Problem>");
+    $code->line("$value = {$short}Decoder::read($payload, $f);");
+    $code->line('try $f->done();');
+    $code->line('$out = guard $value;');
+    $code->line('return .ok(mv $out);');
+    $code->close();
+    $code->blank();
 
-        $code->line('/**');
-        $code->line(" * A {$q} from `$f`, or null when anything was refused.");
-        $code->line(' */');
-        $code->open("public static function read(nexus::Payload& $payload, nexus::Fields& $f) : {$q}?");
-        $code->line('nexus::Check $v = $f->check;');
-        string $inputQ = Names::quote($q);
-        $code->line("$v->input = {$inputQ};");
-        $code->line('usize $before = $v->count();');
-        array<string> $unwraps = [];
-        array<string> $named = [];
-        array<Read> $reads = [];
-        foreach ($t->fields as const &$f) {
-            Read $r = Decoders::field($code, $p, $f);
-            if (!$r->unwrap->empty()) {
-                $unwraps[] = $r->unwrap;
-            }
-            $named[] = "${$f->name}: {$r->local}";
-            $reads[] = $r;
+    $code->line('/**');
+    $code->line(" * A {$q} from `$f`, or null when anything was refused.");
+    $code->line(' */');
+    $code->open("public static function read(nexus::Payload& $payload, nexus::Fields& $f) : {$q}?");
+    $code->line('$v = $f->check;');
+    $inputQ = names::quote($q);
+    $code->line("$v->input = {$inputQ};");
+    $code->line('usize $before = $v->count();');
+    array<string> $unwraps = [];
+    array<string> $named = [];
+    array<Read> $reads = [];
+    foreach ($t->fields as const &$f) {
+        $r = field($code, $p, $f);
+        if (!$r->unwrap->empty()) {
+            $unwraps[] = $r->unwrap;
         }
-        Decoders::crossing($code, $t, $reads);
+        $local = types::moved($f->typeText, $r->local);
+        $named[] = "${$f->name}: {$local}";
+        $reads[] = mv $r;
+    }
+    crossing($code, $t, $reads);
+    $code->begin('if ($v->count() != $before)');
+    $code->line('return null;');
+    $code->close();
+    foreach ($unwraps as const &$line) {
+        $code->line($line);
+    }
+    $args = str::join($named, ', ');
+    if ($t->checks->empty()) {
+        $code->line("return {$q}({$args});");
+    } else {
+        $code->line("$out = {$q}({$args});");
+        $code->line("$v->at('', 'object', '');");
+        int32 $n = 0;
+        foreach ($t->checks as const &$rule) {
+            $code->line("$rule{$n} = $payload->get<{$rule}>();");
+            $code->line("$rule{$n}->check($out, $v);");
+            $n = $n + 1;
+        }
         $code->begin('if ($v->count() != $before)');
         $code->line('return null;');
         $code->close();
-        foreach ($unwraps as const &$line) {
-            $code->line($line);
-        }
-        string $args = str::join($named, ', ');
-        $code->line("{$q} $out = {$q}({$args});");
-        if (!$t->checks->empty()) {
-            $code->line("$v->at('', 'object', '');");
-            int32 $n = 0;
-            foreach ($t->checks as const &$rule) {
-                $code->line("{$rule} $rule{$n} = $payload->get<{$rule}>();");
-                $code->line("$rule{$n}->check($out, $v);");
-                $n = $n + 1;
-            }
-            $code->begin('if ($v->count() != $before)');
-            $code->line('return null;');
-            $code->close();
-        }
         $code->line('return $out;');
-        $code->close();
-        $code->close();
-        $code->blank();
+    }
+    $code->close();
+    $code->close();
+    $code->blank();
+}
+
+/**
+ * Reads, normalises and checks one field. The result names the local that holds it, nullable until
+ * the unwrap line after every check.
+ */
+internal function field(Code& $code, const Program& $p, const FieldDecl& $f) : Read
+{
+    $u = names::upper($f->name);
+    $wireQ = names::quote($f->wire);
+    $kindQ = names::quote($f->kind);
+    $labelQ = names::quote($f->label);
+    string $text = $f->typeText;
+    $bare = types::render(types::bare($f->type));
+    $optional = types::optional($f->type);
+    bool $defaulted = $f->hasDefault && $f->defaultText != 'null';
+    bool $required = !$optional && !$f->hasDefault;
+    string $req = 'false';
+    if ($required) {
+        $req = 'true';
     }
 
-    /**
-     * Reads, normalises and checks one field. The result names the local
-     * that holds it, nullable until the unwrap line after every check.
-     */
-    internal static function field(Code& $code, const Program& $p, const FieldDecl& $f) : Read
-    {
-        string $u = Names::upper($f->name);
-        string $wireQ = Names::quote($f->wire);
-        string $kindQ = Names::quote($f->kind);
-        string $labelQ = Names::quote($f->label);
-        string $text = $f->typeText;
-        string $bare = Types::render(Types::bare($f->type));
-        bool $optional = Types::optional($f->type);
-        bool $defaulted = $f->hasDefault && $f->defaultText != 'null';
-        bool $required = !$optional && !$f->hasDefault;
-        string $req = 'false';
-        if ($required) {
-            $req = 'true';
-        }
+    $code->line("// {$f->name}");
+    $code->line("$v->at({$wireQ}, {$kindQ}, {$labelQ});");
+    if (!$f->checks->empty()) {
+        $code->line("usize $b{$u} = $v->count();");
+    }
+    $out = Read("$ok{$u}", '');
+    string $holder = "$ok{$u}";
+    if ($defaulted) {
+        $code->line("{$text} $ok{$u} = {$f->defaultText};");
+    } else if (!$required) {
+        $code->line("{$text} $ok{$u} = null;");
+        $out->nullable = true;
+    } else {
+        $code->line("{$bare}? $v{$u} = null;");
+        $holder = "$v{$u}";
+        $ok = types::binding($bare, "$ok{$u}");
+        $out->unwrap = "{$ok} = guard $v{$u};";
+        $out->nullable = true;
+    }
+    $out->holder = $holder;
 
-        $code->line("// {$f->name}");
+    // the raw value, typed
+    if ($f->shape == 'scalar') {
+        $r = types::binding("{$bare}?", "$r{$u}");
+        $code->line("{$r} = $f->{$f->reader}({$wireQ}, required: {$req});");
+    } else if ($f->shape == 'enum') {
+        $e = $p->enumOf($f->item);
+        $raw = backing($e);
+        $s = types::binding("{$raw}?", "$s{$u}");
+        $tl = types::binding($raw, "$t{$u}");
+        $code->line("{$s} = $f->{$f->reader}({$wireQ}, required: {$req});");
+        $code->line("{$bare}? $r{$u} = null;");
+        $code->begin("if ($s{$u} != null)");
+        $code->line("{$tl} = guard $s{$u};");
+        cases($code, $e, "$t{$u}", "$r{$u} = ", "E{$u}");
+        $code->close();
+    } else if ($f->shape == 'enums') {
+        $e = $p->enumOf($f->item);
+        $raw = backing($e);
+        $code->line("$s{$u} = $f->{$f->reader}({$wireQ}, required: {$req});");
+        $code->line("{$bare}? $r{$u} = null;");
+        $code->begin("if ($s{$u} != null)");
+        $code->line("$t{$u} = guard $s{$u};");
+        $code->line("{$bare} $m{$u} = [];");
+        $code->line("usize $i{$u} = 0;");
+        $code->begin("foreach ($t{$u} as const &$one{$u})");
+        $code->line("$v->item({$wireQ}, $i{$u}, 'enum');");
+        cases($code, $e, "$one{$u}", "$m{$u}[] = ", "E{$u}");
+        $code->line("$i{$u} = $i{$u} + 1;");
+        $code->close();
         $code->line("$v->at({$wireQ}, {$kindQ}, {$labelQ});");
-        if (!$f->checks->empty()) {
-            $code->line("usize $b{$u} = $v->count();");
-        }
-        Read $out = Read("$ok{$u}", '');
-        string $holder = "$ok{$u}";
-        if ($defaulted) {
-            $code->line("{$text} $ok{$u} = {$f->defaultText};");
-        } else if (!$required) {
-            $code->line("{$text} $ok{$u} = null;");
-            $out->nullable = true;
-        } else {
-            $code->line("{$bare}? $v{$u} = null;");
-            $holder = "$v{$u}";
-            $out->unwrap = "{$bare} $ok{$u} = guard $v{$u};";
-            $out->nullable = true;
-        }
-        $out->holder = $holder;
-
-        // the raw value, typed
-        if ($f->shape == 'scalar') {
-            $code->line("{$bare}? $r{$u} = $f->{$f->reader}({$wireQ}, required: {$req});");
-        } else if ($f->shape == 'enum') {
-            EnumDecl $e = $p->enumOf($f->item);
-            string $raw = Decoders::backing($e);
-            $code->line("{$raw}? $s{$u} = $f->{$f->reader}({$wireQ}, required: {$req});");
-            $code->line("{$bare}? $r{$u} = null;");
-            $code->begin("if ($s{$u} != null)");
-            $code->line("{$raw} $t{$u} = guard $s{$u};");
-            Decoders::cases($code, $e, "$t{$u}", "$r{$u} = ", "E{$u}");
-            $code->close();
-        } else if ($f->shape == 'enums') {
-            EnumDecl $e = $p->enumOf($f->item);
-            string $raw = Decoders::backing($e);
-            $code->line("array<{$raw}>? $s{$u} = $f->{$f->reader}({$wireQ}, required: {$req});");
-            $code->line("{$bare}? $r{$u} = null;");
-            $code->begin("if ($s{$u} != null)");
-            $code->line("array<{$raw}> $t{$u} = guard $s{$u};");
-            $code->line("{$bare} $m{$u} = [];");
-            $code->line("usize $i{$u} = 0;");
-            $code->begin("foreach ($t{$u} as const &$one{$u})");
-            $code->line("$v->item({$wireQ}, $i{$u}, 'enum');");
-            Decoders::cases($code, $e, "$one{$u}", "$m{$u}[] = ", "E{$u}");
-            $code->line("$i{$u} = $i{$u} + 1;");
-            $code->close();
-            $code->line("$v->at({$wireQ}, {$kindQ}, {$labelQ});");
-            $code->line("$r{$u} = $m{$u};");
-            $code->close();
-        } else if ($f->shape == 'object') {
-            $code->line("nexus::Fields? $g{$u} = $f->object({$wireQ}, required: {$req});");
-            $code->line("{$bare}? $r{$u} = null;");
-            $code->begin("if ($g{$u} != null)");
-            $code->line("nexus::Fields $h{$u} = guard $g{$u};");
-            $code->line("$r{$u} = {$f->item}Decoder::read($payload, $h{$u});");
-            $code->close();
-        } else {
-            $code->line("array<nexus::Fields>? $g{$u} = $f->objects({$wireQ}, required: {$req});");
-            $code->line("{$bare}? $r{$u} = null;");
-            $code->begin("if ($g{$u} != null)");
-            $code->line("array<nexus::Fields> $h{$u} = guard $g{$u};");
-            Decoders::counts($code, $f->rules, "$h{$u}->count()");
-            $code->line("{$bare} $m{$u} = [];");
-            $code->begin("foreach ($h{$u} as $one{$u})");
-            $code->line("{$f->item}? $o{$u} = {$f->item}Decoder::read($payload, $one{$u});");
-            $code->begin("if ($o{$u} != null)");
-            $code->line("{$f->item} $got{$u} = guard $o{$u};");
-            $code->line("$m{$u}[] = $got{$u};");
-            $code->close();
-            $code->close();
-            $code->line("$r{$u} = $m{$u};");
-            $code->close();
-        }
-
-        // the value: normalised, checked, kept
-        $code->begin("if ($r{$u} != null)");
-        $code->line("{$bare} $x{$u} = guard $r{$u};");
-        bool $blankIsNull = false;
-        foreach ($f->rules as const &$r) {
-            if ($r->key == 'nullIfBlank') {
-                $blankIsNull = true;
-            } else if (Rules::normaliser($r->key)) {
-                $code->line("$x{$u} = nexus::Check::{$r->key}($x{$u});");
-            }
-        }
-        if ($blankIsNull) {
-            $code->begin("if (!nexus::Check::blank($x{$u}))");
-        }
-        if (!$f->each->empty() || !$f->eachChecks->empty()) {
-            string $itemType = 'string';
-            string $itemKind = 'string';
-            if ($f->reader == 'ints') {
-                $itemType = 'int64';
-                $itemKind = 'integer';
-            }
-            string $itemKindQ = Names::quote($itemKind);
-            $code->line("{$bare} $n{$u} = [];");
-            $code->line("usize $j{$u} = 0;");
-            $code->begin("foreach ($x{$u} as const &$it{$u})");
-            $code->line("{$itemType} $y{$u} = $it{$u};");
-            $code->line("$v->item({$wireQ}, $j{$u}, {$itemKindQ});");
-            $code->line("usize $k{$u} = $v->count();");
-            foreach ($f->each as const &$r) {
-                if (Rules::normaliser($r->key)) {
-                    $code->line("$y{$u} = nexus::Check::{$r->key}($y{$u});");
-                }
-            }
-            Decoders::rules($code, $itemKind, $f->each, "$y{$u}", "{$u}Item");
-            Decoders::classes($code, $f->eachChecks, "$y{$u}", "$k{$u}", "{$u}Item");
-            $code->line("$n{$u}[] = $y{$u};");
-            $code->line("$j{$u} = $j{$u} + 1;");
-            $code->close();
-            $code->line("$x{$u} = $n{$u};");
-            $code->line("$v->at({$wireQ}, {$kindQ}, {$labelQ});");
-        }
-        if ($f->shape != 'objects') {
-            Decoders::rules($code, $f->kind, $f->rules, "$x{$u}", $u);
-        }
-        Decoders::classes($code, $f->checks, "$x{$u}", "$b{$u}", $u);
-        $code->line("{$holder} = $x{$u};");
-        if ($blankIsNull) {
-            $code->close();
-        }
+        $code->line("$r{$u} = mv $m{$u};");
         $code->close();
-        return $out;
+    } else if ($f->shape == 'object') {
+        $code->line("$g{$u} = $f->object({$wireQ}, required: {$req});");
+        $code->line("{$bare}? $r{$u} = null;");
+        $code->begin("if ($g{$u} != null)");
+        $code->line("$h{$u} = guard $g{$u};");
+        $code->line("$r{$u} = {$f->item}Decoder::read($payload, $h{$u});");
+        $code->close();
+    } else {
+        $code->line("$g{$u} = $f->objects({$wireQ}, required: {$req});");
+        $code->line("{$bare}? $r{$u} = null;");
+        $code->begin("if ($g{$u} != null)");
+        $code->line("$h{$u} = guard $g{$u};");
+        counts($code, $f->rules, "$h{$u}->count()");
+        $code->line("{$bare} $m{$u} = [];");
+        $code->begin("foreach ($h{$u} as &$one{$u})");
+        $code->line("$o{$u} = {$f->item}Decoder::read($payload, $one{$u});");
+        $code->begin("if ($o{$u} != null)");
+        $code->line("$got{$u} = guard $o{$u};");
+        $code->line("$m{$u}[] = mv $got{$u};");
+        $code->close();
+        $code->close();
+        $code->line("$r{$u} = mv $m{$u};");
+        $code->close();
     }
 
-    /**
-     * The built-in rules of one value, `$x`, of a `$kind` field. Rules that
-     * compare fields run later, in `crossing`.
-     */
-    internal static function rules(Code& $code, const string& $kind, const array<Rule>& $rules, const string& $x, const string& $tag) : void
-    {
-        int32 $n = 0;
-        foreach ($rules as const &$r) {
-            string $k = $r->key;
-            $n = $n + 1;
-            if (Rules::normaliser($k) || Rules::crossing($k, $r->value) || $k == 'confirmed') {
+    // the value: normalised, checked, kept
+    $code->begin("if ($r{$u} != null)");
+    $x = types::binding($bare, "$x{$u}");
+    $code->line("{$x} = guard $r{$u};");
+    bool $blankIsNull = false;
+    foreach ($f->rules as const &$r) {
+        if ($r->key == 'nullIfBlank') {
+            $blankIsNull = true;
+        } else if (rules::normaliser($r->key)) {
+            $code->line("$x{$u} = nexus::Check::{$r->key}($x{$u});");
+        }
+    }
+    if ($blankIsNull) {
+        $code->begin("if (!nexus::Check::blank($x{$u}))");
+    }
+    if (!$f->each->empty() || !$f->eachChecks->empty()) {
+        string $itemType = 'string';
+        string $itemKind = 'string';
+        if ($f->reader == 'ints') {
+            $itemType = 'int64';
+            $itemKind = 'integer';
+        }
+        $itemKindQ = names::quote($itemKind);
+        $code->line("{$bare} $n{$u} = [];");
+        $code->line("usize $j{$u} = 0;");
+        $code->begin("foreach ($x{$u} as const &$it{$u})");
+        $code->line("{$itemType} $y{$u} = $it{$u};");
+        $code->line("$v->item({$wireQ}, $j{$u}, {$itemKindQ});");
+        $code->line("usize $k{$u} = $v->count();");
+        foreach ($f->each as const &$r) {
+            if (rules::normaliser($r->key)) {
+                $code->line("$y{$u} = nexus::Check::{$r->key}($y{$u});");
+            }
+        }
+        builtins($code, $itemKind, $f->each, "$y{$u}", "{$u}Item");
+        classes($code, $f->eachChecks, "$y{$u}", "$k{$u}", "{$u}Item");
+        $item = types::moved($itemType, "$y{$u}");
+        $code->line("$n{$u}[] = {$item};");
+        $code->line("$j{$u} = $j{$u} + 1;");
+        $code->close();
+        $code->line("$x{$u} = mv $n{$u};");
+        $code->line("$v->at({$wireQ}, {$kindQ}, {$labelQ});");
+    }
+    if ($f->shape != 'objects') {
+        builtins($code, $f->kind, $f->rules, "$x{$u}", $u);
+    }
+    classes($code, $f->checks, "$x{$u}", "$b{$u}", $u);
+    $kept = types::moved($bare, "$x{$u}");
+    $code->line("{$holder} = {$kept};");
+    if ($blankIsNull) {
+        $code->close();
+    }
+    $code->close();
+    return $out;
+}
+
+/**
+ * The built-in rules of one value, `$x`, of a `$kind` field. Rules that compare fields run later,
+ * in `crossing`.
+ */
+internal function builtins(Code& $code, const string& $kind, const array<Rule>& $rules, const string& $x, const string& $tag) : void
+{
+    int32 $n = 0;
+    foreach ($rules as const &$r) {
+        string $k = $r->key;
+        $n = $n + 1;
+        if (rules::normaliser($k) || rules::crossing($k, $r->value) || $k == 'confirmed') {
+            continue;
+        }
+        if ($kind == 'string') {
+            text($code, $r, $x, "{$tag}{$n}");
+        } else if ($kind == 'integer' || $kind == 'number') {
+            number($code, $kind, $r, $x, "{$tag}{$n}");
+        } else if ($kind == 'boolean') {
+            $code->line("$v->{$k}({$x});");
+        } else if ($kind == 'date' || $kind == 'timestamp') {
+            date($code, $kind, $r, $x, "{$tag}{$n}");
+        } else if ($kind == 'list') {
+            if ($k == 'distinct') {
+                $code->line("$v->distinct({$x});");
+            } else {
+                array<Rule> $one = [$r];
+                counts($code, $one, "{$x}->count()");
+            }
+        }
+    }
+}
+
+internal function text(Code& $code, const Rule& $r, const string& $x, const string& $tag) : void
+{
+    string $k = $r->key;
+    $n = int($r->value);
+    if ($k == 'min') {
+        $code->line("$v->minLength({$x}, {$n});");
+    } else if ($k == 'max') {
+        $code->line("$v->maxLength({$x}, {$n});");
+    } else if ($k == 'size') {
+        $code->line("$v->sizeLength({$x}, {$n});");
+    } else if ($k == 'between') {
+        $two = decl::items($r->value, 'items');
+        $lo = int($two[0]);
+        $hi = int($two[1]);
+        $code->line("$v->betweenLength({$x}, {$lo}, {$hi});");
+    } else if ($k == 'startsWith' || $k == 'endsWith' || $k == 'oneOf' || $k == 'noneOf') {
+        array<string> $quoted = [];
+        foreach (decl::classes($r->value) as const &$s) {
+            $quoted[] = names::quote($s);
+        }
+        $list = str::join($quoted, ', ');
+        $code->line("$v->{$k}({$x}, [{$list}]);");
+    } else {
+        $code->line("$v->{$k}({$x});");
+    }
+}
+
+internal function number(Code& $code, const string& $kind, const Rule& $r, const string& $x, const string& $tag) : void
+{
+    string $k = $r->key;
+    string $as = 'int64';
+    if ($kind == 'number') {
+        $as = 'float64';
+    }
+    string $value = "{$x} as {$as}";
+    if ($k == 'min' || $k == 'max' || $k == 'multipleOf') {
+        $n = num($r->value, $as);
+        $code->line("$v->{$k}({$value}, {$n});");
+    } else if ($k == 'between') {
+        $two = decl::items($r->value, 'items');
+        $lo = num($two[0], $as);
+        $hi = num($two[1], $as);
+        $code->line("$v->between({$value}, {$lo}, {$hi});");
+    } else if ($k == 'oneOf' || $k == 'noneOf') {
+        array<string> $shown = [];
+        foreach (decl::items($r->value, 'items') as const &$i) {
+            $shown[] = int($i);
+        }
+        $list = str::join($shown, ', ');
+        $code->line("$v->{$k}({$value}, [{$list}]);");
+    } else if (rules::comparing($k)) {
+        $than = num($r->value, 'float64');
+        $shownQ = names::quote(literal($r->value));
+        $code->line("$v->compare('{$k}', {$x} as float64, {$than}, {$shownQ});");
+    }
+}
+
+internal function date(Code& $code, const string& $kind, const Rule& $r, const string& $x, const string& $tag) : void
+{
+    $text = decl::string($r->value);
+    $textQ = names::quote($text);
+    string $other = '';
+    if ($text == 'today') {
+        $other = 'nexus::Check::today()';
+    } else if ($text == 'now') {
+        $other = 'nexus::Check::now()';
+    } else if ($kind == 'date') {
+        $code->line("$when{$tag} = guard calendar::Date::parse({$textQ});");
+        $other = "$when{$tag}";
+    } else {
+        $code->line("$when{$tag} = guard calendar::Zoned::parse({$textQ});");
+        $other = "$when{$tag}->instant";
+    }
+    $code->line("$v->date('{$r->key}', {$x}, {$other}, {$textQ});");
+}
+
+/**
+ * `min`, `max`, `between` and `size` of a list, on its `$count`.
+ */
+internal function counts(Code& $code, const array<Rule>& $rules, const string& $count) : void
+{
+    foreach ($rules as const &$r) {
+        $n = int($r->value);
+        if ($r->key == 'min') {
+            $code->line("$v->minCount({$count}, {$n});");
+        } else if ($r->key == 'max') {
+            $code->line("$v->maxCount({$count}, {$n});");
+        } else if ($r->key == 'size') {
+            $code->line("$v->sizeCount({$count}, {$n});");
+        } else if ($r->key == 'between') {
+            $two = decl::items($r->value, 'items');
+            $lo = int($two[0]);
+            $hi = int($two[1]);
+            $code->line("$v->betweenCount({$count}, {$lo}, {$hi});");
+        }
+    }
+}
+
+/**
+ * The rule classes of a value, once nothing was refused since `$since`.
+ */
+internal function classes(Code& $code, const array<string>& $checks, const string& $x, const string& $since, const string& $tag) : void
+{
+    if ($checks->empty()) {
+        return;
+    }
+    $code->begin("if ($v->count() == {$since})");
+    int32 $n = 0;
+    foreach ($checks as const &$rule) {
+        $code->line("$rule{$tag}{$n} = $payload->get<{$rule}>();");
+        $code->line("$rule{$tag}{$n}->check({$x}, $v);");
+        $n = $n + 1;
+    }
+    $code->close();
+}
+
+/**
+ * The rules that compare one field with another, once both were read.
+ */
+internal function crossing(Code& $code, const TypeDecl& $t, const array<Read>& $reads) : void
+{
+    usize $i = 0;
+    foreach ($t->fields as const &$f) {
+        Read $mine = $reads[$i];
+        $i = $i + 1;
+        foreach ($f->rules as const &$r) {
+            if (!rules::crossing($r->key, $r->value)) {
                 continue;
             }
-            if ($kind == 'string') {
-                Decoders::text($code, $r, $x, "{$tag}{$n}");
-            } else if ($kind == 'integer' || $kind == 'number') {
-                Decoders::number($code, $kind, $r, $x, "{$tag}{$n}");
-            } else if ($kind == 'boolean') {
-                $code->line("$v->{$k}({$x});");
-            } else if ($kind == 'date' || $kind == 'timestamp') {
-                Decoders::date($code, $kind, $r, $x, "{$tag}{$n}");
-            } else if ($kind == 'list') {
-                if ($k == 'distinct') {
-                    $code->line("$v->distinct({$x});");
-                } else {
-                    array<Rule> $one = [$r];
-                    Decoders::counts($code, $one, "{$x}->count()");
-                }
+            $otherName = decl::string($r->value);
+            if ($r->key == 'confirmed') {
+                $otherName = "{$f->name}Confirmation";
             }
-        }
-    }
-
-    internal static function text(Code& $code, const Rule& $r, const string& $x, const string& $tag) : void
-    {
-        string $k = $r->key;
-        string $n = Decoders::int($r->value);
-        if ($k == 'min') {
-            $code->line("$v->minLength({$x}, {$n});");
-        } else if ($k == 'max') {
-            $code->line("$v->maxLength({$x}, {$n});");
-        } else if ($k == 'size') {
-            $code->line("$v->sizeLength({$x}, {$n});");
-        } else if ($k == 'between') {
-            array<json::Value> $two = Json::items($r->value, 'items');
-            string $lo = Decoders::int($two[0]);
-            string $hi = Decoders::int($two[1]);
-            $code->line("$v->betweenLength({$x}, {$lo}, {$hi});");
-        } else if ($k == 'startsWith' || $k == 'endsWith' || $k == 'oneOf' || $k == 'noneOf') {
-            array<string> $quoted = [];
-            foreach (Program::names($r->value) as const &$s) {
-                $quoted[] = Names::quote($s);
+            usize $j = 0;
+            usize $at = 0;
+            foreach ($t->fields as const &$g) {
+                if ($g->name == $otherName) {
+                    $at = $j;
+                }
+                $j = $j + 1;
             }
-            string $list = str::join($quoted, ', ');
-            $code->line("array<string> $list{$tag} = [{$list}];");
-            $code->line("$v->{$k}({$x}, $list{$tag});");
-        } else {
-            $code->line("$v->{$k}({$x});");
-        }
-    }
-
-    internal static function number(Code& $code, const string& $kind, const Rule& $r, const string& $x, const string& $tag) : void
-    {
-        string $k = $r->key;
-        string $as = 'int64';
-        if ($kind == 'number') {
-            $as = 'float64';
-        }
-        string $value = "{$x} as {$as}";
-        if ($k == 'min' || $k == 'max' || $k == 'multipleOf') {
-            string $n = Decoders::num($r->value, $as);
-            $code->line("$v->{$k}({$value}, {$n});");
-        } else if ($k == 'between') {
-            array<json::Value> $two = Json::items($r->value, 'items');
-            string $lo = Decoders::num($two[0], $as);
-            string $hi = Decoders::num($two[1], $as);
-            $code->line("$v->between({$value}, {$lo}, {$hi});");
-        } else if ($k == 'oneOf' || $k == 'noneOf') {
-            array<string> $shown = [];
-            foreach (Json::items($r->value, 'items') as const &$i) {
-                $shown[] = Decoders::int($i);
+            FieldDecl $other = $t->fields[$at];
+            Read $theirs = $reads[$at];
+            $wireQ = names::quote($f->wire);
+            $kindQ = names::quote($f->kind);
+            $labelQ = names::quote($f->label);
+            string $otherLabel = $other->label;
+            if ($otherLabel->empty()) {
+                $otherLabel = names::readable($other->wire);
             }
-            string $list = str::join($shown, ', ');
-            $code->line("array<int64> $list{$tag} = [{$list}];");
-            $code->line("$v->{$k}({$value}, $list{$tag});");
-        } else if (Rules::comparing($k)) {
-            string $than = Decoders::num($r->value, 'float64');
-            string $shownQ = Names::quote(Decoders::literal($r->value));
-            $code->line("$v->compare('{$k}', {$x} as float64, {$than}, {$shownQ});");
-        }
-    }
-
-    internal static function date(Code& $code, const string& $kind, const Rule& $r, const string& $x, const string& $tag) : void
-    {
-        string $text = Json::string($r->value);
-        string $textQ = Names::quote($text);
-        string $other = '';
-        if ($text == 'today') {
-            $other = 'nexus::Check::today()';
-        } else if ($text == 'now') {
-            $other = 'nexus::Check::now()';
-        } else if ($kind == 'date') {
-            $code->line("calendar::Date $when{$tag} = guard calendar::Date::parse({$textQ});");
-            $other = "$when{$tag}";
-        } else {
-            $code->line("calendar::Zoned $when{$tag} = guard calendar::Zoned::parse({$textQ});");
-            $other = "$when{$tag}->instant";
-        }
-        $code->line("$v->date('{$r->key}', {$x}, {$other}, {$textQ});");
-    }
-
-    /**
-     * `min`, `max`, `between` and `size` of a list, on its `$count`.
-     */
-    internal static function counts(Code& $code, const array<Rule>& $rules, const string& $count) : void
-    {
-        foreach ($rules as const &$r) {
-            string $n = Decoders::int($r->value);
-            if ($r->key == 'min') {
-                $code->line("$v->minCount({$count}, {$n});");
-            } else if ($r->key == 'max') {
-                $code->line("$v->maxCount({$count}, {$n});");
-            } else if ($r->key == 'size') {
-                $code->line("$v->sizeCount({$count}, {$n});");
-            } else if ($r->key == 'between') {
-                array<json::Value> $two = Json::items($r->value, 'items');
-                string $lo = Decoders::int($two[0]);
-                string $hi = Decoders::int($two[1]);
-                $code->line("$v->betweenCount({$count}, {$lo}, {$hi});");
+            $otherQ = names::quote($otherLabel);
+            $u = names::upper($f->name);
+            $code->line("$v->at({$wireQ}, {$kindQ}, {$labelQ});");
+            if ($r->key == 'requiredWith' || $r->key == 'requiredWithout') {
+                $otherWireQ = names::quote($other->wire);
+                $code->line("$v->{$r->key}({$mine->holder} != null, $f->has({$otherWireQ}), {$otherQ});");
+                continue;
             }
-        }
-    }
-
-    /**
-     * The rule classes of a value, once nothing was refused since `$since`.
-     */
-    internal static function classes(Code& $code, const array<string>& $checks, const string& $x, const string& $since, const string& $tag) : void
-    {
-        if ($checks->empty()) {
-            return;
-        }
-        $code->begin("if ($v->count() == {$since})");
-        int32 $n = 0;
-        foreach ($checks as const &$rule) {
-            $code->line("{$rule} $rule{$tag}{$n} = $payload->get<{$rule}>();");
-            $code->line("$rule{$tag}{$n}->check({$x}, $v);");
-            $n = $n + 1;
-        }
-        $code->close();
-    }
-
-    /**
-     * The rules that compare one field with another, once both were read.
-     */
-    internal static function crossing(Code& $code, const TypeDecl& $t, const array<Read>& $reads) : void
-    {
-        usize $i = 0;
-        foreach ($t->fields as const &$f) {
-            Read $mine = $reads[$i];
-            $i = $i + 1;
-            foreach ($f->rules as const &$r) {
-                if (!Rules::crossing($r->key, $r->value)) {
-                    continue;
-                }
-                string $otherName = Json::string($r->value);
-                if ($r->key == 'confirmed') {
-                    $otherName = "{$f->name}Confirmation";
-                }
-                usize $j = 0;
-                usize $at = 0;
-                foreach ($t->fields as const &$g) {
-                    if ($g->name == $otherName) {
-                        $at = $j;
-                    }
-                    $j = $j + 1;
-                }
-                FieldDecl $other = $t->fields[$at];
-                Read $theirs = $reads[$at];
-                string $wireQ = Names::quote($f->wire);
-                string $kindQ = Names::quote($f->kind);
-                string $labelQ = Names::quote($f->label);
-                string $otherLabel = $other->label;
-                if ($otherLabel->empty()) {
-                    $otherLabel = Names::readable($other->wire);
-                }
-                string $otherQ = Names::quote($otherLabel);
-                string $u = Names::upper($f->name);
-                $code->line("$v->at({$wireQ}, {$kindQ}, {$labelQ});");
-                if ($r->key == 'requiredWith' || $r->key == 'requiredWithout') {
-                    string $otherWireQ = Names::quote($other->wire);
-                    $code->line("$v->{$r->key}({$mine->holder} != null, $f->has({$otherWireQ}), {$otherQ});");
-                    continue;
-                }
-                string $a = "$cmp{$u}A";
-                string $b = "$cmp{$u}B";
-                string $bareA = Types::render(Types::bare($f->type));
-                string $bareB = Types::render(Types::bare($other->type));
-                array<string> $present = [];
-                if ($mine->nullable) {
-                    $present[] = "{$mine->holder} != null";
-                }
-                if ($theirs->nullable) {
-                    $present[] = "{$theirs->holder} != null";
-                }
-                if (!$present->empty()) {
-                    string $cond = str::join($present, ' && ');
-                    $code->begin("if ({$cond})");
-                }
-                Decoders::take($code, $bareA, $a, $mine);
-                Decoders::take($code, $bareB, $b, $theirs);
-                if ($r->key == 'confirmed') {
-                    $code->line("$v->confirmed({$a} == {$b});");
-                } else if ($r->key == 'same') {
-                    $code->line("$v->same({$a} == {$b}, {$otherQ});");
-                } else if ($r->key == 'different') {
-                    $code->line("$v->different({$a} != {$b}, {$otherQ});");
-                } else if (Rules::comparing($r->key)) {
-                    $code->line("$v->compare('{$r->key}', {$a} as float64, {$b} as float64, {$otherQ});");
-                } else {
-                    $code->line("$v->date('{$r->key}', {$a}, {$b}, {$otherQ});");
-                }
-                if (!$present->empty()) {
-                    $code->close();
-                }
+            string $a = "$cmp{$u}A";
+            string $b = "$cmp{$u}B";
+            $bareA = types::render(types::bare($f->type));
+            $bareB = types::render(types::bare($other->type));
+            array<string> $present = [];
+            if ($mine->nullable) {
+                $present[] = "{$mine->holder} != null";
             }
-        }
-    }
-
-    internal static function take(Code& $code, const string& $bare, const string& $local, const Read& $r) : void
-    {
-        if ($r->nullable) {
-            $code->line("{$bare} {$local} = guard {$r->holder};");
-        } else {
-            $code->line("{$bare} {$local} = {$r->holder};");
-        }
-    }
-
-    /**
-     * An if-chain from a backing value to the case it stands for; a value
-     * that is none of them is refused as `oneOf`.
-     */
-    internal static function cases(Code& $code, const EnumDecl& $e, const string& $raw, const string& $assign, const string& $tag) : void
-    {
-        array<string> $values = [];
-        bool $first = true;
-        foreach ($e->cases as const &$c) {
-            string $value = str::from($c->number);
-            if ($e->text) {
-                $value = Names::quote($c->text);
+            if ($theirs->nullable) {
+                $present[] = "{$theirs->holder} != null";
             }
-            $values[] = $value;
-            if ($first) {
-                $code->begin("if ({$raw} == {$value})");
+            if (!$present->empty()) {
+                $cond = str::join($present, ' && ');
+                $code->begin("if ({$cond})");
+            }
+            take($code, $bareA, $a, $mine);
+            take($code, $bareB, $b, $theirs);
+            if ($r->key == 'confirmed') {
+                $code->line("$v->confirmed({$a} == {$b});");
+            } else if ($r->key == 'same') {
+                $code->line("$v->same({$a} == {$b}, {$otherQ});");
+            } else if ($r->key == 'different') {
+                $code->line("$v->different({$a} != {$b}, {$otherQ});");
+            } else if (rules::comparing($r->key)) {
+                $code->line("$v->compare('{$r->key}', {$a} as float64, {$b} as float64, {$otherQ});");
             } else {
-                $code->next("else if ({$raw} == {$value})");
+                $code->line("$v->date('{$r->key}', {$a}, {$b}, {$otherQ});");
             }
-            $first = false;
-            $code->line("{$assign}{$e->qualified}::{$c->name};");
+            if (!$present->empty()) {
+                $code->close();
+            }
         }
+    }
+}
+
+/**
+ * `$local`, a copy of the value `$r` read, unwrapped when it may be null.
+ */
+internal function take(Code& $code, const string& $bare, const string& $local, const Read& $r) : void
+{
+    $declared = types::binding($bare, $local);
+    if ($r->nullable) {
+        $code->line("{$declared} = guard {$r->holder};");
+    } else {
+        $code->line("{$declared} = {$r->holder};");
+    }
+}
+
+/**
+ * An if-chain from a backing value to the case it stands for; a value that is none of them is
+ * refused as `oneOf`.
+ */
+internal function cases(Code& $code, const EnumDecl& $e, const string& $raw, const string& $assign, const string& $tag) : void
+{
+    array<string> $values = [];
+    bool $first = true;
+    foreach ($e->cases as const &$c) {
+        $value = str::from($c->number);
+        if ($e->text) {
+            $value = names::quote($c->text);
+        }
+        $values[] = $value;
         if ($first) {
-            return;
-        }
-        string $list = str::join($values, ', ');
-        $code->next('else');
-        if ($e->text) {
-            $code->line("array<string> $allowed{$tag} = [{$list}];");
+            $code->begin("if ({$raw} == {$value})");
         } else {
-            $code->line("array<int64> $allowed{$tag} = [{$list}];");
+            $code->next("else if ({$raw} == {$value})");
         }
-        $code->line("$v->oneOf({$raw}, $allowed{$tag});");
-        $code->close();
+        $first = false;
+        $code->line("{$assign}.{$c->name};");
     }
+    if ($first) {
+        return;
+    }
+    $list = str::join($values, ', ');
+    $code->next('else');
+    $code->line("$v->oneOf({$raw}, [{$list}]);");
+    $code->close();
+}
 
-    internal static function backing(const EnumDecl& $e) : string
-    {
-        if ($e->text) {
-            return 'string';
+internal function backing(const EnumDecl& $e) : string
+{
+    if ($e->text) {
+        return 'string';
+    }
+    return 'int64';
+}
+
+internal function int(const json::Value& $v) : string
+{
+    return str::from(decl::int($v, 'integer'));
+}
+
+/**
+ * A number argument as Echo source of type `$as`.
+ */
+internal function num(const json::Value& $v, const string& $as) : string
+{
+    if (decl::text($v, 'kind') == 'float') {
+        float64 $f = decl::field($v, 'number')->asFloat() ?? 0.0;
+        $shown = str::from($f);
+        if (!$shown->contains('.') && !$shown->contains('e')) {
+            $shown->append('.0');
         }
-        return 'int64';
+        return "{$shown} as {$as}";
     }
+    $i = int($v);
+    return "{$i} as {$as}";
+}
 
-    internal static function int(const json::Value& $v) : string
-    {
-        return str::from(Json::int($v, 'integer'));
+/**
+ * A number argument as people read it.
+ */
+internal function literal(const json::Value& $v) : string
+{
+    if (decl::text($v, 'kind') == 'float') {
+        float64 $f = decl::field($v, 'number')->asFloat() ?? 0.0;
+        return str::from($f);
     }
-
-    /**
-     * A number argument as Echo source of type `$as`.
-     */
-    internal static function num(const json::Value& $v, const string& $as) : string
-    {
-        if (Json::text($v, 'kind') == 'float') {
-            float64 $f = Json::field($v, 'number')->asFloat() ?? 0.0;
-            string $shown = str::from($f);
-            if (!$shown->contains('.') && !$shown->contains('e')) {
-                $shown->append('.0');
-            }
-            return "{$shown} as {$as}";
-        }
-        string $i = Decoders::int($v);
-        return "{$i} as {$as}";
-    }
-
-    /**
-     * A number argument as people read it.
-     */
-    internal static function literal(const json::Value& $v) : string
-    {
-        if (Json::text($v, 'kind') == 'float') {
-            float64 $f = Json::field($v, 'number')->asFloat() ?? 0.0;
-            return str::from($f);
-        }
-        return Decoders::int($v);
-    }
+    return int($v);
 }

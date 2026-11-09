@@ -3,8 +3,8 @@ namespace blog;
 use container::Container;
 
 /**
- * The blog itself, as an extension: its providers, one per part, and
- * what belongs to the whole blog.
+ * The blog itself, as an extension: its providers, one per part, and what belongs to the whole
+ * blog.
  */
 public class App : nexus::Extension
 {
@@ -24,7 +24,7 @@ public class App : nexus::Extension
 
     public function services(nexus::Services& $s) : status<nexus::BootError>
     {
-        nexus::App $app = nexus::App($s, $this->providers());
+        $app = nexus::App($s, $this->providers());
 
         // every answer says how long it took
         $app->bind<ServerTiming>(scoped: () => ServerTiming());
@@ -45,11 +45,10 @@ public class App : nexus::Extension
      */
     public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
     {
-        json::Value $german = guard json::parse(std::embed::text('../lang/de.json')) else ($e) {
+        $german = guard json::parse(std::embed::text('../lang/de.json')) else ($e) {
             return .error(.extension('blog', "lang/de.json: {$e->message()}"));
         };
-        nexus::Messages $messages = $kernel->services->get<nexus::Messages>();
-        $messages->add('de', $german);
+        $kernel->services->get<nexus::Messages>()->add('de', $german);
         return .ok;
     }
 

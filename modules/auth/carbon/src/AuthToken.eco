@@ -3,8 +3,7 @@ namespace nexus::auth::carbon;
 use std::time;
 
 /**
- * A row of `auth_tokens`: a bearer token by its id, with the hash of its
- * secret.
+ * A row of `auth_tokens`: a bearer token by its id, with the hash of its secret.
  */
 #[carbon::model: 'auth_tokens']
 public class AuthToken : carbon::Model<AuthToken, AuthTokenRepository>
@@ -29,11 +28,18 @@ public class AuthToken : carbon::Model<AuthToken, AuthTokenRepository>
         return $this->link;
     }
 
+    /**
+     * The row that keeps `$t`. A static, since carbon builds a model with its implicit constructor
+     * and refuses one written out.
+     */
     public static function of(const nexus::auth::StoredToken& $t) : AuthToken
     {
         return AuthToken($id: $t->id, $hash: $t->hash, $subject: $t->subject, $name: $t->name, $scopes: $t->scopes, $createdAt: $t->createdAt, $expiresAt: $t->expiresAt);
     }
 
+    /**
+     * The token this row keeps.
+     */
     public const function stored() : nexus::auth::StoredToken
     {
         return nexus::auth::StoredToken($id: $this->id, $hash: $this->hash, $subject: $this->subject, $name: $this->name, $scopes: $this->scopes, $createdAt: $this->createdAt, $expiresAt: $this->expiresAt);

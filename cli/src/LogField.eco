@@ -1,0 +1,21 @@
+namespace nexusgen;
+
+/**
+ * One field of a log record: its name on the struct, its key in the entry, and the type that is
+ * unwrapped first when it is nullable.
+ */
+public struct LogField
+{
+    public string $name;
+    public string $key;
+
+    /**
+     * The type inside the nullable, empty when the field is not one.
+     */
+    public string $unwrapped = '';
+
+    /**
+     * `#[nexus::sensitive]`: the key is written, the value never.
+     */
+    public bool $sensitive = false;
+}

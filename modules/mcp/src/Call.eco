@@ -1,8 +1,8 @@
 namespace nexus::mcp;
 
 /**
- * One incoming JSON-RPC message. A notification (no `id`) and a client's
- * answer to a request of ours are `silent`: nothing goes back.
+ * One incoming JSON-RPC message. A notification (no `id`) and a client's answer to a request of
+ * ours are `silent`: nothing goes back.
  */
 public struct Call
 {

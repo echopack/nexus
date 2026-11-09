@@ -1,9 +1,8 @@
 namespace nexus::auth;
 
 /**
- * What a signed request signs, and how. The text is the method, the target
- * as sent (path and query), the unix time in seconds and the hex sha256 of
- * the body, one per line:
+ * What a signed request signs, and how. The text is the method, the target as sent (path and
+ * query), the unix time in seconds and the hex sha256 of the body, one per line:
  *
  * ```
  * POST
@@ -12,9 +11,8 @@ namespace nexus::auth;
  * 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
  * ```
  *
- * and the signature is the hex HMAC-SHA256 of that text under the
- * session's secret. The compat form is `METHOD:target:time`, without the
- * body, as older clients sign it.
+ * and the signature is the hex HMAC-SHA256 of that text under the session's secret. The compat form
+ * is `METHOD:target:time`, without the body, as older clients sign it.
  */
 public struct Signature
 {

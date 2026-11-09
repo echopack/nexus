@@ -4,8 +4,8 @@ use std::thread;
 use std::time;
 
 /**
- * Clients, codes and grants kept in the process: for tests and
- * single-process apps. They are gone when it stops.
+ * Clients, codes and grants kept in the process: for tests and single-process apps. They are gone
+ * when it stops.
  */
 #[atomic]
 public class MemoryOAuth : OAuthStore
@@ -43,7 +43,7 @@ public class MemoryOAuth : OAuthStore
         if ($held->value->has($id)) {
             Client $c = $held->value->get($id);
             $c->usedAt = $at;
-            $held->value[$id] = $c;
+            $held->value[$id] = mv $c;
         }
         return .ok;
     }
@@ -106,14 +106,14 @@ public class MemoryOAuth : OAuthStore
         return .ok;
     }
 
-    public function rotate(const Grant& $g, const string& $was) : result<bool, nexus::Problem>
+    public function rotate(const Grant& $g, const string& $was) : result<Rotation, nexus::Problem>
     {
         thread::locked<map<string, Grant>> $held = $this->grantsById->lock();
         if (!$held->value->has($g->id) || $held->value->get($g->id)->refreshHash != $was) {
-            return .ok(false);
+            return .ok(.lost);
         }
         $held->value[$g->id] = $g;
-        return .ok(true);
+        return .ok(.won);
     }
 
     public function drop(const string& $id) : status<nexus::Problem>

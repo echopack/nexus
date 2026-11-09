@@ -3,11 +3,14 @@ namespace nexusgen;
 /**
  * An indented text builder for generated source.
  */
-public class Code
+public struct Code
 {
     public string $text = '';
     private int32 $depth = 0;
 
+    /**
+     * `$s` on a line of its own at the current depth; an empty `$s` is a blank line.
+     */
     public function line(const string& $s) : void
     {
         if (!$s->empty()) {
@@ -19,6 +22,9 @@ public class Code
         $this->text->push(10);
     }
 
+    /**
+     * A blank line.
+     */
     public function blank() : void
     {
         $this->text->push(10);
@@ -53,12 +59,18 @@ public class Code
         $this->depth = $this->depth + 1;
     }
 
+    /**
+     * One level shallower, then `}` with `$suffix` after it (`;`, `);`).
+     */
     public function close(const string& $suffix) : void
     {
         $this->depth = $this->depth - 1;
         $this->line("}{$suffix}");
     }
 
+    /**
+     * One level shallower, then `}`.
+     */
     public function close() : void
     {
         $this->close('');

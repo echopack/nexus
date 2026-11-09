@@ -6,8 +6,12 @@ namespace nexusgen;
 public struct FieldDecl
 {
     public string $name;
-    // the key in the input, or the variable in the environment
+
+    /**
+     * The key in the input, or the variable in the environment.
+     */
     public string $wire;
+
     public json::Value $type;
     public string $typeText;
     public bool $hasDefault;
@@ -26,40 +30,37 @@ public struct FieldDecl
     public bool $positional = false;
 
     /**
-     * How an input field is read: `scalar` (a `Fields` reader), `enum`,
-     * `enums` (a list of them), `object` (a nested input) or `objects`.
+     * How an input field is read: `scalar` (a `Fields` reader), `enum`, `enums` (a list of them),
+     * `object` (a nested input) or `objects`.
      */
     public string $shape = 'scalar';
 
     /**
-     * The `Fields` reader: `string`, `int64`, `strings`, `date`, ...; for
-     * enums the reader of their backing.
+     * The `Fields` reader: `string`, `int64`, `strings`, `date`, ...; for enums the reader of their
+     * backing.
      */
     public string $reader = '';
 
     /**
-     * What the field holds, as messages name it: `string`, `integer`,
-     * `number`, `boolean`, `list`, `date`, `timestamp`, `enum`, `object`,
-     * `json`.
+     * What the field holds, as messages name it: `string`, `integer`, `number`, `boolean`, `list`,
+     * `date`, `timestamp`, `enum`, `object`, `json`.
      */
     public string $kind = '';
 
     /**
-     * The enum or nested input of an `enum`, `enums`, `object` or
-     * `objects` field.
+     * The enum or nested input of an `enum`, `enums`, `object` or `objects` field.
      */
     public string $item = '';
 
     /**
-     * `#[nexus::label]`, and the English messages `#[nexus::message]` gives
-     * per code.
+     * `#[nexus::label]`, and the English messages `#[nexus::message]` gives per code.
      */
     public string $label = '';
     public array<Entry> $messages = [];
 
     /**
-     * The rules every item of a list follows (`each:`), and the rule
-     * classes the field and its items run.
+     * The rules every item of a list follows (`each:`), and the rule classes the field and its
+     * items run.
      */
     public array<Rule> $each = [];
     public array<string> $checks = [];

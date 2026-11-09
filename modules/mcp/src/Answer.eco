@@ -5,6 +5,9 @@ namespace nexus::mcp;
  */
 public struct Answer
 {
+    /**
+     * A result answer to message `$id`.
+     */
     public static function result(const json::Value& $id, json::Value $result) : nexus::Response
     {
         json::Value $o = json::object();
@@ -14,16 +17,11 @@ public struct Answer
         return nexus::Response(json: $o);
     }
 
-    public static function error(const json::Value& $id, const RpcError& $e) : nexus::Response
-    {
-        return Answer::error($id, $e, 200);
-    }
-
     /**
-     * An error answer with HTTP status `$status`, for a message refused
-     * before it was read.
+     * An error answer to message `$id`. A message refused before it was read gets an HTTP `$status`
+     * other than 200.
      */
-    public static function error(const json::Value& $id, const RpcError& $e, int32 $status) : nexus::Response
+    public static function error(const json::Value& $id, const RpcError& $e, int32 $status = 200) : nexus::Response
     {
         json::Value $err = json::object();
         $err['code'] = json::int($e->code());
@@ -36,9 +34,8 @@ public struct Answer
     }
 
     /**
-     * A tool's response as a `tools/call` result: its body as text
-     * content, a JSON object body as structured content too, and any
-     * status from 400 on as an error the model reads.
+     * A tool's response as a `tools/call` result: its body as text content, a JSON object body as
+     * structured content too, and any status from 400 on as an error the model reads.
      */
     public static function tool(const nexus::Response& $res) : json::Value
     {

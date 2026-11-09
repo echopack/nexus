@@ -1,0 +1,49 @@
+namespace nexus::work;
+
+/**
+ * Why a task's data does not decode.
+ */
+public enum DataError
+{
+    /**
+     * The text is not JSON.
+     */
+    case notJson;
+
+    /**
+     * The JSON is not an object.
+     */
+    case notObject;
+
+    /**
+     * Fields that are missing or do not read as their type, in the order they were read.
+     */
+    case fields(array<FieldError> $errors);
+
+    /**
+     * Every error of `$errors`, joined with `; `.
+     */
+    internal static function joined(const array<FieldError>& $errors) : string
+    {
+        array<string> $lines = arr::room<string>($errors->count());
+        foreach ($errors as const &$e) {
+            $lines[] = str::from($e);
+        }
+        return str::join($lines, '; ');
+    }
+}
+
+namespace str;
+
+/**
+ * What is wrong with the data, as the failed task says it.
+ */
+public function from(const nexus::work::DataError& $e) : string
+{
+    return match ($e) {
+        nexus::work::DataError::notJson => 'the task data is not JSON',
+        nexus::work::DataError::notObject => 'the task data is not a JSON object',
+        nexus::work::DataError::fields($errors) => nexus::work::DataError::joined($errors),
+    };
+}
+

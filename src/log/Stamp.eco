@@ -3,8 +3,8 @@ namespace nexus::log;
 use std::time;
 
 /**
- * The two ways a log writes a time: RFC 3339 in UTC with milliseconds
- * for machines, the time of day for people.
+ * The two ways a log writes a time: RFC 3339 in UTC with milliseconds for machines, the time of day
+ * for people.
  */
 public struct Stamp
 {
@@ -13,7 +13,7 @@ public struct Stamp
      */
     public static function rfc3339(time::timestamp $at) : string
     {
-        calendar::Zoned $z = calendar::Zoned($at, calendar::Zone::utc());
+        $z = calendar::Zoned($at, calendar::Zone::utc());
         return $z->format(calendar::Format::rfc3339());
     }
 
@@ -38,8 +38,7 @@ public struct Stamp
     }
 
     /**
-     * The UTC day since 1970 the time falls on, which is what daily
-     * rotation compares.
+     * The UTC day since 1970 the time falls on, which is what daily rotation compares.
      */
     public static function day(time::timestamp $at) : int64
     {

@@ -140,7 +140,7 @@ check "cli posts:show"    1 "$(printf '%s\n' "${shown}" | grep -c '^#1  Hello ag
 check "cli shows author"  1 "$(printf '%s\n' "${shown}" | grep -c '^by The editor <editor@example.com>$')"
 check "cli show missing"  1 "$(./ecobuild/blog posts:show 99 >/dev/null 2>&1; echo $?)"
 check "cli show, error"   1 "$(./ecobuild/blog posts:show 99 2>&1 | grep -c 'Not Found')"
-check "cli create"        "published post #4 by The editor" "$(./ecobuild/blog posts:create --author 1 --title 'From the shell' --body 'Typed in a terminal' --tags Shell --tags ' shell' --tags CLI 2>&1)"
+check "cli create"        "published post #4 by The editor" "$(./ecobuild/blog posts:create --author 1 --title 'From the shell' --body 'Typed in a terminal' --tags Shell --tags ' shell' --tags CLI 2>/dev/null)"
 check "cli create, rules" 1 "$(./ecobuild/blog posts:create --author 1 --title No --body x >/dev/null 2>&1; echo $?)"
 check "cli tags cleaned"  '"tags":["shell","cli"]' "$(body "${base}/v1/posts/4" | grep -o '"tags":\["shell","cli"\]')"
 

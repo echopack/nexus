@@ -9,8 +9,7 @@ public enum Output
     case stderr;
 
     /**
-     * Whether the stream is a terminal, which is when the pretty format
-     * is coloured.
+     * Whether the stream is a terminal, which is when the pretty format is coloured.
      */
     public const function terminal() : bool
     {

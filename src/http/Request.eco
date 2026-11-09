@@ -1,9 +1,9 @@
 namespace nexus;
 
 /**
- * One request, transport independent. The HTTP transport builds it from the
- * wire; tests build it directly: `Request(Method::get, '/v1/posts/42')`.
- * `$params` is filled by the router, `$id` by the kernel.
+ * One request, transport independent. The HTTP transport builds it from the wire; tests build it
+ * directly: `Request(.get, '/v1/posts/42')`. `$params` is filled by the router, `$id` by the
+ * kernel.
  */
 public struct Request
 {
@@ -85,10 +85,10 @@ public struct Request
     }
 
     /**
-     * Where the client reached the app, `https://blog.example.com`: the
-     * scheme from `X-Forwarded-Proto` (a proxy that ends TLS sets it), else
-     * http, and the `Host` header. For links in answers to the same client;
-     * an app behind several names configures its public origin instead.
+     * Where the client reached the app, `https://blog.example.com`: the scheme from
+     * `X-Forwarded-Proto` (a proxy that ends TLS sets it), else http, and the `Host` header. For
+     * links in answers to the same client; an app behind several names configures its public origin
+     * instead.
      */
     public const function origin() : string
     {
@@ -109,12 +109,12 @@ public struct Request
     }
 
     /**
-     * The URL the client asked for, on `origin()`. A `Host` header that
-     * is no host gives `localhost`, as an empty one does.
+     * The URL the client asked for, on `origin()`. A `Host` header that is no host gives
+     * `localhost`, as an empty one does.
      */
     public const function url() : Url
     {
-        Url $url = Url(path: $this->path);
+        $url = Url(path: $this->path);
         $url->query = $this->query;
         Url $origin = guard Url::parse($this->origin()) else {
             $url->scheme = 'http';

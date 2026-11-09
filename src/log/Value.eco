@@ -3,9 +3,9 @@ namespace nexus::log;
 use std::time;
 
 /**
- * One field's value. Small and copyable, so a context shares its fields
- * with every entry instead of cloning them. A map literal of plain values
- * fills `Fields` through its `[k] =` operators, which pick the case.
+ * One field's value. Small and copyable, so a context shares its fields with every entry instead of
+ * cloning them. A map literal of plain values fills `Fields` through its `[k] =` operators, which
+ * pick the case.
  */
 public enum Value
 {
@@ -18,14 +18,14 @@ public enum Value
     case time(time::timestamp $at);
 
     /**
-     * Already encoded JSON, kept as text: written as it is in the JSON
-     * format and as plain text in the others.
+     * Already encoded JSON, kept as text: written as it is in the JSON format and as plain text in
+     * the others.
      */
     case raw(string $json);
 
     /**
-     * The value as plain text: strings as they are, numbers in shortest
-     * form, durations like `1.5s`, timestamps in RFC 3339.
+     * The value as plain text: strings as they are, numbers in shortest form, durations like
+     * `1.5s`, timestamps in RFC 3339.
      */
     public const function text() : string
     {
@@ -50,8 +50,8 @@ public enum Value
     }
 
     /**
-     * Whether the JSON format writes the text as a string and the logfmt
-     * format may need to quote it.
+     * Whether the JSON format writes the text as a string and the logfmt format may need to quote
+     * it.
      */
     public const function quoted() : bool
     {

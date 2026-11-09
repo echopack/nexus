@@ -1,0 +1,45 @@
+namespace nexus::oauth;
+
+/**
+ * Why a redirect URI is refused, with the URI or the part of it at fault. `"{$e}"` reads as the
+ * sentence a client is told.
+ */
+public enum RedirectError
+{
+    /**
+     * Empty, over 2000 bytes, or no scheme before a colon.
+     */
+    case notAbsolute(string $uri);
+
+    case fragment(string $uri);
+
+    /**
+     * A space or a control character somewhere.
+     */
+    case spaces;
+
+    /**
+     * A scheme that is not a letter followed by letters, digits, `+`, `-` and `.`.
+     */
+    case scheme(string $uri);
+
+    /**
+     * A scheme that runs or shows something instead of going back to an app (`javascript`, `data`,
+     * `file`, ...).
+     */
+    case forbidden(string $scheme);
+
+    case noHost(string $uri);
+
+    /**
+     * Userinfo, a backslash or an unclosed IPv6 bracket in the host.
+     */
+    case brokenHost(string $uri);
+
+    /**
+     * Plain HTTP to a host other than this machine.
+     */
+    case remote(string $host);
+
+    case brokenPort(string $uri);
+}

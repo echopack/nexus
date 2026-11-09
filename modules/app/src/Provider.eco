@@ -1,9 +1,8 @@
 namespace nexus;
 
 /**
- * One part of the app wiring itself: its bindings, actions, tools, tasks
- * and commands, side by side. The app lists its providers and hands them
- * to `nexus::App` in both hooks:
+ * One part of the app wiring itself: its bindings, actions, tools, tasks and commands, side by
+ * side. The app lists its providers and hands them to `nexus::App` in both hooks:
  *
  * ```echo
  * public class PostsProvider : nexus::Provider
@@ -32,8 +31,8 @@ public interface Provider
     function register(App $app) : void;
 
     /**
-     * Adds this part's commands. The command line reads them before the
-     * app boots, so this only records.
+     * Adds this part's commands. The command line reads them before the app boots, so this only
+     * records.
      */
     function commands(Commands& $cmds) : void
     {

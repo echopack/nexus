@@ -3,7 +3,7 @@
  *
  * A task is a struct conforming to `nexus::work::Task`: its fields are its
  * data, its `handle(nexus::Payload&)` the work. `nexus gen` writes a
- * companion per task, `SendWelcomeTask::push($payload, SendWelcome(...))`,
+ * companion per task, `SendWelcomeTask::push($payload, $user: ...)`,
  * and a table of codecs the extension finds at boot; the app binds each
  * task with its queue, tries and schedule (`Tasks::bind`, or `$app->bindTask` in
  * nexus-app). Workers claim due tasks with a lease, so a task whose process

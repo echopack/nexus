@@ -1,9 +1,8 @@
 namespace nexus::work;
 
 /**
- * Every task type of the program by name: the generated tables of every
- * module plus the ones an extension adds by hand. Filled at boot, read
- * afterwards.
+ * Every task type of the program by name: the generated tables of every module plus the ones an
+ * extension adds by hand. Filled at boot, read afterwards.
  */
 #[atomic]
 public class Kinds
@@ -11,9 +10,13 @@ public class Kinds
     internal ordered_map<string, Kind> $byName = ordered_map<string, Kind>();
     internal map<type_id, string> $byType = map<type_id, string>();
 
+    /**
+     * Adds `$k`; a second kind of the same name replaces the first.
+     */
     public function add(Kind $k) : void
     {
-        $this->byName[$k->name] = $k;
+        string $name = $k->name;
+        $this->byName[$name] = mv $k;
     }
 
     /**
@@ -22,7 +25,7 @@ public class Kinds
     public function bind<T>(Kind $k) : void
     {
         $this->byType[type_id<T>()] = $k->name;
-        $this->add($k);
+        $this->add(mv $k);
     }
 
     /**
@@ -30,13 +33,16 @@ public class Kinds
      */
     public const function of<T>() : Kind?
     {
-        type_id $id = type_id<T>();
+        $id = type_id<T>();
         if (!$this->byType->has($id)) {
             return null;
         }
         return $this->find($this->byType->get($id));
     }
 
+    /**
+     * The kind named `$name`, or null.
+     */
     public const function find(const string& $name) : Kind?
     {
         if (!$this->byName->has($name)) {
@@ -45,15 +51,21 @@ public class Kinds
         return $this->byName->get($name);
     }
 
+    /**
+     * Every kind, in the order they were added.
+     */
     public const function all() : array<Kind>
     {
-        array<Kind> $out = [];
+        array<Kind> $out = arr::room<Kind>($this->byName->count());
         foreach ($this->byName as $name => const &$k) {
             $out[] = $k;
         }
         return $out;
     }
 
+    /**
+     * How many kinds there are.
+     */
     public const function count() : usize
     {
         return $this->byName->count();

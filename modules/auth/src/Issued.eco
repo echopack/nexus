@@ -29,7 +29,7 @@ public struct Issued : nexus::Resource
             return json::nil();
         }
         time::timestamp $t = guard $at;
-        calendar::Zoned $z = guard calendar::Zoned::of($t, calendar::Zone::utc()) else {
+        calendar::Zoned $z = guard calendar::Zoned::of($t, .utc()) else {
             return json::nil();
         };
         return json::str($z->format(calendar::Format::rfc3339()));

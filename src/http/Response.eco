@@ -1,10 +1,9 @@
 namespace nexus;
 
 /**
- * One response, transport independent. What an action answers with in
- * most cases, usually built by a nexus-rest transformer
- * (`$this->transformer->createResponse($payload, $post)`); build it directly for
- * anything else.
+ * One response, transport independent. What an action answers with in most cases, usually built by
+ * a nexus-rest transformer (`$this->transformer->createResponse($payload, $post)`); build it
+ * directly for anything else.
  */
 public struct Response
 {

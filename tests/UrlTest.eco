@@ -61,7 +61,7 @@ test url_refuses_what_is_no_url
 
 test url_builds_by_copy
 {
-    Url $u = Url(path: '/v1/posts');
+    $u = Url(path: '/v1/posts');
     Url $more = $u->with('tag', 'a&b=c')->with('page', '2')->at('top');
     expect($u->text())->is('/v1/posts');
     expect($more->text())->is('/v1/posts?tag=a%26b%3Dc&page=2#top');
@@ -73,7 +73,7 @@ test url_builds_by_copy
 
 test url_goes_on_an_origin
 {
-    Url $path = Url(path: '/v1/posts/5')->with('a', '1');
+    $path = Url(path: '/v1/posts/5')->with('a', '1');
     Url $plain = guard Url::parse('https://example.com');
     Url $mounted = guard Url::parse('https://example.com/api/');
     expect($path->on($plain)->text())->is('https://example.com/v1/posts/5?a=1');
@@ -84,23 +84,23 @@ test url_goes_on_an_origin
 
 test request_and_redirect_speak_url
 {
-    Request $req = Request(Method::get, '/v1/posts?page=2');
+    $req = Request(.get, '/v1/posts?page=2');
     $req->headers->set('Host', 'blog.example.com:8080');
     $req->headers->set('X-Forwarded-Proto', 'https');
     expect($req->url()->text())->is('https://blog.example.com:8080/v1/posts?page=2');
-    Request $odd = Request(Method::get, '/x');
+    $odd = Request(.get, '/x');
     $odd->headers->set('Host', 'bad host');
     expect($odd->url()->text())->is('http://localhost/x');
-    Response $r = Response(redirect: Url(path: '/login')->with('next', '/a b'));
+    $r = Response(redirect: Url(path: '/login')->with('next', '/a b'));
     expect($r->status)->is(302);
     expect($r->headers->get('Location'))->some('/login?next=%2Fa%20b');
-    Response $s = Response(redirect: '/plain', status: 301);
+    $s = Response(redirect: '/plain', status: 301);
     expect($s->headers->get('Location'))->some('/plain');
 }
 
 test query_removes_by_name
 {
-    Query $q = Query(parse: 'a=1&b=2&a=3');
+    $q = Query(parse: 'a=1&b=2&a=3');
     $q->remove('a');
     expect($q->count())->is(1);
     expect($q->encode())->is('b=2');

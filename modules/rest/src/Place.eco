@@ -1,8 +1,8 @@
 namespace nexus::rest;
 
 /**
- * Where a key of an `Item` lands when it is written: attributes go
- * first (XML writes them into the start tag), includes last.
+ * Where a key of an `Item` lands when it is written: attributes go first (XML writes them into the
+ * start tag), includes last.
  */
 internal enum Place : uint8
 {

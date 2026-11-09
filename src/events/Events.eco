@@ -1,13 +1,12 @@
 namespace nexus;
 
 /**
- * Typed events and their listeners, across every module of the program.
- * An event is any struct. A listener is a struct conforming to
- * `nexus::Listener<E>`, with a static `handle(nexus::Payload&, const E&)`,
- * wired with `$s->listen<E, L>()` in an extension's `services()`, so an
- * app can listen to what a library emits. `emit` runs the listeners in the request or task that
- * emits, in the order they were wired, and stops at the first problem. Work that should
- * not hold up the caller goes to a task the listener pushes.
+ * Typed events and their listeners, across every module of the program. An event is any struct. A
+ * listener is a struct conforming to `nexus::Listener<E>`, with a static
+ * `handle(nexus::Payload&, const E&)`, wired with `$s->listen<E, L>()` in an extension's
+ * `services()`, so an app can listen to what a library emits. `emit` runs the listeners in the
+ * request or task that emits, in the order they were wired, and stops at the first problem. Work
+ * that should not hold up the caller goes to a task the listener pushes.
  *
  * ```echo
  * public struct UserRegistered { public int64 $user; }
@@ -22,9 +21,7 @@ namespace nexus;
  *
  * $s->listen<UserRegistered, WelcomeNewUser>();
  *
- * guard nexus::Events::emit($c, UserRegistered($user: $u->id)) else ($p) {
- *     return .error($p);
- * };
+ * try nexus::Events::emit($payload, UserRegistered($user: $u->id));
  * ```
  *
  * The registry is filled while the kernel boots and only read afterwards.
@@ -36,17 +33,16 @@ public class Events
     internal array<string> $names = [];
 
     /**
-     * Adds a listener for events of type `E`, named for logs and listings.
-     * Boot time only.
+     * Adds a listener for events of type `E`, named for logs and listings. Boot time only.
      */
     public function on<E>(const string& $name, function<status<Problem>(Payload&, const E&)> $listener) : void
     {
         type_id $id = type_id<E>();
         if (!$this->byType->has($id)) {
-            Listeners<E> $fresh = Listeners<E>();
+            $fresh = Listeners<E>();
             $this->byType[$id] = erased::from($fresh);
         }
-        Listeners<E> $all = $this->listenersOf<E>($id);
+        $all = $this->listenersOf<E>($id);
         $all->names[] = $name;
         $all->calls[] = $listener;
         $this->names[] = $name;
@@ -55,7 +51,7 @@ public class Events
     /**
      * How many listeners events of type `E` have.
      */
-    public function count<E>() : usize
+    public const function count<E>() : usize
     {
         type_id $id = type_id<E>();
         if (!$this->byType->has($id)) {
@@ -74,8 +70,7 @@ public class Events
     }
 
     /**
-     * Runs every listener of `E` with `$event`; the first problem stops
-     * the rest and comes back.
+     * Runs every listener of `E` with `$event`; the first problem stops the rest and comes back.
      */
     public function run<E>(Payload& $payload, const E& $event) : status<Problem>
     {
@@ -97,16 +92,15 @@ public class Events
     }
 
     /**
-     * Runs every listener of `E` with `$event`, through the app's
-     * registry.
+     * Runs every listener of `E` with `$event`, through the app's registry.
      */
     public static function emit<E>(Payload& $payload, const E& $event) : status<Problem>
     {
-        Events $ev = $payload->get<Events>();
+        $ev = $payload->get<Events>();
         return $ev->run<E>($payload, $event);
     }
 
-    internal function listenersOf<E>(type_id $id) : Listeners<E>
+    internal const function listenersOf<E>(type_id $id) : Listeners<E>
     {
         unsafe {
             Listeners<E> $all = assume<Listeners<E>>($this->byType->get($id));

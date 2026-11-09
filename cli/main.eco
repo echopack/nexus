@@ -1,13 +1,15 @@
 /**
- * nexus, the developer tool. `nexus gen` writes the generated code of the
- * module in the working directory; a build runs it through the manifest's
- * before_build hook.
+ * nexus, the developer tool. `nexus gen` writes the generated code of the module in the working
+ * directory; a build runs it through the manifest's before_build hook.
  */
 
 use std::env;
 use std::io;
 
-function usage() : void
+/**
+ * Prints how `nexus` is called.
+ */
+internal function usage() : void
 {
     io::println('usage: nexus <command> [options]');
     io::println('');
@@ -19,11 +21,11 @@ function usage() : void
     io::println('  --quiet          say nothing on success');
 }
 
-array<string> $argv = env::argv();
+$argv = env::argv();
 string $command = '';
 bool $check = false;
 bool $force = false;
-nexusgen::Generator $generator = nexusgen::Generator();
+$generator = nexusgen::Generator();
 $generator->echoc = string::from(env::var('ECHOC', 'echoc'));
 
 usize $i = 1;
@@ -64,6 +66,6 @@ if ($check) {
     $done = $generator->generate($force);
 }
 guard $done else ($e) {
-    io::eprintln("nexus: {$e->message()}");
+    io::eprintln("nexus: {$e}");
     env::exit(1);
 }
