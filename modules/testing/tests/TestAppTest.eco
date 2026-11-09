@@ -1,5 +1,5 @@
 /**
- * The ecotest-http checks against a tiny nexus app, in process.
+ * TestApp and its kernel transport against a tiny app with a hand-written route table.
  */
 
 use ecotest::expect;
@@ -19,6 +19,7 @@ internal class KEcho : nexus::Action
         $o['host'] = json::str($payload->request->header('Host') ?? '');
         $o['accept'] = json::str($payload->request->header('Accept') ?? '');
         $o['length'] = json::str($payload->request->header('Content-Length') ?? '');
+        $o['peer'] = json::str($payload->request->peer);
         return nexus::Response(json: $o);
     }
 }
@@ -48,6 +49,15 @@ internal class KApp : nexus::Extension
         $s->route(nexus::Route($m, '/echo', 'KEcho', $d, $b, $w));
         return .ok;
     }
+}
+
+/**
+ * `KApp` booted with no config.
+ */
+internal function kernelApp() : TestApp
+{
+    array<nexus::Extension> $exts = [KApp()];
+    return TestApp($exts);
 }
 
 /**
@@ -119,4 +129,33 @@ test the_kernel_sees_what_a_socket_server_would
     ordered_map<string, string> $query = ['q' => 'a b'];
     $api->get('/echo', query: $query)->json('$.target', '/echo?q=a%20b');
     $api->head('/echo')->ok()->body('');
+}
+
+test an_app_answers_through_its_api_from_loopback
+{
+    $app = kernelApp();
+    $api = $app->api();
+
+    $api->with('X-Who', 'tester')->get('/echo')->ok()->json('$.who', 'tester')->json('$.peer', '127.0.0.1:0');
+    $api->get('/nope')->problem(404);
+    $api->delete('/echo')->problem(405)->header('Allow', 'GET, POST, OPTIONS, HEAD');
+    $app->expectLogged(.info, 'GET /echo 200')->expectNotLogged('GET /echo 500');
+}
+
+test log_checks_fail_at_the_callers_line_and_list_the_log
+{
+    $app = kernelApp();
+    $app->api()->get('/echo')->ok();
+
+    $failures = ecotest::caught(function() : void {
+        $app->expectLogged(.warn, 'GET /echo 200');
+        $app->expectNotLogged('GET /echo 200');
+    });
+
+    expect($failures->count())->is(2);
+    expect($failures[0]->summary)->is("expected 'GET /echo 200' logged at warn");
+    expect($failures[0]->detail)->has('info GET /echo 200');
+    expect($failures[1]->summary)->is("expected 'GET /echo 200' not to be logged");
+    string $file = "{$failures[0]->at->file}";
+    expect($file)->ends('TestAppTest.eco');
 }

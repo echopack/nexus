@@ -1,12 +1,16 @@
 namespace nexus::testing;
 
+use ecotest::http::Api;
+
 /**
  * A booted app for tests: the kernel with the program's generated route and config tables, fixed
- * config values instead of the environment, and a log that keeps every entry.
+ * config values instead of the environment, and a log that keeps every entry. `api()` sends it
+ * requests in process, checked with ecotest-http.
  *
  * ```echo
- * $app = TestApp($extensions, ['BLOG_KEY' => 'k']);
- * $app->client()->get('/health')->assertStatus(200);
+ * $app = TestApp($extensions, ['BLOG_TITLE' => 'Testing blog']);
+ * $app->api()->get('/health')->status(200)->json('$.title', 'Testing blog');
+ * $app->expectLogged(.info, 'GET /health 200');
  * ```
  */
 public class TestApp
@@ -50,11 +54,12 @@ public class TestApp
     }
 
     /**
-     * A client with no default headers.
+     * The app as an ecotest-http `Api`: every request goes straight into the kernel, no socket in
+     * between, from `127.0.0.1`. `with` and `bearer` hand back a copy that sends more headers.
      */
-    public const function client() : Client
+    public const function api() : Api
     {
-        return Client($this->kernel);
+        return Api(transport: KernelTransport($this->kernel), base: 'http://app');
     }
 
     /**
@@ -74,30 +79,33 @@ public class TestApp
     }
 
     /**
-     * Stops the test unless an entry with exactly this message was written at `$level`.
+     * An entry with exactly this message was written at `$level`. A failure lists what was logged.
      */
-    public function assertLogged(nexus::log::Level $level, const string& $message) : TestApp
+    #[caller]
+    public function expectLogged(nexus::log::Level $level, const string& $message) : TestApp
     {
+        ecotest::checked();
         if (!$this->logged($level, $message)) {
-            string $got = $this->logLines();
-            die("nexus-testing: expected a {$level->name()} log entry '{$message}', got: {$got}");
+            ecotest::fail("expected '{$message}' logged at {$level->name()}", std::src::caller(), $detail: $this->logLines());
         }
         return $this;
     }
 
     /**
-     * Stops the test if an entry with exactly this message was written.
+     * No entry with exactly this message was written, at any level.
      */
-    public function assertNotLogged(const string& $message) : TestApp
+    #[caller]
+    public function expectNotLogged(const string& $message) : TestApp
     {
+        ecotest::checked();
         if ($this->logged($message)) {
-            die("nexus-testing: expected no log entry '{$message}'");
+            ecotest::fail("expected '{$message}' not to be logged", std::src::caller(), $detail: $this->logLines());
         }
         return $this;
     }
 
     /**
-     * Every message so far, for a failure that says what was logged instead.
+     * Every entry so far, one per line, for a failure that says what was logged instead.
      */
     private function logLines() : string
     {
@@ -106,8 +114,8 @@ public class TestApp
             $all[] = "{$e->level->name()} {$e->message}";
         }
         if ($all->empty()) {
-            return '(nothing)';
+            return 'nothing was logged';
         }
-        return str::join($all, '; ');
+        return str::join($all, "\n");
     }
 }

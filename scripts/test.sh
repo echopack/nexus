@@ -7,13 +7,16 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 echoc="${ECHOC:-echoc}"
 status=0
+# the suites on nexus-testing reach ecotest-http by path; its libjson and
+# libcurl have to be the sibling checkouts
+"${root}/scripts/link-vendor.sh" >/dev/null
 # each suite prints its ecotest summary line, and every line that is not
 # a passing test when it fails. Every suite runs the tool nexus itself
 # vendors (-m root), testing the directory it runs in: the modules link
 # vendor/echolang/libjson to the sibling 0.2 checkout, which the tool's
-# ^0.1 require does not build against, and modules/ecotest reaches ecotest
-# through path depends, so epm offers it no tool at all.
-for dir in . modules/http modules/testing modules/carbon modules/rest modules/crud modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mcp modules/oauth modules/oauth/carbon modules/app modules/ecotest examples/blog; do
+# ^0.1 require does not build against, and the suites on nexus-testing
+# reach ecotest through path depends, so epm offers them no tool at all.
+for dir in . modules/http modules/testing modules/carbon modules/rest modules/crud modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mcp modules/oauth modules/oauth/carbon modules/app examples/blog; do
     echo "== ${dir}"
     out="$(mktemp)"
     if (cd "${root}/${dir}" && epm run -m "${root}" ecotest --style simple --timeout 120000 --echoc "${echoc}") >"${out}" 2>&1; then

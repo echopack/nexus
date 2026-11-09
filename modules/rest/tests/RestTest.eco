@@ -4,7 +4,7 @@
  * references with meta, the depth limit, and the context handed down the tree.
  */
 
-use nexus::testing::{TestApp, TestResponse};
+use nexus::testing::TestApp;
 use container::{Builder, Container};
 use ecotest::expect;
 
@@ -232,52 +232,57 @@ internal function tApp() : TestApp
 
 test an_item_answers_as_json_by_default
 {
-    $r = tApp()->client()->get('/item');
-    $r->assertStatus(200)->assertHeader('Content-Type', 'application/json; charset=utf-8');
-    $r->assertBody('{"data":{"id":1,"name":"one","tags":["a","b"]}}');
+    tApp()->api()->get('/item')
+        ->status(200)
+        ->header('Content-Type', 'application/json; charset=utf-8')
+        ->body('{"data":{"id":1,"name":"one","tags":["a","b"]}}');
 }
 
 test xml_when_the_request_prefers_it
 {
-    $r = tApp()->client()->with('Accept', 'application/xml')->get('/item?include=owner');
-    $r->assertStatus(200)->assertHeader('Content-Type', 'application/xml; charset=utf-8');
-    $r->assertBody('<?xml version="1.0" encoding="UTF-8"?><response><data id="1"><name>one</name><tags><tag>a</tag><tag>b</tag></tags><owner id="7"><name>Ann</name></owner></data></response>');
+    tApp()->api()->with('Accept', 'application/xml')->get('/item?include=owner')
+        ->status(200)
+        ->header('Content-Type', 'application/xml; charset=utf-8')
+        ->body('<?xml version="1.0" encoding="UTF-8"?><response><data id="1"><name>one</name><tags><tag>a</tag><tag>b</tag></tags><owner id="7"><name>Ann</name></owner></data></response>');
 }
 
 test lists_carry_their_meta_first
 {
-    $list = tApp()->client()->get('/items');
-    $list->assertStatus(200)->assertBody('{"total":41,"data":[{"id":1,"name":"one","tags":[]},{"id":2,"name":"two","tags":[]}]}');
-    $xml = tApp()->client()->with('Accept', 'application/xml')->get('/items');
-    $xml->assertBodyContains('<total>41</total><data><item id="1"><name>one</name><tags/></item>');
+    $api = tApp()->api();
+    $api->get('/items')
+        ->status(200)
+        ->body('{"total":41,"data":[{"id":1,"name":"one","tags":[]},{"id":2,"name":"two","tags":[]}]}');
+    $api->with('Accept', 'application/xml')->get('/items')->has('<total>41</total><data><item id="1"><name>one</name><tags/></item>');
 }
 
 test includes_are_checked_against_the_transformer
 {
-    $app = tApp();
-    array<string> $owner = ['data', 'owner', 'name'];
-    $app->client()->get('/item?include=owner')->assertStatus(200)->assertJson($owner, 'Ann');
-    $app->client()->get('/item?include=owner.boss')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":["a","b"],"owner":{"id":7,"name":"Ann","boss":null}}}');
-    $app->client()->get('/item?include=secrets')->assertProblem(400)->assertBodyContains('secrets');
-    $app->client()->get('/item?include=..')->assertProblem(400);
+    $api = tApp()->api();
+    $api->get('/item?include=owner')->status(200)->json('$.data.owner.name', 'Ann');
+    $api->get('/item?include=owner.boss')
+        ->status(200)
+        ->body('{"data":{"id":1,"name":"one","tags":["a","b"],"owner":{"id":7,"name":"Ann","boss":null}}}');
+    $api->get('/item?include=secrets')->problem(400)->has('secrets');
+    $api->get('/item?include=..')->problem(400);
 }
 
 test nesting_stops_at_the_limit
 {
-    $r = tApp()->client()->get('/deep');
-    $r->assertStatus(200);
     // eight levels of boss below the top one, the ninth left out
-    array<string> $eighth = ['data', '0', 'boss', 'boss', 'boss', 'boss', 'boss', 'boss', 'boss', 'boss', 'id'];
-    $r->assertJson($eighth, 9);
-    $r->assertBodyContains('"id":9,"name":"next"}');
+    tApp()->api()->get('/deep')
+        ->status(200)
+        ->json('$.data[0].boss.boss.boss.boss.boss.boss.boss.boss.id', 9)
+        ->has('"id":9,"name":"next"}');
 }
 
 test the_context_reaches_nested_transformers
 {
-    $app = tApp();
-    $app->client()->get('/viewed?include=owner')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":[],"owner":{"id":7,"name":"Ann","mine":true}}}');
+    $api = tApp()->api();
+    $api->get('/viewed?include=owner')
+        ->status(200)
+        ->body('{"data":{"id":1,"name":"one","tags":[],"owner":{"id":7,"name":"Ann","mine":true}}}');
     // without a context nothing knows the viewer
-    $app->client()->get('/item?include=owner')->assertBodyContains('"owner":{"id":7,"name":"Ann"}}');
+    $api->get('/item?include=owner')->has('"owner":{"id":7,"name":"Ann"}}');
 }
 
 test a_context_keeps_one_value_per_type
@@ -295,8 +300,9 @@ test a_context_keeps_one_value_per_type
 
 test the_network_resolves_cycles
 {
-    $app = tApp();
-    $app->client()->get('/cycle?include=owner.items')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":[],"owner":{"id":7,"name":"Ann","items":[{"id":2,"name":"two","tags":[]}]}}}');
+    tApp()->api()->get('/cycle?include=owner.items')
+        ->status(200)
+        ->body('{"data":{"id":1,"name":"one","tags":[],"owner":{"id":7,"name":"Ann","items":[{"id":2,"name":"two","tags":[]}]}}}');
 }
 
 test a_network_holds_one_transformer_per_model
@@ -312,19 +318,24 @@ test a_network_holds_one_transformer_per_model
 
 test a_reference_carries_meta_next_to_its_data
 {
-    $app = tApp();
-    $app->client()->get('/cycle?include=holder')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":[],"holder":{"is_cached":true,"data":{"id":7,"name":"Ann"}}}}');
-    $app->client()->with('Accept', 'application/xml')->get('/cycle?include=holder')->assertBody('<?xml version="1.0" encoding="UTF-8"?><response><data id="1"><name>one</name><tags/><holder><is_cached>true</is_cached><data id="7"><name>Ann</name></data></holder></data></response>');
+    $api = tApp()->api();
+    $api->get('/cycle?include=holder')
+        ->status(200)
+        ->body('{"data":{"id":1,"name":"one","tags":[],"holder":{"is_cached":true,"data":{"id":7,"name":"Ann"}}}}');
+    $api->with('Accept', 'application/xml')->get('/cycle?include=holder')
+        ->body('<?xml version="1.0" encoding="UTF-8"?><response><data id="1"><name>one</name><tags/><holder><is_cached>true</is_cached><data id="7"><name>Ann</name></data></holder></data></response>');
 }
 
 test a_reference_to_nothing_keeps_its_meta
 {
-    tApp()->client()->get('/orphan?include=holder')->assertStatus(200)->assertBody('{"data":{"id":1,"name":"one","tags":[],"holder":{"is_cached":true,"data":null}}}');
+    tApp()->api()->get('/orphan?include=holder')
+        ->status(200)
+        ->body('{"data":{"id":1,"name":"one","tags":[],"holder":{"is_cached":true,"data":null}}}');
 }
 
 test an_item_answer_carries_meta_first
 {
-    tApp()->client()->get('/cached')->assertStatus(200)->assertBody('{"cached":true,"data":{"id":1,"name":"one","tags":[]}}');
+    tApp()->api()->get('/cached')->status(200)->body('{"cached":true,"data":{"id":1,"name":"one","tags":[]}}');
 }
 
 test an_item_replaces_in_place_and_appends_new_keys

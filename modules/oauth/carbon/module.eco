@@ -35,5 +35,4 @@
     #[depends: "../../testing"]
     #[depends: "../../auth"]
     #[sources: "tests/*.eco"]
-    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
 }

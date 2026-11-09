@@ -6,7 +6,8 @@
 
 use nexus::mcp::{ToolSpec, Tools, Schema};
 use ecotest::expect;
-use nexus::testing::{TestApp, TestResponse};
+use ecotest::http::{Api, Reply};
+use nexus::testing::TestApp;
 
 internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
 
@@ -115,7 +116,11 @@ internal class TExt : nexus::Extension
 internal class Rig
 {
     public TestApp $app;
-    public string $token;
+
+    /**
+     * The app as the signed in caller: every request carries the test token.
+     */
+    public Api $api;
 
     public constructor()
     {
@@ -126,124 +131,111 @@ internal class Rig
         nexus::Payload $payload = $this->app->kernel->background('issue', 'test');
         nexus::auth::Issued $issued = guard $payload->get<nexus::auth::Tokens>()->issue('7');
         nexus::Kernel::finish($payload);
-        $this->token = $issued->token;
+        $this->api = $this->app->api()->bearer($issued->token);
     }
 
     /**
-     * Posts one JSON-RPC message with the test token.
+     * Posts one JSON-RPC message with the test token, `$params` given as JSON text.
      */
-    public function rpc(const string& $method, json::Value $params) : TestResponse
+    public function rpc(const string& $method, const string& $params = '{}') : Reply
+    {
+        json::Value $p = guard json::parse($params);
+        return $this->send($method, mv $p);
+    }
+
+    /**
+     * Calls tool `$tool` with `$args` given as JSON text.
+     */
+    public function call(const string& $tool, const string& $args = '{}') : Reply
+    {
+        json::Value $arguments = guard json::parse($args);
+        json::Value $p = json::object();
+        $p['name'] = json::str($tool);
+        $p['arguments'] = mv $arguments;
+        return $this->send('tools/call', mv $p);
+    }
+
+    /**
+     * Posts the JSON-RPC envelope around `$params` with the test token.
+     */
+    private function send(const string& $method, mv json::Value $params) : Reply
     {
         json::Value $o = json::object();
         $o['jsonrpc'] = json::str('2.0');
         $o['id'] = json::int(1);
         $o['method'] = json::str($method);
-        $o['params'] = $params;
-        return $this->app->client()->with('Authorization', "Bearer {$this->token}")->post('/mcp', json: $o);
-    }
-
-    public function call(const string& $tool, json::Value $args) : TestResponse
-    {
-        json::Value $p = json::object();
-        $p['name'] = json::str($tool);
-        $p['arguments'] = $args;
-        return $this->rpc('tools/call', $p);
+        $o['params'] = mv $params;
+        return $this->api->post('/mcp', json: $o);
     }
 }
 
 test a_caller_without_a_credential_is_pointed_at_oauth
 {
     $r = Rig();
-    json::Value $o = json::object();
-    $o['jsonrpc'] = json::str('2.0');
-    $o['id'] = json::int(1);
-    $o['method'] = json::str('ping');
-    TestResponse $res = $r->app->client()->with('Host', 'blog.test')->post('/mcp', json: $o);
-    $res->assertStatus(401);
-    expect($res->header('WWW-Authenticate'))->some('Bearer resource_metadata="http://blog.test/.well-known/oauth-protected-resource/mcp"');
+    $r->app->api()->with('Host', 'blog.test')->post('/mcp', json: '{"jsonrpc":"2.0","id":1,"method":"ping"}')
+        ->status(401)
+        ->header('WWW-Authenticate', 'Bearer resource_metadata="http://blog.test/.well-known/oauth-protected-resource/mcp"');
 }
 
 test initialize_answers_the_asked_revision_and_the_server
 {
     $r = Rig();
-    json::Value $p = json::object();
-    $p['protocolVersion'] = json::str('2025-06-18');
-    TestResponse $res = $r->rpc('initialize', $p);
-    $res->assertStatus(200);
-    $res->assertJson(['result', 'protocolVersion'], '2025-06-18');
-    $res->assertJson(['result', 'serverInfo', 'name'], 'tests');
-    $res->assertJson(['result', 'instructions'], 'Call echo_text.');
+    $r->rpc('initialize', '{"protocolVersion":"2025-06-18"}')
+        ->status(200)
+        ->json('$.result.protocolVersion', '2025-06-18')
+        ->json('$.result.serverInfo.name', 'tests')
+        ->json('$.result.instructions', 'Call echo_text.');
 
-    json::Value $q = json::object();
-    $q['protocolVersion'] = json::str('1999-01-01');
-    $r->rpc('initialize', $q)->assertJson(['result', 'protocolVersion'], '2025-11-25');
+    $r->rpc('initialize', '{"protocolVersion":"1999-01-01"}')->json('$.result.protocolVersion', '2025-11-25');
 }
 
 test tools_are_listed_with_their_schema
 {
     $r = Rig();
-    TestResponse $res = $r->rpc('tools/list', json::object());
-    $res->assertCount(['result', 'tools'], 2);
-    $res->assertJson(['result', 'tools', '0', 'name'], 'echo_text');
-    $res->assertJson(['result', 'tools', '0', 'title'], 'Echo');
-    $res->assertJson(['result', 'tools', '0', 'inputSchema', 'required', '0'], 'text');
-    json::Value $hint = expect(TestResponse::walk($res->json(), ['result', 'tools', '0', 'annotations', 'readOnlyHint']))->some();
-    expect($hint->asBool())->some(true);
+    $r->rpc('tools/list')
+        ->count('$.result.tools', 2)
+        ->json('$.result.tools[0].name', 'echo_text')
+        ->json('$.result.tools[0].title', 'Echo')
+        ->json('$.result.tools[0].inputSchema.required[0]', 'text')
+        ->json('$.result.tools[0].annotations.readOnlyHint', true);
 }
 
 test a_call_runs_the_tool_on_the_mcp_door
 {
     $r = Rig();
-    json::Value $args = json::object();
-    $args['text'] = json::str('hello');
-    TestResponse $res = $r->call('echo_text', $args);
-    $res->assertStatus(200);
-    $res->assertJson(['result', 'structuredContent', 'said'], 'hello');
-    $res->assertJson(['result', 'structuredContent', 'by'], 'mcp');
-    json::Value $failed = expect(TestResponse::walk($res->json(), ['result', 'isError']))->some();
-    expect($failed->asBool())->some(false);
+    $r->call('echo_text', '{"text":"hello"}')
+        ->status(200)
+        ->json('$.result.structuredContent.said', 'hello')
+        ->json('$.result.structuredContent.by', 'mcp')
+        ->json('$.result.isError', false);
 }
 
 test bad_arguments_are_a_tool_error_the_model_reads
 {
     $r = Rig();
-    json::Value $unknown = json::object();
-    $unknown['text'] = json::str('hi');
-    $unknown['loud'] = json::bool(true);
-    TestResponse $res = $r->call('echo_text', $unknown);
-    json::Value $failed = expect(TestResponse::walk($res->json(), ['result', 'isError']))->some();
-    expect($failed->asBool())->some(true);
-    $res->assertBodyContains('echo_text takes no loud');
-
-    TestResponse $missing = $r->call('echo_text', json::object());
-    json::Value $alsoFailed = expect(TestResponse::walk($missing->json(), ['result', 'isError']))->some();
-    expect($alsoFailed->asBool())->some(true);
-    $missing->assertBodyContains('is required');
-
-    $r->call('no_such_tool', json::object())->assertJson(['error', 'code'], -32602);
+    $r->call('echo_text', '{"text":"hi","loud":true}')->json('$.result.isError', true)->has('echo_text takes no loud');
+    $r->call('echo_text')->json('$.result.isError', true)->has('is required');
+    $r->call('no_such_tool')->json('$.error.code', -32602);
 }
 
 test a_tools_middleware_answers_for_it
 {
     $r = Rig();
-    json::Value $args = json::object();
-    $args['text'] = json::str('hello');
-    TestResponse $res = $r->call('locked_echo', $args);
-    $res->assertStatus(200);
-    json::Value $failed = expect(TestResponse::walk($res->json(), ['result', 'isError']))->some();
-    expect($failed->asBool())->some(true);
-    $res->assertBodyContains('this one is locked');
+    $r->call('locked_echo', '{"text":"hello"}')
+        ->status(200)
+        ->json('$.result.isError', true)
+        ->has('this one is locked');
 }
 
 test the_endpoint_refuses_what_it_does_not_speak
 {
     $r = Rig();
-    $r->rpc('resources/list', json::object())->assertJson(['error', 'code'], -32601);
-    $r->app->client()->get('/mcp')->assertStatus(405)->assertHeader('Allow', 'POST');
-    $r->app->client()->with('Authorization', "Bearer {$r->token}")->post('/mcp', body: '{}', type: 'text/plain')->assertStatus(415);
-    $r->app->client()->with('Authorization', "Bearer {$r->token}")->with('MCP-Protocol-Version', '2024-01-01')->post('/mcp', json: json::object())->assertStatus(400);
-    $r->app->client()->with('Authorization', "Bearer {$r->token}")->post('/mcp', body: '{"jsonrpc":"2.0","method":"notifications/initialized"}', type: 'application/json')->assertStatus(202);
-    $r->app->client()->with('Authorization', "Bearer {$r->token}")->post('/mcp', body: 'nope', type: 'application/json')->assertJson(['error', 'code'], -32700);
+    $r->rpc('resources/list')->json('$.error.code', -32601);
+    $r->app->api()->get('/mcp')->status(405)->header('Allow', 'POST');
+    $r->api->post('/mcp', body: '{}', type: 'text/plain')->status(415);
+    $r->api->with('MCP-Protocol-Version', '2024-01-01')->post('/mcp', json: '{}')->status(400);
+    $r->api->post('/mcp', json: '{"jsonrpc":"2.0","method":"notifications/initialized"}')->status(202);
+    $r->api->post('/mcp', body: 'nope', type: 'application/json')->json('$.error.code', -32700);
 }
 
 test boot_refuses_a_tool_without_a_binding

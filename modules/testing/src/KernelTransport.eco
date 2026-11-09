@@ -3,10 +3,11 @@ namespace nexus::testing;
 use ecotest::http::{Header, Request, Response, Transport, TransportError, Verb};
 
 /**
- * Delivers requests to a nexus kernel in process: `Api(transport: KernelTransport($app->kernel))`.
- * The URL's path and query become the request target; scheme, host and fragment are dropped. It
- * keeps the `ecotest::http::Transport` contract, so the kernel sees the `Host`, `Accept` and
- * `Content-Length` a socket client would add, and a HEAD comes back without a body.
+ * Delivers requests to a nexus kernel in process; `TestApp::api()` is built on it. The URL's path
+ * and query become the request target; scheme, host and fragment are dropped. It keeps the
+ * `ecotest::http::Transport` contract, so the kernel sees the `Host`, `Accept` and
+ * `Content-Length` a socket client would add, and a HEAD comes back without a body. The peer is
+ * `127.0.0.1:0`, a loopback client.
  */
 public class KernelTransport : Transport
 {
@@ -28,6 +29,7 @@ public class KernelTransport : Transport
         string $target = KernelTransport::target($request->url);
         $in = nexus::Request(KernelTransport::method($request->verb), $target);
         $in->body = $request->body;
+        $in->peer = '127.0.0.1:0';
 
         foreach ($request->headers as const &$h) {
             $in->headers->add($h->name, $h->value);

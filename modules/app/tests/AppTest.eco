@@ -4,7 +4,7 @@
  * the boot errors when a helper's module is missing.
  */
 
-use nexus::testing::{TestApp, TestResponse};
+use nexus::testing::TestApp;
 use container::Container;
 use ecotest::expect;
 
@@ -292,11 +292,8 @@ internal function aFirst(const nexus::BootError& $e) : string
 test actions_answer_on_their_route_and_link_to_themselves
 {
     TestApp $app = aApp();
-    TestResponse $res = $app->client()->get('/items/7');
-    $res->assertStatus(200);
-    $res->assertJson(['id'], 7);
-    $res->assertJson(['self'], '/items/7');
-    $app->client()->get('/items/x')->assertStatus(404);
+    $app->api()->get('/items/7')->status(200)->json('$.id', 7)->json('$.self', '/items/7');
+    $app->api()->get('/items/x')->status(404);
     nexus::Router $router = $app->kernel->router;
     expect($router->url<AShow>(['id' => '9'])->text())->is('/items/9');
     bool $constrained = false;
@@ -350,26 +347,22 @@ test a_shared_binding_is_one_for_the_whole_app
 test an_action_answers_on_every_route_it_is_given
 {
     TestApp $app = aApp();
-    TestResponse $res = $app->client()->get('/things/3');
-    $res->assertStatus(200);
-    $res->assertJson(['id'], 3);
-    $app->client()->post('/things/4', json: json::object())->assertStatus(200);
+    $app->api()->get('/things/3')->status(200)->json('$.id', 3);
+    $app->api()->post('/things/4', json: '{}')->status(200);
 }
 
 test middleware_wraps_every_route_of_the_action
 {
-    TestApp $app = aApp();
-    $app->client()->get('/items/1')->assertHeader('X-Stamp', 'yes');
-    $app->client()->get('/things/1')->assertHeader('X-Stamp', 'yes');
+    $api = aApp()->api();
+    $api->get('/items/1')->header('X-Stamp', 'yes');
+    $api->get('/things/1')->header('X-Stamp', 'yes');
 }
 
 test the_apps_middleware_wraps_every_request
 {
-    TestApp $app = aApp();
-    $app->client()->get('/items/1')->assertHeader('X-Every', 'yes');
-    TestResponse $missing = $app->client()->get('/nowhere');
-    $missing->assertStatus(404);
-    $missing->assertHeader('X-Every', 'yes');
+    $api = aApp()->api();
+    $api->get('/items/1')->header('X-Every', 'yes');
+    $api->get('/nowhere')->status(404)->header('X-Every', 'yes');
 }
 
 test a_route_without_methods_stops_the_boot

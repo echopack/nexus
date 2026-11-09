@@ -3,7 +3,7 @@
  * does not open, the problems of carbon errors and the migrate commands.
  */
 
-use nexus::testing::{TestApp, TestResponse};
+use nexus::testing::TestApp;
 use container::{Builder, Container};
 use ecotest::expect;
 
@@ -81,9 +81,9 @@ test every_request_has_a_session_of_its_own
     $b = cDriver();
     $source = carbon::fake::Source<hydrahon::Mysql>([$a, $b]);
     array<nexus::Extension> $exts = [cOn($source), CApp()];
-    $app = TestApp($exts);
-    $app->client()->get('/ping')->assertStatus(200);
-    $app->client()->get('/ping')->assertStatus(200);
+    $api = TestApp($exts)->api();
+    $api->get('/ping')->status(200);
+    $api->get('/ping')->status(200);
     // one connection per request
     expect($source->opened())->is(2);
     expect($a->last())->is('SELECT 1');

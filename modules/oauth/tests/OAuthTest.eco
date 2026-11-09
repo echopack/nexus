@@ -3,11 +3,14 @@
  * by a signed in user, the code traded with PKCE, the access token on the MCP endpoint (and nowhere
  * else), refresh rotation with reuse detection, revocation and the grants list, on memory stores
  * and a clock the tests move.
+ *
+ * Requests reach the app as host `app`, so the issuer is `http://app`.
  */
 
 use nexus::oauth::{Pkce, Register};
 use nexus::mcp::{ToolSpec, Schema};
-use nexus::testing::{TestApp, TestResponse};
+use nexus::testing::TestApp;
+use ecotest::http::{Api, Reply};
 use std::time;
 use ecotest::expect;
 
@@ -47,11 +50,17 @@ internal class Rig
     public calendar::ManualClock $clock;
     public string $user;
 
+    /**
+     * The app, signed in as user 7.
+     */
+    public Api $signedIn;
+
     public constructor()
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
         $this->app = TestApp(Rig::extensions($this->clock, '/consent'), Rig::vars());
         $this->user = Rig::signIn($this->app);
+        $this->signedIn = $this->app->api()->bearer($this->user);
     }
 
     /**
@@ -62,6 +71,7 @@ internal class Rig
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
         $this->app = TestApp(Rig::extensions($this->clock, $consent), Rig::vars());
         $this->user = Rig::signIn($this->app);
+        $this->signedIn = $this->app->api()->bearer($this->user);
     }
 
     public static function vars() : map<string, string>
@@ -89,24 +99,22 @@ internal class Rig
         return $issued->token;
     }
 
+    /**
+     * Registers a client that comes back to `REDIRECT`: its id.
+     */
     public function register() : string
     {
-        json::Value $uris = json::arr();
-        $uris[] = json::str(REDIRECT);
-        json::Value $o = json::object();
-        $o['client_name'] = json::str('Test client');
-        $o['redirect_uris'] = mv $uris;
-        TestResponse $res = $this->app->client()->post('/oauth/register', json: $o);
-        $res->assertStatus(201);
-        json::Value $id = guard TestResponse::walk($res->json(), ['client_id']);
-        return $id->asStr() ?? '';
+        return $this->app->api()
+            ->post('/oauth/register', json: '{"client_name":"Test client","redirect_uris":["http://127.0.0.1:33418/callback"]}')
+            ->status(201)
+            ->capture('$.client_id');
     }
 
     public function query(const string& $client) : string
     {
         string $challenge = Pkce::challenge(VERIFIER);
         string $redirect = nexus::Percent::encode(REDIRECT);
-        return "response_type=code&client_id={$client}&redirect_uri={$redirect}&code_challenge={$challenge}&code_challenge_method=S256&state=s1&resource=http%3A%2F%2Flocalhost%2Fmcp";
+        return "response_type=code&client_id={$client}&redirect_uri={$redirect}&code_challenge={$challenge}&code_challenge_method=S256&state=s1&resource=http%3A%2F%2Fapp%2Fmcp";
     }
 
     /**
@@ -117,47 +125,35 @@ internal class Rig
         json::Value $o = json::object();
         $o['query'] = json::str($query);
         $o['allow'] = json::bool($allow);
-        TestResponse $res = $this->app->client()->with('Authorization', "Bearer {$this->user}")->post('/oauth/approve', json: $o);
-        $res->assertStatus(200);
-        json::Value $to = guard TestResponse::walk($res->json(), ['redirect']);
-        return $to->asStr() ?? '';
+        return $this->signedIn->post('/oauth/approve', json: $o)->status(200)->capture('$.redirect');
     }
 
-    public function token(const string& $form) : TestResponse
+    public function token(const ordered_map<string, string>& $form) : Reply
     {
-        return $this->app->client()->post('/oauth/token', form: $form);
+        return $this->app->api()->post('/oauth/token', form: $form);
     }
 
     /**
      * Registers, approves and trades the code: the token answer.
      */
-    public function connect() : TestResponse
+    public function connect() : Reply
     {
         string $client = $this->register();
         string $back = $this->approve($this->query($client), true);
-        string $code = Rig::param($back, 'code');
-        string $redirect = nexus::Percent::encode(REDIRECT);
-        string $verifier = VERIFIER;
-        return $this->token("grant_type=authorization_code&client_id={$client}&code={$code}&redirect_uri={$redirect}&code_verifier={$verifier}");
+        return $this->token([
+            'grant_type' => 'authorization_code',
+            'client_id' => $client,
+            'code' => Rig::param($back, 'code'),
+            'redirect_uri' => REDIRECT,
+            'code_verifier' => VERIFIER,
+        ]);
     }
 
-    public function who(const string& $token) : TestResponse
+    public function who(const string& $token) : Reply
     {
-        json::Value $p = json::object();
-        $p['name'] = json::str('who');
-        $p['arguments'] = json::object();
-        json::Value $o = json::object();
-        $o['jsonrpc'] = json::str('2.0');
-        $o['id'] = json::int(1);
-        $o['method'] = json::str('tools/call');
-        $o['params'] = mv $p;
-        return $this->app->client()->with('Authorization', "Bearer {$token}")->post('/mcp', json: $o);
-    }
-
-    public static function field(const TestResponse& $res, const string& $key) : string
-    {
-        json::Value $v = guard TestResponse::walk($res->json(), [$key]);
-        return $v->asStr() ?? '';
+        return $this->app->api()
+            ->bearer($token)
+            ->post('/mcp', json: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"who","arguments":{}}}');
     }
 
     /**
@@ -177,35 +173,28 @@ internal class Rig
 test the_metadata_names_the_endpoints
 {
     $r = Rig();
-    TestResponse $server = $r->app->client()->with('Host', 'blog.test')->get('/.well-known/oauth-authorization-server');
-    $server->assertStatus(200);
-    $server->assertJson(['issuer'], 'http://blog.test');
-    $server->assertJson(['token_endpoint'], 'http://blog.test/oauth/token');
-    $server->assertJson(['code_challenge_methods_supported', '0'], 'S256');
-    TestResponse $resource = $r->app->client()->with('Host', 'blog.test')->get('/.well-known/oauth-protected-resource/mcp');
-    $resource->assertJson(['resource'], 'http://blog.test/mcp');
-    $resource->assertJson(['authorization_servers', '0'], 'http://blog.test');
-    $resource->assertJson(['resource_name'], 'Tests');
+    $blog = $r->app->api()->with('Host', 'blog.test');
+    $blog->get('/.well-known/oauth-authorization-server')
+        ->status(200)
+        ->json('$.issuer', 'http://blog.test')
+        ->json('$.token_endpoint', 'http://blog.test/oauth/token')
+        ->json('$.code_challenge_methods_supported[0]', 'S256');
+    $blog->get('/.well-known/oauth-protected-resource/mcp')
+        ->json('$.resource', 'http://blog.test/mcp')
+        ->json('$.authorization_servers[0]', 'http://blog.test')
+        ->json('$.resource_name', 'Tests');
 }
 
 test registration_checks_what_a_client_asks_for
 {
     $r = Rig();
-    string $id = $r->register();
-    expect($id)->length(32);
+    expect($r->register())->length(32);
 
-    json::Value $far = json::arr();
-    $far[] = json::str('http://evil.example/cb');
-    json::Value $o = json::object();
-    $o['redirect_uris'] = mv $far;
-    $r->app->client()->post('/oauth/register', json: $o)->assertStatus(400)->assertJson(['error'], 'invalid_redirect_uri');
-
-    json::Value $ok = json::arr();
-    $ok[] = json::str('https://app.example/cb');
-    json::Value $secret = json::object();
-    $secret['redirect_uris'] = mv $ok;
-    $secret['token_endpoint_auth_method'] = json::str('client_secret_basic');
-    $r->app->client()->post('/oauth/register', json: $secret)->assertJson(['error'], 'invalid_client_metadata');
+    $r->app->api()->post('/oauth/register', json: '{"redirect_uris":["http://evil.example/cb"]}')
+        ->status(400)
+        ->json('$.error', 'invalid_redirect_uri');
+    $r->app->api()->post('/oauth/register', json: '{"redirect_uris":["https://app.example/cb"],"token_endpoint_auth_method":"client_secret_basic"}')
+        ->json('$.error', 'invalid_client_metadata');
 
     expect(Register::clean("Evil\u{202E}txt.exe"))->is('Eviltxt.exe');
     expect(Register::clean("\n\t"))->is('MCP client');
@@ -216,38 +205,32 @@ test authorize_hands_the_browser_to_the_consent_page
     $r = Rig();
     string $client = $r->register();
     string $query = $r->query($client);
-    TestResponse $res = $r->app->client()->get("/oauth/authorize?{$query}");
-    $res->assertStatus(302);
-    string $location = $res->header('Location') ?? '';
-    expect($location)->is("http://localhost/consent?{$query}");
+    $r->app->api()->get("/oauth/authorize?{$query}")
+        ->status(302)
+        ->header('Location', "http://app/consent?{$query}");
 
-    $r->app->client()->get('/oauth/authorize?response_type=code&client_id=nobody')->assertStatus(400);
-    string $redirect = nexus::Percent::encode(REDIRECT);
-    TestResponse $plain = $r->app->client()->get("/oauth/authorize?response_type=code&client_id={$client}&redirect_uri={$redirect}&state=s9");
-    $plain->assertStatus(302);
-    string $back = $plain->header('Location') ?? '';
-    expect($back)->starts(REDIRECT);
+    $r->app->api()->get('/oauth/authorize?response_type=code&client_id=nobody')->status(400);
+    string $back = $r->app->api()
+        ->get('/oauth/authorize', query: ['response_type' => 'code', 'client_id' => $client, 'redirect_uri' => REDIRECT, 'state' => 's9'])
+        ->status(302)
+        ->header('Location', starts: REDIRECT)
+        ->capture(header: 'Location');
     expect(Rig::param($back, 'error'))->is('invalid_request');
     expect(Rig::param($back, 'state'))->is('s9');
 
-    json::Value $pending = expect(TestResponse::walk($r->app->client()->with('Authorization', "Bearer {$r->user}")->get("/oauth/request?{$query}")->json(), ['client', 'name']))->some();
-    expect($pending->asStr())->some('Test client');
-    $r->app->client()->get("/oauth/request?{$query}")->assertStatus(401);
+    $r->signedIn->get("/oauth/request?{$query}")->json('$.client.name', 'Test client');
+    $r->app->api()->get("/oauth/request?{$query}")->status(401);
 }
 
 test the_consent_page_keeps_its_own_query_and_origin
 {
     $r = Rig(consent: '/consent?step=1');
-    string $client = $r->register();
-    string $query = $r->query($client);
-    string $location = $r->app->client()->get("/oauth/authorize?{$query}")->header('Location') ?? '';
-    expect($location)->is("http://localhost/consent?step=1&{$query}");
+    string $query = $r->query($r->register());
+    $r->app->api()->get("/oauth/authorize?{$query}")->header('Location', "http://app/consent?step=1&{$query}");
 
     $far = Rig(consent: 'https://app.example.com/approve');
-    string $other = $far->register();
-    string $asks = $far->query($other);
-    string $there = $far->app->client()->get("/oauth/authorize?{$asks}")->header('Location') ?? '';
-    expect($there)->is("https://app.example.com/approve?{$asks}");
+    string $asks = $far->query($far->register());
+    $far->app->api()->get("/oauth/authorize?{$asks}")->header('Location', "https://app.example.com/approve?{$asks}");
 }
 
 test a_consent_page_or_issuer_that_is_no_url_stops_the_boot
@@ -266,11 +249,10 @@ test a_consent_page_or_issuer_that_is_no_url_stops_the_boot
 test a_denied_request_goes_back_with_access_denied
 {
     $r = Rig();
-    string $client = $r->register();
-    string $back = $r->approve($r->query($client), false);
+    string $back = $r->approve($r->query($r->register()), false);
     expect(Rig::param($back, 'error'))->is('access_denied');
     expect(Rig::param($back, 'state'))->is('s1');
-    expect(Rig::param($back, 'iss'))->is('http://localhost');
+    expect(Rig::param($back, 'iss'))->is('http://app');
 }
 
 test the_code_is_traded_once_with_its_verifier
@@ -280,79 +262,89 @@ test the_code_is_traded_once_with_its_verifier
     string $back = $r->approve($r->query($client), true);
     string $code = Rig::param($back, 'code');
     expect($code)->length(64);
-    expect(Rig::param($back, 'iss'))->is('http://localhost');
-    string $redirect = nexus::Percent::encode(REDIRECT);
-    string $verifier = VERIFIER;
-    $r->token("grant_type=authorization_code&client_id={$client}&code={$code}&redirect_uri={$redirect}&code_verifier=wrong-verifier-wrong-verifier-wrong-verifier-wrong")->assertStatus(400)->assertJson(['error'], 'invalid_grant');
-    // the failed try spent it
-    $r->token("grant_type=authorization_code&client_id={$client}&code={$code}&redirect_uri={$redirect}&code_verifier={$verifier}")->assertJson(['error'], 'invalid_grant');
+    expect(Rig::param($back, 'iss'))->is('http://app');
 
-    TestResponse $pair = $r->connect();
-    $pair->assertStatus(200);
-    $pair->assertJson(['token_type'], 'Bearer');
-    $pair->assertJson(['expires_in'], 3600);
-    $pair->assertHeader('Cache-Control', 'no-store');
-    expect(Rig::field($pair, 'access_token'))->starts('nxo_');
-    expect(Rig::field($pair, 'refresh_token'))->starts('nxr_');
+    $r->token([
+        'grant_type' => 'authorization_code',
+        'client_id' => $client,
+        'code' => $code,
+        'redirect_uri' => REDIRECT,
+        'code_verifier' => 'wrong-verifier-wrong-verifier-wrong-verifier-wrong',
+    ])->status(400)->json('$.error', 'invalid_grant');
+    // the failed try spent it
+    $r->token([
+        'grant_type' => 'authorization_code',
+        'client_id' => $client,
+        'code' => $code,
+        'redirect_uri' => REDIRECT,
+        'code_verifier' => VERIFIER,
+    ])->json('$.error', 'invalid_grant');
+
+    $pair = $r->connect()
+        ->status(200)
+        ->json('$.token_type', 'Bearer')
+        ->json('$.expires_in', 3600)
+        ->header('Cache-Control', 'no-store');
+    expect($pair->capture('$.access_token'))->starts('nxo_');
+    expect($pair->capture('$.refresh_token'))->starts('nxr_');
 }
 
 test an_access_token_opens_mcp_and_nothing_else
 {
     $r = Rig();
-    TestResponse $pair = $r->connect();
-    string $access = Rig::field($pair, 'access_token');
-    TestResponse $res = $r->who($access);
-    $res->assertJson(['result', 'structuredContent', 'subject'], '7');
-    $res->assertJson(['result', 'structuredContent', 'via'], 'oauth');
-    $r->app->client()->with('Authorization', "Bearer {$access}")->get('/oauth/grants')->assertStatus(401);
+    string $access = $r->connect()->capture('$.access_token');
+    $r->who($access)
+        ->json('$.result.structuredContent.subject', '7')
+        ->json('$.result.structuredContent.via', 'oauth');
+    $r->app->api()->bearer($access)->get('/oauth/grants')->status(401);
 
     $r->clock->advance(.mins(61));
-    $r->who($access)->assertStatus(401);
+    $r->who($access)->status(401);
 }
 
 test refresh_rotates_and_a_reused_token_ends_the_grant
 {
     $r = Rig();
-    TestResponse $pair = $r->connect();
+    $pair = $r->connect();
     string $client = Rig::param("x?{$r->query($r->register())}", 'client_id');
-    string $firstAccess = Rig::field($pair, 'access_token');
-    string $firstRefresh = Rig::field($pair, 'refresh_token');
-    json::Value $grants = $r->app->client()->with('Authorization', "Bearer {$r->user}")->get('/oauth/grants')->json();
-    json::Value $owner = expect(TestResponse::walk($grants, ['items', '0', 'client']))->some();
-    string $holder = $owner->asStr() ?? '';
+    string $firstAccess = $pair->capture('$.access_token');
+    string $firstRefresh = $pair->capture('$.refresh_token');
+    string $holder = $r->signedIn->get('/oauth/grants')->capture('$.items[0].client');
     expect($client)->isNot($holder);
 
-    $r->token("grant_type=refresh_token&client_id={$client}&refresh_token={$firstRefresh}")->assertJson(['error'], 'invalid_grant');
-    TestResponse $second = $r->token("grant_type=refresh_token&client_id={$holder}&refresh_token={$firstRefresh}");
-    $second->assertStatus(200);
-    string $secondAccess = Rig::field($second, 'access_token');
-    string $secondRefresh = Rig::field($second, 'refresh_token');
+    $r->token(['grant_type' => 'refresh_token', 'client_id' => $client, 'refresh_token' => $firstRefresh])
+        ->json('$.error', 'invalid_grant');
+    $second = $r->token(['grant_type' => 'refresh_token', 'client_id' => $holder, 'refresh_token' => $firstRefresh])
+        ->status(200);
+    string $secondAccess = $second->capture('$.access_token');
+    string $secondRefresh = $second->capture('$.refresh_token');
     expect($secondRefresh)->isNot($firstRefresh);
-    $r->who($firstAccess)->assertStatus(401);
-    $r->who($secondAccess)->assertJson(['result', 'structuredContent', 'subject'], '7');
+    $r->who($firstAccess)->status(401);
+    $r->who($secondAccess)->json('$.result.structuredContent.subject', '7');
 
     // the spent one comes back: someone holds a copy, so the grant ends
-    $r->token("grant_type=refresh_token&client_id={$holder}&refresh_token={$firstRefresh}")->assertJson(['error'], 'invalid_grant');
-    $r->who($secondAccess)->assertStatus(401);
-    $r->token("grant_type=refresh_token&client_id={$holder}&refresh_token={$secondRefresh}")->assertJson(['error'], 'invalid_grant');
+    $r->token(['grant_type' => 'refresh_token', 'client_id' => $holder, 'refresh_token' => $firstRefresh])
+        ->json('$.error', 'invalid_grant');
+    $r->who($secondAccess)->status(401);
+    $r->token(['grant_type' => 'refresh_token', 'client_id' => $holder, 'refresh_token' => $secondRefresh])
+        ->json('$.error', 'invalid_grant');
 }
 
 test revoking_and_disconnecting_end_the_grant
 {
     $r = Rig();
-    string $access = Rig::field($r->connect(), 'access_token');
-    $r->app->client()->post('/oauth/revoke', form: "token={$access}")->assertStatus(200);
-    $r->who($access)->assertStatus(401);
-    $r->app->client()->post('/oauth/revoke', form: 'token=nonsense')->assertStatus(200);
+    string $access = $r->connect()->capture('$.access_token');
+    $r->app->api()->post('/oauth/revoke', form: ['token' => $access])->status(200);
+    $r->who($access)->status(401);
+    $r->app->api()->post('/oauth/revoke', form: ['token' => 'nonsense'])->status(200);
 
-    string $again = Rig::field($r->connect(), 'access_token');
-    TestResponse $list = $r->app->client()->with('Authorization', "Bearer {$r->user}")->get('/oauth/grants');
-    $list->assertCount(['items'], 1);
-    $list->assertJson(['items', '0', 'name'], 'Test client');
-    json::Value $id = expect(TestResponse::walk($list->json(), ['items', '0', 'id']))->some();
-    string $grant = $id->asStr() ?? '';
-    $r->app->client()->with('Authorization', "Bearer {$r->user}")->delete("/oauth/grants/{$grant}")->assertStatus(204);
-    $r->who($again)->assertStatus(401);
+    string $again = $r->connect()->capture('$.access_token');
+    string $grant = $r->signedIn->get('/oauth/grants')
+        ->count('$.items', 1)
+        ->json('$.items[0].name', 'Test client')
+        ->capture('$.items[0].id');
+    $r->signedIn->delete("/oauth/grants/{$grant}")->status(204);
+    $r->who($again)->status(401);
 }
 
 test boot_needs_nexus_auth_first
