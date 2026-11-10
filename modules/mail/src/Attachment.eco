@@ -1,0 +1,91 @@
+namespace nexus::mail;
+
+/**
+ * Where an attachment's bytes come from.
+ */
+public enum Content
+{
+    case bytes(string $data);
+    case file(string $path);
+}
+
+/**
+ * A file sent with a mail: bytes already in hand, or a file read when the mail is sent.
+ *
+ * ```echo
+ * Attachment('terms.pdf', bytes: $pdf)
+ * Attachment(file: '/var/reports/2026-11.csv')
+ * ```
+ *
+ * Without a `type`, the content type follows the name's extension.
+ */
+public struct Attachment
+{
+    public string $name;
+    public string $type;
+    public Content $content;
+
+    public constructor(const string& $name, bytes: string $data, type: const string& $type = '')
+    {
+        $this->name = $name;
+        $this->type = Attachment::typeOf($name, $type);
+        $this->content = .bytes(mv $data);
+    }
+
+    public constructor(file: const string& $path, name: const string& $name = '', type: const string& $type = '')
+    {
+        string $base = $name;
+        if ($base->empty()) {
+            $base = std::fs::path($path)->basename();
+        }
+        $this->name = $base;
+        $this->type = Attachment::typeOf($base, $type);
+        $this->content = .file($path);
+    }
+
+    /**
+     * The bytes, read from disk for a file.
+     */
+    public const function data() : result<string, MailError>
+    {
+        match ($this->content) {
+            Content::bytes($data) => {
+                return .ok($data);
+            },
+            Content::file($path) => {
+                string $read = guard std::fs::readfile($path) else ($e) {
+                    return .error(.invalid("attachment {$path} cannot be read: {$e}"));
+                };
+                return .ok($read);
+            },
+        }
+    }
+
+    /**
+     * `$given`, or the type the extension of `$name` stands for.
+     */
+    internal static function typeOf(const string& $name, const string& $given) : string
+    {
+        if (!$given->empty()) {
+            return $given;
+        }
+        string $ext = str::lower(std::fs::path($name)->extension());
+        if ($ext->starts('.')) {
+            $ext = $ext->sub(1, $ext->size() - 1);
+        }
+        if ($ext == 'pdf') { return 'application/pdf'; }
+        if ($ext == 'png') { return 'image/png'; }
+        if ($ext == 'jpg' || $ext == 'jpeg') { return 'image/jpeg'; }
+        if ($ext == 'gif') { return 'image/gif'; }
+        if ($ext == 'webp') { return 'image/webp'; }
+        if ($ext == 'svg') { return 'image/svg+xml'; }
+        if ($ext == 'txt') { return 'text/plain; charset=utf-8'; }
+        if ($ext == 'csv') { return 'text/csv; charset=utf-8'; }
+        if ($ext == 'html') { return 'text/html; charset=utf-8'; }
+        if ($ext == 'json') { return 'application/json'; }
+        if ($ext == 'xml') { return 'application/xml'; }
+        if ($ext == 'ics') { return 'text/calendar; charset=utf-8'; }
+        if ($ext == 'zip') { return 'application/zip'; }
+        return 'application/octet-stream';
+    }
+}

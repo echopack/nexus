@@ -1,14 +1,20 @@
 namespace Blog::Tasks;
 
-use Blog::DB::Model::UserRepository;
+use Blog::Actions::Posts::ShowPost;
+use Blog::Config::BlogConfig;
+use Blog::DB::Model::{PostTable, UserRepository};
+use Blog::DB::Repository::PostRepository;
+use Blog::Mail::{PostLink, WelcomeMail};
 
 /**
- * Welcomes a new user and notes when. There is no mail yet, so the welcome is a log line; the note
- * is what `/v1/me` shows. Tried five times, and one welcome per user waits or runs at a time.
+ * Mails a new user the welcome, in the locale they signed up in, with the latest posts, and notes
+ * when; the note is what `/v1/me` shows. Tried five times, and one welcome per user waits or runs
+ * at a time. A mail sent whose note then fails to save is sent again on the next try.
  */
 public struct SendWelcome : nexus::work::Task
 {
     public int64 $user;
+    public string $locale = 'en';
 
     public const function tries() : int64
     {
@@ -33,7 +39,20 @@ public struct SendWelcome : nexus::work::Task
             // a try that died after saving: welcomed already
             return .ok;
         }
-        $payload->log->info('welcome', ['to' => $u->email]);
+        $latest = guard $payload->get<PostRepository>()->find()->readonly()->order(desc: PostTable::$id)->limit(3)->get() else ($e) {
+            return .error(.retry("the posts table: {$e}"));
+        };
+        nexus::Router $router = $payload->get<nexus::Router>();
+        array<PostLink> $posts = [];
+        foreach ($latest as const &$p) {
+            $posts[] = PostLink($p->title, $router->url<ShowPost>(['id' => "{$p->id}"])->text());
+        }
+        $mail = WelcomeMail($u->name, $payload->get<BlogConfig>()->title, $this->locale, $payload->get<nexus::Messages>(), mv $posts);
+        nexus::mail::Mailer $mailer = $payload->get<nexus::mail::Mailer>();
+        nexus::mail::Message $msg = $mailer->compose($mail)->to(nexus::mail::Address($u->email, $u->name));
+        guard $mailer->send($msg) else ($e) {
+            return .error(nexus::work::Failure::of($e->problem()));
+        };
         $u->welcomedAt = $payload->get<nexus::work::Work>()->clock->now();
         guard $users->save($u) else ($e) {
             return .error(.retry("saving the welcome: {$e}"));

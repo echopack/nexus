@@ -1,0 +1,166 @@
+/**
+ * Mail templates: what `#[nexus::mail]` accepts, what it refuses, how a template is read, and the
+ * `nexus::mail::render` overload it writes.
+ */
+
+use nexusgen::{Piece, PieceKind, Program, emitter, template};
+use ecotest::expect;
+
+internal function mailField(const string& $name, const string& $type) : string
+{
+    return "\{\"name\":\"{$name}\",\"visibility\":\"public\",\"static\":false,\"type\":{$type},\"default\":false,\"line\":9,\"tools\":[]}";
+}
+
+internal function mailDecls(const string& $tool, bool $mailable = true) : json::Value
+{
+    string $conforms = '';
+    if ($mailable) {
+        $conforms = '{"kind":"named","name":"nexus::mail::Mailable"}';
+    }
+    string $tools = '';
+    if (!$tool->empty()) {
+        $tools = "\{\"namespace\":\"nexus\",\"name\":\"mail\",\"value\":{$tool}}";
+    }
+    array<string> $fields = [
+        mailField('name', '{"kind":"string"}'),
+        mailField('inviter', '{"kind":"optional","of":{"kind":"string"}}'),
+        mailField('count', '{"kind":"prim","name":"int64"}'),
+        mailField('admin', '{"kind":"prim","name":"bool"}'),
+        mailField('posts', '{"kind":"array","of":{"kind":"named","name":"shop::Mail::PostLink"}}'),
+        mailField('tags', '{"kind":"array","of":{"kind":"string"}}'),
+        mailField('author', '{"kind":"named","name":"shop::Mail::PostLink"}'),
+        mailField('editor', '{"kind":"optional","of":{"kind":"named","name":"shop::Mail::PostLink"}}'),
+    ];
+    string $all = str::join($fields, ',');
+    string $mail = "\{\"kind\":\"struct\",\"name\":\"Welcome\",\"qualified\":\"shop::Mail::Welcome\",\"visibility\":\"public\",\"file\":\"src/Mail/Welcome.eco\",\"line\":4,\"generics\":[],\"tools\":[{$tools}],\"conforms\":[{$conforms}],\"fields\":[{$all}],\"constructors\":[],\"methods\":[]}";
+    string $title = mailField('title', '{"kind":"string"}');
+    string $url = mailField('url', '{"kind":"string"}');
+    string $link = "\{\"kind\":\"struct\",\"name\":\"PostLink\",\"qualified\":\"shop::Mail::PostLink\",\"visibility\":\"public\",\"file\":\"src/Mail/PostLink.eco\",\"line\":3,\"generics\":[],\"tools\":[],\"conforms\":[],\"fields\":[{$title},{$url}],\"constructors\":[],\"methods\":[]}";
+    string $text = "\{\"modules\":[\{\"name\":\"shop\",\"declarations\":[{$mail},{$link}]}]}";
+    $doc = guard json::parse($text);
+    return $doc;
+}
+
+internal function mailTool(const string& $text, const string& $html) : string
+{
+    array<string> $fields = [];
+    if (!$text->empty()) {
+        $fields[] = "\{\"key\":\"text\",\"value\":\{\"kind\":\"string\",\"text\":\"{$text}\"}}";
+    }
+    if (!$html->empty()) {
+        $fields[] = "\{\"key\":\"html\",\"value\":\{\"kind\":\"string\",\"text\":\"{$html}\"}}";
+    }
+    string $all = str::join($fields, ',');
+    return "\{\"kind\":\"record\",\"fields\":[{$all}]}";
+}
+
+/**
+ * A module root in the temp directory with the given templates under `resources/emails/`.
+ */
+internal function mailRoot(const string& $name, const map<string, string>& $files) : std::fs::path
+{
+    std::fs::path $root = std::env::tmp() / "nexus-mailtest-{$name}";
+    std::fs::path $dir = $root / 'resources' / 'emails';
+    std::fs::mkdir($dir, recursive: true);
+    foreach ($files as $file => const &$body) {
+        std::fs::writefile($dir / $file, $body);
+    }
+    return $root;
+}
+
+internal function mailProgram(const string& $name, const map<string, string>& $files, const string& $tool) : Program
+{
+    $decls = mailDecls($tool);
+    return Program($decls, $decls, root: mailRoot($name, $files));
+}
+
+internal function mailProblem(const string& $name, const string& $template) : string
+{
+    $p = mailProgram($name, ['m.txt' => $template], mailTool('m.txt', ''));
+    expect($p->problems)->size(1);
+    return $p->problems[0];
+}
+
+test a_mailable_writes_its_render_overload
+{
+    map<string, string> $files = [
+        'welcome.txt' => "Hello {{ name }}, you have {{ count }} posts.\n{{ if inviter }}\n{{ inviter }} invited you.\n{{ end }}\n",
+        'welcome.html' => "<h1>Hi {{ name }}</h1>{{ raw name }}\n{{ each posts as post }}\n<a href=\"{{ post.url }}\">{{ post.title }}</a>\n{{ end }}\n{{ if admin }}admin{{ else }}member{{ end }}",
+    ];
+    $p = mailProgram('writes', $files, mailTool('welcome.txt', 'welcome.html'));
+    expect($p->problems)->size(0);
+    expect($p->mails)->size(1);
+    expect(emitter::render($p))
+        ->has('namespace nexus::mail;')
+        ->has(' * The bodies of shop::Mail::Welcome, from resources/emails/welcome.txt and resources/emails/welcome.html.')
+        ->has('public function render(const shop::Mail::Welcome& $m) : nexus::mail::Rendered')
+        ->has("$text->append('Hello ');\n    $text->append($m->name);\n    $text->append(', you have ');\n    $text->append(str::from($m->count));\n    $text->append(' posts.');\n    $text->push(10);\n    if ($m->inviter != null) \{\n        if ($m->inviter != null) \{\n            string $v1 = guard $m->inviter;\n            $text->append($v1);\n        }\n        $text->append(' invited you.');")
+        ->has('$r->text = mv $text;')
+        ->has('$html->append(nexus::mail::Html::escape($m->name));')
+        ->has("$html->append('</h1>');\n    $html->append($m->name);")
+        ->has('foreach ($m->posts as const &$post1) {')
+        ->has('$html->append(nexus::mail::Html::escape($post1->url));')
+        ->has("if ($m->admin) \{\n        $html->append('admin');\n    } else \{\n        $html->append('member');\n    }")
+        ->has('$r->html = mv $html;');
+}
+
+test block_tags_alone_on_a_line_take_the_line_with_them
+{
+    array<Piece> $pieces = expect(template::parse("a\n  {{ if x }}  \nb\n{{ end }}\nc {{{{ d"))->ok();
+    expect($pieces)->size(5);
+    expect($pieces[0]->text)->is("a\n");
+    expect($pieces[1]->kind == PieceKind::when)->yes();
+    expect($pieces[2]->text)->is("b\n");
+    expect($pieces[3]->kind == PieceKind::end)->yes();
+    expect($pieces[4]->text)->is('c {{ d');
+    // inline tags keep their line
+    array<Piece> $inline = expect(template::parse("x {{ if y }}z{{ end }}\n"))->ok();
+    expect($inline[$inline->count() - 1]->text)->is("\n");
+}
+
+test loops_nest_and_their_names_go_out_of_scope
+{
+    map<string, string> $files = ['m.txt' => "{{ each tags as tag }}{{ each tags as inner }}{{ tag }}{{ inner }}{{ end }}{{ end }}"];
+    $p = mailProgram('nested', $files, mailTool('m.txt', ''));
+    expect($p->problems)->size(0);
+    expect(emitter::render($p))->has('foreach ($m->tags as const &$tag1)')->has('foreach ($m->tags as const &$inner2)')->has('$text->append($tag1);');
+    expect(mailProblem('scope', "{{ each tags as tag }}{{ end }}{{ tag }}"))->has('has no field tag');
+}
+
+test paths_walk_into_struct_fields
+{
+    expect(mailProgram('walk', ['m.txt' => '{{ author.title }}'], mailTool('m.txt', ''))->problems)->size(0);
+    expect(mailProblem('walk-missing', '{{ author.nope }}'))->has('PostLink has no public field nope');
+    expect(mailProblem('walk-null', '{{ editor.title }}'))->has('editor may be null');
+    expect(mailProblem('walk-string', '{{ name.size }}'))->has('name has type string, which has no fields');
+}
+
+test a_template_is_checked_against_the_struct
+{
+    expect(mailProblem('unknown', 'Hi {{ nme }}'))->has('resources/emails/m.txt:1:4: Welcome has no field nme');
+    expect(mailProblem('hole-array', '{{ posts }}'))->has('posts has type array<shop::Mail::PostLink>; a hole writes strings and numbers');
+    expect(mailProblem('hole-bool', '{{ admin }}'))->has('use if for a bool');
+    expect(mailProblem('if-number', '{{ if count }}x{{ end }}'))->has('if tests a bool, a nullable, a string or an array');
+    expect(mailProblem('each-string', '{{ each name as n }}{{ end }}'))->has('each walks an array');
+    expect(mailProblem('else', 'x{{ else }}'))->has('else without an if');
+    expect(mailProblem('else-twice', '{{ if admin }}{{ else }}{{ else }}{{ end }}'))->has('a second else');
+    expect(mailProblem('end', 'x{{ end }}'))->has('end without an if or each');
+    expect(mailProblem('open', "\n  {{ each tags as t }}x"))->has('m.txt:2:3: this each has no end');
+    expect(mailProblem('unclosed', 'x {{ name'))->has('1:3: this {{ is never closed');
+    expect(mailProblem('bad-tag', '{{ name | upper }}'))->has('is not a field, raw, if, else, each or end');
+    expect(mailProblem('bad-each', '{{ each posts }}{{ end }}'))->has('{{ each posts as post }}');
+}
+
+test the_attribute_is_checked
+{
+    expect(mailProgram('missing', [], mailTool('nope.txt', ''))->problems[0])->has('resources/emails/nope.txt does not exist');
+    expect(mailProgram('leave', [], mailTool('../secret.txt', ''))->problems[0])->has('may not leave resources/emails/');
+    expect(mailProgram('absolute', [], mailTool('/etc/passwd', ''))->problems[0])->has('must be relative');
+    expect(mailProgram('none', [], mailTool('', ''))->problems[0])->has('names no template');
+    string $subject = '{"kind":"record","fields":[{"key":"subject","value":{"kind":"string","text":"Hi"}}]}';
+    expect(mailProgram('subject', [], $subject)->problems[0])->has('takes no subject; write subject()');
+    $plain = mailDecls(mailTool('m.txt', ''), false);
+    expect(Program($plain, $plain, root: mailRoot('plain', ['m.txt' => 'x']))->problems[0])->has('does not conform to nexus::mail::Mailable');
+    $bare = mailDecls('');
+    expect(Program($bare, $bare, root: mailRoot('bare', []))->problems[0])->has('src/Mail/Welcome.eco:4')->has('a mailable without templates');
+}

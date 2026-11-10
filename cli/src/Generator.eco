@@ -75,6 +75,9 @@ public struct Generator
         if (!$p->logs->empty()) {
             $extra->append(", {$p->logs->count()} log record(s)");
         }
+        if (!$p->mails->empty()) {
+            $extra->append(", {$p->mails->count()} mail(s)");
+        }
         $this->say("nexus gen  {$p->actions->count()} action(s), {$p->inputs->count()} input(s), {$p->configs->count()} config(s){$extra}");
         return .ok(emitter::render($p));
     }

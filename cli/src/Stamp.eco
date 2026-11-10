@@ -1,10 +1,12 @@
 /**
  * A digest of everything the generated file depends on: every `.eco` file of the module (outside
- * build, vendor and hidden directories) and the compiler used. Equal stamps mean the decls pass can
- * be skipped.
+ * build, vendor and hidden directories), every mail template under `resources/emails/`, and the
+ * compiler used. Equal stamps mean the decls pass can be skipped.
  */
 
 namespace nexusgen::stamp;
+
+use nexusgen::mails;
 
 /**
  * The digest of the `.eco` files under `$root` and of the compiler `$echoc`.
@@ -13,9 +15,10 @@ public function digest(const std::fs::path& $root, const string& $echoc) : strin
 {
     $h = crypto::Sha256();
     $h->update($echoc);
-    $h->update('nexus-gen 2');
+    $h->update('nexus-gen 3');
     array<string> $files = [];
-    walk($root, $files);
+    walk($root, '.eco', $files);
+    walk($root / mails::FOLDER, '', $files);
     $files->sort();
     foreach ($files as const &$path) {
         $h->update($path);
@@ -25,9 +28,9 @@ public function digest(const std::fs::path& $root, const string& $echoc) : strin
 }
 
 /**
- * Adds every `.eco` file under `$dir` to `$out`, as its path spelled out.
+ * Adds every file under `$dir` whose name ends in `$suffix` to `$out`, as its path spelled out.
  */
-internal function walk(const std::fs::path& $dir, array<string>& $out) : void
+internal function walk(const std::fs::path& $dir, const string& $suffix, array<string>& $out) : void
 {
     $d = guard std::fs::opendir($dir) else {
         return;
@@ -38,8 +41,8 @@ internal function walk(const std::fs::path& $dir, array<string>& $out) : void
             continue;
         }
         if ($e->is_directory()) {
-            walk($e->path(), $out);
-        } else if ($name->ends('.eco')) {
+            walk($e->path(), $suffix, $out);
+        } else if ($name->ends($suffix)) {
             $out[] = $e->path()->string();
         }
     }

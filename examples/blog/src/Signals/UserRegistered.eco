@@ -1,9 +1,10 @@
 namespace Blog::Signals;
 
 /**
- * Someone signed up.
+ * Someone signed up, speaking `locale`.
  */
 public struct UserRegistered
 {
     public int64 $user;
+    public string $locale = 'en';
 }

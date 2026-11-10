@@ -1,0 +1,76 @@
+namespace nexus::mail;
+
+/**
+ * Who a mail is from and to, and its extra headers: what a mailable's `envelope()` may set, and
+ * the part of a `Message` that is not its content.
+ */
+public struct Envelope
+{
+    /**
+     * The sender; `NEXUS_MAIL_FROM` when null.
+     */
+    public Address? $from = null;
+    public array<Address> $to = [];
+    public array<Address> $cc = [];
+
+    /**
+     * Recipients that get the mail without being named on it.
+     */
+    public array<Address> $bcc = [];
+    public Address? $replyTo = null;
+    public array<Header> $headers = [];
+
+    public function from(Address $address) : Envelope&
+    {
+        $this->from = $address;
+        return $this;
+    }
+
+    public function to(Address $address) : Envelope&
+    {
+        $this->to[] = mv $address;
+        return $this;
+    }
+
+    public function cc(Address $address) : Envelope&
+    {
+        $this->cc[] = mv $address;
+        return $this;
+    }
+
+    public function bcc(Address $address) : Envelope&
+    {
+        $this->bcc[] = mv $address;
+        return $this;
+    }
+
+    public function replyTo(Address $address) : Envelope&
+    {
+        $this->replyTo = $address;
+        return $this;
+    }
+
+    /**
+     * An extra header line, `header('List-Unsubscribe', '<https://...>')`.
+     */
+    public function header(const string& $name, const string& $value) : Envelope&
+    {
+        $this->headers[] = Header($name, $value);
+        return $this;
+    }
+
+    /**
+     * Every address the mail is delivered to: `to`, `cc` and `bcc`.
+     */
+    public const function recipients() : array<Address>
+    {
+        array<Address> $all = $this->to->clone();
+        foreach ($this->cc as const &$a) {
+            $all[] = $a;
+        }
+        foreach ($this->bcc as const &$a) {
+            $all[] = $a;
+        }
+        return $all;
+    }
+}

@@ -1,0 +1,10 @@
+namespace nexus::mail;
+
+/**
+ * One extra header line of a mail, `List-Unsubscribe: <...>`.
+ */
+public struct Header
+{
+    public string $name;
+    public string $value;
+}

@@ -18,7 +18,7 @@ status=0
 # vendor/echolang/libjson to the sibling 0.2 checkout, which the tool's
 # ^0.1 require does not build against, and the suites on nexus-testing
 # reach ecotest through path depends, so epm offers them no tool at all.
-for dir in . modules/http modules/testing modules/carbon modules/carbon/testing modules/rest modules/crud modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mcp modules/oauth modules/oauth/carbon modules/app examples/blog; do
+for dir in . modules/http modules/testing modules/carbon modules/carbon/testing modules/rest modules/crud modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mail modules/mcp modules/oauth modules/oauth/carbon modules/app examples/blog; do
     echo "== ${dir}"
     out="$(mktemp)"
     if (cd "${root}/${dir}" && epm run -m "${root}" ecotest --style simple --timeout 120000 --echoc "${echoc}") >"${out}" 2>&1; then
@@ -30,7 +30,7 @@ for dir in . modules/http modules/testing modules/carbon modules/carbon/testing 
     rm -f "${out}"
 done
 (cd "${root}" && "${echoc}" build --target nexus >/dev/null)
-for dir in modules/http modules/carbon modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mcp modules/oauth modules/oauth/carbon examples/blog; do
+for dir in modules/http modules/carbon modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mail modules/mcp modules/oauth modules/oauth/carbon examples/blog; do
     echo "== nexus gen --check (${dir})"
     (cd "${root}/${dir}" && "${root}/ecobuild/nexus" gen --check) || status=1
 done

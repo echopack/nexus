@@ -1,0 +1,10 @@
+namespace nexus::mail;
+
+/**
+ * A mail the transport took: its `Message-ID` and who it went to.
+ */
+public struct Sent
+{
+    public string $messageId;
+    public array<string> $recipients;
+}

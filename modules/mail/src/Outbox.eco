@@ -1,0 +1,114 @@
+namespace nexus::mail;
+
+use std::thread;
+
+/**
+ * Keeps every mail instead of sending it: `NEXUS_MAIL_URL=memory:`, for tests. The extension binds
+ * it, so a test reads it from the container and asserts on what went out.
+ *
+ * ```echo
+ * $outbox = $app->kernel->services->get<nexus::mail::Outbox>();
+ * nexus::mail::Delivery $d = guard $outbox->find(to: 'ann@example.com');
+ * ```
+ */
+#[atomic]
+public class Outbox : Transport
+{
+    private thread::mutex<array<Delivery>> $kept = thread::mutex<array<Delivery>>([]);
+    private thread::mutex<array<MailError>> $refusals = thread::mutex<array<MailError>>([]);
+
+    public const function describe() : string
+    {
+        return 'memory:';
+    }
+
+    public function deliver(const Delivery& $d) : status<MailError>
+    {
+        MailError? $refused = $this->nextRefusal();
+        if ($refused != null) {
+            MailError $e = guard $refused;
+            return .error($e);
+        }
+        thread::locked<array<Delivery>> $held = $this->kept->lock();
+        $held->value[] = $d;
+        return .ok;
+    }
+
+    /**
+     * Makes the next delivery fail with `$e` instead of keeping the mail; called again, the one
+     * after that too.
+     */
+    public function refuse(MailError $e) : void
+    {
+        thread::locked<array<MailError>> $r = $this->refusals->lock();
+        $r->value[] = $e;
+    }
+
+    /**
+     * A copy of every mail so far, oldest first.
+     */
+    public const function delivered() : array<Delivery>
+    {
+        thread::locked<array<Delivery>> $held = $this->kept->lock();
+        return $held->value->clone();
+    }
+
+    public const function count() : usize
+    {
+        thread::locked<array<Delivery>> $held = $this->kept->lock();
+        return $held->value->count();
+    }
+
+    /**
+     * The first mail delivered to `$email` (to, cc or bcc), or null.
+     */
+    public const function find(to: const string& $email) : Delivery?
+    {
+        foreach ($this->delivered() as const &$d) {
+            foreach ($d->recipients as const &$a) {
+                if ($a->email == $email) {
+                    return $d;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The first mail with exactly this subject, or null.
+     */
+    public const function find(subject: const string& $subject) : Delivery?
+    {
+        foreach ($this->delivered() as const &$d) {
+            if ($d->message->subject == $subject) {
+                return $d;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Forgets every mail so far, and every refusal still waiting.
+     */
+    public function clear() : void
+    {
+        thread::locked<array<Delivery>> $held = $this->kept->lock();
+        $held->value = [];
+        thread::locked<array<MailError>> $r = $this->refusals->lock();
+        $r->value = [];
+    }
+
+    /**
+     * The oldest refusal still waiting, taken off the list; null when there is none.
+     */
+    private function nextRefusal() : MailError?
+    {
+        thread::locked<array<MailError>> $r = $this->refusals->lock();
+        if ($r->value->empty()) {
+            return null;
+        }
+        MailError $e = $r->value[0];
+        $r->value->remove(0);
+        return $e;
+    }
+}

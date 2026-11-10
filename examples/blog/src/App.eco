@@ -60,12 +60,12 @@ public class App : nexus::Extension
     }
 
     /**
-     * Input messages in German, next to the English ones.
+     * Input messages and the welcome subject in German, next to the English ones.
      */
     public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
     {
-        $german = guard json::parse(std::embed::text('../lang/de.json')) else ($e) {
-            return .error(.extension('blog', "lang/de.json: {$e->message()}"));
+        $german = guard json::parse(std::embed::text('../resources/lang/de.json')) else ($e) {
+            return .error(.extension('blog', "resources/lang/de.json: {$e->message()}"));
         };
         $kernel->services->get<nexus::Messages>()->add('de', $german);
         return .ok;

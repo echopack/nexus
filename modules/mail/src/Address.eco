@@ -1,0 +1,55 @@
+namespace nexus::mail;
+
+/**
+ * A mail address with an optional display name: `Address('ann@example.com', 'Ann')`.
+ */
+public struct Address
+{
+    public string $email;
+    public string? $name = null;
+
+    /**
+     * Why this address cannot go on a mail, or ok: it needs exactly one `@` with something on both
+     * sides, and neither part may hold a line break or `<`, `>`.
+     */
+    public const function check() : status<MailError>
+    {
+        usize $at = $this->email->find('@');
+        usize $size = $this->email->size();
+        if ($at == 0 || $at + 1 >= $size || $this->email->find('@', $at + 1) < $size) {
+            return .error(.invalid("'{$this->email}' is not a mail address"));
+        }
+        foreach (["\r", "\n", '<', '>', ' '] as const &$c) {
+            if ($this->email->contains($c)) {
+                return .error(.invalid("'{$this->email}' holds a character an address cannot have"));
+            }
+        }
+        if ($this->name != null) {
+            string $n = guard $this->name;
+            if (Address::broken($n)) {
+                return .error(.invalid("the name of {$this->email} holds a line break"));
+            }
+        }
+        return .ok;
+    }
+
+    /**
+     * The part after the `@`.
+     */
+    public const function domain() : string
+    {
+        usize $at = $this->email->find('@');
+        if ($at >= $this->email->size()) {
+            return '';
+        }
+        return $this->email->sub($at + 1, $this->email->size() - $at - 1);
+    }
+
+    /**
+     * Whether `$text` holds a CR or LF, which would end a header early.
+     */
+    internal static function broken(const string& $text) : bool
+    {
+        return $text->contains("\r") || $text->contains("\n");
+    }
+}

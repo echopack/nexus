@@ -9,7 +9,7 @@
 
 namespace nexusgen::emitter;
 
-use nexusgen::{decl, decoders, mappings, names, records, rules, types};
+use nexusgen::{decl, decoders, mails, mappings, names, records, rules, types};
 
 public function render(const Program& $p) : string
 {
@@ -84,6 +84,16 @@ public function render(const Program& $p) : string
         foreach ($p->logs as const &$r) {
             $code->blank();
             records::emit($code, $r);
+        }
+    }
+
+    if (!$p->mails->empty()) {
+        // overloads of nexus::mail::render, which Mailer::compose<M> asks for
+        $code->blank();
+        $code->line('namespace nexus::mail;');
+        foreach ($p->mails as const &$m) {
+            $code->blank();
+            mails::emit($code, $m);
         }
     }
 

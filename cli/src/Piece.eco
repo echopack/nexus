@@ -1,0 +1,28 @@
+namespace nexusgen;
+
+/**
+ * What a piece of a mail template is.
+ */
+public enum PieceKind : uint8
+{
+    case text = 1;
+    case hole = 2;
+    case raw = 3;
+    case when = 4;
+    case otherwise = 5;
+    case end = 6;
+    case each = 7;
+}
+
+/**
+ * One piece of a mail template: text, or a tag with its field path (and for `each`, the name of
+ * its item), where it starts.
+ */
+public struct Piece
+{
+    public PieceKind $kind;
+    public string $text;
+    public string $name = '';
+    public int64 $line = 0;
+    public int64 $column = 0;
+}

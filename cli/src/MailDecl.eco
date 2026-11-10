@@ -1,0 +1,70 @@
+namespace nexusgen;
+
+/**
+ * What one piece of a compiled mail template does when the mail is rendered.
+ */
+public enum Step : uint8
+{
+    /**
+     * Writes `text`, as it is.
+     */
+    case text = 1;
+
+    /**
+     * Writes the value of the expression `text`, HTML-escaped when `escape`.
+     */
+    case hole = 2;
+
+    /**
+     * Opens `if (text)`.
+     */
+    case when = 3;
+
+    /**
+     * Turns to the other branch of the open `if`.
+     */
+    case otherwise = 4;
+
+    /**
+     * Closes the open `if` or loop.
+     */
+    case end = 5;
+
+    /**
+     * Opens `foreach (text as const &local)`.
+     */
+    case each = 6;
+}
+
+/**
+ * One step of a compiled template.
+ */
+public struct MailOp
+{
+    public Step $step;
+    public string $text = '';
+
+    /**
+     * For a hole: the value's type without its `?`, `string` or a number type.
+     */
+    public string $type = '';
+    public bool $nullable = false;
+    public bool $escape = false;
+
+    /**
+     * For a loop: the local each item is bound to, `$post1`.
+     */
+    public string $local = '';
+}
+
+/**
+ * A struct tagged `#[nexus::mail]`: its templates under `resources/emails/`, compiled.
+ */
+public struct MailDecl
+{
+    public string $qualified;
+    public string $textPath = '';
+    public array<MailOp> $text = [];
+    public string $htmlPath = '';
+    public array<MailOp> $html = [];
+}

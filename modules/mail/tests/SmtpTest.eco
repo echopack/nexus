@@ -1,0 +1,120 @@
+/**
+ * The SMTP transport against the scripted fake: what goes over the wire, and how each refusal comes
+ * back.
+ */
+
+use nexus::mail::{Address, Endpoint, MailError, Mailer, Message, Smtp, Tls};
+use ecotest::expect;
+use std::thread;
+
+internal function smtpMailer(uint16 $port, Tls $tls = .none) : Mailer
+{
+    Endpoint $at = guard Endpoint::parse("smtp://127.0.0.1:{$port}") else ($why) {
+        die($why);
+    };
+    return Mailer(Smtp($at, $tls, .secs(1)), Address('shop@example.com', 'Shop'), nexus::Logger::silent());
+}
+
+internal function smtpMessage() : Message
+{
+    Message $m = Message();
+    $m->to(Address('ann@example.com'))->bcc(Address('audit@example.com'))->subject('Hello')->text("Hi Ann\n.\nbye");
+    return $m;
+}
+
+internal function code(const MailError& $e) : int64
+{
+    return match ($e) {
+        MailError::rejected($code, $why) => $code,
+        else => 0,
+    };
+}
+
+test a_mail_goes_over_the_wire_to_every_recipient
+{
+    $l = smtpListen();
+    thread::task<string> $server = smtpServe($l, []);
+    $sent = expect(smtpMailer($l->local->port)->send(smtpMessage()))->ok();
+    string $log = $server->wait();
+    expect($log)
+        ->has('MAIL FROM:<shop@example.com>')
+        ->has('RCPT TO:<ann@example.com>')
+        ->has('RCPT TO:<audit@example.com>')
+        ->has("Subject: Hello\r\n")
+        ->has("Message-ID: {$sent->messageId}")
+        // libcurl stuffs the lone dot, so the body survives the end-of-data mark
+        ->has("Hi Ann\r\n..\r\nbye");
+    expect($log->contains('audit@example.com>\r\n'))->no();
+    expect($sent->recipients)->size(2);
+}
+
+test a_refused_recipient_is_final
+{
+    $l = smtpListen();
+    thread::task<string> $server = smtpServe($l, ['RCPT' => '550 no such user']);
+    MailError $e = expect(smtpMailer($l->local->port)->send(smtpMessage()))->fails();
+    $server->wait();
+    expect(code($e))->is(550 as int64);
+    expect($e->transient())->no();
+    expect($e->problem()->status())->is(400 as int32);
+}
+
+test a_busy_server_is_transient
+{
+    $l = smtpListen();
+    thread::task<string> $server = smtpServe($l, ['MAIL' => '451 try again later']);
+    MailError $e = expect(smtpMailer($l->local->port)->send(smtpMessage()))->fails();
+    $server->wait();
+    expect(code($e))->is(451 as int64);
+    expect($e->transient())->yes();
+    expect($e->problem()->status())->is(503 as int32);
+}
+
+test a_server_without_starttls_is_refused_when_tls_is_required
+{
+    $l = smtpListen();
+    thread::task<string> $server = smtpServe($l, []);
+    MailError $e = expect(smtpMailer($l->local->port, .starttls)->send(smtpMessage()))->fails();
+    $server->wait();
+    expect($e->message())->has('TLS');
+    expect($e->transient())->no();
+}
+
+test a_closed_port_cannot_connect
+{
+    $l = smtpListen();
+    uint16 $port = $l->local->port;
+    $l->close();
+    MailError $e = expect(smtpMailer($port)->send(smtpMessage()))->fails();
+    expect($e->message())->has('cannot reach');
+    expect($e->transient())->yes();
+}
+
+test a_silent_server_times_out
+{
+    $l = smtpListen();
+    thread::task<string> $server = smtpServe($l, [], true);
+    MailError $e = expect(smtpMailer($l->local->port)->send(smtpMessage()))->fails();
+    $server->wait();
+    expect($e->message())->has('timed out');
+    expect($e->transient())->yes();
+}
+
+test urls_name_the_server_and_the_login
+{
+    Endpoint $e = expect(Endpoint::parse('smtp://me%40x.com:p%3Ass@mail.example.com'))->ok();
+    expect($e->host)->is('mail.example.com');
+    expect($e->port as int64)->is(587 as int64);
+    expect($e->username)->is('me@x.com');
+    expect($e->password)->is('p:ss');
+    expect($e->url())->is('smtp://mail.example.com:587');
+    Endpoint $tls = expect(Endpoint::parse('smtps://mail.example.com'))->ok();
+    expect($tls->url())->is('smtps://mail.example.com:465');
+    Endpoint $port = expect(Endpoint::parse('smtp://[::1]:2525'))->ok();
+    expect($port->url())->is('smtp://[::1]:2525');
+    expect(Endpoint::parse('log:'))->ok();
+    expect(Endpoint::parse('memory:'))->ok();
+    expect(Endpoint::parse('http://x'))->fails();
+    expect(Endpoint::parse('smtp://x:99999'))->fails();
+    expect(Endpoint::parse('nonsense'))->fails();
+}

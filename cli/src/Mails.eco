@@ -1,0 +1,455 @@
+/**
+ * Mail templates: structs conforming to `nexus::mail::Mailable`, tagged
+ * `#[nexus::mail: { text: "welcome.txt", html: "welcome.html" }]`. Each template under
+ * `resources/emails/` is compiled to code, and every field it names is checked against the struct,
+ * so a typo is an error here rather than an empty spot in a mail. For each one the generator writes
+ * `nexus::mail::render(const M&)`, the overload `Mailer::compose<M>` asks for:
+ *
+ *     {{ name }}                    a string or number field; HTML-escaped in an .html template
+ *     {{ raw intro }}               the same, never escaped
+ *     {{ if inviter }}...{{ else }}...{{ end }}   a bool, a nullable, a string or an array
+ *     {{ each posts as post }}{{ post.title }}{{ end }}   an array; `post` is each item
+ *
+ * A path walks into fields of structs and classes of the program, `post.author.name`. A null hole
+ * writes nothing.
+ */
+
+namespace nexusgen::mails;
+
+use nexusgen::{Code, MailDecl, MailOp, Piece, PieceKind, Program, Step, decl, names, template, types};
+
+/**
+ * Where an app keeps its mail templates, under the module root.
+ */
+public const string FOLDER = 'resources/emails';
+
+/**
+ * A name a template can use: the struct's fields, or a loop's item, with the expression that reads
+ * it and its type.
+ */
+internal struct Var
+{
+    public string $name;
+    public string $expr;
+    public json::Value $type;
+}
+
+/**
+ * Where a path led: the expression reading it and its type.
+ */
+internal struct Found
+{
+    public string $expr;
+    public json::Value $type;
+}
+
+/**
+ * A block still open while compiling: `if` (with whether `else` came) or `each`, and how many names
+ * the scope held when it opened.
+ */
+internal struct Open
+{
+    public PieceKind $kind;
+    public bool $otherwise = false;
+    public int64 $line;
+    public int64 $column;
+    public usize $mark;
+}
+
+/**
+ * Reads the mailable `$d` into `$p`, or records why it cannot be one.
+ */
+public function read(Program& $p, const json::Value& $d) : void
+{
+    $q = decl::text($d, 'qualified');
+    string $usage = '#[nexus::mail] takes { text: "welcome.txt", html: "welcome.html" }, paths under resources/emails/';
+    $kind = decl::text($d, 'kind');
+    if ($kind != 'struct' && $kind != 'class') {
+        $p->fail($d, "#[nexus::mail] goes on a struct conforming to nexus::mail::Mailable; {$q} is not one");
+        return;
+    }
+    if (!decl::conforms($d, 'nexus::mail::Mailable')) {
+        $p->fail($d, "{$q} has #[nexus::mail] but does not conform to nexus::mail::Mailable");
+        return;
+    }
+    if (!decl::items($d, 'generics')->empty()) {
+        $p->fail($d, "{$q} is generic; a mailable is one concrete struct");
+        return;
+    }
+    json::Value $tool = guard decl::tool($d, 'mail') else {
+        $p->fail($d, "{$q} is a mailable without templates; {$usage}");
+        return;
+    };
+    MailDecl $m = MailDecl($q);
+    foreach (decl::record(decl::value($tool)) as const &$e) {
+        if ($e->key == 'subject') {
+            $p->fail($d, "#[nexus::mail] takes no subject; write subject() on {$q}, where it can be translated or computed");
+            return;
+        }
+        if ($e->key != 'text' && $e->key != 'html') {
+            $p->fail($d, "#[nexus::mail] has no option {$e->key}; {$usage}");
+            return;
+        }
+        string $path = decl::string($e->value);
+        string $where = guard located($path) else ($why) {
+            $p->fail($d, "#[nexus::mail] {$e->key}: {$why}");
+            return;
+        };
+        string $src = guard std::fs::readfile($p->root / $where) else {
+            $p->fail($d, "#[nexus::mail] {$e->key}: {$where} does not exist");
+            return;
+        };
+        bool $html = $e->key == 'html';
+        array<MailOp> $ops = guard compile($p, $d, $src, $html) else ($why) {
+            $p->problems[] = "{$where}:{$why}";
+            return;
+        };
+        if ($html) {
+            $m->htmlPath = $where;
+            $m->html = mv $ops;
+        } else {
+            $m->textPath = $where;
+            $m->text = mv $ops;
+        }
+    }
+    if ($m->textPath->empty() && $m->htmlPath->empty()) {
+        $p->fail($d, "{$q} names no template; {$usage}");
+        return;
+    }
+    $p->mails[] = mv $m;
+}
+
+/**
+ * `resources/emails/<path>`, or why `$path` is not a template path.
+ */
+internal function located(const string& $path) : result<string, string>
+{
+    if ($path->empty()) {
+        return .error('the template path is empty');
+    }
+    if ($path->starts('/') || $path->contains('\\')) {
+        return .error("{$path} must be relative to resources/emails/");
+    }
+    foreach (str::split($path, '/')->owned() as const &$part) {
+        if ($part == '..' || $part == '.' || $part->empty()) {
+            return .error("{$path} may not leave resources/emails/");
+        }
+    }
+    string $where = FOLDER;
+    $where->append('/');
+    $where->append($path);
+    return .ok($where);
+}
+
+/**
+ * The steps of the template `$src` of the mailable `$d`, or `line:column: why` for the first
+ * problem.
+ */
+internal function compile(const Program& $p, const json::Value& $d, const string& $src, bool $html) : result<array<MailOp>, string>
+{
+    array<Piece> $pieces = guard template::parse($src) else ($why) {
+        return .error($why);
+    };
+    $q = decl::text($d, 'qualified');
+    array<Var> $scope = [];
+    foreach (decl::items($d, 'fields') as const &$f) {
+        if (!readable($f)) {
+            continue;
+        }
+        $name = decl::text($f, 'name');
+        $scope[] = Var($name, "$m->{$name}", decl::field($f, 'type'));
+    }
+    array<Open> $open = [];
+    array<MailOp> $ops = [];
+    int64 $locals = 0;
+    foreach ($pieces as const &$piece) {
+        string $at = "{$piece->line}:{$piece->column}";
+        if ($piece->kind == PieceKind::text) {
+            MailOp $t = MailOp(.text);
+            $t->text = $piece->text;
+            $ops[] = mv $t;
+            continue;
+        }
+        if ($piece->kind == PieceKind::hole || $piece->kind == PieceKind::raw) {
+            Found $v = guard find($p, $q, $scope, $piece->text) else ($why) {
+                return .error("{$at}: {$why}");
+            };
+            json::Value $bare = types::bare($v->type);
+            string $kind = sort($bare);
+            if ($kind != 'string' && $kind != 'number') {
+                string $shown = types::render($v->type);
+                return .error("{$at}: {$piece->text} has type {$shown}; a hole writes strings and numbers (use if for a bool, each for an array)");
+            }
+            MailOp $h = MailOp(.hole);
+            $h->text = $v->expr;
+            $h->type = types::render($bare);
+            $h->nullable = types::optional($v->type);
+            $h->escape = $html && $piece->kind == PieceKind::hole && $kind == 'string';
+            $ops[] = mv $h;
+            continue;
+        }
+        if ($piece->kind == PieceKind::when) {
+            Found $v = guard find($p, $q, $scope, $piece->text) else ($why) {
+                return .error("{$at}: {$why}");
+            };
+            string $test = guard condition($v) else {
+                string $shown = types::render($v->type);
+                return .error("{$at}: {$piece->text} has type {$shown}; if tests a bool, a nullable, a string or an array");
+            };
+            MailOp $w = MailOp(.when);
+            $w->text = $test;
+            $ops[] = mv $w;
+            $open[] = Open(.when, false, $piece->line, $piece->column, $scope->count());
+            continue;
+        }
+        if ($piece->kind == PieceKind::otherwise) {
+            if ($open->empty() || $open[$open->count() - 1]->kind != PieceKind::when) {
+                return .error("{$at}: else without an if");
+            }
+            Open& $top = $open[$open->count() - 1];
+            if ($top->otherwise) {
+                return .error("{$at}: a second else for one if");
+            }
+            $top->otherwise = true;
+            $ops[] = MailOp(.otherwise);
+            continue;
+        }
+        if ($piece->kind == PieceKind::end) {
+            if ($open->empty()) {
+                return .error("{$at}: end without an if or each");
+            }
+            Open $closed = $open->pop();
+            $scope->truncate($closed->mark);
+            $ops[] = MailOp(.end);
+            continue;
+        }
+        // each
+        Found $list = guard find($p, $q, $scope, $piece->text) else ($why) {
+            return .error("{$at}: {$why}");
+        };
+        if (decl::text($list->type, 'kind') != 'array') {
+            string $shown = types::render($list->type);
+            return .error("{$at}: {$piece->text} has type {$shown}; each walks an array");
+        }
+        $locals++;
+        MailOp $loop = MailOp(.each);
+        $loop->text = $list->expr;
+        $loop->local = "${$piece->name}{$locals}";
+        $ops[] = $loop;
+        $open[] = Open(.each, false, $piece->line, $piece->column, $scope->count());
+        $scope[] = Var($piece->name, $loop->local, decl::field($list->type, 'of'));
+    }
+    if (!$open->empty()) {
+        Open $left = $open[$open->count() - 1];
+        string $what = 'if';
+        if ($left->kind == PieceKind::each) {
+            $what = 'each';
+        }
+        return .error("{$left->line}:{$left->column}: this {$what} has no end");
+    }
+    return .ok($ops);
+}
+
+/**
+ * The expression and type of `$path`: its first name from the scope (innermost first), each next
+ * one a field of the struct or class before it.
+ */
+internal function find(const Program& $p, const string& $q, const array<Var>& $scope, const string& $path) : result<Found, string>
+{
+    array<string> $parts = str::split($path, '.')->owned();
+    string $first = $parts[0];
+    Found? $start = null;
+    usize $i = $scope->count();
+    while ($i > 0) {
+        $i = $i - 1;
+        if ($scope[$i]->name == $first) {
+            $start = Found($scope[$i]->expr, $scope[$i]->type);
+            break;
+        }
+    }
+    Found $at = guard $start else {
+        string $short = names::short($q);
+        return .error("{$short} has no field {$first}");
+    };
+    string $before = $first;
+    usize $k = 1;
+    while ($k < $parts->count()) {
+        string $seg = $parts[$k];
+        if (types::optional($at->type)) {
+            return .error("{$before} may be null, so {$seg} cannot be read from it");
+        }
+        string $owner = types::name($at->type);
+        json::Value $d = guard $p->typeNamed($owner) else {
+            string $shown = types::render($at->type);
+            return .error("{$before} has type {$shown}, which has no fields to read");
+        };
+        json::Value $f = guard fieldOf($d, $seg) else {
+            string $short = names::short($owner);
+            return .error("{$short} has no public field {$seg}");
+        };
+        $at = Found("{$at->expr}->{$seg}", decl::field($f, 'type'));
+        $before->append(".{$seg}");
+        $k++;
+    }
+    return .ok($at);
+}
+
+/**
+ * Whether a template may read the field `$f`: it is neither static nor private.
+ */
+internal function readable(const json::Value& $f) : bool
+{
+    return !decl::flag($f, 'static') && decl::text($f, 'visibility') != 'private';
+}
+
+/**
+ * The public, non-static field `$name` of the declaration `$d`, or null.
+ */
+internal function fieldOf(const json::Value& $d, const string& $name) : json::Value?
+{
+    foreach (decl::items($d, 'fields') as const &$f) {
+        if (decl::text($f, 'name') == $name && readable($f)) {
+            return $f;
+        }
+    }
+    return null;
+}
+
+/**
+ * `string`, `number`, `bool`, `array` or `other` for a type without its `?`.
+ */
+internal function sort(const json::Value& $t) : string
+{
+    $kind = decl::text($t, 'kind');
+    if ($kind == 'string') {
+        return 'string';
+    }
+    if ($kind == 'array') {
+        return 'array';
+    }
+    if ($kind == 'prim') {
+        $n = decl::text($t, 'name');
+        if ($n == 'bool') {
+            return 'bool';
+        }
+        if (types::integer($n) || $n == 'float32' || $n == 'float64') {
+            return 'number';
+        }
+    }
+    return 'other';
+}
+
+/**
+ * The Echo condition `{{ if }}` tests for `$v`, or null when its type has none.
+ */
+internal function condition(const Found& $v) : string?
+{
+    if (types::optional($v->type)) {
+        return "{$v->expr} != null";
+    }
+    string $kind = sort($v->type);
+    if ($kind == 'bool') {
+        return $v->expr;
+    }
+    if ($kind == 'string' || $kind == 'array') {
+        return "!{$v->expr}->empty()";
+    }
+    return null;
+}
+
+/**
+ * The `nexus::mail::render` overload for `$m`.
+ */
+public function emit(Code& $code, const MailDecl& $m) : void
+{
+    array<string> $from = [];
+    if (!$m->textPath->empty()) {
+        $from[] = $m->textPath;
+    }
+    if (!$m->htmlPath->empty()) {
+        $from[] = $m->htmlPath;
+    }
+    string $files = str::join($from, ' and ');
+    $code->line('/**');
+    $code->line(" * The bodies of {$m->qualified}, from {$files}.");
+    $code->line(' */');
+    $code->open("public function render(const {$m->qualified}& $m) : nexus::mail::Rendered");
+    $code->line('nexus::mail::Rendered $r = nexus::mail::Rendered();');
+    int64 $holes = 0;
+    if (!$m->textPath->empty()) {
+        $code->line('string $text = \'\';');
+        body($code, $m->text, '$text', $holes);
+        $code->line('$r->text = mv $text;');
+    }
+    if (!$m->htmlPath->empty()) {
+        $code->line('string $html = \'\';');
+        body($code, $m->html, '$html', $holes);
+        $code->line('$r->html = mv $html;');
+    }
+    $code->line('return $r;');
+    $code->close();
+}
+
+/**
+ * The statements that write `$ops` into the string `$out`.
+ */
+internal function body(Code& $code, const array<MailOp>& $ops, const string& $out, int64& $holes) : void
+{
+    foreach ($ops as const &$op) {
+        if ($op->step == Step::text) {
+            literal($code, $op->text, $out);
+        } else if ($op->step == Step::hole) {
+            if ($op->nullable) {
+                $holes++;
+                string $v = "$v{$holes}";
+                $code->begin("if ({$op->text} != null)");
+                $code->line("{$op->type} {$v} = guard {$op->text};");
+                $code->line(write($op, $v, $out));
+                $code->close();
+            } else {
+                $code->line(write($op, $op->text, $out));
+            }
+        } else if ($op->step == Step::when) {
+            $code->begin("if ({$op->text})");
+        } else if ($op->step == Step::otherwise) {
+            $code->next('else');
+        } else if ($op->step == Step::each) {
+            $code->begin("foreach ({$op->text} as const &{$op->local})");
+        } else {
+            $code->close();
+        }
+    }
+}
+
+/**
+ * The statement appending the value `$expr` of the hole `$op` to `$out`.
+ */
+internal function write(const MailOp& $op, const string& $expr, const string& $out) : string
+{
+    if ($op->type != 'string') {
+        return "{$out}->append(str::from({$expr}));";
+    }
+    if ($op->escape) {
+        return "{$out}->append(nexus::mail::Html::escape({$expr}));";
+    }
+    return "{$out}->append({$expr});";
+}
+
+/**
+ * Appends the template text `$text` to `$out`, a line at a time.
+ */
+internal function literal(Code& $code, const string& $text, const string& $out) : void
+{
+    array<string> $lines = str::split($text, "\n")->owned();
+    usize $i = 0;
+    while ($i < $lines->count()) {
+        if ($i > 0) {
+            $code->line("{$out}->push(10);");
+        }
+        if (!$lines[$i]->empty()) {
+            string $quoted = names::quote($lines[$i]);
+            $code->line("{$out}->append({$quoted});");
+        }
+        $i++;
+    }
+}

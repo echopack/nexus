@@ -52,6 +52,8 @@ internal class World
         map<string, string> $vars = [
             'NEXUS_DATABASE_URL' => $this->db->url,
             'NEXUS_AUTH_KEY' => 'an-integration-key-of-at-least-32-chars',
+            'NEXUS_MAIL_URL' => 'memory:',
+            'NEXUS_MAIL_FROM' => 'hello@blog.test',
         ];
         $this->app = TestApp(Blog::extensions(), mv $vars);
         $this->api = $this->app->api();
@@ -100,6 +102,14 @@ internal class World
         };
         nexus::Kernel::finish($payload);
         return $this->api->bearer($issued->token);
+    }
+
+    /**
+     * Where the app's mail went: `NEXUS_MAIL_URL` is `memory:` here.
+     */
+    public function outbox() : nexus::mail::Outbox
+    {
+        return $this->app->kernel->services->get<nexus::mail::Outbox>();
     }
 
     /**

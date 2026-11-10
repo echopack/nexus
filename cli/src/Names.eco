@@ -34,6 +34,28 @@ public function variable(const string& $name) : bool
 }
 
 /**
+ * Whether `$name` is a letter followed by letters and digits, with `_` counting as a letter when
+ * `$underscore`.
+ */
+public function identifier(const string& $name, underscore: bool $underscore = false) : bool
+{
+    if ($name->empty()) {
+        return false;
+    }
+    usize $i = 0;
+    while ($i < $name->size()) {
+        uint8 $c = $name->byte($i);
+        bool $letter = ($c >= 97 && $c <= 122) || ($c >= 65 && $c <= 90) || ($underscore && $c == 95);
+        bool $digit = $c >= 48 && $c <= 57;
+        if (!$letter && !($digit && $i > 0)) {
+            return false;
+        }
+        $i = $i + 1;
+    }
+    return true;
+}
+
+/**
  * `pageSize` to `PAGE_SIZE`.
  */
 public function screaming(const string& $name) : string

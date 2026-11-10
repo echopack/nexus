@@ -1,6 +1,6 @@
 namespace nexusgen;
 
-use nexusgen::{decl, exposures, names, records, rules, types};
+use nexusgen::{decl, exposures, mails, names, records, rules, types};
 
 /**
  * Everything `nexus gen` writes code for, read from one module's decls: actions, inputs, configs,
@@ -21,6 +21,16 @@ public struct Program
      * The structs tagged `#[nexus::log]`, typed log records.
      */
     public array<LogDecl> $logs = [];
+
+    /**
+     * The structs tagged `#[nexus::mail]`, mailables with their templates compiled.
+     */
+    public array<MailDecl> $mails = [];
+
+    /**
+     * The module root, which the paths of the module's files (its mail templates) start from.
+     */
+    public std::fs::path $root = '.';
 
     /**
      * The classes conforming to `nexus::mcp::Tool`; actions that can be offered as tools stay with
@@ -57,6 +67,12 @@ public struct Program
      */
     internal map<string, bool> $known = [];
     internal array<EnumDecl> $enums = [];
+
+    /**
+     * Every struct and class of the program, by qualified name: what a mail template path may walk
+     * into.
+     */
+    internal map<string, json::Value> $types = [];
     internal map<string, string> $ruleTypes = [];
 
     /**
@@ -69,11 +85,23 @@ public struct Program
 
     /**
      * Reads the module in `$decls`, with `$all` (the whole program) telling which classes are
-     * middleware, inputs and rules.
+     * middleware, inputs and rules, and `$root` where the module's files (its mail templates) are.
      */
-    public constructor(const json::Value& $decls, const json::Value& $all)
+    public constructor(const json::Value& $decls, const json::Value& $all, root: std::fs::path $root = '.')
     {
+        $this->root = $root;
         $this->read($decls, $all);
+    }
+
+    /**
+     * The struct or class of the program called `$q`, or null.
+     */
+    internal const function typeNamed(const string& $q) : json::Value?
+    {
+        if (!$this->types->has($q)) {
+            return null;
+        }
+        return $this->types->get($q);
     }
 
     /**
@@ -94,6 +122,9 @@ public struct Program
                 }
                 if ($kind == 'enum') {
                     $this->readEnum($d);
+                }
+                if ($kind == 'struct' || $kind == 'class') {
+                    $this->types[$q] = $d;
                 }
                 if ($kind == 'class') {
                     foreach (decl::items($d, 'conforms') as const &$c) {
@@ -127,6 +158,10 @@ public struct Program
             }
             if (decl::has($d, 'log')) {
                 records::read($this, $d);
+            }
+            $kind = decl::text($d, 'kind');
+            if (decl::has($d, 'mail') || (($kind == 'struct' || $kind == 'class') && decl::conforms($d, 'nexus::mail::Mailable'))) {
+                mails::read($this, $d);
             }
         }
         foreach ($declarations as const &$d) {

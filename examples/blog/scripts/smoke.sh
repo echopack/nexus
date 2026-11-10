@@ -6,7 +6,8 @@
 # sign-up stores a pipeline (welcome, then count the users) that serve's own
 # workers run; a second one, stored while no worker runs, outlives a kill -9
 # and is run by `blog work`. nexus-work-carbon's live test runs against the
-# same server. Doors:
+# same server. Mail goes to a throwaway Mailpit in Docker: each welcome is
+# read back from its API, and nexus-mail's live test runs against it. Doors:
 # `posts:show` and `posts:create` on the command line, and an MCP client
 # that registers, is allowed by the editor, trades its code with PKCE,
 # calls the post tools and refreshes its token.
@@ -28,10 +29,18 @@ docker run -d --rm --name "${name}" \
     -e MYSQL_ROOT_PASSWORD=rootpw -e MYSQL_DATABASE=blog -e MYSQL_USER=app -e MYSQL_PASSWORD=secret \
     -e MARIADB_ROOT_PASSWORD=rootpw -e MARIADB_DATABASE=blog -e MARIADB_USER=app -e MARIADB_PASSWORD=secret \
     -p "127.0.0.1:${db_port}:3306" "${image}" >/dev/null || { echo "docker run failed"; exit 1; }
-trap 'docker rm -f -v "${name}" >/dev/null 2>&1 || true' EXIT
+mail_smtp=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+mail_http=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+mail_name="nexus-blog-mail-$$"
+docker run -d --rm --name "${mail_name}" \
+    -p "127.0.0.1:${mail_smtp}:1025" -p "127.0.0.1:${mail_http}:8025" "${MAIL_IMAGE:-axllent/mailpit}" >/dev/null \
+    || { docker rm -f -v "${name}" >/dev/null 2>&1; echo "docker run (mailpit) failed"; exit 1; }
+trap 'docker rm -f -v "${name}" "${mail_name}" >/dev/null 2>&1 || true' EXIT
+mailapi="http://127.0.0.1:${mail_http}/api/v1"
 
 export NEXUS_DATABASE_URL="mysql://app:secret@127.0.0.1:${db_port}/blog?fetchServerKey=true"
 export NEXUS_AUTH_KEY=smoke-auth-key-of-at-least-32-characters
+export NEXUS_MAIL_URL="smtp://127.0.0.1:${mail_smtp}" NEXUS_MAIL_TLS=none NEXUS_MAIL_FROM=hello@blog.test NEXUS_MAIL_FROM_NAME="A nexus blog"
 
 failed=0
 check() {
@@ -67,6 +76,17 @@ check "doctor"            1 "$(./ecobuild/blog doctor 2>&1 | grep -c '^ok: .* ro
 # task that waits for them (it only runs when WORK_LIVE_URL is set)
 live="$(cd "${here}/../../modules/work/carbon" && WORK_LIVE_URL="${NEXUS_DATABASE_URL}" epm run -m "${here}/../.." ecotest --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
 check "work store, live"  1 "$(printf '%s\n' "${live}" | grep -c '^ok .*LiveTest.eco::dependencies_finishing_at_once_on_two_servers_all_count')"
+
+# nexus-mail's live test on the Mailpit: a mail over SMTP, read back from its API
+for _ in $(seq 1 50); do
+    curl -s -o /dev/null "${mailapi}/messages" && break
+    sleep 0.2
+done
+live="$(cd "${here}/../../modules/mail" && MAIL_LIVE_URL="${NEXUS_MAIL_URL}" MAIL_LIVE_API="http://127.0.0.1:${mail_http}" epm run -m "${here}/../.." ecotest --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
+check "mail, live"        1 "$(printf '%s\n' "${live}" | grep -c '^ok .*LiveTest.eco::a_mail_reaches_a_real_server')"
+
+# the subjects of every mail to `$1` Mailpit holds
+mailed() { curl -s -G --data-urlencode "query=to:$1" "${mailapi}/search" | grep -o '"Subject":"[^"]*"'; }
 
 log="$(mktemp)"
 ./ecobuild/blog serve --listen "127.0.0.1:${port}" >"${log}" 2>&1 &
@@ -217,6 +237,7 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 check "welcomed by serve" 1 "${welcomed}"
+check "welcome mailed"    '"Subject":"Welcome to A nexus blog"' "$(mailed first@example.com)"
 # then the next step of the sign-up's pipeline counts the users
 for _ in $(seq 1 50); do
     grep -q 'users counted' "${log}" && break
@@ -258,7 +279,7 @@ check "delete, restarted" 204 "$(code -X DELETE -H "Authorization: $(signed DELE
 check "delete the signed" 204 "$(code -X DELETE -H "Authorization: $(signed DELETE /v1/posts/3 '')" "${base}/v1/posts/3")"
 check "delete cli post"   204 "$(code -X DELETE -H "Authorization: $(signed DELETE /v1/posts/4 '')" "${base}/v1/posts/4")"
 check "delete mcp post"   204 "$(code -X DELETE -H "Authorization: $(signed DELETE /v1/posts/5 '')" "${base}/v1/posts/5")"
-check "sign up, queued"   201 "$(code -X POST -H "${json}" -d '{"name":"Second reader","email":"second@example.com","password":"second-password-1","passwordConfirmation":"second-password-1"}' "${base}/v1/users")"
+check "sign up, queued"   201 "$(code -X POST -H "${json}" -H 'Accept-Language: de-CH' -d '{"name":"Second reader","email":"second@example.com","password":"second-password-1","passwordConfirmation":"second-password-1"}' "${base}/v1/users")"
 second="$(body -X POST -H "${json}" -d '{"email":"second@example.com","password":"second-password-1"}' "${base}/v1/auth/token" | field token)"
 check "not welcomed yet"  1 "$(body -H "Authorization: Bearer ${second}" "${base}/v1/me" | grep -c '"welcomed_at":null')"
 # the process dies without a chance to clean up; the task is in the database
@@ -281,6 +302,7 @@ rm -f "${worklog}"
 
 serve
 check "welcomed by work"  1 "$(body -H "Authorization: Bearer ${second}" "${base}/v1/me" | grep -c '"welcomed_at":"')"
+check "welcome mailed, de" '"Subject":"Willkommen bei A nexus blog"' "$(mailed second@example.com)"
 kill -TERM "${pid}"
 wait "${pid}"
 

@@ -1,0 +1,181 @@
+/**
+ * Reads a mail template into pieces: text, and the tags between `{{` and `}}`. `{{{{` is a literal
+ * `{{`. A block tag (`if`, `else`, `end`, `each`) alone on its line takes the line with it, so a
+ * template can put each on a line of its own without leaving blank lines in the mail.
+ */
+
+namespace nexusgen::template;
+
+use nexusgen::{Piece, PieceKind, names};
+
+/**
+ * The pieces of `$src`, or the first problem as `line:column: message`.
+ */
+public function parse(const string& $raw) : result<array<Piece>, string>
+{
+    string $src = str::replace($raw, "\r\n", "\n");
+    array<Piece> $out = [];
+    string $pending = '';
+    usize $n = $src->size();
+    usize $i = 0;
+    while ($i < $n) {
+        if (opens($src, $i, '{{{{')) {
+            $pending->append('{{');
+            $i = $i + 4;
+            continue;
+        }
+        if (!opens($src, $i, '{{')) {
+            $pending->push($src->byte($i));
+            $i++;
+            continue;
+        }
+        usize $close = $src->find('}}', $i + 2);
+        if ($close >= $n) {
+            string $at = place($src, $i);
+            return .error("{$at}: this \{\{ is never closed");
+        }
+        string $inner = string::from(str::trim($src->sub($i + 2, $close - $i - 2)));
+        Piece $p = guard tag($inner) else ($why) {
+            string $at = place($src, $i);
+            return .error("{$at}: {$why}");
+        };
+        $p->line = line($src, $i);
+        $p->column = column($src, $i);
+        usize $after = $close + 2;
+        if (block($p->kind)) {
+            usize $start = $i;
+            while ($start > 0 && blank($src->byte($start - 1))) {
+                $start = $start - 1;
+            }
+            usize $end = $after;
+            while ($end < $n && blank($src->byte($end))) {
+                $end++;
+            }
+            bool $alone = ($start == 0 || $src->byte($start - 1) == 10) && ($end == $n || $src->byte($end) == 10);
+            if ($alone) {
+                $pending = $pending->sub(0, $pending->size() - ($i - $start));
+                $after = $end;
+                if ($after < $n) {
+                    $after++;
+                }
+            }
+        }
+        if (!$pending->empty()) {
+            $out[] = Piece(.text, $pending);
+            $pending = '';
+        }
+        $out[] = mv $p;
+        $i = $after;
+    }
+    if (!$pending->empty()) {
+        $out[] = Piece(.text, $pending);
+    }
+    return .ok($out);
+}
+
+/**
+ * The tag inside `{{ }}`, or why it is none.
+ */
+internal function tag(const string& $inner) : result<Piece, string>
+{
+    if ($inner->empty()) {
+        return .error('an empty {{ }}');
+    }
+    array<string> $words = [];
+    foreach (str::split($inner, ' ')->owned() as const &$w) {
+        if (!$w->empty()) {
+            $words[] = $w;
+        }
+    }
+    string $head = $words[0];
+    if ($head == 'else' || $head == 'end') {
+        if ($words->count() != 1) {
+            return .error("\{\{ {$head} }} takes nothing after it");
+        }
+        if ($head == 'else') {
+            return .ok(Piece(.otherwise, ''));
+        }
+        return .ok(Piece(.end, ''));
+    }
+    if ($head == 'raw' || $head == 'if') {
+        if ($words->count() != 2 || !path($words[1])) {
+            return .error("\{\{ {$head} }} takes one field, like \{\{ {$head} user.name }}");
+        }
+        if ($head == 'raw') {
+            return .ok(Piece(.raw, $words[1]));
+        }
+        return .ok(Piece(.when, $words[1]));
+    }
+    if ($head == 'each') {
+        if ($words->count() != 4 || $words[2] != 'as' || !path($words[1]) || !names::identifier($words[3], underscore: true)) {
+            return .error('{{ each }} reads {{ each posts as post }}');
+        }
+        Piece $p = Piece(.each, $words[1]);
+        $p->name = $words[3];
+        return .ok($p);
+    }
+    if ($words->count() != 1 || !path($head)) {
+        return .error("\{\{ {$inner} }} is not a field, raw, if, else, each or end");
+    }
+    return .ok(Piece(.hole, $head));
+}
+
+/**
+ * Whether `$src` holds `$what` at `$at`.
+ */
+internal function opens(const string& $src, usize $at, const string& $what) : bool
+{
+    return $at + $what->size() <= $src->size() && $src->sub($at, $what->size()) == $what;
+}
+
+internal function block(PieceKind $k) : bool
+{
+    return $k == PieceKind::when || $k == PieceKind::otherwise || $k == PieceKind::end || $k == PieceKind::each;
+}
+
+internal function blank(uint8 $c) : bool
+{
+    return $c == 32 || $c == 9;
+}
+
+/**
+ * Whether `$text` is a dotted path of names, `post.author.name`.
+ */
+internal function path(const string& $text) : bool
+{
+    foreach (str::split($text, '.')->owned() as const &$part) {
+        if (!names::identifier($part, underscore: true)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+internal function line(const string& $src, usize $at) : int64
+{
+    int64 $line = 1;
+    usize $i = 0;
+    while ($i < $at) {
+        if ($src->byte($i) == 10) {
+            $line++;
+        }
+        $i++;
+    }
+    return $line;
+}
+
+internal function column(const string& $src, usize $at) : int64
+{
+    usize $i = $at;
+    while ($i > 0 && $src->byte($i - 1) != 10) {
+        $i = $i - 1;
+    }
+    return ($at - $i + 1) as int64;
+}
+
+internal function place(const string& $src, usize $at) : string
+{
+    int64 $l = line($src, $at);
+    int64 $c = column($src, $at);
+    return "{$l}:{$c}";
+}

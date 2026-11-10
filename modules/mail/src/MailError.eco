@@ -1,0 +1,97 @@
+namespace nexus::mail;
+
+/**
+ * Why a mail was not sent.
+ *
+ * `transient()` says whether trying again later may work (the server was away, slow or said 4xx);
+ * `problem()` turns the error into the `nexus::Problem` a task hands to `Failure::of`, so a
+ * transient error is retried and anything else gives up.
+ */
+public enum MailError
+{
+    /**
+     * The mail itself is wrong: no recipient, no subject, a bad address, a header with a line
+     * break, an attachment that cannot be read.
+     */
+    case invalid(string $why);
+
+    /**
+     * The server could not be reached, or the connection broke.
+     */
+    case connect(string $why);
+
+    /**
+     * The server took longer than `NEXUS_MAIL_TIMEOUT`.
+     */
+    case timeout(string $why);
+
+    /**
+     * TLS could not be set up: no STARTTLS offered, a failed handshake, a certificate that does not
+     * check out.
+     */
+    case tls(string $why);
+
+    /**
+     * The server turned the username and password down.
+     */
+    case auth(string $why);
+
+    /**
+     * The server answered with an SMTP error code: 4xx is temporary, 5xx is final.
+     */
+    case rejected(int64 $code, string $why);
+
+    /**
+     * Anything else.
+     */
+    case other(string $why);
+
+    /**
+     * What went wrong, in words.
+     */
+    public const function message() : string
+    {
+        return match ($this) {
+            MailError::invalid($why) => "invalid mail: {$why}",
+            MailError::connect($why) => "cannot reach the mail server: {$why}",
+            MailError::timeout($why) => "the mail server timed out: {$why}",
+            MailError::tls($why) => "TLS to the mail server failed: {$why}",
+            MailError::auth($why) => "the mail server refused the login: {$why}",
+            MailError::rejected($code, $why) => "the mail server answered {$code}: {$why}",
+            MailError::other($why) => "mail not sent: {$why}",
+        };
+    }
+
+    /**
+     * Whether sending again later may work.
+     */
+    public const function transient() : bool
+    {
+        return match ($this) {
+            MailError::connect($why) => true,
+            MailError::timeout($why) => true,
+            MailError::rejected($code, $why) => $code >= 400 && $code < 500,
+            MailError::other($why) => true,
+            else => false,
+        };
+    }
+
+    /**
+     * The problem a task answers with: `unavailable` (retried) when `transient()`, `badRequest`
+     * (given up) otherwise.
+     */
+    public const function problem() : nexus::Problem
+    {
+        if ($this->transient()) {
+            return .unavailable($this->message());
+        }
+        return .badRequest($this->message());
+    }
+}
+
+namespace str;
+
+public function from(const nexus::mail::MailError& $e) : string
+{
+    return $e->message();
+}

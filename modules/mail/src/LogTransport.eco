@@ -1,0 +1,28 @@
+namespace nexus::mail;
+
+/**
+ * Writes each mail to the log instead of sending it: `NEXUS_MAIL_URL=log:`, the default, so a
+ * development setup never mails anyone. The headline at info, the whole mail at debug.
+ */
+#[atomic]
+public class LogTransport : Transport
+{
+    private nexus::Logger $log;
+
+    public constructor(nexus::Logger $log)
+    {
+        $this->log = $log;
+    }
+
+    public const function describe() : string
+    {
+        return 'log:';
+    }
+
+    public function deliver(const Delivery& $d) : status<MailError>
+    {
+        $this->log->info('mail logged, not sent', ['to' => str::join($d->emails(), ', '),'subject' => $d->message->subject, 'bytes' => $d->mime->size() as int64]);
+        $this->log->debug('mail', ['mime' => $d->mime]);
+        return .ok;
+    }
+}

@@ -1,0 +1,120 @@
+namespace nexus::mail;
+
+use std::time;
+
+/**
+ * The body handed to libcurl once, then the end: what an upload's read callback asks for.
+ */
+internal class Once
+{
+    public string $text;
+    public bool $given = false;
+
+    public constructor(string $text)
+    {
+        $this->text = mv $text;
+    }
+
+    public function next() : string
+    {
+        if ($this->given) {
+            return '';
+        }
+        $this->given = true;
+        return $this->text;
+    }
+}
+
+/**
+ * Sends over SMTP through libcurl: STARTTLS (or `smtps://` TLS from the start), AUTH with the URL's
+ * username and password, one connection per mail. Each send has its own handle, so threads never
+ * share one.
+ */
+#[atomic]
+public class Smtp : Transport
+{
+    public Endpoint $at;
+    public Tls $tls;
+    public time::duration $timeout;
+
+    public constructor(Endpoint $at, Tls $tls = .starttls, time::duration $timeout = time::duration::secs(30))
+    {
+        $this->at = mv $at;
+        $this->tls = $tls;
+        $this->timeout = $timeout;
+    }
+
+    public const function describe() : string
+    {
+        return $this->at->url();
+    }
+
+    public function deliver(const Delivery& $d) : status<MailError>
+    {
+        curl::Easy $h = curl::Easy();
+        if (!$h->open()) {
+            return .error(.other('libcurl gave no handle'));
+        }
+        guard $this->prepare($h, $d) else ($e) {
+            return .error(.other("libcurl refused an option: {$e}"));
+        };
+        Once $body = Once($d->mime);
+        $h->source(.chunks(() => $body->next(), $d->mime->size() as int64));
+        guard $h->perform() else ($e) {
+            return .error(Smtp::failure($e, $h->infoLong(.responseCode)));
+        };
+        return .ok;
+    }
+
+    private const function prepare(curl::Easy& $h, const Delivery& $d) : status<curl::Error>
+    {
+        try $h->setString(.url, $this->at->url());
+        if (!$this->at->username->empty()) {
+            try $h->setString(.username, $this->at->username);
+            try $h->setString(.password, $this->at->password);
+        }
+        try $h->setString(.mailFrom, "<{$d->from->email}>");
+        array<string> $to = [];
+        foreach ($d->recipients as const &$a) {
+            $to[] = "<{$a->email}>";
+        }
+        try $h->setList(.mailRcpt, $to);
+        if ($this->at->scheme == Scheme::smtp) {
+            curl::UseSsl $mode = curl::UseSsl::all;
+            if ($this->tls == Tls::optional) {
+                $mode = curl::UseSsl::attempt;
+            } else if ($this->tls == Tls::none) {
+                $mode = curl::UseSsl::none;
+            }
+            try $h->setLong(.useSsl, $mode->value());
+        }
+        int64 $ms = $this->timeout->as_millis();
+        try $h->setLong(.timeoutMs, $ms);
+        try $h->setLong(.connectTimeoutMs, $ms);
+        return .ok;
+    }
+
+    /**
+     * The `MailError` for libcurl's `$e`, with `$code` the last SMTP reply (0 when there was none).
+     */
+    internal static function failure(curl::Error $e, int64 $code) : MailError
+    {
+        string $why = $e->message();
+        if ($e == curl::Error::sslConnectError || $e == curl::Error::peerFailedVerification || $e == curl::Error::useSslFailed) {
+            return .tls($why);
+        }
+        if ($e == curl::Error::loginDenied) {
+            return .auth($why);
+        }
+        if ($e == curl::Error::timeout) {
+            return .timeout($why);
+        }
+        if ($code >= 400) {
+            return .rejected($code, $why);
+        }
+        if ($e == curl::Error::couldNotConnect || $e == curl::Error::couldNotResolveHost || $e == curl::Error::sendError || $e == curl::Error::recvError) {
+            return .connect($why);
+        }
+        return .other($why);
+    }
+}

@@ -1,0 +1,19 @@
+namespace nexus::mail;
+
+/**
+ * The bodies `nexus gen` renders from a mailable's templates: null for a template it does not name.
+ */
+public struct Rendered
+{
+    public string? $text = null;
+    public string? $html = null;
+}
+
+/**
+ * The bodies of a mailable: `nexus gen` writes one overload per `#[nexus::mail]` struct, and
+ * `Mailer::compose` asks for it. This one is the base, a `Rendered` being its own bodies.
+ */
+public function render(const Rendered& $r) : Rendered
+{
+    return $r;
+}

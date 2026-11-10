@@ -41,6 +41,7 @@
 #[depends: "../../modules/auth/carbon"]
 #[depends: "../../modules/work"]
 #[depends: "../../modules/work/carbon"]
+#[depends: "../../modules/mail"]
 #[depends: "../../modules/mcp"]
 #[depends: "../../modules/oauth"]
 #[depends: "../../modules/oauth/carbon"]

@@ -1,0 +1,92 @@
+/**
+ * A scripted SMTP server on a thread, for one connection: it greets, answers each command with what
+ * the test scripted (250 unless told otherwise), keeps what it was sent, and hands that back as
+ * the thread's result.
+ */
+
+use std::thread;
+
+internal function smtpListen() : tcp::Listener
+{
+    tcp::Listener $l = guard tcp::Listener::bind(tcp::Address(loopback: 0)) else ($e) {
+        die("listen: {$e}");
+    };
+    return $l;
+}
+
+internal function smtpLine(tcp::Reader& $r, tcp::Stream $s) : string?
+{
+    string? $line = guard $r->until($s, "\r\n", tcp::Deadline(ms: 5000)) else {
+        return null;
+    };
+    return $line;
+}
+
+internal function smtpReply(const map<string, string>& $replies, const string& $verb, const string& $fallback) : string
+{
+    if ($replies->has($verb)) {
+        return $replies->get($verb);
+    }
+    return $fallback;
+}
+
+internal function smtpSay(tcp::Stream $s, const string& $line) : void
+{
+    $s->write("{$line}\r\n", tcp::Deadline(ms: 5000));
+}
+
+/**
+ * Serves one session on `$l`. `$replies` maps a command (`MAIL`, `RCPT`, `DATA`, `END` for the end
+ * of the data) to the line answering it. With `$stall`, the server accepts and says nothing.
+ */
+internal function smtpServe(tcp::Listener $l, map<string, string> $replies, bool $stall = false) : thread::task<string>
+{
+    thread::task<string> $t = guard thread::spawn(function() : string {
+        tcp::Stream? $maybe = guard $l->accept(tcp::Deadline(ms: 5000)) else ($e) {
+            return "accept: {$e}";
+        };
+        tcp::Stream $s = guard $maybe else {
+            return 'no client came';
+        };
+        if ($stall) {
+            std::time::sleep(.millis(1500));
+            return 'stalled';
+        }
+        string $log = '';
+        tcp::Reader $r = tcp::Reader();
+        smtpSay($s, '220 fake.test ESMTP');
+        while (true) {
+            string $line = guard smtpLine($r, $s) else {
+                return $log;
+            };
+            $log->append("{$line}\n");
+            string $verb = str::upper(string::from(str::split($line, ' ')->at(0)));
+            if ($verb == 'EHLO' || $verb == 'HELO') {
+                smtpSay($s, '250-fake.test');
+                smtpSay($s, '250 8BITMIME');
+            } else if ($verb == 'MAIL' || $verb == 'RCPT') {
+                smtpSay($s, smtpReply($replies, $verb, '250 OK'));
+            } else if ($verb == 'DATA') {
+                string $answer = smtpReply($replies, 'DATA', '354 go ahead');
+                smtpSay($s, $answer);
+                if ($answer->starts('354')) {
+                    string? $data = guard $r->until($s, "\r\n.\r\n", tcp::Deadline(ms: 5000)) else {
+                        return $log;
+                    };
+                    string $got = $data ?? '';
+                    $log->append("<data>{$got}</data>\n");
+                    smtpSay($s, smtpReply($replies, 'END', '250 queued as 1'));
+                }
+            } else if ($verb == 'QUIT') {
+                smtpSay($s, '221 bye');
+                return $log;
+            } else {
+                smtpSay($s, '250 OK');
+            }
+        }
+        return $log;
+    }) else ($e) {
+        die('spawn failed');
+    };
+    return $t;
+}

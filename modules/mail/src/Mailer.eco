@@ -1,0 +1,91 @@
+namespace nexus::mail;
+
+/**
+ * Builds mail from mailables and sends it through the app's transport. One for the whole process,
+ * bound by the extension; take it in a service, task or signal handler.
+ *
+ * ```echo
+ * $msg = $mailer->compose(WelcomeMail($user->name))->to(Address($user->email, $user->name));
+ * nexus::mail::Sent $sent = guard $mailer->send($msg) else ($e) { ... };
+ * ```
+ */
+#[atomic]
+public class Mailer
+{
+    public Transport $transport;
+
+    /**
+     * The sender of a mail that names none, from `NEXUS_MAIL_FROM`.
+     */
+    public Address? $from;
+    private nexus::Logger $log;
+    private calendar::Clock $clock;
+
+    public constructor(Transport $transport, Address? $from, nexus::Logger $log, clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->transport = $transport;
+        $this->from = $from;
+        $this->log = $log;
+        $this->clock = $clock;
+    }
+
+    /**
+     * The message `$mail` makes: its bodies rendered from its templates, its subject, envelope and
+     * attachments. Add recipients and anything else before sending it.
+     */
+    public function compose<M : Mailable>(const M& $mail) : Message
+    {
+        Message $m = Message();
+        Rendered $r = nexus::mail::render($mail);
+        $m->text = $r->text;
+        $m->html = $r->html;
+        $m->subject = $mail->subject();
+        $mail->envelope($m->envelope);
+        $mail->attachments($m->attachments);
+        return $m;
+    }
+
+    /**
+     * Writes `$m` and hands it to the transport, which for SMTP means it is sent before this
+     * returns.
+     */
+    public function send(const Message& $m) : result<Sent, MailError>
+    {
+        try $m->check();
+        Address? $sender = $m->envelope->from ?? $this->from;
+        Address $from = guard $sender else {
+            return .error(.invalid('the mail has no sender; give it one or set NEXUS_MAIL_FROM'));
+        };
+        try $from->check();
+        array<string> $files = [];
+        foreach ($m->attachments as const &$f) {
+            string $data = try $f->data();
+            $files[] = mv $data;
+        }
+        string $mark = try Mailer::token(12);
+        string $unique = try Mailer::token(16);
+        string $id = "<{$unique}@{$from->domain()}>";
+        string $date = calendar::Format::rfc2822()->render(calendar::Zoned($this->clock->now(), calendar::Zone::utc()));
+        string $mime = Mime::write($m, $from, $id, $date, $files, $mark);
+        Delivery $d = Delivery($from, $m->envelope->recipients(), $id, mv $mime, $m);
+        array<string> $emails = $d->emails();
+        string $to = str::join($emails, ', ');
+        guard $this->transport->deliver($d) else ($e) {
+            $this->log->warn('mail not sent', ['to' => $to, 'subject' => $m->subject, 'error' => $e->message()]);
+            return .error($e);
+        };
+        $this->log->info('mail sent', ['to' => $to, 'message_id' => $id]);
+        return .ok(Sent($id, mv $emails));
+    }
+
+    /**
+     * `$bytes` random bytes as hex.
+     */
+    internal static function token(usize $bytes) : result<string, MailError>
+    {
+        string $raw = guard crypto::random($bytes) else {
+            return .error(.other('the system gave no random bytes'));
+        };
+        return .ok(crypto::hex($raw));
+    }
+}

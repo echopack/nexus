@@ -1,0 +1,10 @@
+namespace Blog::Mail;
+
+/**
+ * A post as a mail links to it: its title and where it is.
+ */
+public struct PostLink
+{
+    public string $title;
+    public string $url;
+}

@@ -38,6 +38,9 @@ public function extensions() : array<nexus::Extension>
         // keeps the distributed queue's tasks in the database
         nexus::work::carbon::Extension(),
 
+        // mail through NEXUS_MAIL_URL: SMTP, the log, or kept in memory for tests
+        nexus::mail::Extension(),
+
         // the blog itself: its routes, tools, commands, tasks, schedule and translations
         Blog::App(),
     ];

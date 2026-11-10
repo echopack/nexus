@@ -1,0 +1,50 @@
+/**
+ * The extension: what `NEXUS_MAIL_*` picks, and what stops the boot.
+ */
+
+use nexus::mail::{Address, Mailer, Message, Outbox};
+use nexus::testing::TestApp;
+use ecotest::expect;
+
+test memory_binds_an_outbox_the_mailer_sends_into
+{
+    $app = TestApp([nexus::mail::Extension()], ['NEXUS_MAIL_URL' => 'memory:', 'NEXUS_MAIL_FROM' => 'shop@example.com', 'NEXUS_MAIL_FROM_NAME' => 'Shop']);
+    Mailer $mailer = $app->kernel->services->get<Mailer>();
+    Outbox $box = $app->kernel->services->get<Outbox>();
+    Message $m = Message();
+    $m->to(Address('ann@example.com'))->subject('Hi')->text('x');
+    expect($mailer->send($m))->ok();
+    expect($box->delivered()[0]->mime)->has('From: Shop <shop@example.com>');
+    expect($app->logged('mail sent'))->yes();
+}
+
+test the_log_transport_is_the_default
+{
+    $app = TestApp([nexus::mail::Extension()], []);
+    Mailer $mailer = $app->kernel->services->get<Mailer>();
+    Message $m = Message();
+    $m->to(Address('ann@example.com'))->from(Address('shop@example.com'))->subject('Hi')->text('x');
+    expect($mailer->send($m))->ok();
+    expect($app->logged('mail logged, not sent'))->yes();
+}
+
+test bad_settings_stop_the_boot
+{
+    expect(TestApp::attempt([nexus::mail::Extension()], ['NEXUS_MAIL_URL' => 'http://x']))->fails();
+    expect(TestApp::attempt([nexus::mail::Extension()], ['NEXUS_MAIL_TLS' => 'maybe']))->fails();
+    expect(TestApp::attempt([nexus::mail::Extension()], ['NEXUS_MAIL_FROM' => 'not-an-address']))->fails();
+    // smtp needs a sender to put on the envelope
+    expect(TestApp::attempt([nexus::mail::Extension()], ['NEXUS_MAIL_URL' => 'smtp://localhost:2525']))->fails();
+    expect(TestApp::attempt([nexus::mail::Extension()], ['NEXUS_MAIL_URL' => 'smtp://localhost:2525', 'NEXUS_MAIL_FROM' => 'shop@example.com'])->has_value())->yes();
+}
+
+test a_given_transport_wins
+{
+    Outbox $box = Outbox();
+    $app = TestApp([nexus::mail::Extension(transport: $box)], ['NEXUS_MAIL_URL' => 'smtp://localhost:2525', 'NEXUS_MAIL_FROM' => 'shop@example.com']);
+    Mailer $mailer = $app->kernel->services->get<Mailer>();
+    Message $m = Message();
+    $m->to(Address('ann@example.com'))->subject('Hi')->text('x');
+    expect($mailer->send($m))->ok();
+    expect($box->count() as int64)->is(1 as int64);
+}

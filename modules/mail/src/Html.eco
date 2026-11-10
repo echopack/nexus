@@ -1,0 +1,35 @@
+namespace nexus::mail;
+
+/**
+ * What the generated templates call to keep a field's value from being read as HTML.
+ */
+public struct Html
+{
+    /**
+     * `$text` with `&`, `<`, `>`, `"` and `'` written as entities.
+     */
+    public static function escape(const string& $text) : string
+    {
+        str::text $out = str::text();
+        $out->reserve($text->size());
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c == 38) {
+                $out->append('&amp;');
+            } else if ($c == 60) {
+                $out->append('&lt;');
+            } else if ($c == 62) {
+                $out->append('&gt;');
+            } else if ($c == 34) {
+                $out->append('&quot;');
+            } else if ($c == 39) {
+                $out->append('&#39;');
+            } else {
+                $out->push($c);
+            }
+            $i++;
+        }
+        return $out->take();
+    }
+}

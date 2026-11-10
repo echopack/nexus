@@ -1,0 +1,51 @@
+/*
+ * nexus-mail: mail for nexus apps, sent over SMTP or kept for tests.
+ *
+ * A mail is a struct conforming to `nexus::mail::Mailable`: its fields are
+ * its data, `subject()` and the optional `envelope()` and `attachments()`
+ * are ordinary code (translated, computed, whatever the app needs), and
+ * `#[nexus::mail]` names the templates its bodies come from, under the
+ * module's `resources/emails/`. `nexus gen` compiles each template and checks
+ * every hole against the struct's fields:
+ *
+ *   #[nexus::mail: { text: "welcome.txt", html: "welcome.html" }]
+ *   public struct WelcomeMail : nexus::mail::Mailable
+ *   {
+ *       public string $name;
+ *       public const function subject() : string { return "Welcome, {$this->name}"; }
+ *   }
+ *
+ *   $msg = $mailer->compose(WelcomeMail($user->name))->to(nexus::mail::Address($user->email));
+ *   guard $mailer->send($msg) else ($e) { return nexus::work::Failure::of($e->problem()); }
+ *
+ * `NEXUS_MAIL_URL` picks where mail goes: `smtp://user:pass@host:587`
+ * (STARTTLS unless `NEXUS_MAIL_TLS` says otherwise), `smtps://...:465`,
+ * `log:` (the default: written to the log, never sent) or `memory:` (kept
+ * in the `Outbox`, for tests). Sending is synchronous; send from a task to
+ * get retries.
+ */
+
+#[module: "nexus-mail"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "Mail for nexus apps: typed mailables, compiled templates, SMTP and a test outbox"]
+
+#[depends: "../.."]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../libcurl"]
+#[depends: "../../../libcrypto"]
+#[depends: "../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[depends: "../../../libtcp"]
+    #[sources: "tests/*.eco"]
+}

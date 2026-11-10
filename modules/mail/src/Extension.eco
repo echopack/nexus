@@ -1,0 +1,85 @@
+namespace nexus::mail;
+
+/**
+ * Mail for a nexus app: reads `NEXUS_MAIL_*`, picks the transport `NEXUS_MAIL_URL` names (unless one
+ * is given) and binds the process-wide `Mailer`. With `memory:` it binds the `Outbox` too, so tests
+ * read what went out.
+ *
+ * ```echo
+ * nexus::mail::Extension(),
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public Transport? $transport;
+    public calendar::Clock $clock;
+    internal string $describe = '';
+
+    public constructor(transport: Transport? $transport = null, clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->transport = $transport;
+        $this->clock = $clock;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-mail';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        MailConfig $config = $s->get<MailConfig>();
+        Endpoint $at = guard Endpoint::parse($config->url) else ($why) {
+            return .error(.extension('nexus-mail', "NEXUS_MAIL_URL: {$why}"));
+        };
+        Tls $tls = guard Tls::named($config->tls) else {
+            return .error(.extension('nexus-mail', "NEXUS_MAIL_TLS is '{$config->tls}'; expected starttls, optional or none"));
+        };
+        Address? $from = null;
+        if (!$config->from->empty()) {
+            Address $a = Address($config->from);
+            if (!$config->fromName->empty()) {
+                $a->name = $config->fromName;
+            }
+            guard $a->check() else ($e) {
+                return .error(.extension('nexus-mail', "NEXUS_MAIL_FROM: {$e}"));
+            };
+            $from = $a;
+        }
+        bool $smtp = $at->scheme == Scheme::smtp || $at->scheme == Scheme::smtps;
+        if ($this->transport == null && $smtp && $from == null) {
+            return .error(.extension('nexus-mail', 'NEXUS_MAIL_FROM is required to send over SMTP'));
+        }
+        nexus::Logger $log = $s->get<nexus::Logger>();
+        Transport $t = $this->pick($at, $tls, $config, $log, $s);
+        $this->describe = $t->describe();
+        $s->bind<Mailer>(put: Mailer($t, $from, $log, clock: $this->clock));
+        return .ok;
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        $kernel->log->debug("mail through {$this->describe}");
+        return .ok;
+    }
+
+    /**
+     * The given transport, or the one `$at` names; for `memory:` the `Outbox`, bound as well.
+     */
+    private function pick(const Endpoint& $at, Tls $tls, const MailConfig& $config, nexus::Logger $log, nexus::Services& $s) : Transport
+    {
+        if ($this->transport != null) {
+            Transport $given = guard $this->transport;
+            return $given;
+        }
+        if ($at->scheme == Scheme::log) {
+            return LogTransport($log);
+        }
+        if ($at->scheme == Scheme::memory) {
+            Outbox $box = Outbox();
+            $s->bind<Outbox>(put: $box);
+            return $box;
+        }
+        return Smtp($at, $tls, $config->timeout);
+    }
+}

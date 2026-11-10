@@ -1,0 +1,27 @@
+namespace Blog::Mail;
+
+/**
+ * The mail a new reader gets: a hello, and the latest posts. The subject is translated through the
+ * blog's catalogs (`mail.welcome.subject`, `{blog}` filled in) in the locale they signed up in.
+ */
+#[nexus::mail: { text: "welcome.txt", html: "welcome.html" }]
+public struct WelcomeMail : nexus::mail::Mailable
+{
+    public string $name;
+    public string $blog;
+    public string $locale;
+    public nexus::Messages $messages;
+    public array<PostLink> $posts = [];
+
+    public const function subject() : string
+    {
+        // de-CH, then de, then en
+        foreach ($this->messages->chain($this->locale) as const &$locale) {
+            string $translated = guard $this->messages->get($locale, 'mail.welcome.subject') else {
+                continue;
+            };
+            return str::replace($translated, '{blog}', $this->blog);
+        }
+        return "Welcome to {$this->blog}";
+    }
+}

@@ -1,0 +1,139 @@
+namespace nexus::mail;
+
+/**
+ * What `NEXUS_MAIL_URL` says: an `smtp` or `smtps` server, with credentials, or `log:` or
+ * `memory:`.
+ */
+public enum Scheme : uint8
+{
+    case smtp = 1;
+    case smtps = 2;
+    case log = 3;
+    case memory = 4;
+}
+
+/**
+ * Where mail goes, read from `NEXUS_MAIL_URL`: `smtp://user:pass@host:587` (port 587 unless given),
+ * `smtps://user:pass@host` (465), `log:` or `memory:`. The username and password are
+ * percent-decoded.
+ */
+public struct Endpoint
+{
+    public Scheme $scheme;
+    public string $host = '';
+    public uint16 $port = 0;
+    public string $username = '';
+    public string $password = '';
+
+    /**
+     * The endpoint `$url` names, or why it names none.
+     */
+    public static function parse(const string& $url) : result<Endpoint, string>
+    {
+        string $u = string::from(str::trim($url));
+        if ($u == 'log' || $u == 'log:' || $u == 'log://') {
+            return .ok(Endpoint(.log));
+        }
+        if ($u == 'memory' || $u == 'memory:' || $u == 'memory://') {
+            return .ok(Endpoint(.memory));
+        }
+        usize $sep = $u->find('://');
+        if ($sep >= $u->size()) {
+            return .error('expected smtp://host, smtps://host, log: or memory:');
+        }
+        string $scheme = str::lower($u->sub(0, $sep));
+        Endpoint $e = Endpoint(.smtp);
+        $e->port = 587;
+        if ($scheme == 'smtps') {
+            $e->scheme = Scheme::smtps;
+            $e->port = 465;
+        } else if ($scheme != 'smtp') {
+            return .error("unknown scheme {$scheme}; expected smtp or smtps");
+        }
+        string $rest = $u->sub($sep + 3, $u->size() - $sep - 3);
+        usize $slash = $rest->find('/');
+        if ($slash < $rest->size()) {
+            $rest = $rest->sub(0, $slash);
+        }
+        usize $at = $rest->size();
+        usize $i = 0;
+        while ($i < $rest->size()) {
+            if ($rest->byte($i) == 64) {
+                $at = $i;
+            }
+            $i++;
+        }
+        if ($at < $rest->size()) {
+            string $info = $rest->sub(0, $at);
+            $rest = $rest->sub($at + 1, $rest->size() - $at - 1);
+            usize $colon = $info->find(':');
+            string $user = $info;
+            string $pass = '';
+            if ($colon < $info->size()) {
+                $user = $info->sub(0, $colon);
+                $pass = $info->sub($colon + 1, $info->size() - $colon - 1);
+            }
+            string $username = guard nexus::Percent::decode($user) else {
+                return .error('the username is not valid percent-encoding');
+            };
+            string $password = guard nexus::Percent::decode($pass) else {
+                return .error('the password is not valid percent-encoding');
+            };
+            $e->username = $username;
+            $e->password = $password;
+        }
+        string $host = $rest;
+        usize $portAt = $rest->size();
+        if ($rest->starts('[')) {
+            usize $close = $rest->find(']');
+            if ($close >= $rest->size()) {
+                return .error('an IPv6 host needs its closing ]');
+            }
+            $host = $rest->sub(0, $close + 1);
+            if ($close + 1 < $rest->size()) {
+                if ($rest->byte($close + 1) != 58) {
+                    return .error('expected :port after the IPv6 host');
+                }
+                $portAt = $close + 1;
+            }
+        } else {
+            usize $colon = $rest->find(':');
+            if ($colon < $rest->size()) {
+                $host = $rest->sub(0, $colon);
+                $portAt = $colon;
+            }
+        }
+        if ($portAt < $rest->size()) {
+            string $digits = $rest->sub($portAt + 1, $rest->size() - $portAt - 1);
+            uint64 $port = guard str::uint($digits) else {
+                return .error("port '{$digits}' is not a number");
+            };
+            if ($port == 0 || $port > 65535) {
+                return .error("port {$port} is out of range");
+            }
+            $e->port = $port as uint16;
+        }
+        if ($host->empty()) {
+            return .error('the URL names no host');
+        }
+        $e->host = $host;
+        return .ok($e);
+    }
+
+    /**
+     * The URL libcurl connects to, without the credentials: `smtp://host:587`.
+     */
+    public const function url() : string
+    {
+        if ($this->scheme == Scheme::smtps) {
+            return "smtps://{$this->host}:{$this->port}";
+        }
+        if ($this->scheme == Scheme::smtp) {
+            return "smtp://{$this->host}:{$this->port}";
+        }
+        if ($this->scheme == Scheme::memory) {
+            return 'memory:';
+        }
+        return 'log:';
+    }
+}

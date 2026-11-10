@@ -1,0 +1,12 @@
+Hello {{ name }},
+
+welcome to {{ blog }}. Your account is ready, and you can sign in with the address this mail went to.
+{{ if posts }}
+
+The latest posts:
+{{ each posts as post }}
+- {{ post.title }} ({{ post.url }})
+{{ end }}
+{{ end }}
+
+See you soon.

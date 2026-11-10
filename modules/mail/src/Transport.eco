@@ -1,0 +1,15 @@
+namespace nexus::mail;
+
+/**
+ * Where a `Mailer` hands its mail: `Smtp`, `LogTransport` or the `Outbox`. One transport serves
+ * every thread of the process.
+ */
+public interface Transport
+{
+    /**
+     * A short name for logs, like `smtp://mail.example.com:587`.
+     */
+    const function describe() : string;
+
+    function deliver(const Delivery& $d) : status<MailError>;
+}

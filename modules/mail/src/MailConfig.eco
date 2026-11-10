@@ -1,0 +1,44 @@
+namespace nexus::mail;
+
+use std::time;
+
+/**
+ * The mail settings, read from `NEXUS_MAIL_URL`, `NEXUS_MAIL_FROM`, `NEXUS_MAIL_FROM_NAME`,
+ * `NEXUS_MAIL_TLS` and `NEXUS_MAIL_TIMEOUT`.
+ */
+#[nexus::config: "NEXUS_MAIL"]
+public struct MailConfig
+{
+    /**
+     * Where mail goes: `smtp://user:pass@host:587`, `smtps://user:pass@host:465`, `log:` (written to
+     * the log, never sent) or `memory:` (kept in the `Outbox`, for tests).
+     */
+    #[nexus::env: 'URL']
+    #[nexus::secret]
+    public string $url = 'log:';
+
+    /**
+     * The sender of every mail that does not name its own, like `hello@example.com`. Required for
+     * SMTP.
+     */
+    #[nexus::env: 'FROM']
+    public string $from = '';
+
+    /**
+     * The display name beside that sender.
+     */
+    #[nexus::env: 'FROM_NAME']
+    public string $fromName = '';
+
+    /**
+     * For `smtp://`: `starttls` (required), `optional` or `none`.
+     */
+    #[nexus::env: 'TLS']
+    public string $tls = 'starttls';
+
+    /**
+     * How long one mail may take, connecting included, like `30s`.
+     */
+    #[nexus::env: 'TIMEOUT']
+    public time::duration $timeout = std::time::duration::secs(30);
+}

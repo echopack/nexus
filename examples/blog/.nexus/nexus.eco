@@ -697,7 +697,7 @@ public struct RegisterDispatch
      */
     public static function about() : string
     {
-        return 'Signs a new user up and signals it: `WelcomeNewUser` queues the welcome. A taken email is a 409.';
+        return 'Signs a new user up and signals it, with the locale the request speaks: `WelcomeNewUser` queues the welcome. A taken email is a 409.';
     }
 
     /**
@@ -1488,6 +1488,7 @@ internal struct SendWelcomeTaskCodec
     {
         $p = nexus::work::TaskData();
         $p->put('user', $task->user);
+        $p->put('locale', $task->locale);
         return $p->text();
     }
 
@@ -1498,9 +1499,15 @@ internal struct SendWelcomeTaskCodec
     {
         $p = try nexus::work::TaskData::parse($text);
         int64? $vUser = $p->int64('user', required: true);
+        string $okLocale = 'en';
+        $vLocale = $p->string('locale', required: false);
+        if ($vLocale != null) {
+            $xLocale = guard $vLocale;
+            $okLocale = mv $xLocale;
+        }
         try $p->done();
         int64 $okUser = guard $vUser;
-        return .ok(Blog::Tasks::SendWelcome($user: $okUser));
+        return .ok(Blog::Tasks::SendWelcome($user: $okUser, $locale: mv $okLocale));
     }
 }
 
@@ -1561,6 +1568,82 @@ public function record(const Blog::Logs::PostPublished& $r) : nexus::log::Record
     $f['author'] = $r->author;
     $f['tags'] = $r->tags;
     return nexus::log::Record(.info, 'post published', mv $f);
+}
+
+namespace nexus::mail;
+
+/**
+ * The bodies of Blog::Mail::WelcomeMail, from resources/emails/welcome.txt and resources/emails/welcome.html.
+ */
+public function render(const Blog::Mail::WelcomeMail& $m) : nexus::mail::Rendered
+{
+    nexus::mail::Rendered $r = nexus::mail::Rendered();
+    string $text = '';
+    $text->append('Hello ');
+    $text->append($m->name);
+    $text->append(',');
+    $text->push(10);
+    $text->push(10);
+    $text->append('welcome to ');
+    $text->append($m->blog);
+    $text->append('. Your account is ready, and you can sign in with the address this mail went to.');
+    $text->push(10);
+    if (!$m->posts->empty()) {
+        $text->push(10);
+        $text->append('The latest posts:');
+        $text->push(10);
+        foreach ($m->posts as const &$post1) {
+            $text->append('- ');
+            $text->append($post1->title);
+            $text->append(' (');
+            $text->append($post1->url);
+            $text->append(')');
+            $text->push(10);
+        }
+    }
+    $text->push(10);
+    $text->append('See you soon.');
+    $text->push(10);
+    $r->text = mv $text;
+    string $html = '';
+    $html->append('<!doctype html>');
+    $html->push(10);
+    $html->append('<html>');
+    $html->push(10);
+    $html->append('<body style="font-family: sans-serif; line-height: 1.5;">');
+    $html->push(10);
+    $html->append('  <h1>Hello ');
+    $html->append(nexus::mail::Html::escape($m->name));
+    $html->append('</h1>');
+    $html->push(10);
+    $html->append('  <p>Welcome to ');
+    $html->append(nexus::mail::Html::escape($m->blog));
+    $html->append('. Your account is ready, and you can sign in with the address this mail went to.</p>');
+    $html->push(10);
+    if (!$m->posts->empty()) {
+        $html->append('  <h2>The latest posts</h2>');
+        $html->push(10);
+        $html->append('  <ul>');
+        $html->push(10);
+        foreach ($m->posts as const &$post1) {
+            $html->append('    <li><a href="');
+            $html->append(nexus::mail::Html::escape($post1->url));
+            $html->append('">');
+            $html->append(nexus::mail::Html::escape($post1->title));
+            $html->append('</a></li>');
+            $html->push(10);
+        }
+        $html->append('  </ul>');
+        $html->push(10);
+    }
+    $html->append('  <p>See you soon.</p>');
+    $html->push(10);
+    $html->append('</body>');
+    $html->push(10);
+    $html->append('</html>');
+    $html->push(10);
+    $r->html = mv $html;
+    return $r;
 }
 
 namespace nexusgen::nexus_blog;
@@ -1644,6 +1727,8 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Inputs::PostRef>('Blog::Inputs::PostRef');
     $g->name<Blog::Inputs::Registration>('Blog::Inputs::Registration');
     $g->name<Blog::Logs::PostPublished>('Blog::Logs::PostPublished');
+    $g->name<Blog::Mail::PostLink>('Blog::Mail::PostLink');
+    $g->name<Blog::Mail::WelcomeMail>('Blog::Mail::WelcomeMail');
     $g->name<Blog::Middleware::RequireAdmin>('Blog::Middleware::RequireAdmin');
     $g->name<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser');
     $g->name<Blog::Middleware::ServerTiming>('Blog::Middleware::ServerTiming');

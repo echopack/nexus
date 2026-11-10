@@ -1,0 +1,26 @@
+namespace nexus::mail;
+
+/**
+ * One mail as a transport gets it: the sender and every recipient for the envelope, the written
+ * mail, and the message it was written from.
+ */
+public struct Delivery
+{
+    public Address $from;
+    public array<Address> $recipients;
+    public string $messageId;
+    public string $mime;
+    public Message $message;
+
+    /**
+     * The recipients' bare addresses, in envelope order.
+     */
+    public const function emails() : array<string>
+    {
+        array<string> $all = arr::room<string>($this->recipients->count());
+        foreach ($this->recipients as const &$a) {
+            $all[] = $a->email;
+        }
+        return $all;
+    }
+}

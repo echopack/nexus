@@ -1,0 +1,54 @@
+/**
+ * A mail through a real SMTP server, read back from its HTTP API: what only a server shows. Runs
+ * when MAIL_LIVE_URL names the server (`smtp://127.0.0.1:1025`) and MAIL_LIVE_API its Mailpit API
+ * (`http://127.0.0.1:8025`), as the blog's smoke test does; skipped otherwise.
+ */
+
+use nexus::mail::{Address, Attachment, Endpoint, Mailer, Message, Smtp};
+use ecotest::expect;
+
+internal function liveVar(const string& $name) : string?
+{
+    string::view? $v = std::env::var($name);
+    if ($v == null) {
+        return null;
+    }
+    string::view $got = guard $v;
+    return string($got);
+}
+
+test a_mail_reaches_a_real_server
+{
+    string $url = guard liveVar('MAIL_LIVE_URL') else {
+        ecotest::skip('MAIL_LIVE_URL is not set');
+        return;
+    };
+    string $api = liveVar('MAIL_LIVE_API') ?? 'http://127.0.0.1:8025';
+    Endpoint $at = expect(Endpoint::parse($url))->ok();
+    Mailer $mailer = Mailer(Smtp($at, .none, .secs(10)), Address('live@nexus.test', 'nexus live'), nexus::Logger::silent());
+    string $mark = nexus::Kernel::id();
+    Message $m = Message();
+    $m->to(Address('reader@nexus.test', 'Zoë Reader'))->cc(Address('copy@nexus.test'))->bcc(Address('hidden@nexus.test'))
+        ->subject("Grüezi {$mark}")->text("Plain body\n.\nwith a lone dot")->html('<p>Rich <b>body</b></p>')
+        ->attach(Attachment('notes.txt', bytes: 'attached text'));
+    $sent = expect($mailer->send($m))->ok();
+    expect($sent->recipients)->size(3);
+
+    curl::Response $found = expect(curl::send(.get("{$api}/api/v1/search?query={$mark}")))->ok();
+    expect($found->status)->is(200 as int64);
+    json::Value $doc = expect(json::parse($found->body))->ok();
+    json::Value $list = $doc['messages'];
+    expect(($list->asArray() ?? array<json::Value>())->count() as int64)->is(1 as int64);
+    string $id = $list[0]['ID']->asStr() ?? '';
+
+    curl::Response $one = expect(curl::send(.get("{$api}/api/v1/message/{$id}")))->ok();
+    json::Value $msg = expect(json::parse($one->body))->ok();
+    expect($msg['Subject']->asStr() ?? '')->is("Grüezi {$mark}");
+    expect($msg['MessageID']->asStr() ?? '')->is($sent->messageId->sub(1, $sent->messageId->size() - 2));
+    expect($msg['To'][0]['Name']->asStr() ?? '')->is('Zoë Reader');
+    expect($msg['Text']->asStr() ?? '')->has("Plain body\r\n.\r\nwith a lone dot");
+    expect($msg['HTML']->asStr() ?? '')->has('<p>Rich <b>body</b></p>');
+    expect($msg['Attachments'][0]['FileName']->asStr() ?? '')->is('notes.txt');
+    // bcc went to the server's envelope, never into the mail
+    expect($msg['Bcc'][0]['Address']->asStr() ?? '')->is('hidden@nexus.test');
+}

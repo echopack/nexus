@@ -253,6 +253,14 @@ Settled while building M5 (choices made with the user: the business logic lives 
 
 **2026-11-10, singular lane and queue names (uncommitted).** The user wanted lanes and queues named in the singular: the blog's `WorkersLane`/`WorkersQueue` are `WorkerLane`/`WorkerQueue` (`src/Queues/WorkerQueue.eco`), `JobsLane`/`JobsQueue` are `JobLane`/`JobQueue` (`src/Queues/JobQueue.eco`). The doc examples in core, nexus-work and nexus-app, the work test rig's aliases and AppTest's lanes (`AWorkerLane`, `AJobLane`) follow.
 
+**2026-11-10: nexus-mail, the first M7 service (uncommitted).** Choices made with the user: SMTP through libcurl (TLS, STARTTLS and AUTH come with it; libtcp has no TLS), text and HTML parts, attachments, typed mailables and templates; templates have holes, `if` and `each`, compiled and checked by `nexus gen`; sending is synchronous and apps send from a task for retries (nexus-mail does not depend on nexus-work); the subject and the rest of the envelope are code on the mailable, so they can be translated; an app's resources live in `resources/` (`resources/emails/`, `resources/lang/`).
+- **Mailables.** A struct `: nexus::mail::Mailable` with `subject()` and the optional `envelope(Envelope&)` and `attachments(array<Attachment>&)` (interface defaults); `#[nexus::mail: { text: "welcome.txt", html: "welcome.html" }]` names its templates, relative to `resources/emails/`. `Mailer::compose<M>` fills a `Message` from the generated `nexus::mail::render(const M&) : Rendered` (the hook pattern of `Logger::emit<R>`; the module declares a base overload for `Rendered` itself), then the subject, envelope and attachments; `->to(...)` and the other builders add to it; `send(Message) : result<Sent, MailError>`.
+- **Gen.** `cli/src/Mails.eco`, `Template.eco`, `Piece.eco`, `MailDecl.eco`. Tags: `{{ field }}` (HTML-escaped in `html`), `{{ raw field }}`, `{{ if x }}...{{ else }}...{{ end }}` (bool, nullable, string or array), `{{ each list as item }}...{{ end }}`, `{{{{` for a literal `{{`; a block tag alone on its line takes the line. Paths walk public fields of the program's structs and classes (`post.author.name`), not through a nullable. Located refusals carry the template's `file:line:column`: unknown field, a hole on a bool or array, `if` on a number, `each` on a non-array, stray `else`/`end`, an unclosed block or `{{`, a missing file, a path leaving `resources/emails/`, a `subject` option, no templates, `#[nexus::mail]` without the conformance. The stamp hashes `resources/emails/` too (`nexus-gen 3`).
+- **Module** (`modules/mail`, namespace `nexus::mail`). `MailConfig` (`NEXUS_MAIL_URL` secret, default `log:`; `_FROM`, `_FROM_NAME`, `_TLS` starttls|optional|none, `_TIMEOUT` 30s). `Extension(transport:, clock:)` parses the URL (`smtp://user:pass@host:587`, `smtps://...:465`, `log:`, `memory:`), refuses a bad URL, TLS value or sender, and SMTP without `NEXUS_MAIL_FROM`; binds `Mailer` `put:` and, for `memory:`, the `Outbox`. `Mime` writes CRLF RFC 5322: encoded words, quoted-printable bodies, base64 attachments, `multipart/alternative` in `multipart/mixed`, no Bcc header; `Message::check` refuses CR/LF in headers, a missing recipient, subject or body. Transports: `Smtp` (a `curl::Easy` per send; the reply code maps a 4xx to transient, a 5xx to final), `LogTransport`, `Outbox` (`delivered`, `find(to:)`, `find(subject:)`, `refuse(MailError)` for the next delivery, `clear`). `MailError::problem()` is `unavailable` when transient (a task retries) and `badRequest` otherwise (it gives up).
+- **Blog.** `Blog::Mail::WelcomeMail` (+ `PostLink`) with `resources/emails/welcome.{txt,html}`; the subject is `mail.welcome.subject` from the catalog chain of the locale the reader signed up in (`Register` puts it on `UserRegistered`, `WelcomeNewUser` on `SendWelcome`), German in `resources/lang/de.json` (moved from `lang/`). `SendWelcome` mails the welcome with the three latest posts, then notes `welcomed_at`; a mail error is `Failure::of($e->problem())`.
+- **Not done from the plan:** `Opt::list` on libcurl's `Request` (only `Easy::setList`; nexus uses `Easy`), `NEXUS_MAIL_HELO`, per-locale template files. The module's own tests hand-write their `render` overloads (test sources are not in the decls pass), like the work rig's codecs.
+- Suites: libcurl 173, cli MailTest 6, mail 28 (SMTP against a scripted libtcp fake; `LiveTest` against Mailpit when `MAIL_LIVE_URL` is set), blog 21; smoke 125 with a Mailpit container (both welcomes read back from its API, the second in German through the stored task).
+
 ## Repository layout
 
 ```
@@ -412,6 +420,7 @@ public struct BlogConfig { #[nexus::env] public string $title = 'A nexus blog'; 
 4. **libhttp:** cookies (parse and Set-Cookie), multipart/form, a static directory with Range and ETag, gzip. Dispatch through `wrap` already works.
 5. **carbongen / restgen:** a `--decls <file>` flag that reads the JSON instead of spawning echoc, plus a local-module filter (carbongen `Schema::read`). restgen first catches up with the 2026-11-02 rest rewrite (Mapping interfaces).
 6. **harbor:** the S3 + sigv4 code moves into `nexus-files`.
+7. **libcurl (done 2026-11-10):** `Easy::setList(option, items)` for slist options (`CURLOPT_MAIL_RCPT`), the named options `mailFrom`, `mailAuth`, `loginOptions`, `useSsl` (+ `UseSsl`), and the error names `remoteAccessDenied`, `sendError`, `recvError`, `useSslFailed`, `loginDenied`.
 
 ## Milestones (vertical slices, each ends green and running through examples/blog)
 
@@ -423,7 +432,7 @@ public struct BlogConfig { #[nexus::env] public string $title = 'A nexus blog'; 
 | M4 async | Events (sync and queued), nexus-work (tasks, memory and carbon queues, retries, scheduler, once-lock), graceful drain via libsignal | welcome task and nightly task in blog; tasks survive kill and restart |
 | M5 doors | `#[nexus::cli]` actions, nexus-mcp, nexus-oauth | one blog action works over HTTP, CLI and MCP; OAuth DCR + PKCE + refresh tested by script |
 | M6 frontend | nexus-spa, `nexus gen client` (OpenAPI 3.1 + TS) | embedded blog SPA; generated client passes strict tsc |
-| M7 services | Upstream 4 and 6; cache, mail (SMTP plus fake), files (disk, S3), i18n catalogs to typed enum, `/metrics` | blog uses each one; tests run on fakes |
+| M7 services | Upstream 4 and 6; cache, mail (SMTP plus fake; done 2026-11-10), files (disk, S3), i18n catalogs to typed enum, `/metrics` | blog uses each one; tests run on fakes |
 | M8 realtime | channels, SSE, broadcast events | live comments in blog over WebSocket and SSE |
 | M9 proof | `nexus new / make / dev`; port Recensio's HTTP layer (doors to actions, Refusal to Problem, Api::authed to a `RequireUser` middleware, OAuth/MCP to the extensions) | Recensio test.sh, test-live.sh and smoke.sh green; duplicated plumbing deleted |
 
@@ -435,6 +444,7 @@ Probe first in M1 (10-line modules):
 ## Conventions
 
 - An app's namespace follows its folders: `src/A/B/X.eco` declares `App::A::B` (the blog: PascalCase folders and namespaces, `Blog::Middleware`).
+- An app's resources live in `resources/` at its root: `resources/emails/` for mail templates, `resources/lang/` for catalogs.
 - One type per PascalCase file; type-oriented API (enums with methods, static named constructors, no loose free functions).
 - No fake variadics: take array or map literals.
 - Shared objects `#[atomic]`, seal-then-share.

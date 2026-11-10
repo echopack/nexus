@@ -1,0 +1,40 @@
+namespace nexus::mail;
+
+/**
+ * How an `smtp://` connection is secured, from `NEXUS_MAIL_TLS`. An `smtps://` one is TLS from the
+ * first byte whatever this says.
+ */
+public enum Tls : uint8
+{
+    /**
+     * STARTTLS or no mail: the default.
+     */
+    case starttls = 1;
+
+    /**
+     * STARTTLS when the server offers it, plaintext otherwise.
+     */
+    case optional = 2;
+
+    /**
+     * Plaintext: a local relay or a development catcher only.
+     */
+    case none = 3;
+
+    /**
+     * The mode `$text` names (`starttls`, `optional`, `none`), or null.
+     */
+    public static function named(const string& $text) : Tls?
+    {
+        if ($text == 'starttls') {
+            return Tls::starttls;
+        }
+        if ($text == 'optional') {
+            return Tls::optional;
+        }
+        if ($text == 'none') {
+            return Tls::none;
+        }
+        return null;
+    }
+}

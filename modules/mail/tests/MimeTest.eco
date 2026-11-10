@@ -1,0 +1,127 @@
+/**
+ * The mail as text: headers, encoded words, quoted-printable, parts and attachments.
+ */
+
+use nexus::mail::{Address, Attachment, Message, Mime};
+use ecotest::expect;
+
+internal function written(const Message& $m) : string
+{
+    array<string> $files = [];
+    foreach ($m->attachments as const &$f) {
+        $files[] = $f->data()->or('');
+    }
+    return Mime::write($m, Address('shop@example.com', 'The Shop'), '<id1@example.com>', 'Tue, 10 Nov 2026 09:30:00 +0000', $files, 'abc');
+}
+
+test a_text_mail_is_one_part
+{
+    Message $m = Message();
+    $m->to(Address('ann@example.com', 'Ann'))->subject('Hello')->text("Line one\nLine two");
+    $out = written($m);
+    expect($out)
+        ->has("Date: Tue, 10 Nov 2026 09:30:00 +0000\r\n")
+        ->has("From: The Shop <shop@example.com>\r\n")
+        ->has("To: Ann <ann@example.com>\r\n")
+        ->has("Subject: Hello\r\n")
+        ->has("Message-ID: <id1@example.com>\r\n")
+        ->has("MIME-Version: 1.0\r\n")
+        ->has("Content-Type: text/plain; charset=utf-8\r\n")
+        ->has("Content-Transfer-Encoding: quoted-printable\r\n\r\nLine one\r\nLine two");
+    expect($out->contains('multipart'))->no();
+}
+
+test text_and_html_are_alternatives
+{
+    Message $m = Message();
+    $m->to(Address('ann@example.com'))->subject('Hi')->text('plain')->html('<p>rich</p>');
+    expect(written($m))
+        ->has("Content-Type: multipart/alternative; boundary=\"=_alt_abc\"\r\n\r\n--=_alt_abc\r\n")
+        ->has("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nplain\r\n--=_alt_abc\r\n")
+        ->has("Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n<p>rich</p>\r\n--=_alt_abc--\r\n");
+}
+
+test attachments_go_in_a_mixed_part_as_base64
+{
+    Message $m = Message();
+    $m->to(Address('ann@example.com'))->subject('Report')->text('see attached')->attach(Attachment('report.csv', bytes: "a,b\n1,2\n"));
+    expect(written($m))
+        ->has("Content-Type: multipart/mixed; boundary=\"=_mixed_abc\"\r\n\r\n--=_mixed_abc\r\nContent-Type: text/plain")
+        ->has("\r\n--=_mixed_abc\r\nContent-Type: text/csv; charset=utf-8; name=\"report.csv\"\r\n")
+        ->has("Content-Disposition: attachment; filename=\"report.csv\"\r\nContent-Transfer-Encoding: base64\r\n\r\nYSxiCjEsMgo=\r\n")
+        ->has("\r\n--=_mixed_abc--\r\n");
+}
+
+test bcc_is_never_written_and_cc_and_reply_to_are
+{
+    Message $m = Message();
+    $m->to(Address('ann@example.com'))->cc(Address('bob@example.com'))->bcc(Address('eve@example.com'))
+        ->replyTo(Address('help@example.com'))->header('X-Campaign', 'fall')->subject('Hi')->text('x');
+    $out = written($m);
+    expect($out)->has("Cc: bob@example.com\r\n")->has("Reply-To: help@example.com\r\n")->has("X-Campaign: fall\r\n");
+    expect($out->contains('eve@example.com'))->no();
+    expect($m->envelope->recipients())->size(3);
+}
+
+test non_ascii_headers_are_encoded_words
+{
+    expect(Mime::word('Grüezi'))->is('=?UTF-8?B?R3LDvGV6aQ==?=');
+    expect(Mime::word('plain'))->is('plain');
+    expect(Mime::address(Address('zoe@example.com', 'Zoë')))->is('=?UTF-8?B?Wm/Dqw==?= <zoe@example.com>');
+    expect(Mime::address(Address('bob@example.com', 'Smith, Bob')))->is('"Smith, Bob" <bob@example.com>');
+    // a long one splits into words without cutting a character apart
+    string $long = str::repeat('ü', 40);
+    $words = Mime::word($long);
+    expect($words)->has("?=\r\n =?UTF-8?B?");
+}
+
+test quoted_printable_escapes_and_wraps
+{
+    expect(Mime::quotedPrintable('a=b'))->is('a=3Db');
+    expect(Mime::quotedPrintable('Grüße'))->is('Gr=C3=BC=C3=9Fe');
+    expect(Mime::quotedPrintable("trailing \nnext"))->is("trailing=20\r\nnext");
+    expect(Mime::quotedPrintable("crlf\r\nkept"))->is("crlf\r\nkept");
+    string $long = str::repeat('x', 100);
+    $wrapped = Mime::quotedPrintable($long);
+    expect($wrapped)->has("=\r\n");
+    foreach (str::split($wrapped, "\r\n")->owned() as const &$line) {
+        expect($line->size() <= 76)->yes();
+    }
+}
+
+test base64_lines_are_76_wide
+{
+    $out = Mime::base64(str::repeat('a', 200));
+    $lines = str::split($out, "\r\n")->owned();
+    expect($lines[0]->size())->is(76 as usize);
+    expect($out->ends("\r\n"))->yes();
+}
+
+test a_message_checks_itself
+{
+    Message $none = Message();
+    $none->subject('x')->text('y');
+    expect($none->check())->fails();
+    Message $noSubject = Message();
+    $noSubject->to(Address('ann@example.com'))->text('y');
+    expect($noSubject->check())->fails();
+    Message $injected = Message();
+    $injected->to(Address('ann@example.com'))->subject("Hi\r\nBcc: eve@example.com")->text('y');
+    expect($injected->check())->fails();
+    Message $bad = Message();
+    $bad->to(Address('not-an-address'))->subject('x')->text('y');
+    expect($bad->check())->fails();
+    Message $ok = Message();
+    $ok->to(Address('ann@example.com'))->subject('x')->text('y');
+    expect($ok->check())->fine();
+}
+
+test addresses_check_their_shape
+{
+    expect(Address('ann@example.com')->check())->fine();
+    expect(Address('@example.com')->check())->fails();
+    expect(Address('ann@')->check())->fails();
+    expect(Address('a@b@c')->check())->fails();
+    expect(Address("ann@example.com\r\nBcc: x")->check())->fails();
+    expect(Address('ann@example.com')->domain())->is('example.com');
+}

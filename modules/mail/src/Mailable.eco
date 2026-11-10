@@ -1,0 +1,42 @@
+namespace nexus::mail;
+
+/**
+ * A mail as a type: its fields are its data, and `#[nexus::mail: { text: "...", html: "..." }]`
+ * names the templates under `resources/emails/` its bodies are rendered from. Everything else is
+ * code, so a subject can be translated or computed however the app likes.
+ *
+ * ```echo
+ * #[nexus::mail: { text: "welcome.txt", html: "welcome.html" }]
+ * public struct WelcomeMail : nexus::mail::Mailable
+ * {
+ *     public string $name;
+ *
+ *     public const function subject() : string
+ *     {
+ *         return "Welcome, {$this->name}";
+ *     }
+ * }
+ * ```
+ */
+public interface Mailable
+{
+    /**
+     * The subject line.
+     */
+    const function subject() : string;
+
+    /**
+     * Sets the sender, recipients, reply address or headers this mail always has. Nothing unless
+     * written.
+     */
+    const function envelope(Envelope& $e) : void
+    {
+    }
+
+    /**
+     * Adds the files this mail always carries. Nothing unless written.
+     */
+    const function attachments(array<Attachment>& $out) : void
+    {
+    }
+}

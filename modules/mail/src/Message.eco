@@ -1,0 +1,119 @@
+namespace nexus::mail;
+
+/**
+ * One mail, ready to send: its envelope, subject, bodies and attachments. `Mailer::compose` builds
+ * one from a mailable; the builder methods add to it.
+ *
+ * ```echo
+ * $msg = $mailer->compose(WelcomeMail($user->name))->to(Address($user->email, $user->name));
+ * ```
+ */
+public struct Message
+{
+    public Envelope $envelope = Envelope();
+    public string $subject = '';
+    public string? $text = null;
+    public string? $html = null;
+    public array<Attachment> $attachments = [];
+
+    public function from(Address $address) : Message&
+    {
+        $this->envelope->from(mv $address);
+        return $this;
+    }
+
+    public function to(Address $address) : Message&
+    {
+        $this->envelope->to(mv $address);
+        return $this;
+    }
+
+    public function cc(Address $address) : Message&
+    {
+        $this->envelope->cc(mv $address);
+        return $this;
+    }
+
+    public function bcc(Address $address) : Message&
+    {
+        $this->envelope->bcc(mv $address);
+        return $this;
+    }
+
+    public function replyTo(Address $address) : Message&
+    {
+        $this->envelope->replyTo(mv $address);
+        return $this;
+    }
+
+    public function header(const string& $name, const string& $value) : Message&
+    {
+        $this->envelope->header($name, $value);
+        return $this;
+    }
+
+    public function subject(const string& $subject) : Message&
+    {
+        $this->subject = $subject;
+        return $this;
+    }
+
+    public function text(const string& $body) : Message&
+    {
+        $this->text = $body;
+        return $this;
+    }
+
+    public function html(const string& $body) : Message&
+    {
+        $this->html = $body;
+        return $this;
+    }
+
+    public function attach(Attachment $file) : Message&
+    {
+        $this->attachments[] = mv $file;
+        return $this;
+    }
+
+    /**
+     * Why this mail cannot be sent as it is, or ok.
+     */
+    public const function check() : status<MailError>
+    {
+        if ($this->envelope->to->empty() && $this->envelope->cc->empty() && $this->envelope->bcc->empty()) {
+            return .error(.invalid('the mail has no recipient'));
+        }
+        if ($this->subject->empty()) {
+            return .error(.invalid('the mail has no subject'));
+        }
+        if ($this->text == null && $this->html == null) {
+            return .error(.invalid('the mail has no body'));
+        }
+        if (Address::broken($this->subject)) {
+            return .error(.invalid('the subject holds a line break'));
+        }
+        if ($this->envelope->from != null) {
+            Address $from = guard $this->envelope->from;
+            try $from->check();
+        }
+        if ($this->envelope->replyTo != null) {
+            Address $reply = guard $this->envelope->replyTo;
+            try $reply->check();
+        }
+        foreach ($this->envelope->recipients() as const &$a) {
+            try $a->check();
+        }
+        foreach ($this->envelope->headers as const &$h) {
+            if (Address::broken($h->name) || Address::broken($h->value) || $h->name->contains(':') || $h->name->empty()) {
+                return .error(.invalid("header '{$h->name}' is not one header line"));
+            }
+        }
+        foreach ($this->attachments as const &$f) {
+            if (Address::broken($f->name) || Address::broken($f->type)) {
+                return .error(.invalid("attachment '{$f->name}' has a line break in its name or type"));
+            }
+        }
+        return .ok;
+    }
+}

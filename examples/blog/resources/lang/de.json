@@ -36,5 +36,10 @@
     "Blog::Inputs::Registration": {
       "email": "E-Mail-Adresse"
     }
+  },
+  "mail": {
+    "welcome": {
+      "subject": "Willkommen bei {blog}"
+    }
   }
 }

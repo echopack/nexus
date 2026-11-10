@@ -1,0 +1,138 @@
+/**
+ * Composing a message from a mailable, and what the mailer does with it.
+ */
+
+use nexus::mail::{Address, Attachment, Envelope, MailError, Mailable, Mailer, Message, Outbox, Rendered};
+use ecotest::expect;
+
+internal struct Receipt : Mailable
+{
+    public string $name;
+    public int64 $total;
+
+    public const function subject() : string
+    {
+        return "Your receipt, {$this->name}";
+    }
+
+    public const function envelope(Envelope& $e) : void
+    {
+        $e->replyTo(Address('billing@example.com'))->header('X-Kind', 'receipt');
+    }
+
+    public const function attachments(array<Attachment>& $out) : void
+    {
+        $out[] = Attachment('receipt.txt', bytes: "total {$this->total}");
+    }
+}
+
+internal struct Bare : Mailable
+{
+    public const function subject() : string
+    {
+        return '';
+    }
+}
+
+namespace nexus::mail;
+
+// what `nexus gen` writes for a `#[nexus::mail]` struct; these test types are hand-written
+public function render(const Receipt& $m) : Rendered
+{
+    Rendered $r = Rendered();
+    $r->text = "Hello {$m->name}, you paid {$m->total}.";
+    string $name = nexus::mail::Html::escape($m->name);
+    $r->html = "<p>Hello {$name}</p>";
+    return $r;
+}
+
+public function render(const Bare& $m) : Rendered
+{
+    Rendered $r = Rendered();
+    $r->text = 'x';
+    return $r;
+}
+
+namespace;
+
+internal function outboxMailer(Outbox $box, Address? $from = Address('shop@example.com')) : Mailer
+{
+    return Mailer($box, $from, nexus::Logger::silent());
+}
+
+test compose_fills_the_message_from_the_mailable
+{
+    Message $m = outboxMailer(Outbox())->compose(Receipt('Ann', 42));
+    expect($m->subject)->is('Your receipt, Ann');
+    expect($m->text ?? '')->is('Hello Ann, you paid 42.');
+    expect($m->html ?? '')->has('<p>Hello Ann</p>');
+    expect($m->attachments)->size(1);
+    expect($m->envelope->headers)->size(1);
+    Address $reply = expect($m->envelope->replyTo)->some();
+    expect($reply->email)->is('billing@example.com');
+}
+
+test send_hands_the_written_mail_to_the_transport
+{
+    Outbox $box = Outbox();
+    $mailer = outboxMailer($box);
+    Message $m = $mailer->compose(Receipt('Ann', 42))->to(Address('ann@example.com', 'Ann'));
+    $sent = expect($mailer->send($m))->ok();
+    expect($box->count() as int64)->is(1 as int64);
+    nexus::mail::Delivery $d = expect($box->find(to: 'ann@example.com'))->some();
+    expect($d->messageId)->is($sent->messageId);
+    expect($d->from->email)->is('shop@example.com');
+    expect($d->mime)->has('Reply-To: billing@example.com')->has('X-Kind: receipt')->has('filename="receipt.txt"');
+    expect($sent->messageId)->has('@example.com>');
+    expect($box->find(subject: 'Your receipt, Ann'))->some();
+    $box->clear();
+    expect($box->count() as int64)->is(0 as int64);
+}
+
+test the_envelope_sender_wins_over_the_default
+{
+    Outbox $box = Outbox();
+    $mailer = outboxMailer($box);
+    Message $m = $mailer->compose(Receipt('Ann', 1))->to(Address('ann@example.com'))->from(Address('ceo@example.com'));
+    expect($mailer->send($m))->ok();
+    expect($box->delivered()[0]->from->email)->is('ceo@example.com');
+}
+
+test a_mail_without_sender_subject_or_recipient_is_refused
+{
+    Outbox $box = Outbox();
+    $noSender = outboxMailer($box, null);
+    MailError $e = expect($noSender->send($noSender->compose(Receipt('Ann', 1))->to(Address('ann@example.com'))))->fails();
+    expect($e->message())->has('no sender');
+    $mailer = outboxMailer($box);
+    expect($mailer->send($mailer->compose(Bare())->to(Address('ann@example.com'))))->fails();
+    expect($mailer->send($mailer->compose(Receipt('Ann', 1))))->fails();
+    expect($box->count() as int64)->is(0 as int64);
+}
+
+test a_refusal_comes_back_once
+{
+    Outbox $box = Outbox();
+    $box->refuse(.connect('down'));
+    $mailer = outboxMailer($box);
+    Message $m = $mailer->compose(Receipt('Ann', 1))->to(Address('ann@example.com'));
+    MailError $e = expect($mailer->send($m))->fails();
+    expect($e->transient())->yes();
+    expect($mailer->send($m))->ok();
+}
+
+test a_missing_attachment_file_is_invalid
+{
+    Outbox $box = Outbox();
+    $mailer = outboxMailer($box);
+    Message $m = $mailer->compose(Receipt('Ann', 1))->to(Address('ann@example.com'))->attach(Attachment(file: '/nonexistent/report.pdf'));
+    expect($m->attachments[1]->type)->is('application/pdf');
+    expect($m->attachments[1]->name)->is('report.pdf');
+    MailError $e = expect($mailer->send($m))->fails();
+    expect($e->message())->has('/nonexistent/report.pdf');
+}
+
+test html_escape_covers_the_five
+{
+    expect(nexus::mail::Html::escape('<a href="x">Tom & Jerry\'s</a>'))->is('&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&#39;s&lt;/a&gt;');
+}

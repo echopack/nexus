@@ -1,0 +1,300 @@
+namespace nexus::mail;
+
+/**
+ * Writes a `Message` as the RFC 5322 text a mail server takes: CRLF line ends, `=?UTF-8?B?...?=`
+ * words for non-ASCII headers, quoted-printable bodies, base64 attachments, and
+ * `multipart/alternative` (text and HTML) inside `multipart/mixed` (attachments). Bcc is never
+ * written: those recipients only go to the server.
+ */
+public struct Mime
+{
+    /**
+     * The whole mail. `$files` holds each attachment's bytes, in order; `$mark` makes the part
+     * boundaries unique.
+     */
+    public static function write(const Message& $m, const Address& $from, const string& $id, const string& $date, const array<string>& $files, const string& $mark) : string
+    {
+        str::text $out = str::text();
+        Mime::line($out, 'Date', $date);
+        Mime::line($out, 'From', Mime::address($from));
+        Mime::list($out, 'To', $m->envelope->to);
+        Mime::list($out, 'Cc', $m->envelope->cc);
+        if ($m->envelope->replyTo != null) {
+            Address $reply = guard $m->envelope->replyTo;
+            Mime::line($out, 'Reply-To', Mime::address($reply));
+        }
+        Mime::line($out, 'Subject', Mime::word($m->subject));
+        Mime::line($out, 'Message-ID', $id);
+        Mime::line($out, 'MIME-Version', '1.0');
+        foreach ($m->envelope->headers as const &$h) {
+            Mime::line($out, $h->name, Mime::word($h->value));
+        }
+        if ($m->attachments->empty()) {
+            Mime::body($out, $m, $mark);
+            return $out->take();
+        }
+        string $mixed = "=_mixed_{$mark}";
+        Mime::line($out, 'Content-Type', "multipart/mixed; boundary=\"{$mixed}\"");
+        $out->append("\r\n");
+        $out->append("--{$mixed}\r\n");
+        Mime::body($out, $m, $mark);
+        usize $i = 0;
+        while ($i < $m->attachments->count()) {
+            const Attachment& $f = $m->attachments[$i];
+            string $name = Mime::quoted(Mime::word($f->name));
+            $out->append("\r\n--{$mixed}\r\n");
+            Mime::line($out, 'Content-Type', "{$f->type}; name={$name}");
+            Mime::line($out, 'Content-Disposition', "attachment; filename={$name}");
+            Mime::line($out, 'Content-Transfer-Encoding', 'base64');
+            $out->append("\r\n");
+            $out->append(Mime::base64($files[$i]));
+            $i++;
+        }
+        $out->append("\r\n--{$mixed}--\r\n");
+        return $out->take();
+    }
+
+    /**
+     * The content headers and the body of `$m`: one part, or text and HTML as alternatives.
+     */
+    internal static function body(str::text& $out, const Message& $m, const string& $mark) : void
+    {
+        if ($m->text != null && $m->html != null) {
+            string $text = guard $m->text;
+            string $html = guard $m->html;
+            string $alt = "=_alt_{$mark}";
+            Mime::line($out, 'Content-Type', "multipart/alternative; boundary=\"{$alt}\"");
+            $out->append("\r\n");
+            $out->append("--{$alt}\r\n");
+            Mime::part($out, 'text/plain', $text);
+            $out->append("\r\n--{$alt}\r\n");
+            Mime::part($out, 'text/html', $html);
+            $out->append("\r\n--{$alt}--\r\n");
+            return;
+        }
+        if ($m->html != null) {
+            string $html = guard $m->html;
+            Mime::part($out, 'text/html', $html);
+            return;
+        }
+        string $text = $m->text ?? '';
+        Mime::part($out, 'text/plain', $text);
+    }
+
+    /**
+     * A text part: its headers, a blank line, the quoted-printable body.
+     */
+    internal static function part(str::text& $out, const string& $type, const string& $body) : void
+    {
+        Mime::line($out, 'Content-Type', "{$type}; charset=utf-8");
+        Mime::line($out, 'Content-Transfer-Encoding', 'quoted-printable');
+        $out->append("\r\n");
+        $out->append(Mime::quotedPrintable($body));
+    }
+
+    internal static function line(str::text& $out, const string& $name, const string& $value) : void
+    {
+        $out->append($name);
+        $out->append(': ');
+        $out->append($value);
+        $out->append("\r\n");
+    }
+
+    /**
+     * A header of addresses, folded onto continuation lines so no line runs past 78 characters.
+     */
+    internal static function list(str::text& $out, const string& $name, const array<Address>& $all) : void
+    {
+        if ($all->empty()) {
+            return;
+        }
+        $out->append($name);
+        $out->append(':');
+        usize $width = $name->size() + 1;
+        usize $i = 0;
+        while ($i < $all->count()) {
+            string $one = Mime::address($all[$i]);
+            if ($i > 0) {
+                $out->append(',');
+                $width = $width + 1;
+            }
+            if ($i > 0 && $width + 1 + $one->size() > 78) {
+                $out->append("\r\n");
+                $width = 0;
+            }
+            $out->append(' ');
+            $out->append($one);
+            $width = $width + 1 + $one->size();
+            $i++;
+        }
+        $out->append("\r\n");
+    }
+
+    /**
+     * `Ann <ann@example.com>`, the name quoted or encoded when it has to be.
+     */
+    public static function address(const Address& $a) : string
+    {
+        if ($a->name == null) {
+            return $a->email;
+        }
+        string $name = guard $a->name;
+        if ($name->empty()) {
+            return $a->email;
+        }
+        string $shown = Mime::word($name);
+        if (Mime::plain($name)) {
+            $shown = Mime::phrase($name);
+        }
+        return "{$shown} <{$a->email}>";
+    }
+
+    /**
+     * A plain-ASCII display name, in quotes when it holds a character with a meaning in headers.
+     */
+    internal static function phrase(const string& $name) : string
+    {
+        // the RFC 5322 specials; `address` has already checked the name is printable ASCII
+        foreach (['(', ')', '<', '>', '[', ']', ':', ';', '@', '\\', ',', '.', '"'] as const &$c) {
+            if ($name->contains($c)) {
+                return Mime::quoted($name);
+            }
+        }
+        return $name;
+    }
+
+    /**
+     * `$text` in double quotes, with `"` and `\` escaped.
+     */
+    internal static function quoted(const string& $text) : string
+    {
+        string $out = '"';
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c == 34 || $c == 92) {
+                $out->push(92);
+            }
+            $out->push($c);
+            $i++;
+        }
+        $out->push(34);
+        return $out;
+    }
+
+    /**
+     * Whether `$text` is printable ASCII only, so it can stand in a header as it is.
+     */
+    internal static function plain(const string& $text) : bool
+    {
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c < 32 || $c > 126) {
+                return false;
+            }
+            $i++;
+        }
+        return true;
+    }
+
+    /**
+     * `$text` as it is when it is plain ASCII, as `=?UTF-8?B?...?=` words otherwise (RFC 2047). A
+     * word holds at most 45 bytes and never splits a character.
+     */
+    public static function word(const string& $text) : string
+    {
+        if (Mime::plain($text)) {
+            return $text;
+        }
+        array<string> $words = [];
+        usize $at = 0;
+        while ($at < $text->size()) {
+            usize $end = $at + 45;
+            if ($end >= $text->size()) {
+                $end = $text->size();
+            } else {
+                $end = str::boundary($text, $end);
+            }
+            string $piece = $text->sub($at, $end - $at);
+            string $encoded = crypto::base64($piece);
+            $words[] = "=?UTF-8?B?{$encoded}?=";
+            $at = $end;
+        }
+        return str::join($words, "\r\n ");
+    }
+
+    /**
+     * `$body` in quoted-printable (RFC 2045): line ends as CRLF, lines of at most 76 characters
+     * with soft breaks, and `=`, control bytes, non-ASCII and a space before a line end as `=XX`.
+     */
+    public static function quotedPrintable(const string& $body) : string
+    {
+        str::text $out = str::text();
+        $out->reserve($body->size() + $body->size() / 8);
+        array<string> $lines = str::split($body, "\n")->owned();
+        usize $n = 0;
+        while ($n < $lines->count()) {
+            string $line = $lines[$n];
+            if ($line->ends("\r")) {
+                $line = $line->sub(0, $line->size() - 1);
+            }
+            if ($n > 0) {
+                $out->append("\r\n");
+            }
+            usize $width = 0;
+            usize $i = 0;
+            while ($i < $line->size()) {
+                uint8 $c = $line->byte($i);
+                bool $last = $i + 1 == $line->size();
+                string $piece;
+                if (($c >= 33 && $c <= 126 && $c != 61) || (($c == 32 || $c == 9) && !$last)) {
+                    $piece = '';
+                    $piece->push($c);
+                } else {
+                    $piece = '=';
+                    $piece->append(Mime::hexByte($c));
+                }
+                if ($width + $piece->size() > 75) {
+                    $out->append("=\r\n");
+                    $width = 0;
+                }
+                $out->append($piece);
+                $width = $width + $piece->size();
+                $i++;
+            }
+            $n++;
+        }
+        return $out->take();
+    }
+
+    /**
+     * `$data` in base64, in lines of 76 characters, each ended with CRLF.
+     */
+    public static function base64(const string& $data) : string
+    {
+        string $all = crypto::base64($data);
+        str::text $out = str::text();
+        $out->reserve($all->size() + $all->size() / 38 + 2);
+        usize $at = 0;
+        while ($at < $all->size()) {
+            usize $take = 76;
+            if ($at + $take > $all->size()) {
+                $take = $all->size() - $at;
+            }
+            $out->append($all->sub($at, $take));
+            $out->append("\r\n");
+            $at = $at + $take;
+        }
+        return $out->take();
+    }
+
+    internal static function hexByte(uint8 $c) : string
+    {
+        string $digits = '0123456789ABCDEF';
+        string $out = '';
+        $out->push($digits->byte(($c / 16) as usize));
+        $out->push($digits->byte(($c % 16) as usize));
+        return $out;
+    }
+}

@@ -8,7 +8,7 @@ namespace nexus;
  *
  * ```echo
  * nexus::Messages $m = $kernel->services->get<nexus::Messages>();
- * $m->add('de', guard json::parse(std::embed::text('../lang/de.json')));
+ * $m->add('de', guard json::parse(std::embed::text('../resources/lang/de.json')));
  * ```
  *
  * A catalog is a JSON object of keys to messages, nested objects joined with dots. A refusal of
