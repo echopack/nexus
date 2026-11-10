@@ -8,7 +8,6 @@ use Blog::DB::Query::PostQuery;
  * Posts, newest first, a page at a time: `?order=title`, `?tag=echo`, `?ids=1,2`, `?count=1`,
  * `?include=author`.
  */
-#[nexus::answers: { collection: "Blog::Transformers::PostTransformer" }]
 public class ListPosts : nexus::Action
 {
     private PostCRUD $crud;

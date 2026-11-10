@@ -6,7 +6,6 @@ use Blog::Transformers::UserAdminTransformer;
 /**
  * Every user of the blog, for an admin: in the admin shape, emails and roles included.
  */
-#[nexus::answers: { collection: "Blog::Transformers::UserAdminTransformer" }]
 #[nexus::through: [
     "Blog::Middleware::RequireUser",
     "Blog::Middleware::RequireAdmin"

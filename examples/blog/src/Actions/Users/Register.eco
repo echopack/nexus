@@ -9,7 +9,6 @@ use Blog::Transformers::UserTransformer;
  * Signs a new user up and signals it: `WelcomeNewUser` queues the welcome. A taken email
  * is a 409.
  */
-#[nexus::answers: { response: "Blog::Transformers::UserTransformer" }]
 public class Register : nexus::Action
 {
     private UserRepository $users;

@@ -46,12 +46,6 @@ public struct Program
     public array<string> $problems = [];
 
     /**
-     * Every class of the program conforming to nexus::rest::Transformer, by qualified name: what
-     * `#[nexus::answers]` may name.
-     */
-    internal map<string, bool> $transformers = [];
-
-    /**
      * Every class of the program conforming to nexus::Middleware, by qualified name: what
      * `#[nexus::through]` may name.
      */
@@ -75,7 +69,7 @@ public struct Program
 
     /**
      * Reads the module in `$decls`, with `$all` (the whole program) telling which classes are
-     * transformers.
+     * middleware, inputs and rules.
      */
     public constructor(const json::Value& $decls, const json::Value& $all)
     {
@@ -83,8 +77,8 @@ public struct Program
     }
 
     /**
-     * Learns what the whole program `$all` declares (transformers, middleware, inputs, enums, rule
-     * classes), then reads the module in `$decls`.
+     * Learns what the whole program `$all` declares (middleware, inputs, enums, rule classes), then
+     * reads the module in `$decls`.
      */
     private function read(const json::Value& $decls, const json::Value& $all) : void
     {
@@ -92,9 +86,6 @@ public struct Program
             foreach (decl::items($mod, 'declarations') as const &$d) {
                 $kind = decl::text($d, 'kind');
                 $q = decl::text($d, 'qualified');
-                if ($kind == 'class' && decl::conforms($d, 'nexus::rest::Transformer')) {
-                    $this->transformers[$q] = true;
-                }
                 if ($kind == 'class' && decl::conforms($d, 'nexus::Middleware')) {
                     $this->middleware[$q] = true;
                 }
@@ -213,7 +204,7 @@ public struct Program
         }
         $a->returns = decl::field($h, 'return');
         $a->returnText = types::render($a->returns);
-        if (!$this->readAnswers($d, $a) || !$this->readThrough($d, $a)) {
+        if (!$this->readThrough($d, $a)) {
             return;
         }
         foreach (decl::items($h, 'params') as const &$raw) {
@@ -227,37 +218,6 @@ public struct Program
             $a->tool = ToolMeta($description: names::prose(decl::text($d, 'doc')));
         }
         $this->actions[] = mv $a;
-    }
-
-    /**
-     * `#[nexus::answers: { response: "blog::PostTransformer" }]` (or `collection:`): the
-     * transformer an action answering with a `nexus::Response` builds it with, what the API
-     * description reads its shape from. False after a problem.
-     */
-    internal function readAnswers(const json::Value& $d, ActionDecl& $a) : bool
-    {
-        json::Value $tool = guard decl::tool($d, 'answers') else {
-            return true;
-        };
-        string $usage = '#[nexus::answers] takes { response: "x::SomeTransformer" } or { collection: "x::SomeTransformer" }';
-        $entries = decl::record(decl::value($tool));
-        if ($entries->count() != 1) {
-            $this->fail($d, $usage);
-            return false;
-        }
-        string $as = $entries[0]->key;
-        $named = decl::string($entries[0]->value);
-        if (($as != 'response' && $as != 'collection') || $named->empty()) {
-            $this->fail($d, $usage);
-            return false;
-        }
-        if (!$this->transformers->has($named)) {
-            $this->fail($d, "#[nexus::answers] names {$named}, which is not a class conforming to nexus::rest::Transformer");
-            return false;
-        }
-        $a->answers = $named;
-        $a->answersAs = $as;
-        return true;
     }
 
     /**
@@ -587,7 +547,7 @@ public struct Program
         $a = ActionDecl($q, decl::text($d, 'file'), decl::int($d, 'line'));
         $a->returns = decl::field($h, 'return');
         $a->returnText = types::render($a->returns);
-        if (!$this->readAnswers($d, $a) || !$this->readThrough($d, $a)) {
+        if (!$this->readThrough($d, $a)) {
             return;
         }
         bool $hasInput = false;

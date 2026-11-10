@@ -8,15 +8,37 @@ namespace Blog;
 public function extensions() : array<nexus::Extension>
 {
     array<nexus::Extension> $all = [
+        // the HTTP/1.1 server behind `serve`; nexus itself routes every request
         nexus::http::Extension(),
+
+        // the MySQL database from NEXUS_DATABASE_URL, a session per request, and the
+        // migrate commands running the blog's migrations
         nexus::carbon::Extension((nexus::carbon::DatabaseConfig $config) => Blog::DB::open($config), Blog::DB::migrations()),
+
+        // who is calling: bearer tokens, signed sessions and password hashing, prefixed `blog_`;
+        // the stores come from the next line
         nexus::auth::Extension('blog', stores: .provided),
+
+        // keeps those tokens and sessions in the database
         nexus::auth::carbon::Extension(),
+
+        // OAuth 2.1, so an MCP client signs in with a click instead of a pasted token; the stores
+        // come from the next line
         nexus::oauth::Extension(stores: .provided),
+
+        // keeps OAuth clients, codes and grants in the database
         nexus::oauth::carbon::Extension(),
+
+        // the `/mcp` endpoint that offers the blog's tools to models
         nexus::mcp::Extension(),
+
+        // tasks, queues, workers and the scheduler
         nexus::work::Extension(),
+
+        // keeps the distributed queue's tasks in the database
         nexus::work::carbon::Extension(),
+
+        // the blog itself: its routes, tools, commands, tasks, schedule and translations
         Blog::App(),
     ];
     return $all;

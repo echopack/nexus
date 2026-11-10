@@ -6,7 +6,6 @@ use Blog::Types::{Caller, UserContext};
 /**
  * Who is signed in.
  */
-#[nexus::answers: { response: "Blog::Transformers::UserTransformer" }]
 #[nexus::through: ["Blog::Middleware::RequireUser"]]
 public class Me : nexus::Action
 {

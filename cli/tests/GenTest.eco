@@ -192,30 +192,12 @@ test tools_are_wired_by_their_define_and_directory
     expect(nexusgen::Tool::rest->target())->is('.rest/models.eco');
 }
 
-test actions_answer_with_responses_their_transformer_builds
+test actions_answer_with_the_responses_they_build
 {
-    string $transformer = '{"kind":"class","name":"ItemTransformer","qualified":"shop::ItemTransformer","tools":[],"conforms":[{"kind":"named","name":"nexus::rest::Transformer","args":[{"kind":"named","name":"shop::Item"}]}],"fields":[]}';
-    string $all = "\{\"modules\":[\{\"name\":\"nexus-rest\",\"declarations\":[]},\{\"name\":\"shop\",\"declarations\":[{$transformer}]}]}";
-    $program = expect(json::parse($all))->ok();
     $response = genResult('{"kind":"named","name":"nexus::Response"}');
-    string $answers = '{"namespace":"nexus","name":"answers","value":{"kind":"record","fields":[{"key":"response","value":{"kind":"string","text":"shop::ItemTransformer"}}]}}';
-
-    $one = genDecls(genAction($answers, '{"name":"id","type":{"kind":"prim","name":"int64"},"default":false}', $response, genAct()));
-    $p = Program($one, $program);
+    $p = Program(genDecls(genAction('', '{"name":"id","type":{"kind":"prim","name":"int64"},"default":false}', $response, genAct())));
     expect($p->problems)->empty();
-    expect($p->actions[0]->answers)->is('shop::ItemTransformer');
-    expect($p->actions[0]->answersAs)->is('response');
     expect(emitter::render($p))->has('return nexus::Reply::of($payload, $result);');
-
-    string $stranger = '{"namespace":"nexus","name":"answers","value":{"kind":"record","fields":[{"key":"collection","value":{"kind":"string","text":"shop::Nothing"}}]}}';
-    $unknown = Program(genDecls(genAction($stranger, '', $response, genAct())), $program);
-    expect($unknown->problems)->size(1);
-    expect($unknown->problems[0])->has('shop::Nothing, which is not a class conforming to nexus::rest::Transformer');
-
-    string $wrong = '{"namespace":"nexus","name":"answers","value":{"kind":"record","fields":[{"key":"item","value":{"kind":"string","text":"shop::ItemTransformer"}}]}}';
-    $misspelled = Program(genDecls(genAction($wrong, '', $response, genAct())), $program);
-    expect($misspelled->problems)->size(1);
-    expect($misspelled->problems[0])->has('takes { response:');
 }
 
 test actions_name_the_middleware_they_go_through

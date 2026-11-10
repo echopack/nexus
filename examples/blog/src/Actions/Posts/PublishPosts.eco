@@ -8,7 +8,6 @@ use Blog::Types::Caller;
 /**
  * Publishes several posts by whoever is signed in, all or none.
  */
-#[nexus::answers: { collection: "Blog::Transformers::PostTransformer" }]
 #[nexus::through: ["Blog::Middleware::RequireUser"]]
 public class PublishPosts : nexus::Action
 {

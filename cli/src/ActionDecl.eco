@@ -12,13 +12,6 @@ public struct ActionDecl
     public array<Param> $params = [];
 
     /**
-     * The transformer `#[nexus::answers]` names, and whether it answers one model (`response`) or a
-     * list (`collection`).
-     */
-    public string $answers = '';
-    public string $answersAs = '';
-
-    /**
      * The middleware `#[nexus::through]` names, outermost first.
      */
     public array<string> $through = [];

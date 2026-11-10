@@ -8,7 +8,6 @@ use Blog::Types::Caller;
 /**
  * Changes a post's title or body. Only its author or an admin may.
  */
-#[nexus::answers: { response: "Blog::Transformers::PostTransformer" }]
 #[nexus::through: ["Blog::Middleware::RequireUser"]]
 public class UpdatePost : nexus::Action
 {
