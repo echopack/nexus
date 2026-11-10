@@ -1,6 +1,6 @@
 namespace Blog::Transformers;
 
-use Blog::Models::{User, UserAdminMapping};
+use Blog::DB::Model::{User, UserAdminMapping};
 
 /**
  * A user as an admin sees them: the `admin` shape of `User`, email and role included. Not in the

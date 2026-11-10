@@ -1,0 +1,13 @@
+/**
+ * How a post's tags are normalised before they are stored.
+ */
+
+use ecotest::expect;
+use Blog::Services::PostService;
+
+#[group: "unit"]
+test tags_are_trimmed_lowered_and_kept_once
+{
+    expect(PostService::tags(['Echo', ' echo', '', 'CLI']))->is(['echo', 'cli']);
+    expect(PostService::tags([]))->empty();
+}

@@ -12,8 +12,8 @@ use std::time;
  * renews with the lease.
  *
  * ```echo
- * $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
- *     ->into<WorkersLane>();
+ * $app->bindDistributedQueue<JobLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+ *     ->into<WorkerLane>();
  * ```
  *
  * One store serves the whole process: every call takes a session of its own from the database, so

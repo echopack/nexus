@@ -1,7 +1,7 @@
 namespace Blog::Actions::Posts;
 
-use Blog::Models::Post;
-use Blog::Types::{Caller, PostCrud};
+use Blog::DB::Model::Post;
+use Blog::Types::Caller;
 
 /**
  * Deletes a post. Only its author or an admin may.
@@ -9,9 +9,9 @@ use Blog::Types::{Caller, PostCrud};
 #[nexus::through: ["Blog::Middleware::RequireUser"]]
 public class DeletePost : nexus::Action
 {
-    private PostCrud $crud;
+    private PostCRUD $crud;
 
-    public constructor(PostCrud $crud)
+    public constructor(PostCRUD $crud)
     {
         $this->crud = $crud;
     }

@@ -5,10 +5,10 @@ namespace nexus::work;
  * lane:
  *
  * ```echo
- * public struct WorkersLane : nexus::work::Lane {}
- * public type WorkersQueue = nexus::work::AsyncQueue<WorkersLane>;
+ * public struct WorkerLane : nexus::work::Lane {}
+ * public type WorkerQueue = nexus::work::AsyncQueue<WorkerLane>;
  *
- * $app->bindAsyncQueue<WorkersLane>(threads: 4);
+ * $app->bindAsyncQueue<WorkerLane>(threads: 4);
  *
  * // in a service, action or signal handler built with the queue
  * $this->workers->push(SendWelcome($user: 5));

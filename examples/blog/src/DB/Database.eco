@@ -1,7 +1,7 @@
-namespace Blog::Database;
+namespace Blog::DB;
 
-use Blog::Models::UserRepository;
-use Blog::Repositories::PostRepository;
+use Blog::DB::Model::UserRepository;
+use Blog::DB::Repository::PostRepository;
 
 /**
  * The database `NEXUS_DATABASE_URL` names: a MySQL pool with the blog's repositories registered and
@@ -26,7 +26,7 @@ public function wire(carbon::DB $db) : status<carbon::Error>
 {
     try $db->register<UserRepository>();
     try $db->register<PostRepository>();
-    try Blog::Models::Carbon::check($db);
+    try Blog::DB::Model::Carbon::check($db);
     try nexus::auth::carbon::Tables::wire($db);
     try nexus::work::carbon::Tables::wire($db);
     try nexus::oauth::carbon::Tables::wire($db);
@@ -41,6 +41,6 @@ public function migrations() : array<carbon::migrate::Step>
     $all = nexus::auth::carbon::Tables::migrations();
     $all->extend(nexus::work::carbon::Tables::migrations());
     $all->extend(nexus::oauth::carbon::Tables::migrations());
-    $all->extend(Blog::Migrations::Carbon::migrations());
+    $all->extend(Blog::DB::Migration::Carbon::migrations());
     return $all;
 }

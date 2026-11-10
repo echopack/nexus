@@ -6,7 +6,7 @@ use Blog::Commands::SetPassword;
 use Blog::Config::BlogConfig;
 use Blog::Middleware::ServerTiming;
 use Blog::Providers::{AuthProvider, PostsProvider};
-use Blog::Queues::{JobsLane, WorkersLane};
+use Blog::Queues::{JobLane, WorkerLane};
 
 /**
  * The blog itself, as an extension: its providers, one per part, and what belongs to the whole
@@ -44,9 +44,9 @@ public class App : nexus::Extension
             ->route([.get], '/health');
 
         // tasks wait in the database and run on the worker threads of whichever server claims them
-        $app->bindAsyncQueue<WorkersLane>();
-        $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
-            ->into<WorkersLane>();
+        $app->bindAsyncQueue<WorkerLane>();
+        $app->bindDistributedQueue<JobLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+            ->into<WorkerLane>();
 
         // the providers bind their handlers on it
         $app->instance(nexus::SignalDispatcher());

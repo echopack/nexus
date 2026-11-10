@@ -1,0 +1,8 @@
+namespace Blog::Queues;
+
+/**
+ * The blog's worker threads in each process: `NEXUS_WORK_THREADS` of them.
+ */
+public struct WorkerLane : nexus::work::Lane {}
+
+public type WorkerQueue = nexus::work::AsyncQueue<WorkerLane>;

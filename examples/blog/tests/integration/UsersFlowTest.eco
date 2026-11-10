@@ -1,0 +1,106 @@
+/**
+ * Users end to end: signing up and the welcome a worker sends, the sign-up rules in two
+ * languages, and the admin's list of everyone.
+ */
+
+use ecotest::expect;
+
+/**
+ * What `POST /v1/users` takes, with the name padded so the trim shows.
+ */
+internal function registration(const string& $email, const string& $password) : json::Value
+{
+    return json::object(['name' => ' A reader ', 'email' => $email, 'password' => $password, 'passwordConfirmation' => $password]);
+}
+
+#[group: "integration"]
+test signing_up_queues_a_welcome_that_a_worker_sends
+{
+    $world = World();
+    $admin = $world->admin();
+
+    ecotest::step('a reader signs up');
+    string $id = $world->api->post('/v1/users', json: registration(' Reader@Example.com ', 'a long password'))
+        ->status(201)
+        ->json('$.data.name', 'A reader')
+        ->capture('$.data.id');
+    expect($world->db->count('users'))->is(2);
+
+    ecotest::step('the welcome pipeline is queued: two tasks and the edge between them');
+    expect($world->db->count('nexus_tasks'))->is(2);
+    expect($world->db->count('nexus_task_edges'))->is(1);
+
+    ecotest::step('a worker welcomes them');
+    int64 $user = str::int($id) ?? 0;
+    expect($world->run(Blog::Tasks::SendWelcome($user: $user)))->fine();
+    expect($world->app->logged('welcome'))->yes(says: 'the welcome was logged');
+    $admin->get('/v1/users')
+        ->json('$.data[1].email', 'reader@example.com')
+        ->matches('$.data[1].welcomed_at', (const json::Value& $v) : bool => !$v->isNull(), says: 'set');
+
+    ecotest::step('the reader signs in with the password they chose');
+    $world->api->post('/v1/auth/token', json: credentials('reader@example.com', 'a long password'))->status(201);
+}
+
+#[group: "integration"]
+test the_welcome_gives_up_when_the_user_is_gone
+{
+    $world = World();
+    nexus::work::Failure $f = expect($world->run(Blog::Tasks::SendWelcome($user: 9)))->fails();
+    expect($f->why())->is('user 9 is gone');
+}
+
+#[group: "integration"]
+test sign_up_rules_hold_in_two_languages
+{
+    $world = World();
+
+    ecotest::step('a taken email is refused before anything is written');
+    $world->api->post('/v1/users', json: registration('Editor@Example.com', 'a long password'))
+        ->invalid('email', 'unique')
+        ->json('$.errors[0].message', 'Someone already signed up with that e-mail address.');
+    $world->api->post('/v1/users', json: registration('new@example.com', 'short'))->invalid('password', 'min');
+
+    ecotest::step('every rule is named in English');
+    $doc = registration('not an address', 'a long password');
+    $doc['passwordConfirmation'] = 'something else';
+    $doc['name'] = '   ';
+    $world->api->post('/v1/users', json: $doc)
+        ->invalid('name', 'notBlank')
+        ->invalid('email', 'email')
+        ->invalid('password', 'confirmed')
+        ->header('Content-Language', 'en')
+        ->json('$.errors[0].message', 'The name field must not be blank.');
+
+    ecotest::step('and in German when asked');
+    $world->api->with('Accept-Language', 'de-CH, en;q=0.5')->post('/v1/users', json: $doc)
+        ->header('Content-Language', 'de')
+        ->json('$.errors[0].message', 'Das Feld Name darf nicht leer sein.')
+        ->has('Das Feld E-Mail-Adresse muss eine gültige E-Mail-Adresse sein.')
+        ->has('Die Bestätigung von Passwort stimmt nicht überein.');
+
+    ecotest::step('nobody new, nothing queued');
+    expect($world->db->count('users'))->is(1);
+    expect($world->db->count('nexus_tasks'))->is(0);
+}
+
+#[group: "integration"]
+test only_an_admin_lists_users
+{
+    $world = World();
+    $admin = $world->admin();
+    $ada = $world->author('Ada');
+
+    ecotest::step('nobody signed in, and an author, are refused');
+    $world->api->get('/v1/users')->problem(401);
+    $ada->get('/v1/users')->problem(403);
+
+    ecotest::step('the admin sees everyone, with emails and roles');
+    $admin->get('/v1/users')
+        ->status(200)
+        ->count('$.data', 2)
+        ->json('$.data[0].email', 'editor@example.com')
+        ->json('$.data[0].role', 2)
+        ->json('$.data[1].name', 'Ada')
+        ->json('$.data[1].email', 'ada@example.com');
+}

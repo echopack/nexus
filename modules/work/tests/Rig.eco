@@ -13,8 +13,8 @@ internal const int64 START = 1793588340;
 
 internal struct TLane : Lane {}
 internal struct TJobs : Lane {}
-internal type WorkersQueue = AsyncQueue<TLane>;
-internal type JobsQueue = DistributedQueue<TJobs>;
+internal type WorkerQueue = AsyncQueue<TLane>;
+internal type JobQueue = DistributedQueue<TJobs>;
 
 /**
  * What tasks did, in order.
@@ -314,18 +314,18 @@ internal class Rig
         return $this->app->kernel->background('test', nexus::Kernel::id());
     }
 
-    public function workers() : WorkersQueue
+    public function workers() : WorkerQueue
     {
-        return $this->app->kernel->services->get<WorkersQueue>();
+        return $this->app->kernel->services->get<WorkerQueue>();
     }
 
     /**
      * The distributed queue as a request reaches it.
      */
-    public function jobs() : JobsQueue
+    public function jobs() : JobQueue
     {
         nexus::Payload $p = $this->payload();
-        return $p->get<JobsQueue>();
+        return $p->get<JobQueue>();
     }
 
     public function start() : void

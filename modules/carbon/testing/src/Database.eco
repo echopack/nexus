@@ -1,0 +1,202 @@
+namespace nexus::carbon::testing;
+
+use std::time;
+
+/**
+ * A MySQL database of its own for one test: created on a server, migrated, and dropped when the
+ * value goes or a check stops the test first. Boot the app on `$url`.
+ *
+ * ```echo
+ * $db = Database(server: Database::server(env: ['BLOG_TEST_DATABASE_URL', 'ECOTEST_MYSQL_URL']), migrations: Blog::DB::migrations());
+ * $app = TestApp(Blog::extensions(), ['NEXUS_DATABASE_URL' => $db->url]);
+ * expect($db->count('posts'))->is(0);
+ * ```
+ */
+public class Database
+{
+    /**
+     * How many databases this process made, which keeps their names apart.
+     */
+    internal static int32 $made = 0;
+
+    /**
+     * The database's name, such as `test_4711_1`.
+     */
+    public const string $name;
+
+    /**
+     * The server URL with the database in its path, for `NEXUS_DATABASE_URL`.
+     */
+    public const string $url;
+
+    /**
+     * A connection to the database, for seeding what the app cannot and for checking what it
+     * wrote.
+     */
+    public carbon::DB $db;
+
+    /**
+     * The connection to the server that creates and drops the database.
+     */
+    private carbon::DB $server;
+
+    /**
+     * The cleanup that drops the database when the test stops before this value goes.
+     */
+    private usize $cleanup = 0;
+
+    /**
+     * Creates a database on the server at `$server` (a `mysql://` URL; its own path is ignored),
+     * named `$prefix` with this process's id, and runs `$migrations` on it. Waits up to 90 seconds
+     * for the server to answer, so a container that is still starting is fine.
+     * Stops the test when the server never answers or a migration fails.
+     */
+    #[caller]
+    public constructor(server: const string& $server, migrations: array<carbon::migrate::Step> $migrations, prefix: const string& $prefix = 'test')
+    {
+        $at = std::src::caller();
+        Database::$made = Database::$made + 1;
+        int32 $pid = std::env::pid();
+        int32 $n = Database::$made;
+        $this->name = "{$prefix}_{$pid}_{$n}";
+        $this->url = Database::within($server, $this->name);
+
+        carbon::mysql::Driver $admin = Database::reach(Database::within($server, ''), $at);
+        $this->server = carbon::DB($admin);
+        // a crashed run can leave a database of the same name behind
+        Database::sql($this->server, "DROP DATABASE IF EXISTS `{$this->name}`", $at);
+        Database::sql($this->server, "CREATE DATABASE `{$this->name}`", $at);
+
+        carbon::DB $host = $this->server;
+        string $name = $this->name;
+        $this->cleanup = ecotest::defer(function() : void {
+            $dropped = $host->run("DROP DATABASE IF EXISTS `{$name}`");
+        });
+
+        carbon::mysql::Driver $own = guard carbon::mysql::Driver::open($this->url) else ($e) {
+            die(ecotest::report("cannot open the test database {$this->name}: {$e}", $at), $at);
+        };
+        $this->db = carbon::DB($own);
+        carbon::Migrator $migrator = carbon::Migrator($this->db, $migrations, carbon::ddl::Mysql());
+        guard $migrator->up() else ($e) {
+            die(ecotest::report("cannot migrate the test database {$this->name}: {$e}", $at), $at);
+        };
+    }
+
+    destructor()
+    {
+        ecotest::undefer($this->cleanup);
+        $dropped = $this->server->run("DROP DATABASE IF EXISTS `{$this->name}`");
+    }
+
+    /**
+     * The value of the first of `$names` that is set, or a skip when none is: the server an
+     * integration test runs against.
+     */
+    #[caller]
+    public static function server(env: const array<string>& $names) : string
+    {
+        foreach ($names as const &$name) {
+            string $value = string(std::env::var($name, ''));
+            if (!$value->empty()) {
+                return $value;
+            }
+        }
+
+        string $wanted = str::join($names, ' or ');
+        ecotest::skip("no test database: set {$wanted}", at: std::src::caller());
+        return '';
+    }
+
+    /**
+     * How many rows table `$table` holds.
+     */
+    #[caller]
+    public function count(const string& $table) : uint64
+    {
+        $at = std::src::caller();
+        hydrahon::Select $q = hydrahon::Select(from: hydrahon::Table(name: $table))->count();
+        carbon::Session $s = $this->db->session();
+        carbon::Cursor $rows = guard $s->connection()->query($q) else ($e) {
+            die(ecotest::report("cannot count {$table}: {$e}", $at), $at);
+        };
+        bool $one = guard $rows->step() else ($e) {
+            die(ecotest::report("cannot count {$table}: {$e}", $at), $at);
+        };
+        if (!$one) {
+            return 0;
+        }
+        int64 $n = $rows->int(0) ?? 0;
+        return $n as uint64;
+    }
+
+    /**
+     * Runs `$statement` on the test database, for state the app has no way to write, such as a
+     * token that expired yesterday.
+     */
+    #[caller]
+    public function run(const string& $statement) : carbon::Written
+    {
+        return Database::sql($this->db, $statement, std::src::caller());
+    }
+
+    /**
+     * `$url` with `$name` as its path: `mysql://u:p@h:3306/name?x=1`. An empty name leaves the
+     * server's URL without a database.
+     */
+    internal static function within(const string& $url, const string& $name) : string
+    {
+        string $query = '';
+        string $rest = $url;
+        usize $q = $rest->find('?');
+        if ($q < $rest->size()) {
+            $query = $rest->sub($q, $rest->size() - $q);
+            $rest = $rest->sub(0, $q);
+        }
+
+        usize $scheme = $rest->find('://');
+        usize $from = 0;
+        if ($scheme < $rest->size()) {
+            $from = $scheme + 3;
+        }
+        usize $slash = $rest->find('/', $from);
+        if ($slash < $rest->size()) {
+            $rest = $rest->sub(0, $slash);
+        }
+        return "{$rest}/{$name}{$query}";
+    }
+
+    /**
+     * A connection to the server at `$url`, retried for up to 90 seconds. Every test is a process
+     * of its own, so each one waits; ecotest services have no tcp readiness check to do it once.
+     */
+    private static function reach(const string& $url, std::src::location $at) : carbon::mysql::Driver
+    {
+        time::instant $started = .now();
+        time::duration $limit = time::duration::secs(90);
+        while (true) {
+            match (carbon::mysql::Driver::open($url)) {
+                .ok($driver) => {
+                    return $driver;
+                },
+                .error($e) => {
+                    if ($started->elapsed() > $limit) {
+                        ecotest::stop("the test database server did not answer: {$e}", $at);
+                    }
+                },
+            };
+            time::sleep(time::duration::millis(500));
+        }
+    }
+
+    /**
+     * Runs `$statement` on `$db`, stopping the test at `$at` when it fails.
+     */
+    private static function sql(carbon::DB $db, const string& $statement, std::src::location $at) : carbon::Written
+    {
+        carbon::Written $done = guard $db->run($statement) else ($e) {
+            die(ecotest::report("{$statement}: {$e}", $at), $at);
+        };
+        return $done;
+    }
+}

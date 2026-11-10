@@ -1,6 +1,6 @@
 namespace Blog::Types;
 
-use Blog::Models::User;
+use Blog::DB::Model::User;
 
 /**
  * Who is viewing, as an action hands it to the transformers: what lets `UserTransformer` show users

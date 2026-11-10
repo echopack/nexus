@@ -1,7 +1,7 @@
 namespace Blog::Commands;
 
 use Blog::Inputs::PostRef;
-use Blog::Models::User;
+use Blog::DB::Model::User;
 use Blog::Services::PostService;
 
 /**

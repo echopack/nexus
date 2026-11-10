@@ -1,6 +1,6 @@
 namespace Blog::Tasks;
 
-use Blog::Models::UserRepository;
+use Blog::DB::Model::UserRepository;
 
 /**
  * Notes how many users the blog has; it runs after a welcome, in the same pipeline.

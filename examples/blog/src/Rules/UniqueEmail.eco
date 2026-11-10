@@ -1,6 +1,6 @@
 namespace Blog::Rules;
 
-use Blog::Models::{UserRepository, UserTable};
+use Blog::DB::Model::{UserRepository, UserTable};
 
 /**
  * An e-mail address nobody signed up with yet. The insert still answers a 409 when two sign-ups

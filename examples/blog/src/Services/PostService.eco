@@ -2,8 +2,8 @@ namespace Blog::Services;
 
 use Blog::Inputs::{NewPost, PostChanges};
 use Blog::Logs::PostPublished;
-use Blog::Models::{Post, User, UserRepository};
-use Blog::Repositories::PostRepository;
+use Blog::DB::Model::{Post, User, UserRepository};
+use Blog::DB::Repository::PostRepository;
 
 /**
  * What the blog does with posts, whichever door asks: the HTTP actions, the `posts:*` commands and

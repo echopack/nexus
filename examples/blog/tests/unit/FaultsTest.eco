@@ -1,0 +1,23 @@
+/**
+ * Database failures mapped to answers. A real database gives these only to a race or a broken
+ * schema, so the fake driver fails on cue instead.
+ */
+
+#[group: "unit"]
+test a_broken_reference_is_a_conflict
+{
+    $r = FakeRig();
+    $r->fake->rows([editorRow()])->fails(carbon::Error::driver(carbon::Failure($fault: carbon::Fault::reference, $message: 'foreign key')));
+    $r->editor()->post('/v1/posts', json: '{"title":"Orphan","body":"Text"}')->problem(409);
+}
+
+#[group: "unit"]
+test a_sign_up_racing_past_the_email_check_is_a_conflict
+{
+    $r = FakeRig();
+    // the address looks free, then the insert hits the unique key another sign-up just took
+    $r->fake->rows([])->fails(carbon::Error::driver(carbon::Failure($fault: carbon::Fault::duplicate, $message: 'Duplicate entry')));
+    $r->api->post('/v1/users', json: '{"name":"A reader","email":"reader@example.com","password":"a long password","passwordConfirmation":"a long password"}')
+        ->problem(409)
+        ->has('that email is taken');
+}

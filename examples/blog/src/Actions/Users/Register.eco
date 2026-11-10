@@ -1,7 +1,7 @@
 namespace Blog::Actions::Users;
 
 use Blog::Inputs::Registration;
-use Blog::Models::{User, UserRepository};
+use Blog::DB::Model::{User, UserRepository};
 use Blog::Signals::UserRegistered;
 use Blog::Transformers::UserTransformer;
 

@@ -13,11 +13,11 @@
  *   $app->bind<PostService>(scoped: (Container $c) => PostService($c->get<PostRepository>()));
  *   $app->bindAction<ShowPost>(...)->route([.get], '/v1/posts/{id}')->tool('show_post');
  *   $app->bindTool<CreatePostTool>(...)->offer('create_post');
- *   $app->bindAsyncQueue<WorkersLane>();   // NEXUS_WORK_THREADS threads, or threads: 4
- *   $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))->into<WorkersLane>();
- *   $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
+ *   $app->bindAsyncQueue<WorkerLane>();   // NEXUS_WORK_THREADS threads, or threads: 4
+ *   $app->bindDistributedQueue<JobLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))->into<WorkerLane>();
+ *   $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobLane>();
  *   $app->instance(nexus::SignalDispatcher());
- *   $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobsQueue>());
+ *   $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobQueue>());
  *
  * and a provider's commands, which the command line reads before boot:
  *

@@ -1,7 +1,7 @@
-namespace Blog::Repositories;
+namespace Blog::DB::Repository;
 
-use Blog::Models::{Post, PostWiring};
-use Blog::Queries::PostQuery;
+use Blog::DB::Model::{Post, PostWiring};
+use Blog::DB::Query::PostQuery;
 
 /**
  * Writing posts: a title is trimmed, and an empty one refused.

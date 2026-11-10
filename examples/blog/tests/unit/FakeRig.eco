@@ -1,0 +1,61 @@
+/**
+ * The blog on carbon's fake MySQL driver, for the few cases a real database will not produce on
+ * demand: queue what the database answers, including a failure, send a request, check the reply.
+ * Everything else runs against a real database in `tests/integration/`.
+ */
+
+use ecotest::http::Api;
+use nexus::testing::TestApp;
+use Blog::DB::Model::{User, UserTable};
+use carbon::fake;
+use hydrahon::{Value, Mysql};
+use std::time;
+
+internal class FakeRig
+{
+    /**
+     * The database: queue its answers with `rows`, `written` and `fails`.
+     */
+    public fake::Driver<Mysql> $fake;
+
+    public TestApp $app;
+
+    /**
+     * Requests from nobody in particular.
+     */
+    public Api $api;
+
+    public constructor()
+    {
+        $driver = fake::Driver<Mysql>();
+        $this->fake = $driver;
+        $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+            $made = carbon::DB($driver, clock: calendar::FixedClock(time::timestamp::from_unix_secs(1700000000)));
+            try Blog::DB::wire($made);
+            return .ok($made);
+        });
+        $clock = calendar::FixedClock(time::timestamp::from_unix_secs(1700000000));
+        $auth = nexus::auth::Extension('blog', clock: $clock, cost: crypto::PasswordCost(8, 1));
+        array<nexus::Extension> $exts = [$db, $auth, nexus::oauth::Extension(clock: $clock), nexus::mcp::Extension(), nexus::work::Extension(), Blog::App()];
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => 'a-test-key-of-at-least-thirty-two-chars'];
+        $this->app = TestApp($exts, mv $vars);
+        $this->api = $this->app->api();
+    }
+
+    /**
+     * Requests signed in as the editor, user 1. `RequireUser` loads the editor on every request,
+     * so queue `editorRow()` before each one.
+     */
+    public function editor() : Api
+    {
+        $t = guard $this->app->kernel->services->child()->get<nexus::auth::Tokens>()->issue('1') else ($p) {
+            die("the test could not issue the editor a token: {$p->detail(nexus::Mode::testing)}");
+        };
+        return $this->api->bearer($t->token);
+    }
+}
+
+internal function editorRow() : array<Value>
+{
+    return UserTable()->row(User($id: 1, $email: 'editor@example.com', $name: 'The editor'));
+}

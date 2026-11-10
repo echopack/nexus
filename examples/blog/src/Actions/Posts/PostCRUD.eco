@@ -1,0 +1,11 @@
+namespace Blog::Actions::Posts;
+
+use Blog::DB::Model::Post;
+use Blog::DB::Query::PostQuery;
+use Blog::DB::Repository::PostRepository;
+use Blog::Transformers::PostTransformer;
+
+/**
+ * List, show, create, update and delete of posts, answered through the `PostTransformer`.
+ */
+public type PostCRUD = nexus::crud::Crud<Post, PostQuery, int64, PostRepository, PostTransformer>;

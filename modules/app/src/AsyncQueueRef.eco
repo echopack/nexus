@@ -4,7 +4,7 @@ namespace nexus::app;
  * The async queue `bindAsyncQueue` just bound, for where its runs log:
  *
  * ```echo
- * $app->bindAsyncQueue<WorkersLane>(threads: $config->workers)
+ * $app->bindAsyncQueue<WorkerLane>(threads: $config->workers)
  *     ->log((const nexus::work::Run& $run) => .also(nexus::log::File("var/tasks/{$run->id}.log", .json)));
  * ```
  */

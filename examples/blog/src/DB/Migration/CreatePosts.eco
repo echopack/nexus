@@ -1,4 +1,4 @@
-namespace Blog::Migrations;
+namespace Blog::DB::Migration;
 
 #[carbon::migration: '20261102100100_create_posts']
 public class CreatePosts : carbon::Migration

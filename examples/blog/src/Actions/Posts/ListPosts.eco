@@ -1,9 +1,8 @@
 namespace Blog::Actions::Posts;
 
 use Blog::Config::BlogConfig;
-use Blog::Models::PostTable;
-use Blog::Queries::PostQuery;
-use Blog::Types::PostCrud;
+use Blog::DB::Model::PostTable;
+use Blog::DB::Query::PostQuery;
 
 /**
  * Posts, newest first, a page at a time: `?order=title`, `?tag=echo`, `?ids=1,2`, `?count=1`,
@@ -12,10 +11,10 @@ use Blog::Types::PostCrud;
 #[nexus::answers: { collection: "Blog::Transformers::PostTransformer" }]
 public class ListPosts : nexus::Action
 {
-    private PostCrud $crud;
+    private PostCRUD $crud;
     private BlogConfig $config;
 
-    public constructor(PostCrud $crud, BlogConfig $config)
+    public constructor(PostCRUD $crud, BlogConfig $config)
     {
         $this->crud = $crud;
         $this->config = $config;

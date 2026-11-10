@@ -1,6 +1,6 @@
 namespace Blog::Tasks;
 
-use Blog::Models::UserRepository;
+use Blog::DB::Model::UserRepository;
 
 /**
  * Welcomes a new user and notes when. There is no mail yet, so the welcome is a log line; the note

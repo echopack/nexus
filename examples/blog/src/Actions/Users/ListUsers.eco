@@ -1,6 +1,6 @@
 namespace Blog::Actions::Users;
 
-use Blog::Models::{UserRepository, UserTable};
+use Blog::DB::Model::{UserRepository, UserTable};
 use Blog::Transformers::UserAdminTransformer;
 
 /**

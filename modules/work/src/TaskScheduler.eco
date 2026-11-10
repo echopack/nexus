@@ -12,7 +12,7 @@ use std::time;
  * `NEXUS_WORK_KEEP`.
  *
  * ```echo
- * $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
+ * $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobLane>();
  * ```
  */
 #[atomic]

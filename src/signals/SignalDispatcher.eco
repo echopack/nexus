@@ -23,7 +23,7 @@ namespace nexus;
  *
  * ```echo
  * $app->instance(nexus::SignalDispatcher());
- * $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobsQueue>());
+ * $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobQueue>());
  * ```
  */
 #[atomic]

@@ -17,7 +17,7 @@ use container::{Container, Entry};
  * public function services(nexus::Services& $s) : status<nexus::BootError>
  * {
  *     nexus::App $app = nexus::App($s, $this->providers());
- *     $app->bindAsyncQueue<WorkersLane>(threads: 4);
+ *     $app->bindAsyncQueue<WorkerLane>(threads: 4);
  *     return .ok;
  * }
  *
@@ -157,7 +157,7 @@ public class App
      * way. A provider takes what it wires onto from here:
      *
      * ```echo
-     * $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobsQueue>());
+     * $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobQueue>());
      * ```
      */
     public function get<T>() : T

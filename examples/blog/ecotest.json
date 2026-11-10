@@ -1,0 +1,9 @@
+{
+  "services": [
+    {
+      "name": "mysql",
+      "run": ["sh", "-c", "docker rm -f nexus-blog-test >/dev/null 2>&1; exec docker run --rm --name nexus-blog-test -e MYSQL_ROOT_PASSWORD=test -p 127.0.0.1:33071:3306 --tmpfs /var/lib/mysql mysql:8.0 --skip-log-bin"],
+      "url": "mysql://root:test@127.0.0.1:33071/?fetchServerKey=true"
+    }
+  ]
+}

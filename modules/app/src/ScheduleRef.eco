@@ -5,8 +5,8 @@ namespace nexus::app;
  * needed and checked at boot:
  *
  * ```echo
- * $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
- * $app->schedule(Heartbeat())->every('1m')->into<WorkersLane>();
+ * $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobLane>();
+ * $app->schedule(Heartbeat())->every('1m')->into<WorkerLane>();
  * ```
  */
 public class ScheduleRef

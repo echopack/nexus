@@ -1,7 +1,7 @@
 namespace Blog::Transformers;
 
 use Blog::Actions::Posts::ShowPost;
-use Blog::Models::{Post, PostMapping};
+use Blog::DB::Model::{Post, PostMapping};
 
 /**
  * A post as the API shows it: what `Post` exposes (`PostMapping`, its author when the request

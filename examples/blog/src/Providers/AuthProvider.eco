@@ -4,8 +4,8 @@ use container::Container;
 use Blog::Actions::Auth::{Login, Logout, Me, OpenSession};
 use Blog::Actions::Users::{ListUsers, Register};
 use Blog::Middleware::{RequireAdmin, RequireUser};
-use Blog::Models::{User, UserRepository};
-use Blog::Queues::{JobsLane, JobsQueue};
+use Blog::DB::Model::{User, UserRepository};
+use Blog::Queues::{JobLane, JobQueue};
 use Blog::Rules::UniqueEmail;
 use Blog::Services::SignIn;
 use Blog::Signals::{UserRegistered, WelcomeNewUser};
@@ -45,8 +45,8 @@ public class AuthProvider : nexus::Provider
             ->route([.get], '/v1/users');
 
         // a sign up is welcomed on a worker; expired tokens go every night at three
-        $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobsQueue>());
+        $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobQueue>());
         
-        $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
+        $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobLane>();
     }
 }

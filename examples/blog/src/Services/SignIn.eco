@@ -1,7 +1,7 @@
 namespace Blog::Services;
 
 use Blog::Inputs::Credentials;
-use Blog::Models::{User, UserRepository, UserTable};
+use Blog::DB::Model::{User, UserRepository, UserTable};
 
 /**
  * Checks an email and a password, throttled per address and per account, and rehashes a password

@@ -17,12 +17,12 @@
  *
  * A queue is named by a lane, an empty struct, and bound with nexus-app:
  *
- *   public struct WorkersLane : nexus::work::Lane {}
- *   public type WorkersQueue = nexus::work::AsyncQueue<WorkersLane>;
+ *   public struct WorkerLane : nexus::work::Lane {}
+ *   public type WorkerQueue = nexus::work::AsyncQueue<WorkerLane>;
  *
- *   $app->bindAsyncQueue<WorkersLane>();   // NEXUS_WORK_THREADS threads, or threads: 4
- *   $app->bindDistributedQueue<JobsLane>(store: nexus::work::MemoryStore())->into<WorkersLane>();
- *   $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobsLane>();
+ *   $app->bindAsyncQueue<WorkerLane>();   // NEXUS_WORK_THREADS threads, or threads: 4
+ *   $app->bindDistributedQueue<JobLane>(store: nexus::work::MemoryStore())->into<WorkerLane>();
+ *   $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobLane>();
  *
  * The store here is kept in memory (`MemoryStore`); nexus-work-carbon keeps
  * it in the app's database.

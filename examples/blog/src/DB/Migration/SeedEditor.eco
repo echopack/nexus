@@ -1,4 +1,4 @@
-namespace Blog::Migrations;
+namespace Blog::DB::Migration;
 
 /**
  * The first author, so a fresh blog can take posts. The editor is its admin.

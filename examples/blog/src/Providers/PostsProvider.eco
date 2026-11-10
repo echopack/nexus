@@ -1,16 +1,15 @@
 namespace Blog::Providers;
 
 use container::Container;
-use Blog::Actions::Posts::{CreatePost, DeletePost, ListPosts, PublishPosts, ShowPost, UpdatePost};
+use Blog::Actions::Posts::{CreatePost, DeletePost, ListPosts, PostCRUD, PublishPosts, ShowPost, UpdatePost};
 use Blog::Commands::{CreatePostCommand, ShowPostCommand};
 use Blog::Config::BlogConfig;
-use Blog::Models::{Post, UserRepository};
-use Blog::Queries::PostQuery;
-use Blog::Repositories::PostRepository;
+use Blog::DB::Model::{Post, UserRepository};
+use Blog::DB::Query::PostQuery;
+use Blog::DB::Repository::PostRepository;
 use Blog::Services::PostService;
 use Blog::Tools::CreatePostTool;
 use Blog::Transformers::PostTransformer;
-use Blog::Types::PostCrud;
 
 /**
  * Posts: the service, its HTTP actions, its MCP tools and its commands.
@@ -22,7 +21,7 @@ public class PostsProvider : nexus::Provider
         $app->bindRepository<PostRepository>();
         $app->bind<PostService>(scoped: (Container $c) => PostService($c->get<PostRepository>(), $c->get<UserRepository>(), $c->get<nexus::Logger>()));
 
-        $app->bindAction<ShowPost>((Container $c) => ShowPost($c->get<PostCrud>()))
+        $app->bindAction<ShowPost>((Container $c) => ShowPost($c->get<PostCRUD>()))
             ->route([.get], '/v1/posts/{id}')
             ->tool(
                 'show_post',
@@ -31,7 +30,7 @@ public class PostsProvider : nexus::Provider
                 readOnly: true,
                 map: ['post' => 'id']
             );
-        $app->bindAction<ListPosts>((Container $c) => ListPosts($c->get<PostCrud>(), $c->get<BlogConfig>()))
+        $app->bindAction<ListPosts>((Container $c) => ListPosts($c->get<PostCRUD>(), $c->get<BlogConfig>()))
             ->route([.get], '/v1/posts');
         $app->bindAction<CreatePost>((Container $c) => CreatePost($c->get<PostService>(), $c->get<PostTransformer>()))
             ->route([.post], '/v1/posts');
@@ -39,13 +38,13 @@ public class PostsProvider : nexus::Provider
             ->route([.post], '/v1/posts/batch');
         $app->bindAction<UpdatePost>((Container $c) => UpdatePost($c->get<PostService>(), $c->get<PostTransformer>()))
             ->route([.patch], '/v1/posts/{id}');
-        $app->bindAction<DeletePost>((Container $c) => DeletePost($c->get<PostCrud>()))
+        $app->bindAction<DeletePost>((Container $c) => DeletePost($c->get<PostCRUD>()))
             ->route([.delete], '/v1/posts/{id}');
 
         // a post links to ShowPost through the router, which boot fills
         $app->bindTransformer<Post, PostTransformer>(PostTransformer($app->router()));
-        $app->bind<PostCrud>(scoped: function(Container $c) : PostCrud {
-            $crud = PostCrud($c->get<PostRepository>(), $c->get<PostTransformer>());
+        $app->bind<PostCRUD>(scoped: function(Container $c) : PostCRUD {
+            $crud = PostCRUD($c->get<PostRepository>(), $c->get<PostTransformer>());
             $crud->name = 'post';
             $crud->load = function(PostQuery $q, const EchoPack::Rest::Includes& $inc) : PostQuery {
                 if ($inc->has('author')) {

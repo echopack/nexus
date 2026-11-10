@@ -1,0 +1,67 @@
+/**
+ * The post commands end to end, run as the command line would: the same service and database as
+ * the API, the same rules.
+ */
+
+use ecotest::expect;
+
+/**
+ * Runs command `$cmd` in `$world` as the command line would, with `$in` filled in.
+ */
+internal function command(World $world, nexus::Command $cmd, nexus::Invocation& $in) : int32
+{
+    $in->attach($world->app->kernel);
+    return $cmd->run($in);
+}
+
+/**
+ * Everything the command printed, one line per row.
+ */
+internal function printed(const nexus::Invocation& $in) : string
+{
+    return str::join($in->out->page->rows, "\n");
+}
+
+#[group: "integration"]
+test the_post_commands_publish_and_show
+{
+    $world = World();
+
+    ecotest::step('posts:create publishes a post by the given author');
+    $in = nexus::Invocation(nexus::Mode::testing);
+    $in->values['author'] = '1';
+    $in->given['author'] = true;
+    $in->values['title'] = 'From the shell';
+    $in->given['title'] = true;
+    $in->values['body'] = 'Typed in a terminal';
+    $in->given['body'] = true;
+    $in->lists['tags'] = ['Echo', ' echo', 'CLI'];
+    expect(command($world, Blog::Commands::CreatePostCommandCli('posts:create'), $in))->is(0);
+    expect(printed($in))->has('published post #1 by The editor');
+
+    ecotest::step('posts:show prints it');
+    $shown = nexus::Invocation(nexus::Mode::testing);
+    $shown->positionals = ['1'];
+    expect(command($world, Blog::Commands::ShowPostCommandCli('posts:show'), $shown))->is(0);
+    expect(printed($shown))->has('#1  From the shell')->has('by The editor <editor@example.com>')->has('tags: echo, cli');
+
+    ecotest::step('a post that is not there, or not a number, is an error');
+    $missing = nexus::Invocation(nexus::Mode::testing);
+    $missing->positionals = ['9'];
+    expect(command($world, Blog::Commands::ShowPostCommandCli('posts:show'), $missing))->is(1);
+    expect(printed($missing))->has('error: Not Found');
+    $bad = nexus::Invocation(nexus::Mode::testing);
+    $bad->positionals = ['nine'];
+    expect(command($world, Blog::Commands::ShowPostCommandCli('posts:show'), $bad))->is(1);
+    expect(printed($bad))->has('error: id:');
+
+    ecotest::step('posts:create keeps the API rules and writes nothing it refuses');
+    $short = nexus::Invocation(nexus::Mode::testing);
+    $short->values['author'] = '1';
+    $short->given['author'] = true;
+    $short->values['title'] = 'No';
+    $short->given['title'] = true;
+    expect(command($world, Blog::Commands::CreatePostCommandCli('posts:create'), $short))->is(1);
+    expect(printed($short))->has('title:')->has('body:');
+    expect($world->db->count('posts'))->is(1);
+}

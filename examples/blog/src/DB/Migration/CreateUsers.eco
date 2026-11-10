@@ -1,4 +1,4 @@
-namespace Blog::Migrations;
+namespace Blog::DB::Migration;
 
 #[carbon::migration: '20261102100000_create_users']
 public class CreateUsers : carbon::Migration

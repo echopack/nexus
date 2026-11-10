@@ -60,8 +60,8 @@ internal struct ASend : nexus::work::Task
     }
 }
 
-internal struct AWorkersLane : nexus::work::Lane {}
-internal struct AJobsLane : nexus::work::Lane {}
+internal struct AWorkerLane : nexus::work::Lane {}
+internal struct AJobLane : nexus::work::Lane {}
 
 // what nexus gen writes for this module's types
 internal struct AShowDispatch
@@ -107,8 +107,8 @@ internal function appGenerated(nexus::Generated $g) : void
     });
     $g->name<APrune>('APrune');
     $g->name<ASend>('ASend');
-    $g->name<AWorkersLane>('AWorkersLane');
-    $g->name<AJobsLane>('AJobsLane');
+    $g->name<AWorkerLane>('AWorkerLane');
+    $g->name<AJobLane>('AJobLane');
 }
 
 #[nexus::mcp::tools: 'nexus-app-tests']
@@ -243,18 +243,18 @@ internal class AApp : nexus::Extension
             $app->action<AShow>()->route($none, '/nowhere/{id}');
         }
         if ($this->configuredThreads) {
-            $app->bindAsyncQueue<AWorkersLane>()
+            $app->bindAsyncQueue<AWorkerLane>()
                 ->log((const nexus::work::Run& $run) => nexus::work::RunLog::silent);
         } else {
-            $app->bindAsyncQueue<AWorkersLane>(threads: 3)
+            $app->bindAsyncQueue<AWorkerLane>(threads: 3)
                 ->log((const nexus::work::Run& $run) => nexus::work::RunLog::silent);
         }
-        nexus::app::DistributedQueueRef<AJobsLane> $jobs = $app->bindDistributedQueue<AJobsLane>(store: nexus::work::MemoryStore());
+        nexus::app::DistributedQueueRef<AJobLane> $jobs = $app->bindDistributedQueue<AJobLane>(store: nexus::work::MemoryStore());
         if (!$this->noLane) {
-            $jobs->into<AWorkersLane>();
+            $jobs->into<AWorkerLane>();
         }
-        $app->schedule(APrune($days: 7))->cron('0 3 * * *')->into<AJobsLane>();
-        $app->schedule(ASend($user: 5))->every('1h')->into<AJobsLane>();
+        $app->schedule(APrune($days: 7))->cron('0 3 * * *')->into<AJobLane>();
+        $app->schedule(ASend($user: 5))->every('1h')->into<AJobLane>();
         $app->instance(AHeard());
         $app->instance(nexus::SignalDispatcher());
         $app->get<nexus::SignalDispatcher>()
@@ -389,7 +389,7 @@ test an_async_queue_bound_without_a_count_takes_nexus_work_threads
     $a->configuredThreads = true;
     TestApp $app = guard aBoot($a, true, ['NEXUS_WORK_THREADS' => '5']);
     $w = $app->kernel->services->get<nexus::work::Work>();
-    nexus::work::Pool $pool = expect($w->lanes->pool('AWorkersLane'))->some();
+    nexus::work::Pool $pool = expect($w->lanes->pool('AWorkerLane'))->some();
     expect($pool->threads)->is(5 as uint32);
 }
 
@@ -397,16 +397,16 @@ test queues_and_schedules_are_bound
 {
     TestApp $app = aApp();
     $w = $app->kernel->services->get<nexus::work::Work>();
-    nexus::work::Pool $pool = expect($w->lanes->pool('AWorkersLane'))->some();
+    nexus::work::Pool $pool = expect($w->lanes->pool('AWorkerLane'))->some();
     expect($pool->threads)->is(3 as uint32);
-    nexus::work::Distributed $jobs = expect($w->lanes->store('AJobsLane'))->some();
-    expect($jobs->into)->is('AWorkersLane');
+    nexus::work::Distributed $jobs = expect($w->lanes->store('AJobLane'))->some();
+    expect($jobs->into)->is('AWorkerLane');
     expect($w->scheduler->plans)->size(2);
     expect($w->scheduler->plans[0]->cron)->is('0 3 * * *');
     expect($w->scheduler->plans[1]->text())->is('every 1h');
-    expect($w->scheduler->plans[1]->into)->is('AJobsLane');
+    expect($w->scheduler->plans[1]->into)->is('AJobLane');
     nexus::Payload $payload = $app->kernel->background('push', 'test');
-    nexus::work::Pushed $p = guard $payload->get<nexus::work::DistributedQueue<AJobsLane>>()->push(ASend($user: 9));
+    nexus::work::Pushed $p = guard $payload->get<nexus::work::DistributedQueue<AJobLane>>()->push(ASend($user: 9));
     expect($p->queued())->yes(says: 'the task was stored');
     nexus::Kernel::finish($payload);
 }
@@ -417,7 +417,7 @@ test a_distributed_queue_without_an_async_one_stops_the_boot
     $app->noLane = true;
     $r = aBoot($app, true);
     nexus::BootError $e = expect($r)->fails();
-    expect(aFirst($e))->has('AJobsLane: a distributed queue needs an async queue to run on');
+    expect(aFirst($e))->has('AJobLane: a distributed queue needs an async queue to run on');
 }
 
 test a_tool_without_nexus_mcp_stops_the_boot

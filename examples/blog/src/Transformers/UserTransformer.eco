@@ -1,6 +1,6 @@
 namespace Blog::Transformers;
 
-use Blog::Models::{User, UserMapping};
+use Blog::DB::Model::{User, UserMapping};
 use Blog::Types::UserContext;
 
 /**

@@ -877,6 +877,121 @@ public class ShowPostCommandCli : nexus::Command
 }
 
 
+namespace Blog::DB::Model;
+
+/**
+ * How a Blog::DB::Model::Post is written in its default shape: conform a
+ * nexus::rest::Transformer<Blog::DB::Model::Post> to it as well.
+ */
+public interface PostMapping
+{
+    function name() : string
+    {
+        return 'post';
+    }
+
+    function availableIncludes() : array<string>
+    {
+        array<string> $out = ['author'];
+        foreach ($this->extraIncludes() as const &$extra) {
+            $out[] = $extra;
+        }
+        return $out;
+    }
+
+    function defaultIncludes() : array<string>
+    {
+        return array<string>();
+    }
+
+    function map(const Blog::DB::Model::Post& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
+    {
+        $item->attribute('id', $m->id);
+        $item->text('title', $m->title);
+        $item->text('body', $m->body);
+        $item->texts('tags', $m->tags, item: 'tag');
+        $item->time('created_at', $m->createdAt);
+        if ($m->author->loaded()) {
+            $item->include<Blog::DB::Model::User>('author', $m->author->get());
+        }
+    }
+}
+
+/**
+ * How a Blog::DB::Model::User is written in its default shape: conform a
+ * nexus::rest::Transformer<Blog::DB::Model::User> to it as well.
+ */
+public interface UserMapping
+{
+    function name() : string
+    {
+        return 'user';
+    }
+
+    function availableIncludes() : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->extraIncludes() as const &$extra) {
+            $out[] = $extra;
+        }
+        return $out;
+    }
+
+    function defaultIncludes() : array<string>
+    {
+        return array<string>();
+    }
+
+    function map(const Blog::DB::Model::User& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
+    {
+        $item->protect(['email', 'password_hash']);
+        $item->attribute('id', $m->id);
+        $item->text('name', $m->name);
+        $item->time('welcomed_at', $m->welcomedAt);
+    }
+}
+
+/**
+ * How a Blog::DB::Model::User is written in the shape 'admin': conform a
+ * nexus::rest::Transformer<Blog::DB::Model::User> to it as well.
+ */
+public interface UserAdminMapping
+{
+    function name() : string
+    {
+        return 'user';
+    }
+
+    function availableIncludes() : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->extraIncludes() as const &$extra) {
+            $out[] = $extra;
+        }
+        return $out;
+    }
+
+    function defaultIncludes() : array<string>
+    {
+        return array<string>();
+    }
+
+    function map(const Blog::DB::Model::User& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
+    {
+        $item->protect(['email', 'password_hash']);
+        $item->attribute('id', $m->id);
+        $item->reveal('email');
+        $item->text('email', $m->email);
+        $item->text('name', $m->name);
+        $item->int('role', match ($m->role) {
+            .author => 1,
+            .admin => 2,
+        });
+        $item->time('welcomed_at', $m->welcomedAt);
+    }
+}
+
+
 namespace Blog::Inputs;
 
 /**
@@ -1309,121 +1424,6 @@ public struct RegistrationDecoder
 }
 
 
-namespace Blog::Models;
-
-/**
- * How a Blog::Models::Post is written in its default shape: conform a
- * nexus::rest::Transformer<Blog::Models::Post> to it as well.
- */
-public interface PostMapping
-{
-    function name() : string
-    {
-        return 'post';
-    }
-
-    function availableIncludes() : array<string>
-    {
-        array<string> $out = ['author'];
-        foreach ($this->extraIncludes() as const &$extra) {
-            $out[] = $extra;
-        }
-        return $out;
-    }
-
-    function defaultIncludes() : array<string>
-    {
-        return array<string>();
-    }
-
-    function map(const Blog::Models::Post& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
-    {
-        $item->attribute('id', $m->id);
-        $item->text('title', $m->title);
-        $item->text('body', $m->body);
-        $item->texts('tags', $m->tags, item: 'tag');
-        $item->time('created_at', $m->createdAt);
-        if ($m->author->loaded()) {
-            $item->include<Blog::Models::User>('author', $m->author->get());
-        }
-    }
-}
-
-/**
- * How a Blog::Models::User is written in its default shape: conform a
- * nexus::rest::Transformer<Blog::Models::User> to it as well.
- */
-public interface UserMapping
-{
-    function name() : string
-    {
-        return 'user';
-    }
-
-    function availableIncludes() : array<string>
-    {
-        array<string> $out = [];
-        foreach ($this->extraIncludes() as const &$extra) {
-            $out[] = $extra;
-        }
-        return $out;
-    }
-
-    function defaultIncludes() : array<string>
-    {
-        return array<string>();
-    }
-
-    function map(const Blog::Models::User& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
-    {
-        $item->protect(['email', 'password_hash']);
-        $item->attribute('id', $m->id);
-        $item->text('name', $m->name);
-        $item->time('welcomed_at', $m->welcomedAt);
-    }
-}
-
-/**
- * How a Blog::Models::User is written in the shape 'admin': conform a
- * nexus::rest::Transformer<Blog::Models::User> to it as well.
- */
-public interface UserAdminMapping
-{
-    function name() : string
-    {
-        return 'user';
-    }
-
-    function availableIncludes() : array<string>
-    {
-        array<string> $out = [];
-        foreach ($this->extraIncludes() as const &$extra) {
-            $out[] = $extra;
-        }
-        return $out;
-    }
-
-    function defaultIncludes() : array<string>
-    {
-        return array<string>();
-    }
-
-    function map(const Blog::Models::User& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
-    {
-        $item->protect(['email', 'password_hash']);
-        $item->attribute('id', $m->id);
-        $item->reveal('email');
-        $item->text('email', $m->email);
-        $item->text('name', $m->name);
-        $item->int('role', match ($m->role) {
-            .author => 1,
-            .admin => 2,
-        });
-        $item->time('welcomed_at', $m->welcomedAt);
-    }
-}
-
-
 namespace Blog::Tasks;
 
 /**
@@ -1629,6 +1629,13 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::App>('Blog::App');
     $g->name<Blog::Commands::SetPassword>('Blog::Commands::SetPassword');
     $g->name<Blog::Config::BlogConfig>('Blog::Config::BlogConfig');
+    $g->name<Blog::DB::Migration::CreatePosts>('Blog::DB::Migration::CreatePosts');
+    $g->name<Blog::DB::Migration::CreateUsers>('Blog::DB::Migration::CreateUsers');
+    $g->name<Blog::DB::Migration::SeedEditor>('Blog::DB::Migration::SeedEditor');
+    $g->name<Blog::DB::Model::Post>('Blog::DB::Model::Post');
+    $g->name<Blog::DB::Model::User>('Blog::DB::Model::User');
+    $g->name<Blog::DB::Query::PostQuery>('Blog::DB::Query::PostQuery');
+    $g->name<Blog::DB::Repository::PostRepository>('Blog::DB::Repository::PostRepository');
     $g->name<Blog::Inputs::AuthoredPost>('Blog::Inputs::AuthoredPost');
     $g->name<Blog::Inputs::Credentials>('Blog::Inputs::Credentials');
     $g->name<Blog::Inputs::NewPost>('Blog::Inputs::NewPost');
@@ -1640,17 +1647,10 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Middleware::RequireAdmin>('Blog::Middleware::RequireAdmin');
     $g->name<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser');
     $g->name<Blog::Middleware::ServerTiming>('Blog::Middleware::ServerTiming');
-    $g->name<Blog::Migrations::CreatePosts>('Blog::Migrations::CreatePosts');
-    $g->name<Blog::Migrations::CreateUsers>('Blog::Migrations::CreateUsers');
-    $g->name<Blog::Migrations::SeedEditor>('Blog::Migrations::SeedEditor');
-    $g->name<Blog::Models::Post>('Blog::Models::Post');
-    $g->name<Blog::Models::User>('Blog::Models::User');
     $g->name<Blog::Providers::AuthProvider>('Blog::Providers::AuthProvider');
     $g->name<Blog::Providers::PostsProvider>('Blog::Providers::PostsProvider');
-    $g->name<Blog::Queries::PostQuery>('Blog::Queries::PostQuery');
-    $g->name<Blog::Queues::JobsLane>('Blog::Queues::JobsLane');
-    $g->name<Blog::Queues::WorkersLane>('Blog::Queues::WorkersLane');
-    $g->name<Blog::Repositories::PostRepository>('Blog::Repositories::PostRepository');
+    $g->name<Blog::Queues::JobLane>('Blog::Queues::JobLane');
+    $g->name<Blog::Queues::WorkerLane>('Blog::Queues::WorkerLane');
     $g->name<Blog::Rules::UniqueEmail>('Blog::Rules::UniqueEmail');
     $g->name<Blog::Services::PostService>('Blog::Services::PostService');
     $g->name<Blog::Services::SignIn>('Blog::Services::SignIn');
@@ -1664,9 +1664,9 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Transformers::UserTransformer>('Blog::Transformers::UserTransformer');
     $g->name<Blog::Types::Caller>('Blog::Types::Caller');
     $g->name<Blog::Types::UserContext>('Blog::Types::UserContext');
-    $g->name<Blog::Queues::JobsQueue>('Blog::Queues::JobsQueue');
-    $g->name<Blog::Queues::WorkersQueue>('Blog::Queues::WorkersQueue');
-    $g->name<Blog::Types::PostCrud>('Blog::Types::PostCrud');
+    $g->name<Blog::Actions::Posts::PostCRUD>('Blog::Actions::Posts::PostCRUD');
+    $g->name<Blog::Queues::JobQueue>('Blog::Queues::JobQueue');
+    $g->name<Blog::Queues::WorkerQueue>('Blog::Queues::WorkerQueue');
 }
 
 /**

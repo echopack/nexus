@@ -1,6 +1,6 @@
 namespace Blog::Types;
 
-use Blog::Models::User;
+use Blog::DB::Model::User;
 
 /**
  * Who is calling, as `RequireUser` found them for this request: the credential and the user it

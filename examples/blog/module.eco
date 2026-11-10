@@ -14,7 +14,13 @@
  *   NEXUS_DATABASE_URL=... echoc run -- work                  (works the queue, no HTTP)
  *   NEXUS_DATABASE_URL=... echoc run -- posts:show 1          (the same service as GET /v1/posts/1)
  *   echoc run -- routes
- *   echoc test                                   (on carbon's fake driver)
+ *
+ * Tests: tests/unit/ is plain checks, tests/integration/ boots Blog::extensions() on a MySQL
+ * database of each test's own (tests/integration/World.eco), seeds it and walks a flow in steps.
+ *
+ *   epm run -m ../.. ecotest                     (starts MySQL in Docker from ecotest.json)
+ *   BLOG_TEST_DATABASE_URL=mysql://root:pw@127.0.0.1:3306/ echoc test   (your own server)
+ *   echoc test --target unit                     (no database; plain `echoc test` skips the flows)
  *
  * Everything is wired in src/App.eco through nexus-app's builder: the
  * routes, the MCP tools, the signal handler, the tasks and their schedule. One
@@ -58,7 +64,12 @@
 #[target: exe { name: "blog", entry: "src/main.eco" }]
 
 #[target: test] {
-    #[sources: "tests/*.eco"]
+    #[sources: "tests/**/*.eco"]
     #[depends: "../../../carbon/fake"]
     #[depends: "../../modules/testing"]
+    #[depends: "../../modules/carbon/testing"]
 }
+
+// `echoc test --target unit` needs no database; `--target integration` is the flows alone
+#[target: test { name: "unit", groups: ["unit"] }]
+#[target: test { name: "integration", groups: ["integration"] }]

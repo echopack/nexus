@@ -8,7 +8,7 @@ namespace nexus;
  * ```echo
  * public struct WelcomeNewUser : nexus::SignalHandler<UserRegistered>
  * {
- *     public JobsQueue $jobs;
+ *     public JobQueue $jobs;
  *
  *     public function handle(const UserRegistered& $signal) : status<nexus::Problem>
  *     {

@@ -1,0 +1,175 @@
+/**
+ * Posts end to end on a real database: publishing, reading, changing and deleting them, who may
+ * do which, the list's paging and filters, and batches.
+ */
+
+use ecotest::expect;
+
+#[group: "integration"]
+test an_admin_publishes_and_everyone_reads
+{
+    $world = World();
+    $admin = $world->admin();
+
+    ecotest::step('an admin publishes a post');
+    string $id = $admin->post('/v1/posts', json: newPost('  Hello world ', ['Echo', 'nexus']))
+        ->status(201)
+        ->json('$.data.title', 'Hello world')
+        ->json('$.data.tags[0]', 'echo')
+        ->capture('$.data.id');
+    $world->app->expectLogged(.info, 'post published');
+    expect($world->db->count('posts'))->is(1);
+
+    ecotest::step('anyone reads it in the list');
+    $world->api->get('/v1/posts')
+        ->status(200)
+        ->count('$.data', 1)
+        ->json('$.data[0].title', 'Hello world')
+        ->json('$.data[0].url', "/v1/posts/{$id}");
+
+    ecotest::step('it shows with its author, whose email stays hidden');
+    $world->api->get("/v1/posts/{$id}", query: ['include' => 'author'])
+        ->status(200)
+        ->json('$.data.author.name', 'The editor')
+        ->lacks('editor@example.com');
+
+    ecotest::step('the list answers XML when asked');
+    $world->api->with('Accept', 'application/xml')->get('/v1/posts')
+        ->status(200)
+        ->type('application/xml')
+        ->has('<title>Hello world</title>');
+
+    ecotest::step('the admin changes the title');
+    $admin->patch("/v1/posts/{$id}", json: '{"title":"Hello again"}')
+        ->status(200)
+        ->json('$.data.title', 'Hello again')
+        ->json('$.data.body', 'Body text');
+
+    ecotest::step('deleting it answers 204 and it is gone');
+    $admin->delete("/v1/posts/{$id}")->status(204);
+    $world->api->get("/v1/posts/{$id}")->problem(404)->has('the post');
+    expect($world->db->count('posts'))->is(0);
+}
+
+#[group: "integration"]
+test authors_change_only_their_own_posts
+{
+    $world = World();
+    $admin = $world->admin();
+    $ada = $world->author('Ada');
+    $bob = $world->author('Bob');
+
+    ecotest::step('an author publishes a post');
+    string $id = $ada->post('/v1/posts', json: newPost('By Ada'))->status(201)->capture('$.data.id');
+
+    ecotest::step('another author may neither change nor delete it');
+    $bob->patch("/v1/posts/{$id}", json: '{"title":"By Bob now"}')->problem(403);
+    $bob->delete("/v1/posts/{$id}")->problem(403);
+
+    ecotest::step('an admin may change anyone\'s post');
+    $admin->patch("/v1/posts/{$id}", json: '{"title":"Edited by the admin"}')
+        ->status(200)
+        ->json('$.data.title', 'Edited by the admin');
+
+    ecotest::step('its author deletes it');
+    $ada->delete("/v1/posts/{$id}")->status(204);
+    expect($world->db->count('posts'))->is(0);
+}
+
+#[group: "integration"]
+test the_list_pages_filters_and_orders
+{
+    $world = World();
+    $admin = $world->admin();
+    $admin->post('/v1/posts', json: newPost('Banana', ['fruit']))->status(201);
+    $admin->post('/v1/posts', json: newPost('Apple', ['fruit']))->status(201);
+    $admin->post('/v1/posts', json: newPost('Carrot', ['vegetable']))->status(201);
+    // published within one second; created_at keeps seconds, so date them a day apart
+    $world->db->run("UPDATE posts SET created_at = '2026-11-01 12:00:00' WHERE title = 'Banana'");
+    $world->db->run("UPDATE posts SET created_at = '2026-11-02 12:00:00' WHERE title = 'Apple'");
+    $world->db->run("UPDATE posts SET created_at = '2026-11-03 12:00:00' WHERE title = 'Carrot'");
+
+    ecotest::step('newest first, a page at a time');
+    $world->api->get('/v1/posts?size=2')
+        ->status(200)
+        ->count('$.data', 2)
+        ->json('$.data[0].title', 'Carrot')
+        ->json('$.size', 2);
+    $world->api->get('/v1/posts?size=2&page=2')->count('$.data', 1)->json('$.data[0].title', 'Banana');
+
+    ecotest::step('a tag filters, ordered by title, with both counts');
+    $world->api->get('/v1/posts?tag=fruit&order=title&count=1')
+        ->status(200)
+        ->count('$.data', 2)
+        ->json('$.data[0].title', 'Apple')
+        ->json('$.data[1].title', 'Banana')
+        ->json('$.total_count', 3)
+        ->json('$.filter_count', 2);
+
+    ecotest::step('a parameter the list does not know is named');
+    $world->api->get('/v1/posts?order=views')->invalid('order', 'unknown');
+    $world->api->get('/v1/posts?size=1000')->invalid('size', 'range');
+    $world->api->get('/v1/posts?include=secrets')->problem(400);
+}
+
+#[group: "integration"]
+test writing_needs_a_signed_in_author_and_a_valid_post
+{
+    $world = World();
+    $admin = $world->admin();
+
+    ecotest::step('nobody signed in, or a token that is not one, is refused');
+    $world->api->post('/v1/posts', json: newPost('A new post'))->problem(401);
+    $world->api->bearer('blog_000000000000_0000000000000000000000000000000000000000000000000000000000000000')->delete('/v1/posts/1')->problem(401);
+    $world->api->bearer('nonsense')->delete('/v1/posts/1')->problem(401);
+    // nobody signed in hears so before the body is looked at
+    $world->api->post('/v1/posts', body: 'not json', type: 'application/json')->problem(401);
+
+    ecotest::step('every field is checked');
+    $admin->post('/v1/posts', json: '{"title":"No"}')
+        ->invalid('title', 'min')
+        ->invalid('body', 'required');
+    $admin->post('/v1/posts', body: 'not json', type: 'application/json')->problem(400);
+    $admin->patch('/v1/posts/1', json: '{"title":"x"}')->invalid('title', 'min');
+
+    ecotest::step('a post that is not there is a 404');
+    $admin->patch('/v1/posts/999', json: '{}')->problem(404);
+    $world->api->get('/v1/posts/abc')->problem(404);
+
+    ecotest::step('nothing was written');
+    expect($world->db->count('posts'))->is(0);
+}
+
+#[group: "integration"]
+test a_batch_publishes_all_posts_or_none
+{
+    $world = World();
+    $admin = $world->admin();
+
+    ecotest::step('each post is checked by its own rules, and none is written');
+    $twice = newPost('Third post');
+    $twice['tags'] = json::arr(['echo', 'ECHO ']);
+    $refused = json::object(['posts' => json::arr([newPost('A fine title'), newPost('No'), $twice])]);
+    $admin->post('/v1/posts/batch', json: $refused)
+        ->invalid('posts.1.title', 'min')
+        ->invalid('posts.2.tags', 'distinct');
+    $admin->post('/v1/posts/batch', json: '{"posts":[]}')->invalid('posts', 'min');
+    expect($world->db->count('posts'))->is(0);
+
+    ecotest::step('a valid batch publishes every post at once');
+    $batch = json::object(['posts' => json::arr([newPost('First of two', [' Echo ']), newPost('Second of two')])]);
+    $admin->post('/v1/posts/batch', json: $batch)
+        ->status(201)
+        ->count('$.data', 2)
+        ->json('$.data[0].tags[0]', 'echo');
+    $world->app->expectLogged(.info, 'batch closed');
+    expect($world->db->count('posts'))->is(2);
+
+    ecotest::step('bracketed form keys read as the same batch');
+    $admin->post('/v1/posts/batch', form: [
+        'posts[0][title]' => 'Okay title',
+        'posts[0][body]' => 'x',
+        'posts[1][title]' => 'No',
+        'posts[1][body]' => 'y',
+    ])->invalid('posts.1.title', 'min');
+}

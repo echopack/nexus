@@ -5,8 +5,8 @@ namespace nexus::app;
  * (it needs one) and where their runs log:
  *
  * ```echo
- * $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
- *     ->into<WorkersLane>();
+ * $app->bindDistributedQueue<JobLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+ *     ->into<WorkerLane>();
  * ```
  */
 public class DistributedQueueRef<L>

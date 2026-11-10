@@ -1,4 +1,4 @@
-namespace Blog::Models;
+namespace Blog::DB::Model;
 
 use std::time;
 use Blog::Types::Role;

@@ -7,8 +7,8 @@ namespace nexus::work;
  * boot.
  *
  * ```echo
- * nexus::work::Queues::bindAsync<WorkersLane>($s);
- * nexus::work::Queues::bindDistributed<JobsLane>($s, nexus::work::MemoryStore())->into = 'blog::WorkersLane';
+ * nexus::work::Queues::bindAsync<WorkerLane>($s);
+ * nexus::work::Queues::bindDistributed<JobLane>($s, nexus::work::MemoryStore())->into = 'blog::WorkerLane';
  * ```
  */
 public struct Queues

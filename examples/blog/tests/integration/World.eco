@@ -1,0 +1,169 @@
+/**
+ * The blog as it runs in production, booted for one integration test: every extension from
+ * `Blog::extensions()`, a MySQL database of the test's own (migrated, so the seed's admin is
+ * there), real clocks and real password hashing. Requests go through `TestApp::api()`, in process.
+ * The database is dropped when the test ends, even when a check stops it.
+ *
+ * ```echo
+ * $world = World();
+ * $admin = $world->admin();
+ * $admin->post('/v1/posts', json: newPost('Hello'))->status(201);
+ * expect($world->db->count('posts'))->is(1);
+ * ```
+ *
+ * The server is `BLOG_TEST_DATABASE_URL` when you set one, else the MySQL ecotest started from
+ * `ecotest.json`; with neither, the test is skipped.
+ */
+
+use ecotest::http::Api;
+use nexus::testing::TestApp;
+use nexus::carbon::testing::Database;
+use Blog::DB::Model::{User, UserRepository, UserTable};
+use Blog::Types::Role;
+
+internal class World
+{
+    /**
+     * The password every user the world seeds signs in with.
+     */
+    public const string PASSWORD = 'a test password';
+
+    /**
+     * The test's own database: `count` and `run` check and shape what the app cannot.
+     */
+    public Database $db;
+
+    public TestApp $app;
+
+    /**
+     * Requests from nobody in particular.
+     */
+    public Api $api;
+
+    /**
+     * `PASSWORD`, hashed once for every user the world seeds.
+     */
+    private string $hashed = '';
+
+    public constructor()
+    {
+        $server = Database::server(env: ['BLOG_TEST_DATABASE_URL', 'ECOTEST_MYSQL_URL']);
+        $this->db = Database(server: $server, migrations: Blog::DB::migrations(), prefix: 'blog_test');
+        map<string, string> $vars = [
+            'NEXUS_DATABASE_URL' => $this->db->url,
+            'NEXUS_AUTH_KEY' => 'an-integration-key-of-at-least-32-chars',
+        ];
+        $this->app = TestApp(Blog::extensions(), mv $vars);
+        $this->api = $this->app->api();
+    }
+
+    /**
+     * The admin the seed migration made (`editor@example.com`, "The editor"), given `PASSWORD`
+     * and signed in.
+     */
+    public function admin() : Api
+    {
+        UserRepository $users = $this->users();
+        $found = guard $users->find()->where(UserTable::$email == 'editor@example.com')->first() else ($e) {
+            die("the world could not load the seeded admin: {$e}");
+        };
+        $admin = guard $found else {
+            die('the seed migration made no admin');
+        };
+        $admin->passwordHash = $this->password();
+        guard $users->save($admin) else ($e) {
+            die("the world could not give the admin a password: {$e}");
+        };
+        return $this->signIn($admin);
+    }
+
+    /**
+     * A new author called `$name`, at `<name>@example.com` in lower case, with `PASSWORD`, signed
+     * in.
+     */
+    public function author(const string& $name) : Api
+    {
+        string $local = str::lower($name);
+        string $email = "{$local}@example.com";
+        return $this->signIn($this->seed(User($email: $email, $name: $name, $passwordHash: $this->password())));
+    }
+
+    /**
+     * Requests signed in as `$user`, with a bearer token of their own.
+     */
+    private function signIn(const User& $user) : Api
+    {
+        nexus::Payload $payload = $this->app->kernel->background('test', nexus::Kernel::id());
+        string $subject = "{$user->id}";
+        $issued = guard $payload->get<nexus::auth::Tokens>()->issue($subject) else ($p) {
+            die("the world could not issue a token: {$p->detail(nexus::Mode::testing)}");
+        };
+        nexus::Kernel::finish($payload);
+        return $this->api->bearer($issued->token);
+    }
+
+    /**
+     * Runs `$task` here, as a worker would, on a payload of its own. One overload per task: a
+     * generic `run<T>` does not forward to `Inline::run<T>` yet.
+     */
+    public function run(Blog::Tasks::SendWelcome $task) : status<nexus::work::Failure>
+    {
+        nexus::Payload $payload = $this->app->kernel->background('test', nexus::Kernel::id());
+        status<nexus::work::Failure> $out = nexus::work::Inline::run($payload, $task);
+        nexus::Kernel::finish($payload);
+        return $out;
+    }
+
+    public function run(Blog::Tasks::PruneAuth $task) : status<nexus::work::Failure>
+    {
+        nexus::Payload $payload = $this->app->kernel->background('test', nexus::Kernel::id());
+        status<nexus::work::Failure> $out = nexus::work::Inline::run($payload, $task);
+        nexus::Kernel::finish($payload);
+        return $out;
+    }
+
+    private function seed(User $user) : User
+    {
+        $made = guard $this->users()->create($user) else ($e) {
+            die("the world could not seed {$user->email}: {$e}");
+        };
+        return $made;
+    }
+
+    private function users() : UserRepository
+    {
+        $repo = guard $this->app->kernel->services->get<carbon::DB>()->session()->repo<UserRepository>() else ($e) {
+            die("the world has no users: {$e}");
+        };
+        return $repo;
+    }
+
+    private function password() : string
+    {
+        if ($this->hashed->empty()) {
+            $h = guard $this->app->kernel->services->get<nexus::auth::Passwords>()->hash(World::PASSWORD) else ($p) {
+                die("the world could not hash a password: {$p->detail(nexus::Mode::testing)}");
+            };
+            $this->hashed = $h;
+        }
+        return $this->hashed;
+    }
+}
+
+/**
+ * What `POST /v1/auth/token` and `POST /v1/auth/session` take.
+ */
+internal function credentials(const string& $email, const string& $password) : json::Value
+{
+    return json::object(['email' => $email, 'password' => $password]);
+}
+
+/**
+ * A post as `POST /v1/posts` takes it.
+ */
+internal function newPost(const string& $title, const array<string>& $tags = []) : json::Value
+{
+    $post = json::object(['title' => $title, 'body' => 'Body text']);
+    $post['tags'] = $tags;
+    return $post;
+}

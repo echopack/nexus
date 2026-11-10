@@ -1,6 +1,6 @@
 namespace Blog::Middleware;
 
-use Blog::Models::UserRepository;
+use Blog::DB::Model::UserRepository;
 use Blog::Types::Caller;
 
 /**

@@ -10,8 +10,8 @@ namespace nexus::work::carbon;
  * guard nexus::work::carbon::Tables::wire($db) else ($e) { return .error($e); };
  *
  * // a provider
- * $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
- *     ->into<WorkersLane>();
+ * $app->bindDistributedQueue<JobLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+ *     ->into<WorkerLane>();
  * ```
  *
  * List it after nexus-carbon.

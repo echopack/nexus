@@ -6,11 +6,11 @@ use std::time;
  * A queue whose tasks are stored where every server of the app reaches them, named by its lane:
  *
  * ```echo
- * public struct JobsLane : nexus::work::Lane {}
- * public type JobsQueue = nexus::work::DistributedQueue<JobsLane>;
+ * public struct JobLane : nexus::work::Lane {}
+ * public type JobQueue = nexus::work::DistributedQueue<JobLane>;
  *
- * $app->bindDistributedQueue<JobsLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
- *     ->into<WorkersLane>();
+ * $app->bindDistributedQueue<JobLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))
+ *     ->into<WorkerLane>();
  *
  * // in a service, action or signal handler built with the queue
  * $this->jobs->push(SendWelcome($user: 5), in: time::duration::mins(20));

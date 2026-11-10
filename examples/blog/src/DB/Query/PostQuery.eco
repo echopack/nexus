@@ -1,6 +1,6 @@
-namespace Blog::Queries;
+namespace Blog::DB::Query;
 
-use Blog::Models::{Post, PostRelations, PostRows, PostTable};
+use Blog::DB::Model::{Post, PostRelations, PostRows, PostTable};
 
 /**
  * Reading posts.

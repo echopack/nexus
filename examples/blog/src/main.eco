@@ -1,13 +1,1 @@
-array<nexus::Extension> $extensions = [
-    nexus::http::Extension(),
-    nexus::carbon::Extension((nexus::carbon::DatabaseConfig $config) => Blog::Database::open($config), Blog::Database::migrations()),
-    nexus::auth::Extension('blog', stores: .provided),
-    nexus::auth::carbon::Extension(),
-    nexus::oauth::Extension(stores: .provided),
-    nexus::oauth::carbon::Extension(),
-    nexus::mcp::Extension(),
-    nexus::work::Extension(),
-    nexus::work::carbon::Extension(),
-    Blog::App(),
-];
-nexus::Kernel::main($extensions);
+nexus::Kernel::main(Blog::extensions());

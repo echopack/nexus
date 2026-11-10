@@ -1,6 +1,6 @@
 namespace Blog::Signals;
 
-use Blog::Queues::JobsQueue;
+use Blog::Queues::JobQueue;
 use Blog::Tasks::{CountUsers, SendWelcome};
 
 /**
@@ -9,7 +9,7 @@ use Blog::Tasks::{CountUsers, SendWelcome};
  */
 public struct WelcomeNewUser : nexus::SignalHandler<UserRegistered>
 {
-    public JobsQueue $jobs;
+    public JobQueue $jobs;
 
     public function handle(const UserRegistered& $signal) : status<nexus::Problem>
     {

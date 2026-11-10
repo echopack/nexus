@@ -1,0 +1,50 @@
+/**
+ * Test databases on the server in ECOTEST_MYSQL_URL or CARBON_MYSQL_URL; skipped without one.
+ */
+
+use ecotest::expect;
+use nexus::carbon::testing::Database;
+
+test a_url_takes_the_database_into_its_path
+{
+    expect(Database::within('mysql://u:p@h:3306/', 'x'))->is('mysql://u:p@h:3306/x');
+    expect(Database::within('mysql://u:p@h:3306/old?fetchServerKey=true', 'x'))->is('mysql://u:p@h:3306/x?fetchServerKey=true');
+    expect(Database::within('mysql://u:p@h', 'x'))->is('mysql://u:p@h/x');
+    expect(Database::within('mysql://u:p@h/old', ''))->is('mysql://u:p@h/');
+}
+
+test a_database_is_made_used_and_dropped
+{
+    string $server = Database::server(env: ['ECOTEST_MYSQL_URL', 'CARBON_MYSQL_URL']);
+    string $url = '';
+    {
+        $db = Database(server: $server, migrations: [], prefix: 'nexus_carbon_testing');
+        $url = $db->url;
+        expect($db->name)->starts('nexus_carbon_testing_');
+        $db->run('CREATE TABLE things (id INT)');
+        $db->run('INSERT INTO things VALUES (1), (2)');
+        expect($db->count('things'))->is(2);
+    }
+
+    // gone with its value
+    expect(carbon::mysql::Driver::open($url))->fails();
+}
+
+test two_databases_in_one_test_are_apart
+{
+    string $server = Database::server(env: ['ECOTEST_MYSQL_URL', 'CARBON_MYSQL_URL']);
+    $a = Database(server: $server, migrations: [], prefix: 'nexus_carbon_testing');
+    $b = Database(server: $server, migrations: [], prefix: 'nexus_carbon_testing');
+    expect($a->name == $b->name)->no(says: 'two databases share a name');
+}
+
+// a skip is not a death, so this one runs only when asked: `--define live` with a server set
+#[if: live]
+#[tests: expects death]
+test a_database_is_dropped_when_a_check_stops_the_test
+{
+    string $server = Database::server(env: ['ECOTEST_MYSQL_URL', 'CARBON_MYSQL_URL']);
+    $db = Database(server: $server, migrations: [], prefix: 'nexus_carbon_testing_stopped');
+    expect(1)->is(2);
+}
+#[end]

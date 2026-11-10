@@ -1,0 +1,79 @@
+/**
+ * Signing in end to end: bearer tokens kept in the database, logging out, throttled guesses, and
+ * signed sessions checked against the real clock.
+ */
+
+use ecotest::expect;
+use std::time;
+
+#[group: "integration"]
+test signing_in_with_a_token_and_out_again
+{
+    $world = World();
+    $world->admin();
+
+    ecotest::step('the right password answers a token');
+    string $token = $world->api->post('/v1/auth/token', json: credentials('editor@example.com', World::PASSWORD))
+        ->status(201)
+        ->capture('$.token');
+    expect($token)->starts('blog_');
+    expect($world->db->count('auth_tokens'))->is(2);
+
+    ecotest::step('the token signs in');
+    $signedIn = $world->api->bearer($token);
+    $signedIn->get('/v1/me')
+        ->status(200)
+        ->json('$.data.name', 'The editor')
+        ->json('$.data.email', 'editor@example.com');
+
+    ecotest::step('logging out ends the token');
+    $signedIn->delete('/v1/auth')->status(204);
+    $signedIn->get('/v1/me')->problem(401);
+    expect($world->db->count('auth_tokens'))->is(1);
+}
+
+#[group: "integration"]
+test wrong_guesses_look_alike_and_are_throttled
+{
+    $world = World();
+    $world->admin();
+
+    ecotest::step('a wrong password and an unknown email get the same answer');
+    $world->api->post('/v1/auth/token', json: credentials('editor@example.com', 'a wrong password'))
+        ->problem(401)
+        ->has('the email or the password is wrong');
+    $world->api->post('/v1/auth/token', json: credentials('nobody@example.com', 'a wrong password'))
+        ->problem(401)
+        ->has('the email or the password is wrong');
+    $world->api->post('/v1/auth/token', json: credentials('not an email', 'x'))->invalid('email', 'email');
+
+    ecotest::step('after ten wrong guesses at one account, even the right password waits');
+    // one wrong guess above, nine more here
+    foreach (0 .. 9 as $i) {
+        $world->api->post('/v1/auth/token', json: credentials('editor@example.com', 'guess'))->problem(401);
+    }
+    $waits = $world->api->post('/v1/auth/token', json: credentials('editor@example.com', World::PASSWORD))->problem(429);
+    // fifteen minutes from the first guess, on the real clock
+    expect(str::int($waits->capture(header: 'Retry-After')) ?? 0)->between(840, 900);
+}
+
+#[group: "integration"]
+test a_signed_session_signs_each_request
+{
+    $world = World();
+    $world->admin();
+
+    ecotest::step('the right password opens a session');
+    $opened = $world->api->post('/v1/auth/session', json: credentials('editor@example.com', World::PASSWORD))->status(201);
+    $s = nexus::auth::Signer($opened->capture('$.id'), $opened->capture('$.secret'));
+    int64 $now = time::timestamp::now()->unix_secs();
+
+    ecotest::step('a request signed now is the editor');
+    $world->api->with('Authorization', $s->header('GET', '/v1/me', $now, ''))->get('/v1/me')
+        ->status(200)
+        ->json('$.data.name', 'The editor');
+
+    ecotest::step('the signature fits one path, and only for a while');
+    $world->api->with('Authorization', $s->header('GET', '/v1/me', $now, ''))->get('/v1/me?x=1')->problem(401);
+    $world->api->with('Authorization', $s->header('GET', '/v1/me', $now - 600, ''))->get('/v1/me')->problem(401);
+}

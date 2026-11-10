@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Runs every nexus suite through ecotest: core (with the generator), the
-# modules and the blog example, checks that no generated file is stale,
+# modules and the blog example (whose integration tests run on a MySQL the
+# tool starts in Docker, from examples/blog/ecotest.json), checks that no
+# generated file is stale,
 # then the blog's smoke test over a real socket against MySQL in Docker
 # (SMOKE=0 skips it, IMAGE=mariadb:11 picks another server).
 set -euo pipefail
@@ -16,7 +18,7 @@ status=0
 # vendor/echolang/libjson to the sibling 0.2 checkout, which the tool's
 # ^0.1 require does not build against, and the suites on nexus-testing
 # reach ecotest through path depends, so epm offers them no tool at all.
-for dir in . modules/http modules/testing modules/carbon modules/rest modules/crud modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mcp modules/oauth modules/oauth/carbon modules/app examples/blog; do
+for dir in . modules/http modules/testing modules/carbon modules/carbon/testing modules/rest modules/crud modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mcp modules/oauth modules/oauth/carbon modules/app examples/blog; do
     echo "== ${dir}"
     out="$(mktemp)"
     if (cd "${root}/${dir}" && epm run -m "${root}" ecotest --style simple --timeout 120000 --echoc "${echoc}") >"${out}" 2>&1; then
