@@ -1,0 +1,17 @@
+namespace nexus::connect;
+
+/**
+ * Where attempts and links are kept.
+ */
+public enum Stores : uint8
+{
+    /**
+     * In the process, gone when it stops: tests, single-process apps.
+     */
+    case memory = 1;
+
+    /**
+     * Bound by another extension, such as nexus-connect-carbon.
+     */
+    case provided = 2;
+}

@@ -1,0 +1,139 @@
+namespace nexus::cache::redis;
+
+use nexus::cache::{CacheError, Lifetime};
+
+/**
+ * Entries kept in Redis, each under `prefix` plus its key, with Redis's own expiry. A pool lends
+ * connections to one thread at a time, so one store serves every thread.
+ */
+#[atomic]
+public class RedisStore : nexus::cache::Store
+{
+    /**
+     * What every key starts with, like `cache:`.
+     */
+    public const string $prefix;
+
+    private redis::Pool $pool;
+    private string $at;
+
+    public constructor(redis::Pool $pool, string $prefix, string $at)
+    {
+        $this->pool = $pool;
+        $this->prefix = $prefix;
+        $this->at = $at;
+    }
+
+    public const function describe() : string
+    {
+        return $this->at;
+    }
+
+    public function get(const string& $key) : result<string?, CacheError>
+    {
+        string? $v = guard $this->pool->get("{$this->prefix}{$key}") else ($e) {
+            return .error(failure($e));
+        };
+        return .ok($v);
+    }
+
+    public function put(const string& $key, const string& $value, const Lifetime& $life) : status<CacheError>
+    {
+        string $k = "{$this->prefix}{$key}";
+        std::time::duration? $after = $life->after();
+        if ($after == null) {
+            guard $this->pool->set($k, $value) else ($e) {
+                return .error(failure($e));
+            };
+            return .ok;
+        }
+        std::time::duration $d = guard $after;
+        guard $this->pool->set($k, $value, ttl: $d) else ($e) {
+            return .error(failure($e));
+        };
+        return .ok;
+    }
+
+    public function forget(const string& $key) : status<CacheError>
+    {
+        guard $this->pool->unlink(["{$this->prefix}{$key}"]) else ($e) {
+            return .error(failure($e));
+        };
+        return .ok;
+    }
+
+    /**
+     * Unlinks every key under the prefix, a `SCAN` page at a time. Never `FLUSHDB`: the database
+     * may hold more than the cache.
+     */
+    public function flush() : status<CacheError>
+    {
+        redis::ScanOptions $o = redis::ScanOptions();
+        string $escaped = glob($this->prefix);
+        $o->pattern = "{$escaped}*";
+        $o->count = 500;
+        string $cursor = '0';
+        while (true) {
+            redis::ScanPage $page = guard $this->pool->scan($cursor, $o) else ($e) {
+                return .error(failure($e));
+            };
+            if (!$page->items->empty()) {
+                guard $this->pool->unlink($page->items) else ($e) {
+                    return .error(failure($e));
+                };
+            }
+            if ($page->done()) {
+                break;
+            }
+            $cursor = $page->cursor;
+        }
+        return .ok;
+    }
+}
+
+/**
+ * The cache's error for a Redis one: a server that cannot be reached or answered too late is
+ * `unavailable`, anything else `refused`.
+ */
+internal function failure(const redis::Error& $e) : CacheError
+{
+    return match ($e) {
+        redis::Error::timeout => .unavailable($e->message()),
+        redis::Error::transport($t) => .unavailable($e->message()),
+        redis::Error::closed => .unavailable($e->message()),
+        redis::Error::exhausted => .unavailable($e->message()),
+        else => .refused($e->message()),
+    };
+}
+
+/**
+ * `$text` with every glob character escaped, for a `SCAN MATCH` pattern.
+ */
+internal function glob(const string& $text) : string
+{
+    string $out = '';
+    usize $i = 0;
+    while ($i < $text->size()) {
+        uint8 $c = $text->byte($i);
+        // * ? [ ] and the backslash itself
+        if ($c == 42 || $c == 63 || $c == 91 || $c == 93 || $c == 92) {
+            $out->append("\\");
+        }
+        $out->append($text->sub($i, 1));
+        $i++;
+    }
+    return $out;
+}
+
+/**
+ * Where `$o` points, for logs: `redis://host:port/db` or the socket, never the login.
+ */
+internal function where(const redis::Options& $o) : string
+{
+    string? $socket = $o->socket;
+    if ($socket != null) {
+        string $path = guard $socket;
+        return "unix://{$path}";
+    }
+    return "redis://{$o->host}:{$o->port}/{$o->database}";
+}

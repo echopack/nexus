@@ -1,0 +1,80 @@
+namespace Blog::Services;
+
+use std::time;
+use Blog::DB::Model::{User, UserRepository, UserTable};
+use Blog::Signals::UserRegistered;
+
+/**
+ * Turns who a provider says signed in into one of the blog's users: the one already linked to them,
+ * else the one with the email the provider vouched for (linked now), else a new user without a
+ * password (linked, and welcomed like any sign up).
+ */
+public class Accounts
+{
+    private UserRepository $users;
+    private nexus::connect::LinkStore $links;
+    private nexus::SignalDispatcher $signals;
+
+    public constructor(UserRepository $users, nexus::connect::LinkStore $links, nexus::SignalDispatcher $signals)
+    {
+        $this->users = $users;
+        $this->links = $links;
+        $this->signals = $signals;
+    }
+
+    /**
+     * The user `$who` is, for a request speaking `$locale`. A 403 when the provider vouched for no
+     * email, a 409 when an account has their email but the provider did not verify it.
+     */
+    public function of(const nexus::connect::ExternalIdentity& $who, const string& $locale) : result<User, nexus::Problem>
+    {
+        nexus::connect::Link? $known = try $this->links->find($who->provider, $who->subject);
+        if ($known != null) {
+            nexus::connect::Link $l = guard $known;
+            int64 $id = str::int($l->subject) ?? 0;
+            User? $linked = guard $this->users->find()->get($id) else ($e) {
+                return .error(nexus::carbon::Problems::of($e));
+            };
+            if ($linked != null) {
+                User $u = guard $linked;
+                return .ok($u);
+            }
+            // the user is gone; the link is stale
+            try $this->links->unlink($who->provider, $who->subject);
+        }
+        if ($who->email->empty()) {
+            return .error(.forbidden("{$who->provider} shared no email; allow it and try again"));
+        }
+        User? $same = guard $this->users->find()->where(UserTable::$email == $who->email)->first() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        if ($same != null) {
+            User $u = guard $same;
+            if (!$who->emailVerified) {
+                return .error(.conflict('an account has this email; sign in with its password first'));
+            }
+            try $this->link($who, $u);
+            return .ok($u);
+        }
+        string $name = $who->name;
+        if ($name->empty()) {
+            $name = $who->email->sub(0, $who->email->find('@'))->clone();
+        }
+        User $made = guard $this->users->create(User($email: $who->email, $name: $name)) else ($e) {
+            if ($e->duplicate()) {
+                return .error(.conflict('an account has this email; sign in with its password first'));
+            }
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        try $this->link($who, $made);
+        try $this->signals->send(UserRegistered($user: $made->id, $locale: $locale));
+        return .ok($made);
+    }
+
+    internal function link(const nexus::connect::ExternalIdentity& $who, const User& $u) : status<nexus::Problem>
+    {
+        $l = nexus::connect::Link($provider: $who->provider, $external: $who->subject, $subject: "{$u->id}", $email: $who->email,
+            $createdAt: time::timestamp::now());
+        return $this->links->link($l);
+    }
+}

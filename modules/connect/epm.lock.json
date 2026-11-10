@@ -1,0 +1,41 @@
+{
+  "lockVersion": 2,
+  "packages": [
+    {
+      "name": "echolang/ecotest",
+      "version": "0.3.2",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/ecotest"
+      },
+      "rev": "b46762dac0aae2683deb9f67bfaa29eb5ac9e5f8",
+      "sha256": "9fd311c6c0f7bdfc0f2638c57dfc4e818a5e00391385f6dc3eecb744073ef35a",
+      "requires": [
+        "echolang/libcommand",
+        "echolang/libjson"
+      ]
+    },
+    {
+      "name": "echolang/libjson",
+      "version": "0.1.3",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libjson"
+      },
+      "rev": "b51ff583dac2efb54fcf651652af97f76ba5c9bd",
+      "sha256": "0319758a7bc1dae16929b97070475ae1aee0a1ba262dc6279b5e3f0ec637ff6b",
+      "requires": []
+    },
+    {
+      "name": "echolang/libcommand",
+      "version": "0.1.6",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libcommand"
+      },
+      "rev": "4020d4f35546c78372c06aa01248776bed596758",
+      "sha256": "4bfae8b9b27946520a9baa3cfa4cb4afa1d3cc91067e9593165442b54eb3bee5",
+      "requires": []
+    }
+  ]
+}

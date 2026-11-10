@@ -17,7 +17,6 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::auth::carbon::CarbonTokens>('nexus::auth::carbon::CarbonTokens');
     $g->name<nexus::auth::carbon::CreateAuthTables>('nexus::auth::carbon::CreateAuthTables');
     $g->name<nexus::auth::carbon::Extension>('nexus::auth::carbon::Extension');
-    $g->name<nexus::auth::carbon::PruneCommand>('nexus::auth::carbon::PruneCommand');
     $g->name<nexus::auth::carbon::Tables>('nexus::auth::carbon::Tables');
 }
 

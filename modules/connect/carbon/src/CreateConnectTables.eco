@@ -1,0 +1,45 @@
+namespace nexus::connect::carbon;
+
+/**
+ * `connect_attempts` and `connect_links`. Add it to the app's migrations with
+ * `nexus::connect::carbon::Tables::migrations()`.
+ */
+#[carbon::migration: '20261102000700_create_connect_tables']
+public class CreateConnectTables : carbon::Migration
+{
+    public function up(carbon::Migrating $m) : status<carbon::Error>
+    {
+        try $m->create(carbon::ddl::Table('connect_attempts')
+            ->string('id', 32)
+            ->string('provider', 64)
+            ->string('state_hash', 64)
+            ->string('binding_hash', 64)
+            ->string('nonce', 64)
+            ->string('verifier', 128)
+            ->datetime('expires_at')
+            ->string('error', 64)
+            ->string('external_subject', 255)
+            ->string('external_email', 255)
+            ->bool('external_email_verified')
+            ->string('external_name', 255)
+            ->text('external_claims')
+            ->index(['state_hash'])
+            ->index(['expires_at'])
+            ->primary(['id']));
+        return $m->create(carbon::ddl::Table('connect_links')
+            ->string('id', 320)
+            ->string('provider', 64)
+            ->string('external', 255)
+            ->string('subject', 190)
+            ->string('email', 255)
+            ->datetime('created_at')
+            ->index(['subject'])
+            ->primary(['id']));
+    }
+
+    public function down(carbon::Migrating $m) : status<carbon::Error>
+    {
+        try $m->drop('connect_links');
+        return $m->drop('connect_attempts');
+    }
+}

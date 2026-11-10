@@ -1,0 +1,150 @@
+namespace nexus::connect;
+
+use std::thread;
+use std::time;
+
+/**
+ * Any OpenID Connect provider, with the authorization code flow, PKCE (S256), a nonce and the
+ * client secret at the token endpoint. Without endpoints given, they are read once from the
+ * issuer's discovery document (`/.well-known/openid-configuration`) and kept.
+ *
+ * ```echo
+ * nexus::connect::Oidc('acme', issuer: 'https://login.acme.example', client: '...', secret: '...'),
+ * ```
+ */
+#[atomic]
+public class Oidc : Connector
+{
+    public const string $named;
+    public const string $issuer;
+    public string $client;
+    public string $secret;
+    public array<string> $scopes;
+
+    /**
+     * The values a token's `iss` may have: the issuer, and any other spelling the provider uses.
+     */
+    public array<string> $issuers;
+    private thread::mutex<Endpoints?> $endpoints;
+
+    public constructor(
+        const string& $name,
+        issuer: const string& $issuer,
+        client: const string& $client,
+        secret: const string& $secret,
+        scopes: array<string> $scopes = ['openid', 'email', 'profile'],
+        authorize: const string& $authorize = '',
+        token: const string& $token = ''
+    )
+    {
+        $this->named = $name;
+        $this->issuer = $issuer;
+        $this->client = $client;
+        $this->secret = $secret;
+        $this->scopes = mv $scopes;
+        $this->issuers = [$issuer];
+        Endpoints? $known = null;
+        if (!$authorize->empty() && !$token->empty()) {
+            $known = Endpoints($authorize, $token);
+        }
+        $this->endpoints = thread::mutex<Endpoints?>($known);
+    }
+
+    public function name() : string
+    {
+        return $this->named;
+    }
+
+    public function configure(nexus::Services& $s) : result<bool, nexus::BootError>
+    {
+        if ($this->client->empty() || $this->secret->empty()) {
+            return .error(.extension('nexus-connect', "{$this->named}: give the client id and secret"));
+        }
+        return .ok(true);
+    }
+
+    public function authorizeUrl(const Attempt& $a, const string& $state, const string& $challenge, const string& $redirect, Fetch $fetch) : result<string, nexus::Problem>
+    {
+        Endpoints $at = try $this->endpoints($fetch);
+        nexus::Url $url = guard nexus::Url::parse($at->authorize) else ($e) {
+            return .error(.server("{$this->named}: the authorization endpoint is no URL: {$e->message()}"));
+        };
+        $url->query->add('response_type', 'code');
+        $url->query->add('client_id', $this->client);
+        $url->query->add('redirect_uri', $redirect);
+        $url->query->add('scope', str::join($this->scopes, ' '));
+        $url->query->add('state', $state);
+        $url->query->add('nonce', $a->nonce);
+        $url->query->add('code_challenge', $challenge);
+        $url->query->add('code_challenge_method', 'S256');
+        return .ok($url->text());
+    }
+
+    public function exchange(const string& $code, const Attempt& $a, const string& $redirect, Fetch $fetch, time::timestamp $now) : result<ExternalIdentity, nexus::Problem>
+    {
+        Endpoints $at = try $this->endpoints($fetch);
+        $form = nexus::Query();
+        $form->add('grant_type', 'authorization_code');
+        $form->add('code', $code);
+        $form->add('redirect_uri', $redirect);
+        $form->add('client_id', $this->client);
+        $form->add('client_secret', $this->secret);
+        $form->add('code_verifier', $a->verifier);
+        Fetched $answer = try $fetch->post($at->token, $form);
+        json::Value $doc = try $answer->json("{$this->named}'s token endpoint");
+        if ($answer->status != 200) {
+            string $error = IdToken::text($doc, 'error');
+            return .error(.unauthorized("{$this->named} refused the code: {$error}"));
+        }
+        string $raw = IdToken::text($doc, 'id_token');
+        if ($raw->empty()) {
+            return .error(.unavailable("{$this->named} sent no ID token; ask for the openid scope"));
+        }
+        json::Value $claims = try IdToken::check($raw, $this->issuers, $this->client, $a->nonce, $now);
+        return .ok(IdToken::identity($this->named, $claims));
+    }
+
+    /**
+     * The endpoints, read from the discovery document the first time they are needed. The lock is
+     * not held while it is read, so a slow provider holds up its own sign ins only; two at once may
+     * both read it.
+     */
+    internal function endpoints(Fetch $fetch) : result<Endpoints, nexus::Problem>
+    {
+        Endpoints? $cached = $this->known();
+        if ($cached != null) {
+            Endpoints $known = guard $cached;
+            return .ok($known);
+        }
+        string $base = $this->issuer;
+        while ($base->ends('/')) {
+            $base = $base->sub(0, $base->size() - 1)->clone();
+        }
+        Fetched $answer = try $fetch->get("{$base}/.well-known/openid-configuration");
+        if ($answer->status != 200) {
+            return .error(.unavailable("{$this->named}'s discovery document answered {$answer->status}"));
+        }
+        json::Value $doc = try $answer->json("{$this->named}'s discovery document");
+        if (IdToken::text($doc, 'issuer') != $this->issuer) {
+            return .error(.unavailable("{$this->named}'s discovery document names another issuer"));
+        }
+        $found = Endpoints(IdToken::text($doc, 'authorization_endpoint'), IdToken::text($doc, 'token_endpoint'));
+        if ($found->authorize->empty() || $found->token->empty()) {
+            return .error(.unavailable("{$this->named}'s discovery document names no authorization or token endpoint"));
+        }
+        $this->keep($found);
+        return .ok($found);
+    }
+
+    internal function known() : Endpoints?
+    {
+        thread::locked<Endpoints?> $held = $this->endpoints->lock();
+        return $held->value;
+    }
+
+    internal function keep(const Endpoints& $found) : void
+    {
+        thread::locked<Endpoints?> $held = $this->endpoints->lock();
+        $held->value = $found;
+    }
+}

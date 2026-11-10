@@ -1,0 +1,148 @@
+namespace nexus::cache;
+
+use std::thread;
+use std::time;
+
+internal struct Kept
+{
+    internal string $value;
+    // null: kept forever
+    internal time::timestamp? $expiresAt;
+}
+
+/**
+ * Entries kept in the process: `NEXUS_CACHE_URL=memory:`, the default. They are gone when it
+ * stops. An expired entry is dropped when it is next read; past `max` entries, the expired ones go,
+ * then the one that expires soonest.
+ */
+#[atomic]
+public class MemoryStore : Store
+{
+    private thread::mutex<map<string, Kept>> $entries;
+    private calendar::Clock $clock;
+    public const usize $max;
+
+    public constructor(max: usize $max = 100000, clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->entries = thread::mutex<map<string, Kept>>(map<string, Kept>());
+        $this->clock = $clock;
+        $this->max = $max;
+    }
+
+    public const function describe() : string
+    {
+        return 'memory:';
+    }
+
+    public function get(const string& $key) : result<string?, CacheError>
+    {
+        thread::locked<map<string, Kept>> $held = $this->entries->lock();
+        if (!$held->value->has($key)) {
+            return .ok(null);
+        }
+        Kept $k = $held->value->get($key);
+        if (MemoryStore::expired($k, $this->clock->now())) {
+            $held->value->remove($key);
+            return .ok(null);
+        }
+        return .ok($k->value);
+    }
+
+    public function put(const string& $key, const string& $value, const Lifetime& $life) : status<CacheError>
+    {
+        time::timestamp $now = $this->clock->now();
+        time::timestamp? $at = null;
+        time::duration? $after = $life->after();
+        if ($after != null) {
+            time::duration $d = guard $after;
+            $at = $now + $d;
+        }
+        thread::locked<map<string, Kept>> $held = $this->entries->lock();
+        $held->value[$key] = Kept($value, $at);
+        if ($held->value->count() > $this->max) {
+            MemoryStore::makeRoom($held->value, $key, $now, $this->max);
+        }
+        return .ok;
+    }
+
+    public function forget(const string& $key) : status<CacheError>
+    {
+        thread::locked<map<string, Kept>> $held = $this->entries->lock();
+        $held->value->remove($key);
+        return .ok;
+    }
+
+    public function flush() : status<CacheError>
+    {
+        thread::locked<map<string, Kept>> $held = $this->entries->lock();
+        $held->value = map<string, Kept>();
+        return .ok;
+    }
+
+    /**
+     * How many entries are kept, expired ones not yet dropped included.
+     */
+    public const function count() : usize
+    {
+        thread::locked<map<string, Kept>> $held = $this->entries->lock();
+        return $held->value->count();
+    }
+
+    private static function expired(const Kept& $k, time::timestamp $now) : bool
+    {
+        time::timestamp? $at = $k->expiresAt;
+        if ($at == null) {
+            return false;
+        }
+        time::timestamp $t = guard $at;
+        return $t <= $now;
+    }
+
+    /**
+     * Drops the expired entries, then, while there are still more than `$max`, the one that expires
+     * soonest (forever ones last), never `$written`. A scan of every entry, but only when full.
+     */
+    private static function makeRoom(map<string, Kept>& $all, const string& $written, time::timestamp $now, usize $max) : void
+    {
+        array<string> $gone = [];
+        foreach ($all as $key => const &$k) {
+            if (MemoryStore::expired($k, $now)) {
+                $gone[] = $key;
+            }
+        }
+        foreach ($gone as const &$key) {
+            $all->remove($key);
+        }
+        while ($all->count() > $max) {
+            string? $victim = null;
+            time::timestamp? $victimAt = null;
+            foreach ($all as $key => const &$k) {
+                if ($key == $written) {
+                    continue;
+                }
+                if ($victim == null || MemoryStore::sooner($k->expiresAt, $victimAt)) {
+                    $victim = $key;
+                    $victimAt = $k->expiresAt;
+                }
+            }
+            string $v = guard $victim else {
+                return;
+            };
+            $all->remove($v);
+        }
+    }
+
+    // whether expiring at $a comes before $b, null being never
+    private static function sooner(time::timestamp? $a, time::timestamp? $b) : bool
+    {
+        if ($a == null) {
+            return false;
+        }
+        time::timestamp $x = guard $a;
+        if ($b == null) {
+            return true;
+        }
+        time::timestamp $y = guard $b;
+        return $x < $y;
+    }
+}

@@ -1,0 +1,37 @@
+/*
+ * nexus-connect-carbon: nexus-connect's sign in attempts and links in the
+ * app's carbon database.
+ *
+ * Two tables, `connect_attempts` and `connect_links`, in one migration the
+ * app adds to its own. An attempt is claimed with a delete that only one
+ * caller wins.
+ */
+
+#[module: "nexus-connect-carbon"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "nexus-connect sign in attempts and links in a carbon database"]
+
+#[depends: "../../.."]
+#[depends: ".."]
+#[depends: "../../auth"]
+#[depends: "../../carbon"]
+#[depends: "../../../../carbon"]
+#[depends: "../../../../container"]
+#[depends: "../../../../libjson"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+#[if: !CARBON_NOGEN]
+#[sources: ".carbon/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../../../carbon/fake"]
+    #[depends: "../../testing"]
+    #[sources: "tests/*.eco"]
+}

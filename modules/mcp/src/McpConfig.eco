@@ -1,9 +1,8 @@
 namespace nexus::mcp;
 
 /**
- * How the MCP server introduces itself, and where its OAuth metadata link points. Only `origin` is
- * read from the environment, `NEXUS_MCP_ORIGIN`; the app says the rest where it lists the
- * extension: `nexus::mcp::Extension(name: 'blog', instructions: '...')`.
+ * How the MCP server introduces itself. The app says it where it lists the extension:
+ * `nexus::mcp::Extension(name: 'blog', instructions: '...')`.
  */
 #[nexus::config: 'NEXUS_MCP']
 public struct McpConfig
@@ -16,11 +15,4 @@ public struct McpConfig
      * For the model: what the app is, which tool to start with.
      */
     public string $instructions = '';
-
-    /**
-     * The public origin the OAuth metadata link in a 401 points at; empty takes it from the
-     * request.
-     */
-    #[nexus::env: 'ORIGIN']
-    public string $origin = '';
 }

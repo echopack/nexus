@@ -1,0 +1,48 @@
+namespace nexus::oauth::carbon;
+
+use std::time;
+
+/**
+ * A row of `oauth_requests`: an authorization request kept for the consent page.
+ */
+#[carbon::model: 'oauth_requests']
+public class RequestRow : carbon::Model<RequestRow, RequestRowRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $id;
+
+    public string $client;
+    public string $redirect;
+    public bool $named;
+    public string $state;
+    public string $challenge;
+    public string $scope;
+    public string $resource;
+    public time::timestamp $expiresAt;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    /**
+     * The row that keeps `$r`. A static, since carbon builds a model with its implicit constructor
+     * and refuses one written out.
+     */
+    public static function of(const nexus::oauth::AuthRequest& $r) : RequestRow
+    {
+        return RequestRow($id: $r->id, $client: $r->client, $redirect: $r->redirect, $named: $r->named, $state: $r->state,
+            $challenge: $r->challenge, $scope: $r->scope, $resource: $r->resource, $expiresAt: $r->expiresAt);
+    }
+
+    /**
+     * The request this row keeps.
+     */
+    public const function request() : nexus::oauth::AuthRequest
+    {
+        return nexus::oauth::AuthRequest($id: $this->id, $client: $this->client, $redirect: $this->redirect, $named: $this->named,
+            $state: $this->state, $challenge: $this->challenge, $scope: $this->scope, $resource: $this->resource, $expiresAt: $this->expiresAt);
+    }
+}

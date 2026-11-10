@@ -44,6 +44,13 @@ public class CarbonTokens : nexus::auth::TokenStore
         return .ok;
     }
 
+    public function prune(std::time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        AuthTokenRepository $repo = try $this->repo();
+        uint64 $gone = try $repo->find()->where(AuthTokenTable::$expiresAt < $now)->purge();
+        return .ok($gone);
+    }
+
     internal function repo() : result<AuthTokenRepository, nexus::Problem>
     {
         AuthTokenRepository $repo = try $this->session->repo<AuthTokenRepository>();

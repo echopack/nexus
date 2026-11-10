@@ -1,0 +1,10 @@
+namespace nexus::oauth;
+
+/**
+ * The consent page's answer to a request: whether the user allows it.
+ */
+#[nexus::input]
+public struct Decision
+{
+    public bool $allow = false;
+}

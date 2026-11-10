@@ -1,0 +1,24 @@
+namespace nexus::connect;
+
+/**
+ * What a provider answered: the status and the body.
+ */
+public struct Fetched
+{
+    public int32 $status;
+    public string $body;
+
+    /**
+     * The body as JSON, a problem naming `$what` when it is not a JSON object.
+     */
+    public const function json(const string& $what) : result<json::Value, nexus::Problem>
+    {
+        json::Value $doc = guard json::parse($this->body) else {
+            return .error(.unavailable("{$what} answered with something that is not JSON"));
+        };
+        if (!$doc->isObject()) {
+            return .error(.unavailable("{$what} answered with JSON that is not an object"));
+        }
+        return .ok($doc);
+    }
+}

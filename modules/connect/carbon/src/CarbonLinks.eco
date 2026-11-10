@@ -1,0 +1,60 @@
+namespace nexus::connect::carbon;
+
+/**
+ * Links in `connect_links`, through a request's carbon session.
+ */
+public class CarbonLinks : nexus::connect::LinkStore
+{
+    internal carbon::Session $session;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->session = $session;
+    }
+
+    public function find(const string& $provider, const string& $external) : result<nexus::connect::Link?, nexus::Problem>
+    {
+        LinkRowRepository $repo = try $this->repo();
+        LinkRow? $found = try $repo->find()->get(nexus::connect::Link::key($provider, $external));
+        if ($found == null) {
+            return .ok(null);
+        }
+        LinkRow $row = guard $found;
+        return .ok($row->kept());
+    }
+
+    public function link(const nexus::connect::Link& $l) : status<nexus::Problem>
+    {
+        LinkRowRepository $repo = try $this->repo();
+        LinkRow? $there = try $repo->find()->get(nexus::connect::Link::key($l->provider, $l->external));
+        if ($there != null) {
+            return .error(.conflict('this identity is linked to an account already'));
+        }
+        try $repo->create(.of($l));
+        return .ok;
+    }
+
+    public function unlink(const string& $provider, const string& $external) : status<nexus::Problem>
+    {
+        LinkRowRepository $repo = try $this->repo();
+        try $repo->find()->where(LinkRowTable::$id == nexus::connect::Link::key($provider, $external))->purge();
+        return .ok;
+    }
+
+    public function of(const string& $subject) : result<array<nexus::connect::Link>, nexus::Problem>
+    {
+        LinkRowRepository $repo = try $this->repo();
+        array<LinkRow> $rows = try $repo->find()->where(LinkRowTable::$subject == $subject)->order(asc: LinkRowTable::$createdAt)->get();
+        array<nexus::connect::Link> $out = [];
+        foreach ($rows as const &$row) {
+            $out[] = $row->kept();
+        }
+        return .ok($out);
+    }
+
+    internal function repo() : result<LinkRowRepository, nexus::Problem>
+    {
+        LinkRowRepository $repo = try $this->session->repo<LinkRowRepository>();
+        return .ok($repo);
+    }
+}

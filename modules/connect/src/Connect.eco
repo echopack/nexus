@@ -1,0 +1,162 @@
+namespace nexus::connect;
+
+use std::time;
+
+/**
+ * Signing in with an outside provider, per request on the attempt store. The start and the
+ * callback are nexus-connect's routes; the claim is the app's, in the action its page posts to:
+ *
+ * ```echo
+ * nexus::connect::ExternalIdentity $ext = try $this->connect->claim($in->value->attempt, $in->value->binding);
+ * nexus::connect::Link? $known = try $this->links->find($ext->provider, $ext->subject);
+ * // the linked user, or the one with this verified email, or a new one; then a token
+ * ```
+ */
+public class Connect
+{
+    public AttemptStore $attempts;
+    public Connectors $connectors;
+    public Fetch $fetch;
+    public calendar::Clock $clock;
+
+    /**
+     * The app's page the browser comes back to, relative to the origin or absolute.
+     */
+    public const nexus::Url $page;
+
+    public constructor(AttemptStore $attempts, Connectors $connectors, Fetch $fetch, calendar::Clock $clock, const nexus::Url& $page)
+    {
+        $this->attempts = $attempts;
+        $this->connectors = $connectors;
+        $this->fetch = $fetch;
+        $this->clock = $clock;
+        $this->page = $page;
+    }
+
+    /**
+     * Starts a sign in with `$provider`: a 404 for a provider the app does not have.
+     */
+    public function start(nexus::Payload& $payload, const string& $provider) : result<Started, nexus::Problem>
+    {
+        Connector $c = guard $this->connectors->find($provider) else {
+            return .error(.notFound("sign in with {$provider}"));
+        };
+        string $state = nexus::auth::Secrets::hex(32);
+        string $binding = nexus::auth::Secrets::hex(32);
+        string $verifier = nexus::auth::Secrets::hex(32);
+        time::timestamp $until = $this->clock->now() + time::duration::mins(10);
+        $a = Attempt($id: nexus::auth::Secrets::hex(16), $provider: $provider, $stateHash: nexus::auth::Secrets::hash($state),
+            $bindingHash: nexus::auth::Secrets::hash($binding), $nonce: nexus::auth::Secrets::hex(16), $verifier: $verifier, $expiresAt: $until);
+        string $challenge = crypto::base64url(crypto::sha256($verifier));
+        string $url = try $c->authorizeUrl($a, $state, $challenge, Connect::callback($payload, $provider), $this->fetch);
+        try $this->attempts->start($a);
+        return .ok(Started($url, $a->id, $binding, $until));
+    }
+
+    /**
+     * The provider sent the browser back with `$params` (the query, or the form of a `form_post`).
+     * The code is traded and what came of it kept on the attempt; the browser goes on to the app's
+     * page with `?attempt=<id>`, and `&error=` when it did not work out.
+     */
+    public function finish(nexus::Payload& $payload, const string& $provider, const nexus::Query& $params) : nexus::Response
+    {
+        string $state = $params->get('state') ?? '';
+        Attempt? $found = guard $this->attempts->byState(nexus::auth::Secrets::hash($state)) else ($p) {
+            return $payload->fail($p);
+        };
+        Attempt $a = guard $found else {
+            return $this->back($payload, '', 'expired');
+        };
+        if ($a->provider != $provider || $a->settled() || $a->expiresAt < $this->clock->now()) {
+            return $this->back($payload, '', 'expired');
+        }
+        Connector $c = guard $this->connectors->find($provider) else {
+            return $this->back($payload, '', 'expired');
+        };
+        string $refused = $params->get('error') ?? '';
+        string $code = $params->get('code') ?? '';
+        if (!$refused->empty() || $code->empty()) {
+            $a->error = 'access_denied';
+            if ($refused->empty()) {
+                $a->error = 'failed';
+            }
+            return $this->settle($payload, $a);
+        }
+        ExternalIdentity $who = guard $c->exchange($code, $a, Connect::callback($payload, $provider), $this->fetch, $this->clock->now()) else ($p) {
+            $payload->log->warn('sign in failed', ['provider' => $provider, 'detail' => $p->detail(.dev)]);
+            $a->error = 'failed';
+            return $this->settle($payload, $a);
+        };
+        $a->identity = $who;
+        return $this->settle($payload, $a);
+    }
+
+    /**
+     * Who signed in with attempt `$id`, once, for the browser that holds its `$binding`: a 401
+     * when the binding is wrong or the sign in failed, a 409 while the provider has not sent the
+     * browser back, a 404 for an attempt that is gone or expired.
+     */
+    public function claim(const string& $id, const string& $binding) : result<ExternalIdentity, nexus::Problem>
+    {
+        Attempt? $found = try $this->attempts->find($id);
+        Attempt $a = guard $found else {
+            return .error(Connect::gone());
+        };
+        if ($a->expiresAt < $this->clock->now()) {
+            return .error(Connect::gone());
+        }
+        if (!crypto::equal(nexus::auth::Secrets::hash($binding), $a->bindingHash)) {
+            return .error(.unauthorized('this sign in was started somewhere else'));
+        }
+        if (!$a->settled()) {
+            return .error(.conflict('the provider has not sent the browser back yet'));
+        }
+        bool $mine = try $this->attempts->spend($id);
+        if (!$mine) {
+            return .error(Connect::gone());
+        }
+        ExternalIdentity $who = guard $a->identity else {
+            return .error(.unauthorized("the sign in did not work out: {$a->error}"));
+        };
+        return .ok($who);
+    }
+
+    /**
+     * Where `$provider` sends the browser back to: `<origin>/auth/connect/<provider>/callback`,
+     * the redirect to register with the provider.
+     */
+    public static function callback(nexus::Payload& $payload, const string& $provider) : string
+    {
+        return "{$payload->origin()}/auth/connect/{$provider}/callback";
+    }
+
+    internal static function gone() : nexus::Problem
+    {
+        return .notFound('the sign in (it is claimed once, within ten minutes; start again)');
+    }
+
+    internal function settle(nexus::Payload& $payload, const Attempt& $a) : nexus::Response
+    {
+        guard $this->attempts->settle($a) else ($p) {
+            return $payload->fail($p);
+        };
+        return $this->back($payload, $a->id, $a->error);
+    }
+
+    /**
+     * The browser on its way to the app's page, with the attempt and the error when there is one.
+     */
+    internal function back(nexus::Payload& $payload, const string& $attempt, const string& $error) : nexus::Response
+    {
+        nexus::Url $page = guard $payload->absolute($this->page) else {
+            return $payload->fail(.badRequest('the Host header names no host'));
+        };
+        if (!$attempt->empty()) {
+            $page->query->add('attempt', $attempt);
+        }
+        if (!$error->empty()) {
+            $page->query->add('error', $error);
+        }
+        return nexus::Response(redirect: $page);
+    }
+}

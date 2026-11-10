@@ -1,0 +1,40 @@
+/*
+ * nexus-cache: a small key/value cache for nexus apps, kept in the process
+ * or in Redis.
+ *
+ * Keys and values are strings; every entry has a `Lifetime`, `.forever` or
+ * `.expires(...)`. The `get` with a callback is the one most code wants: the
+ * cached value, or what the callback makes, kept for next time.
+ *
+ *   $cache = $payload->get<nexus::cache::Cache>();
+ *   string $json = $cache->get('posts:recent', .expires(.mins(5)), () => recent($repo));
+ *
+ * A cache that fails never fails the request: a read that fails is a miss,
+ * a write that fails is a warning in the log.
+ *
+ * `NEXUS_CACHE_URL` picks where entries are kept: `memory:` (the default:
+ * in the process, gone when it stops) or `redis://user:pass@host:6379/db`,
+ * which nexus-cache-redis (`modules/cache/redis`) serves.
+ */
+
+#[module: "nexus-cache"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "A key/value cache with lifetimes for nexus apps, in memory or in Redis"]
+
+#[depends: "../.."]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+}

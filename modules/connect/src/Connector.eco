@@ -1,0 +1,34 @@
+namespace nexus::connect;
+
+use std::time;
+
+/**
+ * One outside provider people sign in with. `Oidc` speaks to any OpenID Connect provider;
+ * `Google` is one with Google's addresses and settings. Connectors are shared by every worker
+ * thread: `#[atomic]`, no per-request state in fields.
+ */
+public interface Connector
+{
+    /**
+     * The provider's name in URLs and links, lowercase: `google`.
+     */
+    function name() : string;
+
+    /**
+     * Reads the connector's settings at boot, from the extension's `services`. False when it is
+     * not configured (no client id), so the app runs without it; a setting that is wrong stops the
+     * boot.
+     */
+    function configure(nexus::Services& $s) : result<bool, nexus::BootError>;
+
+    /**
+     * Where the browser goes to sign in for attempt `$a`, with its plain `$state` and PKCE
+     * `$challenge`, coming back to `$redirect`.
+     */
+    function authorizeUrl(const Attempt& $a, const string& $state, const string& $challenge, const string& $redirect, Fetch $fetch) : result<string, nexus::Problem>;
+
+    /**
+     * Trades `$code` from the callback for who signed in, checked against attempt `$a`.
+     */
+    function exchange(const string& $code, const Attempt& $a, const string& $redirect, Fetch $fetch, time::timestamp $now) : result<ExternalIdentity, nexus::Problem>;
+}

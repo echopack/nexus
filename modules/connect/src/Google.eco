@@ -1,0 +1,55 @@
+namespace nexus::connect;
+
+use std::time;
+
+/**
+ * Sign in with Google, configured from `NEXUS_CONNECT_GOOGLE_CLIENT_ID` and
+ * `NEXUS_CONNECT_GOOGLE_CLIENT_SECRET` (`GoogleConfig`): OpenID Connect with Google's endpoints and
+ * `openid email profile`. Left out when no client id is set, so an app runs without it in
+ * development.
+ */
+#[atomic]
+public class Google : Connector
+{
+    public const string ISSUER = 'https://accounts.google.com';
+    public const string AUTHORIZE = 'https://accounts.google.com/o/oauth2/v2/auth';
+    public const string TOKEN = 'https://oauth2.googleapis.com/token';
+
+    public Oidc $oidc;
+
+    public constructor()
+    {
+        $this->oidc = Oidc('google', issuer: Google::ISSUER, client: '', secret: '', authorize: Google::AUTHORIZE, token: Google::TOKEN);
+        // google's tokens name the issuer with and without the scheme
+        $this->oidc->issuers = [Google::ISSUER, 'accounts.google.com'];
+    }
+
+    public function name() : string
+    {
+        return 'google';
+    }
+
+    public function configure(nexus::Services& $s) : result<bool, nexus::BootError>
+    {
+        GoogleConfig $config = $s->get<GoogleConfig>();
+        if ($config->clientId->empty()) {
+            return .ok(false);
+        }
+        if ($config->clientSecret->empty()) {
+            return .error(.config([nexus::ConfigError::invalid('NEXUS_CONNECT_GOOGLE_CLIENT_SECRET', 'set it next to NEXUS_CONNECT_GOOGLE_CLIENT_ID')]));
+        }
+        $this->oidc->client = $config->clientId;
+        $this->oidc->secret = $config->clientSecret;
+        return .ok(true);
+    }
+
+    public function authorizeUrl(const Attempt& $a, const string& $state, const string& $challenge, const string& $redirect, Fetch $fetch) : result<string, nexus::Problem>
+    {
+        return $this->oidc->authorizeUrl($a, $state, $challenge, $redirect, $fetch);
+    }
+
+    public function exchange(const string& $code, const Attempt& $a, const string& $redirect, Fetch $fetch, time::timestamp $now) : result<ExternalIdentity, nexus::Problem>
+    {
+        return $this->oidc->exchange($code, $a, $redirect, $fetch, $now);
+    }
+}

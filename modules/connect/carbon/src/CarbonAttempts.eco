@@ -1,0 +1,83 @@
+namespace nexus::connect::carbon;
+
+use std::time;
+
+/**
+ * Sign in attempts in `connect_attempts`, through a request's carbon session.
+ */
+public class CarbonAttempts : nexus::connect::AttemptStore
+{
+    internal carbon::Session $session;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->session = $session;
+    }
+
+    public function start(const nexus::connect::Attempt& $a) : status<nexus::Problem>
+    {
+        AttemptRowRepository $repo = try $this->repo();
+        try $repo->create(.of($a));
+        return .ok;
+    }
+
+    public function find(const string& $id) : result<nexus::connect::Attempt?, nexus::Problem>
+    {
+        AttemptRowRepository $repo = try $this->repo();
+        AttemptRow? $found = try $repo->find()->get($id);
+        if ($found == null) {
+            return .ok(null);
+        }
+        AttemptRow $row = guard $found;
+        return .ok($row->attempt());
+    }
+
+    public function byState(const string& $hash) : result<nexus::connect::Attempt?, nexus::Problem>
+    {
+        AttemptRowRepository $repo = try $this->repo();
+        AttemptRow? $found = try $repo->find()->where(AttemptRowTable::$stateHash == $hash)->first();
+        if ($found == null) {
+            return .ok(null);
+        }
+        AttemptRow $row = guard $found;
+        return .ok($row->attempt());
+    }
+
+    public function settle(const nexus::connect::Attempt& $a) : status<nexus::Problem>
+    {
+        AttemptRowRepository $repo = try $this->repo();
+        AttemptRow $row = .of($a);
+        $set = hydrahon::Values();
+        $set[AttemptRowTable::$error] = $row->error;
+        $set[AttemptRowTable::$externalSubject] = $row->externalSubject;
+        $set[AttemptRowTable::$externalEmail] = $row->externalEmail;
+        $set[AttemptRowTable::$externalEmailVerified] = $row->externalEmailVerified;
+        $set[AttemptRowTable::$externalName] = $row->externalName;
+        $set[AttemptRowTable::$externalClaims] = $row->externalClaims;
+        try $repo->find()->where(AttemptRowTable::$id == $a->id)->update($set);
+        return .ok;
+    }
+
+    /**
+     * Deletes the attempt; only the caller whose delete removed the row spent it.
+     */
+    public function spend(const string& $id) : result<bool, nexus::Problem>
+    {
+        AttemptRowRepository $repo = try $this->repo();
+        uint64 $gone = try $repo->find()->where(AttemptRowTable::$id == $id)->purge();
+        return .ok($gone == 1);
+    }
+
+    public function prune(time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        AttemptRowRepository $repo = try $this->repo();
+        uint64 $gone = try $repo->find()->where(AttemptRowTable::$expiresAt < $now)->purge();
+        return .ok($gone);
+    }
+
+    internal function repo() : result<AttemptRowRepository, nexus::Problem>
+    {
+        AttemptRowRepository $repo = try $this->session->repo<AttemptRowRepository>();
+        return .ok($repo);
+    }
+}

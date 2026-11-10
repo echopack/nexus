@@ -1,8 +1,9 @@
 /**
- * nexus-oauth end to end in process: registration, the authorize hop to the consent page, approval
- * by a signed in user, the code traded with PKCE, the access token on the MCP endpoint (and nowhere
- * else), refresh rotation with reuse detection, revocation and the grants list, on memory stores
- * and a clock the tests move.
+ * nexus-oauth end to end in process: registration, the authorize hop to the consent page with a
+ * kept request, its answer by a signed in user, the code traded with PKCE, the access token on its
+ * resource (and nowhere else), resources and scopes, clients registered in code, refresh rotation
+ * with reuse detection, revocation, the grants list and pruning, on memory stores and a clock the
+ * tests move.
  *
  * Requests reach the app as host `app`, so the issuer is `http://app`.
  */
@@ -44,6 +45,24 @@ internal struct TWhoMcp
     }
 }
 
+/**
+ * Declares resource `api` at `/v1` with scopes `posts:read` and `posts:write`.
+ */
+internal class TApi : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'test-api';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        array<string> $scopes = ['posts:read', 'posts:write'];
+        $s->get<nexus::auth::Resources>()->add($s, nexus::auth::Resource('api', '/v1', $scopes, 'Blog API'));
+        return .ok;
+    }
+}
+
 internal class Rig
 {
     public TestApp $app;
@@ -59,6 +78,26 @@ internal class Rig
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
         $this->app = TestApp(Rig::extensions($this->clock, '/consent'), Rig::vars());
+        $this->user = Rig::signIn($this->app);
+        $this->signedIn = $this->app->api()->bearer($this->user);
+    }
+
+    /**
+     * A rig with the API resource next to MCP, and the app's own client `blog-cli`.
+     */
+    public constructor(api: bool $api)
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        array<ToolSpec> $tools = [TWhoMcp::spec()];
+        array<string> $redirects = ['http://127.0.0.1/cli'];
+        array<nexus::oauth::Client> $own = [nexus::oauth::Client($id: 'blog-cli', $name: 'Blog CLI', $redirects: $redirects)];
+        array<nexus::Extension> $exts = [
+            nexus::auth::Extension('test', clock: $this->clock, cost: crypto::PasswordCost(8, 1)),
+            nexus::oauth::Extension(clock: $this->clock, consent: '/consent', clients: $own),
+            nexus::mcp::Extension(tools: $tools, name: 'Tests'),
+            TApi(),
+        ];
+        $this->app = TestApp($exts, Rig::vars());
         $this->user = Rig::signIn($this->app);
         $this->signedIn = $this->app->api()->bearer($this->user);
     }
@@ -85,8 +124,8 @@ internal class Rig
         array<ToolSpec> $tools = [TWhoMcp::spec()];
         array<nexus::Extension> $exts = [
             nexus::auth::Extension('test', clock: $clock, cost: crypto::PasswordCost(8, 1)),
-            nexus::oauth::Extension(clock: $clock, consent: $consent, name: 'Tests'),
-            nexus::mcp::Extension(tools: $tools),
+            nexus::oauth::Extension(clock: $clock, consent: $consent),
+            nexus::mcp::Extension(tools: $tools, name: 'Tests'),
         ];
         return $exts;
     }
@@ -118,14 +157,57 @@ internal class Rig
     }
 
     /**
-     * The consent page's answer for user 7, and where it sends the browser.
+     * Sends `$query` to `/oauth/authorize`: the id of the request it kept for the consent page.
+     */
+    public function ask(const string& $query) : string
+    {
+        string $consent = $this->app->api()->get("/oauth/authorize?{$query}")
+            ->status(302)
+            ->capture(header: 'Location');
+        return Rig::param($consent, 'request');
+    }
+
+    /**
+     * The consent page's answer for user 7 to request `$id`, and where it sends the browser.
+     */
+    public function answer(const string& $id, bool $allow) : string
+    {
+        json::Value $o = json::object();
+        $o['allow'] = json::bool($allow);
+        return $this->signedIn->post("/oauth/requests/{$id}", json: $o)->status(200)->capture('$.redirect');
+    }
+
+    /**
+     * Asks with `$query` and answers: where the browser goes back to.
      */
     public function approve(const string& $query, bool $allow) : string
     {
-        json::Value $o = json::object();
-        $o['query'] = json::str($query);
-        $o['allow'] = json::bool($allow);
-        return $this->signedIn->post('/oauth/approve', json: $o)->status(200)->capture('$.redirect');
+        return $this->answer($this->ask($query), $allow);
+    }
+
+    /**
+     * A payload for a request to `$path` with bearer token `$token`.
+     */
+    public function payload(const string& $path, const string& $token) : nexus::Payload
+    {
+        $req = nexus::Request(.get, $path);
+        $req->headers->set('Authorization', "Bearer {$token}");
+        return nexus::Payload($request: mv $req, $services: $this->app->kernel->services->child(), $mode: .testing, $log: nexus::Logger([], .info));
+    }
+
+    /**
+     * Who token `$token` names at `$path`, as `via:subject`, or the status it is refused with.
+     */
+    public function identify(const string& $path, const string& $token) : string
+    {
+        nexus::Payload $payload = $this->payload($path, $token);
+        nexus::auth::Identity? $found = guard $payload->get<nexus::auth::Guards>()->identify($payload) else ($p) {
+            return "{$p->status()}";
+        };
+        nexus::auth::Identity $id = guard $found else {
+            return 'nobody';
+        };
+        return "{$id->via}:{$id->subject}";
     }
 
     public function token(const ordered_map<string, string>& $form) : Reply
@@ -139,7 +221,14 @@ internal class Rig
     public function connect() : Reply
     {
         string $client = $this->register();
-        string $back = $this->approve($this->query($client), true);
+        return $this->trade($client, $this->approve($this->query($client), true));
+    }
+
+    /**
+     * Trades the code in `$back` for client `$client`: the token answer.
+     */
+    public function trade(const string& $client, const string& $back) : Reply
+    {
         return $this->token([
             'grant_type' => 'authorization_code',
             'client_id' => $client,
@@ -178,11 +267,15 @@ test the_metadata_names_the_endpoints
         ->status(200)
         ->json('$.issuer', 'http://blog.test')
         ->json('$.token_endpoint', 'http://blog.test/oauth/token')
-        ->json('$.code_challenge_methods_supported[0]', 'S256');
+        ->json('$.code_challenge_methods_supported[0]', 'S256')
+        ->json('$.scopes_supported[0]', 'mcp');
     $blog->get('/.well-known/oauth-protected-resource/mcp')
         ->json('$.resource', 'http://blog.test/mcp')
         ->json('$.authorization_servers[0]', 'http://blog.test')
         ->json('$.resource_name', 'Tests');
+    $blog->post('/mcp', json: '{"jsonrpc":"2.0","id":1,"method":"ping"}')
+        ->status(401)
+        ->header('WWW-Authenticate', 'Bearer resource_metadata="http://blog.test/.well-known/oauth-protected-resource/mcp"');
 }
 
 test registration_checks_what_a_client_asks_for
@@ -197,17 +290,30 @@ test registration_checks_what_a_client_asks_for
         ->json('$.error', 'invalid_client_metadata');
 
     expect(Register::clean("Evil\u{202E}txt.exe"))->is('Eviltxt.exe');
-    expect(Register::clean("\n\t"))->is('MCP client');
+    expect(Register::clean("\n\t"))->is('an app');
 }
 
-test authorize_hands_the_browser_to_the_consent_page
+test authorize_keeps_the_request_for_the_consent_page
 {
     $r = Rig();
     string $client = $r->register();
-    string $query = $r->query($client);
-    $r->app->api()->get("/oauth/authorize?{$query}")
+    string $consent = $r->app->api()->get("/oauth/authorize?{$r->query($client)}")
         ->status(302)
-        ->header('Location', "http://app/consent?{$query}");
+        ->header('Location', starts: 'http://app/consent?request=')
+        ->capture(header: 'Location');
+    string $id = Rig::param($consent, 'request');
+    expect($id)->length(32);
+
+    $r->signedIn->get("/oauth/requests/{$id}")
+        ->status(200)
+        ->json('$.client.name', 'Test client')
+        ->json('$.redirect', REDIRECT)
+        ->json('$.resource.name', 'mcp')
+        ->json('$.resource.url', 'http://app/mcp')
+        ->json('$.scopes[0]', 'mcp')
+        ->json('$.granted_before', false);
+    $r->app->api()->get("/oauth/requests/{$id}")->status(401);
+    $r->signedIn->get('/oauth/requests/nonsense')->status(404);
 
     $r->app->api()->get('/oauth/authorize?response_type=code&client_id=nobody')->status(400);
     string $back = $r->app->api()
@@ -217,33 +323,45 @@ test authorize_hands_the_browser_to_the_consent_page
         ->capture(header: 'Location');
     expect(Rig::param($back, 'error'))->is('invalid_request');
     expect(Rig::param($back, 'state'))->is('s9');
+}
 
-    $r->signedIn->get("/oauth/request?{$query}")->json('$.client.name', 'Test client');
-    $r->app->api()->get("/oauth/request?{$query}")->status(401);
+test a_request_is_answered_once_within_ten_minutes
+{
+    $r = Rig();
+    string $client = $r->register();
+    string $id = $r->ask($r->query($client));
+    string $back = $r->answer($id, true);
+    expect(Rig::param($back, 'code'))->length(64);
+    json::Value $again = json::object();
+    $again['allow'] = json::bool(true);
+    $r->signedIn->post("/oauth/requests/{$id}", json: $again)->status(404);
+
+    string $late = $r->ask($r->query($client));
+    $r->clock->advance(.mins(11));
+    $r->signedIn->get("/oauth/requests/{$late}")->status(404);
+    $r->signedIn->post("/oauth/requests/{$late}", json: $again)->status(404);
 }
 
 test the_consent_page_keeps_its_own_query_and_origin
 {
     $r = Rig(consent: '/consent?step=1');
     string $query = $r->query($r->register());
-    $r->app->api()->get("/oauth/authorize?{$query}")->header('Location', "http://app/consent?step=1&{$query}");
+    $r->app->api()->get("/oauth/authorize?{$query}")->header('Location', starts: 'http://app/consent?step=1&request=');
 
     $far = Rig(consent: 'https://app.example.com/approve');
     string $asks = $far->query($far->register());
-    $far->app->api()->get("/oauth/authorize?{$asks}")->header('Location', "https://app.example.com/approve?{$asks}");
+    $far->app->api()->get("/oauth/authorize?{$asks}")->header('Location', starts: 'https://app.example.com/approve?request=');
 }
 
-test a_consent_page_or_issuer_that_is_no_url_stops_the_boot
+test a_consent_page_that_is_no_url_or_no_resource_stops_the_boot
 {
     $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
     result<TestApp, nexus::BootError> $broken = TestApp::attempt(Rig::extensions($clock, 'consent page'), Rig::vars());
     nexus::BootError $consent = expect($broken)->fails();
     expect($consent->lines()[0])->has("consent: 'consent page' is no URL");
-    map<string, string> $relative = Rig::vars();
-    $relative['NEXUS_OAUTH_ISSUER'] = '/blog';
-    result<TestApp, nexus::BootError> $again = TestApp::attempt(Rig::extensions($clock, '/consent'), $relative);
-    nexus::BootError $issuer = expect($again)->fails();
-    expect($issuer->lines()[0])->has('NEXUS_OAUTH_ISSUER');
+    array<nexus::Extension> $bare = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::oauth::Extension()];
+    nexus::BootError $none = expect(TestApp::attempt($bare, Rig::vars()))->fails();
+    expect($none->lines()[0])->has('no resource to issue tokens for');
 }
 
 test a_denied_request_goes_back_with_access_denied
@@ -284,12 +402,13 @@ test the_code_is_traded_once_with_its_verifier
         ->status(200)
         ->json('$.token_type', 'Bearer')
         ->json('$.expires_in', 3600)
+        ->json('$.scope', 'mcp')
         ->header('Cache-Control', 'no-store');
     expect($pair->capture('$.access_token'))->starts('nxo_');
     expect($pair->capture('$.refresh_token'))->starts('nxr_');
 }
 
-test an_access_token_opens_mcp_and_nothing_else
+test an_access_token_opens_its_resource_and_nothing_else
 {
     $r = Rig();
     string $access = $r->connect()->capture('$.access_token');
@@ -297,9 +416,82 @@ test an_access_token_opens_mcp_and_nothing_else
         ->json('$.result.structuredContent.subject', '7')
         ->json('$.result.structuredContent.via', 'oauth');
     $r->app->api()->bearer($access)->get('/oauth/grants')->status(401);
+    expect($r->identify('/mcp', $access))->is('oauth:7');
+    expect($r->identify('/v1/me', $access))->is('401');
+    nexus::Payload $payload = $r->payload('/mcp', $access);
+    nexus::auth::Identity? $found = guard $payload->get<nexus::auth::Guards>()->identify($payload);
+    nexus::auth::Identity $id = guard $found;
+    expect($id->audience)->is('mcp');
+    expect($id->client)->length(32);
+    expect($id->has('mcp'))->yes(says: 'the token holds the scope it was granted');
+    expect($id->has('admin'))->no(says: 'and no other');
 
     $r->clock->advance(.mins(61));
     $r->who($access)->status(401);
+}
+
+test the_resource_and_scopes_are_checked
+{
+    $r = Rig(api: true);
+    string $client = $r->register();
+    string $challenge = Pkce::challenge(VERIFIER);
+    string $redirect = nexus::Percent::encode(REDIRECT);
+    string $base = "response_type=code&client_id={$client}&redirect_uri={$redirect}&code_challenge={$challenge}&code_challenge_method=S256&state=s1";
+
+    // two resources: the client has to say which
+    string $unnamed = $r->app->api()->get("/oauth/authorize?{$base}")->status(302)->capture(header: 'Location');
+    expect(Rig::param($unnamed, 'error'))->is('invalid_target');
+    string $unknown = $r->app->api()->get("/oauth/authorize?{$base}&resource=http%3A%2F%2Fapp%2Fother")->capture(header: 'Location');
+    expect(Rig::param($unknown, 'error'))->is('invalid_target');
+    string $scope = $r->app->api()->get("/oauth/authorize?{$base}&resource=http%3A%2F%2Fapp%2Fv1&scope=mcp")->capture(header: 'Location');
+    expect(Rig::param($scope, 'error'))->is('invalid_scope');
+
+    string $id = $r->ask("{$base}&resource=http%3A%2F%2Fapp%2Fv1%2F&scope=posts%3Aread");
+    $r->signedIn->get("/oauth/requests/{$id}")
+        ->json('$.resource.name', 'api')
+        ->json('$.resource.title', 'Blog API')
+        ->count('$.scopes', 1)
+        ->json('$.scopes[0]', 'posts:read');
+    string $access = $r->trade($client, $r->answer($id, true))
+        ->status(200)
+        ->json('$.scope', 'posts:read')
+        ->capture('$.access_token');
+    expect($r->identify('/v1/posts', $access))->is('oauth:7');
+    expect($r->identify('/mcp', $access))->is('401');
+    $r->who($access)->status(401);
+
+    // all of the resource's scopes when none are named, and the user allowed them before
+    string $all = $r->ask("{$base}&resource=http%3A%2F%2Fapp%2Fv1");
+    $r->signedIn->get("/oauth/requests/{$all}")->count('$.scopes', 2)->json('$.granted_before', false);
+    $r->trade($client, $r->answer($all, true))->json('$.scope', 'posts:read posts:write');
+    string $read = $r->ask("{$base}&resource=http%3A%2F%2Fapp%2Fv1&scope=posts%3Aread");
+    $r->signedIn->get("/oauth/requests/{$read}")->json('$.granted_before', true);
+    $r->signedIn->get('/oauth/grants')
+        ->count('$.items', 2)
+        ->json('$.items[0].resource', 'api')
+        ->json('$.items[1].resource', 'api');
+}
+
+test a_client_registered_in_code_needs_no_registration
+{
+    $r = Rig(api: true);
+    string $challenge = Pkce::challenge(VERIFIER);
+    string $id = $r->ask("response_type=code&client_id=blog-cli&code_challenge={$challenge}&code_challenge_method=S256&resource=http%3A%2F%2Fapp%2Fmcp");
+    $r->signedIn->get("/oauth/requests/{$id}")->json('$.client.name', 'Blog CLI');
+    string $back = $r->answer($id, true);
+    expect($back)->starts('http://127.0.0.1/cli?code=');
+    $r->token([
+        'grant_type' => 'authorization_code',
+        'client_id' => 'blog-cli',
+        'code' => Rig::param($back, 'code'),
+        'code_verifier' => VERIFIER,
+    ])->status(200);
+
+    array<string> $none = [];
+    array<nexus::oauth::Client> $bad = [nexus::oauth::Client($id: 'x', $name: 'X', $redirects: $none)];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::oauth::Extension(clients: $bad), nexus::mcp::Extension()];
+    nexus::BootError $e = expect(TestApp::attempt($exts, Rig::vars()))->fails();
+    expect($e->lines()[0])->has('client x needs a redirect');
 }
 
 test refresh_rotates_and_a_reused_token_ends_the_grant
@@ -342,9 +534,26 @@ test revoking_and_disconnecting_end_the_grant
     string $grant = $r->signedIn->get('/oauth/grants')
         ->count('$.items', 1)
         ->json('$.items[0].name', 'Test client')
+        ->json('$.items[0].resource', 'mcp')
         ->capture('$.items[0].id');
     $r->signedIn->delete("/oauth/grants/{$grant}")->status(204);
     $r->who($again)->status(401);
+}
+
+test pruning_drops_expired_requests_codes_and_grants
+{
+    $r = Rig();
+    string $client = $r->register();
+    $r->ask($r->query($client));
+    $r->connect();
+    $r->clock->advance(.hours(24 * 31));
+    nexus::Payload $payload = $r->app->kernel->background('prune', 'test');
+    array<nexus::auth::Pruned> $done = guard $payload->get<nexus::auth::Pruning>()->run($payload);
+    nexus::Kernel::finish($payload);
+    expect($done[2]->name)->is('oauth requests, codes and grants');
+    expect($done[2]->count)->is(2 as uint64);
+    // the user's own token expired as well; a fresh one sees no grant
+    $r->app->api()->bearer(Rig::signIn($r->app))->get('/oauth/grants')->count('$.items', 0);
 }
 
 test boot_needs_nexus_auth_first

@@ -41,14 +41,15 @@ public struct Proxies
     }
 
     /**
-     * Who a request from socket peer `$peer` (`address:port`) comes from: the peer itself unless it
-     * is a trusted proxy, else the rightmost address of `$forwarded` that is not one.
+     * The address a request from socket peer `$peer` (`address:port`) comes from, without a port
+     * (it changes with every connection): the peer's unless it is a trusted proxy, else the
+     * rightmost address of `$forwarded` that is not one.
      */
     public const function client(const string& $peer, const string& $forwarded) : string
     {
         $address = Proxies::address($peer);
         if (!$this->trusts($address) || $forwarded->empty()) {
-            return $peer;
+            return $address;
         }
         array<string> $hops = [];
         foreach (str::split($forwarded, ',') as const &$part) {

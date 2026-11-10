@@ -8,8 +8,14 @@
  * and leaves their `Identity` in the payload, an app's own middleware
  * loads its user on top. The action names the middleware in
  * `#[nexus::through]` and reads what it left with `$payload->state<T>()`.
- * Passwords are Argon2id, checked against a decoy when the account is unknown, and
- * logins are throttled per address and per account.
+ * Passwords are Argon2id, checked against a decoy when the account is
+ * unknown, and logins are throttled per address and per account.
+ *
+ * `Resources` are the parts of the app OAuth clients get tokens for (the
+ * MCP endpoint, a public API), each with its metadata (RFC 9728). A token
+ * issued for one resource opens that resource only; the app's own tokens
+ * and sessions open everything. `Pruning` gathers every auth store that
+ * expires, for one `auth:prune`.
  *
  * The stores here keep tokens and sessions in memory; nexus-auth-carbon
  * keeps them in the app's database.

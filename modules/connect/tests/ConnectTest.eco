@@ -1,0 +1,363 @@
+/**
+ * nexus-connect end to end in process, against a provider the tests script: the start, the
+ * provider's callback, the code traded with PKCE and the client secret, the ID token checked, and
+ * the claim, once, by the browser that started it; and every way that is refused. Memory stores, a
+ * clock the tests move, requests as host `app`.
+ */
+
+use nexus::connect::{Connect, ExternalIdentity, ScriptedFetch, Sent, Oidc, Google, IdToken, Link, LinkStore};
+use nexus::testing::TestApp;
+use ecotest::http::Reply;
+use std::time;
+use ecotest::expect;
+
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+internal const START = 1700000000;
+internal const ISSUER = 'https://id.acme.test';
+internal const TOKEN = 'https://id.acme.test/token';
+
+internal class Rig
+{
+    public TestApp $app;
+    public calendar::ManualClock $clock;
+    public ScriptedFetch $acme;
+
+    public constructor(map<string, string> $vars, nexus::connect::Connector $provider)
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        $this->acme = ScriptedFetch();
+        array<nexus::connect::Connector> $providers = [$provider, Google()];
+        array<nexus::Extension> $exts = [
+            nexus::auth::Extension('test', clock: $this->clock, cost: crypto::PasswordCost(8, 1)),
+            nexus::connect::Extension(page: '/signed-in', connectors: $providers, clock: $this->clock, fetch: $this->acme),
+        ];
+        $this->app = TestApp($exts, $vars);
+    }
+
+    /**
+     * Starts a sign in with acme: the answer.
+     */
+    public function start() : Reply
+    {
+        return $this->app->api()->post('/auth/connect/acme', json: '{}');
+    }
+
+    /**
+     * Scripts the token endpoint to answer with an ID token of `$claims` (the nonce filled in from
+     * the authorization URL `$url` unless the claims have one).
+     */
+    public function token(const string& $url, json::Value $claims) : void
+    {
+        if ($claims->get('nonce') == null) {
+            $claims['nonce'] = json::str(param($url, 'nonce'));
+        }
+        json::Value $o = json::object();
+        $o['access_token'] = json::str('at');
+        $o['id_token'] = json::str(jwt($claims));
+        $this->acme->answer(TOKEN, 200, json::dump($o));
+    }
+
+    /**
+     * The provider sends the browser back with the state of `$url` and code `c1`: where it goes on
+     * to.
+     */
+    public function back(const string& $url) : string
+    {
+        return $this->app->api()
+            ->get('/auth/connect/acme/callback', query: ['state' => param($url, 'state'), 'code' => 'c1'])
+            ->status(302)
+            ->capture(header: 'Location');
+    }
+
+    public function claim(const string& $attempt, const string& $binding) : result<ExternalIdentity, nexus::Problem>
+    {
+        nexus::Payload $payload = $this->app->kernel->background('claim', 'test');
+        result<ExternalIdentity, nexus::Problem> $r = $payload->get<Connect>()->claim($attempt, $binding);
+        nexus::Kernel::finish($payload);
+        return $r;
+    }
+
+    /**
+     * Starts, scripts `$claims`, comes back: the start's answer.
+     */
+    public function through(json::Value $claims) : Reply
+    {
+        Reply $started = $this->start();
+        string $url = $started->capture('$.url');
+        $this->token($url, $claims);
+        $this->back($url);
+        return $started;
+    }
+}
+
+/**
+ * A rig with provider acme at its fixed endpoints, Google unconfigured.
+ */
+internal function rig() : Rig
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
+    return Rig(mv $vars, acme());
+}
+
+internal function acme() : Oidc
+{
+    return Oidc('acme', issuer: ISSUER, client: 'cid', secret: 'shh', authorize: 'https://id.acme.test/auth', token: TOKEN);
+}
+
+/**
+ * The claims of a good ID token for person `p1`, issued now.
+ */
+internal function claims() : json::Value
+{
+    json::Value $c = json::object();
+    $c['iss'] = json::str(ISSUER);
+    $c['aud'] = json::str('cid');
+    $c['sub'] = json::str('p1');
+    $c['email'] = json::str('ann@example.com');
+    $c['email_verified'] = json::bool(true);
+    $c['name'] = json::str('Ann');
+    $c['iat'] = json::int(START);
+    $c['exp'] = json::int(START + 3600);
+    return $c;
+}
+
+/**
+ * A JWT carrying `$claims`, with a signature nobody checks.
+ */
+internal function jwt(const json::Value& $claims) : string
+{
+    string $header = crypto::base64url('{"alg":"RS256","typ":"JWT"}');
+    string $body = crypto::base64url(json::dump($claims));
+    return "{$header}.{$body}.c2lnbmF0dXJl";
+}
+
+internal function param(const string& $url, const string& $name) : string
+{
+    usize $q = $url->find('?');
+    if ($q >= $url->size()) {
+        return '';
+    }
+    $pairs = nexus::Query(parse: $url->sub($q + 1, $url->size() - $q - 1));
+    return $pairs->get($name) ?? '';
+}
+
+test a_sign_in_goes_to_the_provider_and_back
+{
+    $r = rig();
+    Reply $started = $r->start()->status(201)->header('Cache-Control', 'no-store');
+    string $url = $started->capture('$.url');
+    string $attempt = $started->capture('$.attempt');
+    string $binding = $started->capture('$.binding');
+    expect($url)->starts('https://id.acme.test/auth?response_type=code&client_id=cid&redirect_uri=');
+    expect(param($url, 'redirect_uri'))->is('http://app/auth/connect/acme/callback');
+    expect(param($url, 'scope'))->is('openid email profile');
+    expect(param($url, 'code_challenge_method'))->is('S256');
+    expect(param($url, 'state'))->length(64);
+    expect($binding)->length(64);
+
+    $r->token($url, claims());
+    expect($r->back($url))->is("http://app/signed-in?attempt={$attempt}");
+    array<Sent> $sent = $r->acme->sent();
+    expect($sent)->size(1);
+    expect($sent[0]->url)->is(TOKEN);
+    expect($sent[0]->form->get('code') ?? '')->is('c1');
+    expect($sent[0]->form->get('client_secret') ?? '')->is('shh');
+    expect($sent[0]->form->get('redirect_uri') ?? '')->is('http://app/auth/connect/acme/callback');
+    string $verifier = $sent[0]->form->get('code_verifier') ?? '';
+    expect(crypto::base64url(crypto::sha256($verifier)))->is(param($url, 'code_challenge'));
+
+    ExternalIdentity $who = guard $r->claim($attempt, $binding);
+    expect($who->provider)->is('acme');
+    expect($who->subject)->is('p1');
+    expect($who->email)->is('ann@example.com');
+    expect($who->emailVerified)->yes(says: 'the provider verified the email');
+    expect($who->name)->is('Ann');
+    nexus::Problem $again = expect($r->claim($attempt, $binding))->fails();
+    expect($again->status())->is(404);
+}
+
+test the_claim_needs_the_binding_and_a_finished_sign_in
+{
+    $r = rig();
+    Reply $started = $r->start();
+    string $url = $started->capture('$.url');
+    string $attempt = $started->capture('$.attempt');
+    string $binding = $started->capture('$.binding');
+    nexus::Problem $early = expect($r->claim($attempt, $binding))->fails();
+    expect($early->status())->is(409);
+    $r->token($url, claims());
+    $r->back($url);
+    nexus::Problem $stolen = expect($r->claim($attempt, 'someone-elses-binding'))->fails();
+    expect($stolen->status())->is(401);
+    // a wrong binding does not spend it
+    ExternalIdentity $who = guard $r->claim($attempt, $binding);
+    expect($who->subject)->is('p1');
+}
+
+test a_sign_in_lasts_ten_minutes
+{
+    $r = rig();
+    Reply $started = $r->start();
+    string $url = $started->capture('$.url');
+    $r->token($url, claims());
+    $r->clock->advance(.mins(11));
+    expect($r->back($url))->is('http://app/signed-in?error=expired');
+    nexus::Problem $late = expect($r->claim($started->capture('$.attempt'), $started->capture('$.binding')))->fails();
+    expect($late->status())->is(404);
+    expect($r->acme->sent())->size(0);
+}
+
+test a_callback_without_a_known_state_goes_back_with_an_error
+{
+    $r = rig();
+    $r->start();
+    string $back = $r->app->api()->get('/auth/connect/acme/callback', query: ['state' => 'forged', 'code' => 'c1'])->status(302)->capture(header: 'Location');
+    expect($back)->is('http://app/signed-in?error=expired');
+    expect($r->acme->sent())->size(0);
+}
+
+test a_user_who_says_no_comes_back_with_access_denied
+{
+    $r = rig();
+    Reply $started = $r->start();
+    string $url = $started->capture('$.url');
+    string $attempt = $started->capture('$.attempt');
+    string $back = $r->app->api()->get('/auth/connect/acme/callback', query: ['state' => param($url, 'state'), 'error' => 'access_denied'])->capture(header: 'Location');
+    expect($back)->is("http://app/signed-in?attempt={$attempt}&error=access_denied");
+    nexus::Problem $p = expect($r->claim($attempt, $started->capture('$.binding')))->fails();
+    expect($p->status())->is(401);
+    expect($p->detail(.dev))->has('access_denied');
+    // the state is spent: coming back again does not trade anything
+    expect($r->back($url))->is('http://app/signed-in?error=expired');
+}
+
+test an_id_token_that_does_not_hold_fails_the_sign_in
+{
+    array<string> $broken = ['nonce', 'aud', 'iss', 'exp', 'azp'];
+    foreach ($broken as const &$what) {
+        $r = rig();
+        json::Value $c = claims();
+        if ($what == 'nonce') {
+            $c['nonce'] = json::str('another-sign-in');
+        }
+        if ($what == 'aud') {
+            $c['aud'] = json::str('another-client');
+        }
+        if ($what == 'iss') {
+            $c['iss'] = json::str('https://evil.test');
+        }
+        if ($what == 'exp') {
+            $c['exp'] = json::int(START - 3600);
+        }
+        if ($what == 'azp') {
+            json::Value $both = json::arr();
+            $both[] = json::str('cid');
+            $both[] = json::str('other');
+            $c['aud'] = mv $both;
+        }
+        Reply $started = $r->through(mv $c);
+        string $attempt = $started->capture('$.attempt');
+        nexus::Problem $p = expect($r->claim($attempt, $started->capture('$.binding')))->fails();
+        expect($p->status())->is(401);
+        expect($r->app->logged('sign in failed'))->yes(says: "a broken {$what} is logged");
+    }
+}
+
+test a_provider_that_refuses_the_code_fails_the_sign_in
+{
+    $r = rig();
+    Reply $started = $r->start();
+    string $url = $started->capture('$.url');
+    $r->acme->answer(TOKEN, 400, '{"error":"invalid_grant"}');
+    expect($r->back($url))->has('error=failed');
+}
+
+test the_callback_takes_a_form_post
+{
+    $r = rig();
+    Reply $started = $r->start();
+    string $url = $started->capture('$.url');
+    string $attempt = $started->capture('$.attempt');
+    $r->token($url, claims());
+    $r->app->api()->post('/auth/connect/acme/callback', form: ['state' => param($url, 'state'), 'code' => 'c1'])
+        ->status(302)
+        ->header('Location', "http://app/signed-in?attempt={$attempt}");
+    ExternalIdentity $who = guard $r->claim($attempt, $started->capture('$.binding'));
+    expect($who->subject)->is('p1');
+}
+
+test google_is_left_out_until_it_is_configured
+{
+    $r = rig();
+    $r->app->api()->post('/auth/connect/google', json: '{}')->status(404);
+    $r->app->api()->post('/auth/connect/nobody', json: '{}')->status(404);
+
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_CONNECT_GOOGLE_CLIENT_ID' => 'g-id', 'NEXUS_CONNECT_GOOGLE_CLIENT_SECRET' => 'g-secret'];
+    $g = Rig(mv $vars, acme());
+    string $url = $g->app->api()->post('/auth/connect/google', json: '{}')->status(201)->capture('$.url');
+    expect($url)->starts('https://accounts.google.com/o/oauth2/v2/auth?');
+    expect(param($url, 'client_id'))->is('g-id');
+    expect(param($url, 'redirect_uri'))->is('http://app/auth/connect/google/callback');
+
+    map<string, string> $half = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_CONNECT_GOOGLE_CLIENT_ID' => 'g-id'];
+    array<nexus::connect::Connector> $providers = [Google()];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::connect::Extension(connectors: $providers)];
+    nexus::BootError $e = expect(TestApp::attempt($exts, $half))->fails();
+    expect($e->lines()[0])->has('NEXUS_CONNECT_GOOGLE_CLIENT_SECRET');
+}
+
+test a_provider_without_endpoints_is_discovered_once
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
+    $r = Rig(mv $vars, Oidc('acme', issuer: ISSUER, client: 'cid', secret: 'shh'));
+    $r->acme->answer('https://id.acme.test/.well-known/openid-configuration', 200,
+        '{"issuer":"https://id.acme.test","authorization_endpoint":"https://id.acme.test/login","token_endpoint":"https://id.acme.test/token"}');
+    expect($r->start()->status(201)->capture('$.url'))->starts('https://id.acme.test/login?');
+    expect($r->start()->capture('$.url'))->starts('https://id.acme.test/login?');
+    expect($r->acme->sent())->size(1);
+
+    map<string, string> $again = ['NEXUS_AUTH_KEY' => KEY];
+    $wrong = Rig(mv $again, Oidc('acme', issuer: ISSUER, client: 'cid', secret: 'shh'));
+    $wrong->acme->answer('https://id.acme.test/.well-known/openid-configuration', 200, '{"issuer":"https://evil.test"}');
+    $wrong->start()->status(503);
+}
+
+test links_tie_an_outside_identity_to_one_user
+{
+    $r = rig();
+    nexus::Payload $payload = $r->app->kernel->background('link', 'test');
+    LinkStore $links = $payload->get<LinkStore>();
+    $l = Link($provider: 'acme', $external: 'p1', $subject: '7', $email: 'ann@example.com', $createdAt: $r->clock->now());
+    guard $links->link($l);
+    expect($links->link($l))->fails();
+    Link? $there = guard $links->find('acme', 'p1');
+    Link $found = expect($there)->some();
+    expect($found->subject)->is('7');
+    array<Link> $mine = guard $links->of('7');
+    expect($mine)->size(1);
+    guard $links->unlink('acme', 'p1');
+    Link? $gone = guard $links->find('acme', 'p1');
+    expect($gone)->none();
+    nexus::Kernel::finish($payload);
+}
+
+test attempts_are_pruned_with_the_rest
+{
+    $r = rig();
+    $r->start();
+    $r->start();
+    $r->clock->advance(.mins(11));
+    nexus::Payload $payload = $r->app->kernel->background('prune', 'test');
+    array<nexus::auth::Pruned> $done = guard $payload->get<nexus::auth::Pruning>()->run($payload);
+    nexus::Kernel::finish($payload);
+    expect($done[2]->name)->is('sign-in attempts');
+    expect($done[2]->count)->is(2 as uint64);
+}
+
+test the_jwt_claims_are_read_without_trusting_them
+{
+    json::Value $c = expect(IdToken::claims(jwt(claims())))->some();
+    expect(IdToken::identity('acme', $c)->subject)->is('p1');
+    expect(IdToken::claims('not.a.jwt.at.all'))->none();
+    expect(IdToken::claims('two.parts'))->none();
+}

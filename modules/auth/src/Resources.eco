@@ -1,0 +1,199 @@
+namespace nexus::auth;
+
+/**
+ * The app's protected resources and who issues tokens for them. An extension that serves one adds
+ * it from its `services` (nexus-mcp adds `/mcp`); nexus-oauth says this app issues the tokens. Each
+ * resource then has its metadata at `/.well-known/oauth-protected-resource<path>`, and a 401 under
+ * it points a client there, which is how the client finds where to sign in.
+ *
+ * `Guards` read it too: a token issued for one resource opens that resource only.
+ */
+#[atomic]
+public class Resources
+{
+    public const string WELL_KNOWN = '/.well-known/oauth-protected-resource';
+
+    internal array<Resource> $all = [];
+
+    /**
+     * The issuer of tokens for the resources: null for none, empty for this app (nexus-oauth),
+     * else an outside authorization server's URL.
+     */
+    internal string? $issuer = null;
+
+    /**
+     * Adds resource `$r` and routes its metadata. Called from an extension's `services`, after
+     * nexus-auth's; a name or path that is taken, or a path that is not `/word...`, stops the boot.
+     */
+    public function add(nexus::Services& $s, const Resource& $r) : void
+    {
+        if (!Resources::isPath($r->path)) {
+            $s->fail(.extension('nexus-auth', "resource {$r->name}: its path '{$r->path}' starts with a slash and does not end with one"));
+            return;
+        }
+        if ($r->name->empty()) {
+            $s->fail(.extension('nexus-auth', "the resource at {$r->path} needs a name"));
+            return;
+        }
+        foreach ($this->all as const &$known) {
+            if ($known->name == $r->name || $known->path == $r->path) {
+                $s->fail(.extension('nexus-auth', "resource {$r->name} at {$r->path} clashes with {$known->name} at {$known->path}"));
+                return;
+            }
+        }
+        if ($this->all->empty()) {
+            $s->route<ResourceMetadata>(method: .get, path: Resources::WELL_KNOWN);
+        }
+        $this->all[] = $r;
+        string $known = Resources::WELL_KNOWN;
+        $s->route<ResourceMetadata>(method: .get, path: "{$known}{$r->path}");
+    }
+
+    /**
+     * Says that this app issues the tokens for its resources: nexus-oauth calls it.
+     */
+    public function issuedHere() : void
+    {
+        $this->issuer = '';
+    }
+
+    /**
+     * Says that the authorization server at `$url` issues the tokens: for an app whose sign in lives
+     * elsewhere. Its tokens still need a guard that reads them.
+     */
+    public function issuedBy(const string& $url) : void
+    {
+        $this->issuer = $url;
+    }
+
+    /**
+     * Whether anybody issues tokens for the resources.
+     */
+    public const function issued() : bool
+    {
+        return $this->issuer != null;
+    }
+
+    /**
+     * The URL of the authorization server, for this request; null when nobody issues tokens.
+     */
+    public function server(nexus::Payload& $payload) : string?
+    {
+        string $at = guard $this->issuer else {
+            return null;
+        };
+        if ($at->empty()) {
+            return $payload->origin();
+        }
+        return $at;
+    }
+
+    public const function all() : array<Resource>
+    {
+        return $this->all;
+    }
+
+    /**
+     * The resource request path `$path` is under (the longest that covers it), or null for the
+     * rest of the app.
+     */
+    public const function of(const string& $path) : Resource?
+    {
+        Resource? $best = null;
+        usize $length = 0;
+        foreach ($this->all as const &$r) {
+            if ($r->covers($path) && ($best == null || $r->path->size() > $length)) {
+                $best = $r;
+                $length = $r->path->size();
+            }
+        }
+        return $best;
+    }
+
+    /**
+     * The resource called `$name`, or null.
+     */
+    public const function named(const string& $name) : Resource?
+    {
+        foreach ($this->all as const &$r) {
+            if ($r->name == $name) {
+                return $r;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The resource whose URL is `$url` on this request's origin, or null: how an OAuth `resource`
+     * parameter (RFC 8707) names one. A trailing slash is forgiven.
+     */
+    public function at(nexus::Payload& $payload, const string& $url) : Resource?
+    {
+        string $wanted = $url;
+        while ($wanted->ends('/')) {
+            $wanted = $wanted->sub(0, $wanted->size() - 1)->clone();
+        }
+        string $origin = $payload->origin();
+        foreach ($this->all as const &$r) {
+            if ("{$origin}{$r->path}" == $wanted) {
+                return $r;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The URL of resource `$r`: its path on the public origin.
+     */
+    public function url(nexus::Payload& $payload, const Resource& $r) : string
+    {
+        return "{$payload->origin()}{$r->path}";
+    }
+
+    /**
+     * Where the metadata of `$r` is.
+     */
+    public function metadata(nexus::Payload& $payload, const Resource& $r) : string
+    {
+        string $known = Resources::WELL_KNOWN;
+        return "{$payload->origin()}{$known}{$r->path}";
+    }
+
+    /**
+     * `$p` as this request's answer. A 401 under a resource says `WWW-Authenticate: Bearer`, with
+     * the resource's metadata when somebody issues tokens for it, so a client can go and get one.
+     */
+    public function challenge(nexus::Payload& $payload, const nexus::Problem& $p) : nexus::Response
+    {
+        nexus::Response $res = $payload->fail($p);
+        if ($res->status != 401) {
+            return $res;
+        }
+        Resource $here = guard $this->of($payload->request->path) else {
+            return $res;
+        };
+        if (!$this->issued()) {
+            $res->header('WWW-Authenticate', 'Bearer');
+            return $res;
+        }
+        $res->header('WWW-Authenticate', "Bearer resource_metadata=\"{$this->metadata($payload, $here)}\"");
+        return $res;
+    }
+
+    /**
+     * Whether `$path` is `/word...`: a leading slash, no trailing one, no spaces.
+     */
+    internal static function isPath(const string& $path) : bool
+    {
+        if ($path->size() < 2 || $path->byte(0) != 47 || $path->ends('/')) {
+            return false;
+        }
+        foreach (0 .. $path->size() as $i) {
+            uint8 $c = $path->byte($i);
+            if ($c <= 32 || $c == 63 || $c == 35) {
+                return false;
+            }
+        }
+        return true;
+    }
+}

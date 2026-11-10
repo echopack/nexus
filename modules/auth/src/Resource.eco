@@ -1,0 +1,66 @@
+namespace nexus::auth;
+
+/**
+ * A part of the app that OAuth clients get tokens for (RFC 9728): the MCP endpoint, a public API.
+ * Its `path` is where it starts, so `/mcp` covers `/mcp` and everything under it; its URL is that
+ * path on the app's public origin. A token issued for a resource opens that resource only; the
+ * app's own tokens and sessions open everything.
+ *
+ * ```echo
+ * $s->get<nexus::auth::Resources>()->add($s, Resource('api', '/v1', ['posts:read', 'posts:write'], 'Blog API'));
+ * ```
+ */
+public struct Resource
+{
+    /**
+     * What tokens name as their audience, short and stable, like `mcp`.
+     */
+    public string $name;
+
+    /**
+     * Where the resource starts, like `/mcp`: a leading slash, no trailing one.
+     */
+    public string $path;
+
+    /**
+     * The scopes a client may ask for. One asking for none gets all of them.
+     */
+    public array<string> $scopes = [];
+
+    /**
+     * What a consent page and the metadata call it.
+     */
+    public string $title = '';
+
+    /**
+     * Whether request path `$path` is this resource or under it.
+     */
+    public const function covers(const string& $path) : bool
+    {
+        if ($path == $this->path) {
+            return true;
+        }
+        return $path->starts("{$this->path}/");
+    }
+
+    /**
+     * Whether `$scope` is one of this resource's.
+     */
+    public const function offers(const string& $scope) : bool
+    {
+        foreach ($this->scopes as const &$s) {
+            if ($s == $scope) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The scopes as OAuth writes them, space separated.
+     */
+    public const function scope() : string
+    {
+        return str::join($this->scopes, ' ');
+    }
+}

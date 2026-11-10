@@ -3,9 +3,10 @@ namespace nexus::oauth;
 use std::time;
 
 /**
- * An app that registered itself (an MCP client, an editor, an inspector). It is a public client: no
- * secret, PKCE proves a code was its own. It only names where codes may go; what it may do is the
- * access of the user who allows it.
+ * An app that gets tokens: one that registered itself (an MCP client, an editor, an inspector), or
+ * one the app registers in code, `Client($id: 'blog-ios', $name: 'Blog for iOS', $redirects: [...])`.
+ * It is a public client: no secret, PKCE proves a code was its own. It only names where codes may
+ * go; what it may do is the access of the user who allows it.
  */
 public struct Client
 {
@@ -15,7 +16,7 @@ public struct Client
     public string $id;
     public string $name;
     public array<string> $redirects;
-    public time::timestamp $createdAt;
+    public time::timestamp $createdAt = time::timestamp::from_unix_secs(0);
 
     /**
      * When it last traded a code or a refresh token; clients never used are swept.

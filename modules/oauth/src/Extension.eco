@@ -4,20 +4,29 @@ use container::{Builder, Container};
 use std::time;
 
 /**
- * OAuth 2.1 for the MCP endpoint. Adds its guard to nexus-auth's (so list it after
- * nexus::auth::Extension), binds `Grants` per request on the store, and with `stores: .memory` a
- * `MemoryOAuth`. Serves the metadata, registration, authorize, consent, token and revoke endpoints,
- * and adds `oauth:prune`.
+ * An OAuth 2.1 authorization server for the app's protected resources (`nexus::auth::Resources`:
+ * nexus-mcp's `/mcp`, or a resource the app declares), so a client connects with a URL and a click
+ * instead of a pasted token. Each token it issues opens the one resource it was asked for, with the
+ * scopes the user allowed.
  *
  * ```echo
  * nexus::auth::Extension('blog', stores: .provided),
- * nexus::oauth::Extension(stores: .provided),     // the store from nexus-oauth-carbon
+ * nexus::oauth::Extension(consent: '/connect', stores: .provided),
  * nexus::oauth::carbon::Extension(),
  * nexus::mcp::Extension(),
  * ```
  *
- * `consent` (the app's page that asks the user), `scope` and `name` are the app's to say; the ones
- * not given keep `OAuthConfig`'s defaults.
+ * The flow: a client registers itself (`/oauth/register`) or is one the app registers in code
+ * (`clients:`), sends the user to `/oauth/authorize`, which keeps the request and sends the browser
+ * to the app's consent page with `?request=<id>`. That page is the app's frontend, signed in with
+ * the app's own token or session (when nobody is signed in, it signs the user in first and comes
+ * back): it reads `GET /oauth/requests/{id}` and answers `POST /oauth/requests/{id}` with
+ * `{"allow": true}`, then sends the browser where the answer says. The client trades the code for
+ * tokens at `/oauth/token`. `GET /oauth/grants` and `DELETE /oauth/grants/{id}` are for an account
+ * page.
+ *
+ * Adds its guard to nexus-auth's (so list it after nexus::auth::Extension) and its requests, codes
+ * and grants to `nexus::auth::Pruning`.
  */
 public class Extension : nexus::Extension
 {
@@ -25,23 +34,20 @@ public class Extension : nexus::Extension
     public calendar::Clock $clock;
     internal nexus::auth::Throttle $registrations;
     internal string? $consent;
-    internal string? $scope;
-    internal string? $named;
+    internal array<Client> $clients;
 
     public constructor(
         stores: Stores $stores = .memory,
         clock: calendar::Clock $clock = calendar::SystemClock(),
         consent: string? $consent = null,
-        scope: string? $scope = null,
-        name: string? $name = null
+        clients: array<Client> $clients = array<Client>()
     )
     {
         $this->stores = $stores;
         $this->clock = $clock;
         $this->registrations = nexus::auth::Throttle(10, .mins(15));
         $this->consent = $consent;
-        $this->scope = $scope;
-        $this->named = $name;
+        $this->clients = mv $clients;
     }
 
     public function name() : string
@@ -55,40 +61,53 @@ public class Extension : nexus::Extension
             return .error(.extension('nexus-oauth', 'its tokens are read by a nexus-auth guard; list nexus::auth::Extension() before nexus::oauth::Extension()'));
         };
         $guards->add(OAuthGuard());
+        nexus::auth::Resources $resources = $guards->resources;
+        $resources->issuedHere();
         // what the app gave here, over what the environment and the defaults say
         OAuthConfig $config = $s->get<OAuthConfig>();
         $config->consent = $this->consent ?? $config->consent;
-        $config->scope = $this->scope ?? $config->scope;
-        $config->name = $this->named ?? $config->name;
         $s->replace<OAuthConfig>(put: $config);
-        try Extension::urls($config);
+        nexus::Url $consent = guard nexus::Url::parse($config->consent) else ($e) {
+            return .error(.extension('nexus-oauth', "consent: '{$config->consent}' is no URL: {$e->message()}"));
+        };
+        foreach ($this->clients as const &$c) {
+            if ($c->redirects->empty()) {
+                return .error(.extension('nexus-oauth', "client {$c->id} needs a redirect"));
+            }
+            foreach ($c->redirects as const &$uri) {
+                guard RedirectUri::parse($uri) else ($e) {
+                    return .error(.extension('nexus-oauth', "client {$c->id}: {$e}"));
+                };
+            }
+        }
+        $clients = Clients($this->clients);
+        $s->bind<Clients>(put: $clients);
         if ($this->stores == Stores::memory) {
             $s->bind<MemoryOAuth>(put: MemoryOAuth());
             $s->alias<OAuthStore, MemoryOAuth>();
         }
+        $s->get<nexus::auth::Pruning>()->add('oauth requests, codes and grants', function(Container $c, time::timestamp $now) : result<uint64, nexus::Problem> {
+            return $c->get<OAuthStore>()->prune($now);
+        });
         calendar::Clock $clock = $this->clock;
         nexus::auth::Throttle $throttle = $this->registrations;
-        $s->bind<Grants>(scope: function[$config, $clock](Container $c) : Grants {
-            return Grants($c->get<OAuthStore>(), $config, $clock);
+        $s->bind<Grants>(scope: function[$clients, $config, $clock](Container $c) : Grants {
+            return Grants($c->get<OAuthStore>(), $clients, $config, $clock);
         });
-        $s->bindAction<ResourceMetadata>(method: .get, path: '/.well-known/oauth-protected-resource', function[$config](Container $c) : ResourceMetadata {
-            return ResourceMetadata($config);
-        });
-        $s->route<ResourceMetadata>(method: .get, path: '/.well-known/oauth-protected-resource/mcp');
-        $s->bindAction<ServerMetadata>(method: .get, path: '/.well-known/oauth-authorization-server', function[$config](Container $c) : ServerMetadata {
-            return ServerMetadata($config);
+        $s->bindAction<ServerMetadata>(method: .get, path: '/.well-known/oauth-authorization-server', function[$resources](Container $c) : ServerMetadata {
+            return ServerMetadata($resources);
         });
         $s->bindAction<Register>(method: .post, path: '/oauth/register', function[$config, $clock, $throttle](Container $c) : Register {
             return Register($c->get<OAuthStore>(), $config, $clock, $throttle);
         });
-        $s->bindAction<Authorize>(method: .get, path: '/oauth/authorize', function[$config](Container $c) : Authorize {
-            return Authorize($c->get<OAuthStore>(), $config);
+        $s->bindAction<Authorize>(method: .get, path: '/oauth/authorize', function[$resources, $consent](Container $c) : Authorize {
+            return Authorize($c->get<Grants>(), $resources, $consent);
         });
-        $s->bindAction<Pending>(method: .get, path: '/oauth/request', function[$config](Container $c) : Pending {
-            return Pending($c->get<OAuthStore>(), $config);
+        $s->bindAction<ShowRequest>(method: .get, path: '/oauth/requests/{id}', function[$resources](Container $c) : ShowRequest {
+            return ShowRequest($c->get<Grants>(), $resources);
         });
-        $s->bindAction<Approve>(method: .post, path: '/oauth/approve', function[$config](Container $c) : Approve {
-            return Approve($c->get<OAuthStore>(), $config, $c->get<Grants>());
+        $s->bindAction<AnswerRequest>(method: .post, path: '/oauth/requests/{id}', function(Container $c) : AnswerRequest {
+            return AnswerRequest($c->get<Grants>());
         });
         $s->bindAction<TokenEndpoint>(method: .post, path: '/oauth/token', function(Container $c) : TokenEndpoint {
             return TokenEndpoint($c->get<Grants>());
@@ -97,7 +116,7 @@ public class Extension : nexus::Extension
             return Revoke($c->get<Grants>());
         });
         $s->bindAction<ListGrants>(method: .get, path: '/oauth/grants', function(Container $c) : ListGrants {
-            return ListGrants($c->get<OAuthStore>());
+            return ListGrants($c->get<Grants>());
         });
         $s->bindAction<DropGrant>(method: .delete, path: '/oauth/grants/{id}', function(Container $c) : DropGrant {
             return DropGrant($c->get<OAuthStore>());
@@ -110,31 +129,8 @@ public class Extension : nexus::Extension
         if (!$kernel->services->has<OAuthStore>()) {
             return .error(.extension('nexus-oauth', 'no store is bound; use stores: .memory or add nexus::oauth::carbon::Extension()'));
         }
-        return .ok;
-    }
-
-    public function commands(nexus::Commands& $cmds) : void
-    {
-        $cmds->add(PruneCommand());
-    }
-
-    /**
-     * Refuses a consent page or an issuer that is no URL, and an issuer that is not absolute,
-     * before the first request trips over it.
-     */
-    internal static function urls(const OAuthConfig& $config) : status<nexus::BootError>
-    {
-        guard nexus::Url::parse($config->consent) else ($e) {
-            return .error(.extension('nexus-oauth', "consent: '{$config->consent}' is no URL: {$e->message()}"));
-        };
-        if ($config->issuer->empty()) {
-            return .ok;
-        }
-        nexus::Url $issuer = guard nexus::Url::parse($config->issuer) else ($e) {
-            return .error(.config([nexus::ConfigError::invalid('NEXUS_OAUTH_ISSUER', $e->message())]));
-        };
-        if (!$issuer->absolute()) {
-            return .error(.config([nexus::ConfigError::invalid('NEXUS_OAUTH_ISSUER', "'{$config->issuer}' is not absolute; give a scheme and a host")]));
+        if ($kernel->services->get<nexus::auth::Resources>()->all()->empty()) {
+            return .error(.extension('nexus-oauth', 'there is no resource to issue tokens for; add nexus::mcp::Extension() or declare one on nexus::auth::Resources'));
         }
         return .ok;
     }

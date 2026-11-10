@@ -18,7 +18,7 @@ test request_converts
     expect($r->query->get('page'))->some('2');
     expect($r->contentType())->is('application/json');
     expect($r->body)->is('{}');
-    expect($r->peer)->is('127.0.0.1:5000');
+    expect($r->peer)->is('127.0.0.1');
 }
 
 test unknown_verb_is_null
@@ -62,11 +62,11 @@ test anyone_else_cannot_claim_an_address
 {
     $p = nexus::http::Proxies(parse: '10.0.0.2');
     $r = expect(Wire::request(forwarded('198.51.100.7:5000', '203.0.113.9'), $p))->some();
-    expect($r->peer)->is('198.51.100.7:5000');
+    expect($r->peer)->is('198.51.100.7');
     $none = expect(Wire::request(forwarded('10.0.0.2:40000', ''), $p))->some();
-    expect($none->peer)->is('10.0.0.2:40000');
+    expect($none->peer)->is('10.0.0.2');
     $all = expect(Wire::request(forwarded('10.0.0.2:40000', '10.0.0.2'), $p))->some();
     expect($all->peer)->is('10.0.0.2');
     $plain = expect(Wire::request(forwarded('10.0.0.2:40000', '203.0.113.9')))->some();
-    expect($plain->peer)->is('10.0.0.2:40000');
+    expect($plain->peer)->is('10.0.0.2');
 }

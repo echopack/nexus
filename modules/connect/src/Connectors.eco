@@ -1,0 +1,23 @@
+namespace nexus::connect;
+
+/**
+ * The providers the app signs people in with, the ones that are configured.
+ */
+#[atomic]
+public class Connectors
+{
+    public array<Connector> $all = [];
+
+    /**
+     * The provider called `$name`, or null.
+     */
+    public function find(const string& $name) : Connector?
+    {
+        foreach ($this->all as $c) {
+            if ($c->name() == $name) {
+                return $c;
+            }
+        }
+        return null;
+    }
+}

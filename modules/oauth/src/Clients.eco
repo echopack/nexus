@@ -1,0 +1,29 @@
+namespace nexus::oauth;
+
+/**
+ * Where a client is found: the ones the app registers in code (`Extension(clients: [...])`, its own
+ * mobile or desktop app), then the ones that registered themselves, in the store.
+ */
+#[atomic]
+public class Clients
+{
+    public array<Client> $fixed;
+
+    public constructor(const array<Client>& $fixed)
+    {
+        $this->fixed = $fixed;
+    }
+
+    /**
+     * Client `$id`, or null when it is not registered.
+     */
+    public function find(OAuthStore $store, const string& $id) : result<Client?, nexus::Problem>
+    {
+        foreach ($this->fixed as const &$c) {
+            if ($c->id == $id) {
+                return .ok($c);
+            }
+        }
+        return $store->client($id);
+    }
+}

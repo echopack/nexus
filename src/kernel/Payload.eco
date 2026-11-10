@@ -79,6 +79,45 @@ public struct Payload
     }
 
     /**
+     * The app's public origin, `https://blog.example.com`, without a trailing slash: `NEXUS_APP_URL`
+     * when it is set, else where the client reached the app (`Request::origin()`). What issuers,
+     * resource URLs and absolute links in an answer are written on.
+     */
+    public function origin() : string
+    {
+        Router? $router = $this->services->find<Router>();
+        if ($router != null) {
+            Router $r = guard $router;
+            Url? $base = $r->origin();
+            if ($base != null) {
+                Url $b = guard $base;
+                string $text = $b->text();
+                while ($text->ends('/')) {
+                    $text = $text->sub(0, $text->size() - 1)->clone();
+                }
+                return $text;
+            }
+        }
+        return $this->request->origin();
+    }
+
+    /**
+     * `$url` as it is when it names a host, else on `origin()`: where a configured page like
+     * `/connect` sends the browser. Null when the origin is no URL (a Host header that names no
+     * host).
+     */
+    public function absolute(const Url& $url) : Url?
+    {
+        if ($url->absolute()) {
+            return $url;
+        }
+        Url $base = guard Url::parse($this->origin()) else {
+            return null;
+        };
+        return $url->on($base);
+    }
+
+    /**
      * A path parameter, or null.
      */
     public const function param(const string& $name) : string?

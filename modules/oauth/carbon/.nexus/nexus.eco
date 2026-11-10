@@ -17,6 +17,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::oauth::carbon::CreateOAuthTables>('nexus::oauth::carbon::CreateOAuthTables');
     $g->name<nexus::oauth::carbon::Extension>('nexus::oauth::carbon::Extension');
     $g->name<nexus::oauth::carbon::GrantRow>('nexus::oauth::carbon::GrantRow');
+    $g->name<nexus::oauth::carbon::RequestRow>('nexus::oauth::carbon::RequestRow');
     $g->name<nexus::oauth::carbon::Tables>('nexus::oauth::carbon::Tables');
 }
 

@@ -55,7 +55,7 @@ public struct Token
      */
     public const function hash() : string
     {
-        return crypto::hex(crypto::sha256($this->secret));
+        return Secrets::hash($this->secret);
     }
 
     /**

@@ -55,6 +55,13 @@ public class CarbonSessions : nexus::auth::SessionStore
         return .ok;
     }
 
+    public function prune(std::time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        AuthSessionRepository $repo = try $this->repo();
+        uint64 $gone = try $repo->find()->where(AuthSessionTable::$expiresAt < $now)->purge();
+        return .ok($gone);
+    }
+
     internal function repo() : result<AuthSessionRepository, nexus::Problem>
     {
         AuthSessionRepository $repo = try $this->session->repo<AuthSessionRepository>();

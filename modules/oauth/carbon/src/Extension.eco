@@ -3,7 +3,7 @@ namespace nexus::oauth::carbon;
 use container::{Builder, Container};
 
 /**
- * Keeps nexus-oauth's clients, codes and grants in the app's carbon database: binds `OAuthStore` on
+ * Keeps nexus-oauth's clients, requests, codes and grants in the app's carbon database: binds `OAuthStore` on
  * each request's `carbon::Session`. List it after nexus-carbon, with nexus-oauth set to
  * `stores: .provided`; the app wires the tables on its database and runs the migration with its
  * own:
@@ -36,7 +36,7 @@ public class Extension : nexus::Extension
     public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
     {
         carbon::DB $db = $kernel->services->get<carbon::DB>();
-        if (!$db->has<ClientRowRepository>() || !$db->has<CodeRowRepository>() || !$db->has<GrantRowRepository>()) {
+        if (!$db->has<ClientRowRepository>() || !$db->has<RequestRowRepository>() || !$db->has<CodeRowRepository>() || !$db->has<GrantRowRepository>()) {
             return .error(.extension('nexus-oauth-carbon', 'wire the OAuth tables on the database: nexus::oauth::carbon::Tables::wire($db)'));
         }
         return .ok;

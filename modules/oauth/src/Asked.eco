@@ -1,39 +1,33 @@
 namespace nexus::oauth;
 
+use std::time;
+
 /**
  * An authorization request (`/oauth/authorize?...`), checked: a registered client, one of its
- * redirects, PKCE with S256, the one scope this server grants and, when the client names it, this
- * server's MCP endpoint as the resource.
+ * redirects, PKCE with S256, one of the app's resources (the `resource` parameter of RFC 8707, or
+ * the only one there is) and scopes that resource offers (all of them when none are asked for).
  */
 public struct Asked
 {
     public Client $client;
-    public RedirectUri $redirect;
-    public string $state;
-    public string $challenge;
-    public string $scope;
 
     /**
-     * `redirect_uri` was in the request, not filled in from the only one registered.
+     * What is kept for the consent page.
      */
-    public bool $named;
+    public AuthRequest $request;
 
-    /**
-     * The query string checked, as `/oauth/approve` gets it back.
-     */
-    public string $query;
-
-    public static function check(const string& $query, OAuthStore $store, const string& $issuer, const OAuthConfig& $config) : result<Asked, Denial>
+    public static function check(nexus::Payload& $payload, const nexus::Query& $q, Grants $grants, nexus::auth::Resources $resources) : result<Asked, Denial>
     {
-        $q = nexus::Query(parse: $query);
+        string $issuer = $payload->origin();
         string $clientId = $q->get('client_id') ?? '';
-        Client? $found = guard $store->client($clientId) else ($p) {
+        Client? $found = guard $grants->client($clientId) else ($p) {
             return .error(.shown($p));
         };
         Client $client = guard $found else {
             return .error(.shown(.badRequest('this app is not registered here; remove it and connect it again')));
         };
-        RedirectUri $redirect = guard $client->redirect($q->get('redirect_uri') ?? '') else {
+        string $asked = $q->get('redirect_uri') ?? '';
+        RedirectUri $redirect = guard $client->redirect($asked) else {
             return .error(.shown(.badRequest("{$client->name} asked to return to an address it did not register")));
         };
         string $state = $q->get('state') ?? '';
@@ -41,36 +35,46 @@ public struct Asked
             return .error(.back(Asked::refusal($redirect, 'unsupported_response_type', 'response_type must be code', $state, $issuer)));
         }
         string $challenge = $q->get('code_challenge') ?? '';
-        if ($challenge->size() < 43 || ($q->get('code_challenge_method') ?? '') != 'S256') {
+        if ($challenge->size() < 43 || $challenge->size() > 128 || ($q->get('code_challenge_method') ?? '') != 'S256') {
             return .error(.back(Asked::refusal($redirect, 'invalid_request', 'use PKCE with S256', $state, $issuer)));
         }
-        string $scope = $q->get('scope') ?? '';
-        if ($scope->empty()) {
-            $scope = $config->scope;
+        string $target = $q->get('resource') ?? '';
+        nexus::auth::Resource $resource = guard Asked::resource($payload, $target, $resources) else {
+            string $why = 'name the resource the token is for';
+            if (!$target->empty()) {
+                $why = "{$target} is not a resource of this server";
+            }
+            return .error(.back(Asked::refusal($redirect, 'invalid_target', $why, $state, $issuer)));
+        };
+        array<string> $scopes = Scopes::split($q->get('scope') ?? '');
+        if ($scopes->empty()) {
+            $scopes = $resource->scopes;
         }
-        foreach (str::split($scope, ' ') as const &$part) {
-            string $word = string::from($part);
-            if (!$word->empty() && $word != $config->scope) {
-                return .error(.back(Asked::refusal($redirect, 'invalid_scope', "this server grants {$config->scope} only", $state, $issuer)));
+        foreach ($scopes as const &$s) {
+            if (!$resource->offers($s)) {
+                string $offered = $resource->scope();
+                return .error(.back(Asked::refusal($redirect, 'invalid_scope', "{$resource->path} offers {$offered}", $state, $issuer)));
             }
         }
-        string $resource = $q->get('resource') ?? '';
-        if (!$resource->empty() && $resource != "{$issuer}/mcp" && $resource != "{$issuer}/mcp/") {
-            return .error(.back(Asked::refusal($redirect, 'invalid_target', "this server is {$issuer}/mcp", $state, $issuer)));
-        }
-        return .ok(Asked($client: $client, $redirect: $redirect, $state: $state, $challenge: $challenge, $scope: $config->scope,
-            $named: !($q->get('redirect_uri') ?? '')->empty(), $query: $query));
+        $r = AuthRequest($id: nexus::auth::Secrets::hex(16), $client: $client->id, $redirect: $redirect->text, $named: !$asked->empty(),
+            $state: $state, $challenge: $challenge, $scope: str::join($scopes, ' '), $resource: $resource->name,
+            $expiresAt: $grants->clock->now() + time::duration::mins(10));
+        return .ok(Asked($client: $client, $request: mv $r));
     }
 
     /**
-     * Where the browser goes back to with `$name=$value` (a code or an error), plus the state and
-     * the issuer (RFC 9207).
+     * The resource `$url` names, or with none named the only one there is.
      */
-    public const function back(const string& $name, const string& $value, const string& $issuer) : string
+    internal static function resource(nexus::Payload& $payload, const string& $url, nexus::auth::Resources $resources) : nexus::auth::Resource?
     {
-        $params = nexus::Query();
-        $params->add($name, $value);
-        return Asked::returning($this->redirect, mv $params, $this->state, $issuer);
+        if (!$url->empty()) {
+            return $resources->at($payload, $url);
+        }
+        array<nexus::auth::Resource> $all = $resources->all();
+        if ($all->count() != 1) {
+            return null;
+        }
+        return $all[0];
     }
 
     internal static function refusal(const RedirectUri& $redirect, const string& $code, const string& $why, const string& $state, const string& $issuer) : string
@@ -78,15 +82,6 @@ public struct Asked
         $params = nexus::Query();
         $params->add('error', $code);
         $params->add('error_description', $why);
-        return Asked::returning($redirect, mv $params, $state, $issuer);
-    }
-
-    internal static function returning(const RedirectUri& $redirect, mv nexus::Query $params, const string& $state, const string& $issuer) : string
-    {
-        if (!$state->empty()) {
-            $params->add('state', $state);
-        }
-        $params->add('iss', $issuer);
-        return $redirect->with($params);
+        return AuthRequest::returning($redirect, mv $params, $state, $issuer);
     }
 }

@@ -1,19 +1,20 @@
 namespace Blog::Providers;
 
 use container::Container;
-use Blog::Actions::Auth::{Login, Logout, Me, OpenSession};
+use Blog::Actions::Auth::{Login, Logout, Me, OpenSession, SignInWith};
 use Blog::Actions::Users::{ListUsers, Register};
 use Blog::Middleware::{RequireAdmin, RequireUser};
 use Blog::DB::Model::{User, UserRepository};
 use Blog::Queues::{JobLane, JobQueue};
 use Blog::Rules::UniqueEmail;
-use Blog::Services::SignIn;
+use Blog::Services::{Accounts, SignIn};
 use Blog::Signals::{UserRegistered, WelcomeNewUser};
 use Blog::Tasks::PruneAuth;
 use Blog::Transformers::{UserAdminTransformer, UserTransformer};
 
 /**
- * Users and signing in: registering, tokens and sessions, who is asking and whether they may.
+ * Users and signing in: registering, passwords, Google, tokens and sessions, who is asking and
+ * whether they may.
  */
 public class AuthProvider : nexus::Provider
 {
@@ -35,6 +36,9 @@ public class AuthProvider : nexus::Provider
             ->route([.post], '/v1/auth/token');
         $app->bindAction<OpenSession>((Container $c) => OpenSession($c->get<SignIn>(), $c->get<nexus::auth::Sessions>()))
             ->route([.post], '/v1/auth/session');
+        $app->bind<Accounts>(scoped: (Container $c) => Accounts($c->get<UserRepository>(), $c->get<nexus::connect::LinkStore>(), $c->get<nexus::SignalDispatcher>()));
+        $app->bindAction<SignInWith>((Container $c) => SignInWith($c->get<nexus::connect::Connect>(), $c->get<Accounts>(), $c->get<nexus::auth::Tokens>()))
+            ->route([.post], '/v1/auth/connect');
         $app->bindAction<Logout>((Container $c) => Logout($c->get<nexus::auth::Guards>()))
             ->route([.delete], '/v1/auth');
         $app->bindAction<Me>((Container $c) => Me($c->get<UserTransformer>()))

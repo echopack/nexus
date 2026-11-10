@@ -17,6 +17,7 @@ public class GrantRow : carbon::Model<GrantRow, GrantRowRepository>
     public string $client;
     public string $subject;
     public string $scope;
+    public string $resource;
     public string $accessHash;
     public time::timestamp $accessExpiresAt;
     public string $refreshHash;
@@ -36,7 +37,7 @@ public class GrantRow : carbon::Model<GrantRow, GrantRowRepository>
      */
     public static function of(const nexus::oauth::Grant& $g) : GrantRow
     {
-        return GrantRow($id: $g->id, $client: $g->client, $subject: $g->subject, $scope: $g->scope,
+        return GrantRow($id: $g->id, $client: $g->client, $subject: $g->subject, $scope: $g->scope, $resource: $g->resource,
             $accessHash: $g->accessHash, $accessExpiresAt: $g->accessExpiresAt,
             $refreshHash: $g->refreshHash, $refreshExpiresAt: $g->refreshExpiresAt,
             $previousHash: $g->previousHash, $createdAt: $g->createdAt, $usedAt: $g->usedAt);
@@ -47,7 +48,7 @@ public class GrantRow : carbon::Model<GrantRow, GrantRowRepository>
      */
     public const function grant() : nexus::oauth::Grant
     {
-        return nexus::oauth::Grant($id: $this->id, $client: $this->client, $subject: $this->subject, $scope: $this->scope,
+        return nexus::oauth::Grant($id: $this->id, $client: $this->client, $subject: $this->subject, $scope: $this->scope, $resource: $this->resource,
             $accessHash: $this->accessHash, $accessExpiresAt: $this->accessExpiresAt,
             $refreshHash: $this->refreshHash, $refreshExpiresAt: $this->refreshExpiresAt,
             $previousHash: $this->previousHash, $createdAt: $this->createdAt, $usedAt: $this->usedAt);

@@ -38,7 +38,7 @@ public class Logins
     public function attempt(nexus::Payload& $payload, const string& $account) : status<nexus::Problem>
     {
         time::timestamp $now = $this->clock->now();
-        string $peer = Logins::peer($payload);
+        string $peer = $payload->request->peer;
         string $key = str::lower($account);
         if (!$this->peers->take($peer, $now)) {
             return .error(.tooMany($this->peers->wait($peer, $now)));
@@ -59,7 +59,7 @@ public class Logins
         if (!$this->passwords->verify($plain, $encoded)) {
             return .error(Logins::refused());
         }
-        $this->peers->refund(Logins::peer($payload));
+        $this->peers->refund($payload->request->peer);
         $this->accounts->refund(str::lower($account));
         return .ok;
     }
@@ -76,24 +76,5 @@ public class Logins
     internal static function refused() : nexus::Problem
     {
         return .unauthorized('the email or the password is wrong');
-    }
-
-    internal static function peer(const nexus::Payload& $payload) : string
-    {
-        string $peer = $payload->request->peer;
-        // the port changes per connection; the address is the client. only
-        // `address:port` has one colon, a bare IPv6 address has several
-        usize $colons = 0;
-        usize $at = 0;
-        foreach (0 .. $peer->size() as $i) {
-            if ($peer->byte($i) == 58) {
-                $colons = $colons + 1;
-                $at = $i;
-            }
-        }
-        if ($colons == 1) {
-            return $peer->sub(0, $at)->clone();
-        }
-        return $peer;
     }
 }

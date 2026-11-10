@@ -1,0 +1,133 @@
+/**
+ * The cache in front of its store: the callback `get`, default lifetimes, and a store that fails.
+ */
+
+use nexus::cache::{Cache, CacheError, Lifetime, MemoryStore, Store};
+use nexus::testing::TestApp;
+use ecotest::expect;
+use std::time;
+
+/**
+ * A store that is always down.
+ */
+#[atomic]
+internal class DownStore : Store
+{
+    public const function describe() : string
+    {
+        return 'down:';
+    }
+
+    public function get(const string& $key) : result<string?, CacheError>
+    {
+        return .error(.unavailable('connection refused'));
+    }
+
+    public function put(const string& $key, const string& $value, const Lifetime& $life) : status<CacheError>
+    {
+        return .error(.unavailable('connection refused'));
+    }
+
+    public function forget(const string& $key) : status<CacheError>
+    {
+        return .error(.unavailable('connection refused'));
+    }
+
+    public function flush() : status<CacheError>
+    {
+        return .error(.unavailable('connection refused'));
+    }
+}
+
+/**
+ * How often a callback ran; a class, so the closure shares it.
+ */
+internal class Calls
+{
+    public int64 $n = 0;
+}
+
+internal function cacheOn(MemoryStore $m) : Cache
+{
+    return Cache($m, .expires(.mins(10)), nexus::Logger::silent());
+}
+
+test the_callback_runs_on_a_miss_only
+{
+    $c = calendar::ManualClock(time::timestamp::from_unix_secs(1700000000));
+    $cache = cacheOn(MemoryStore(clock: $c));
+    Calls $calls = Calls();
+    $make = function[$calls]() : string {
+        $calls->n++;
+        return 'made';
+    };
+    expect($cache->get('k', .expires(.mins(1)), $make))->is('made');
+    expect($cache->get('k', .expires(.mins(1)), $make))->is('made');
+    expect($calls->n)->is(1 as int64);
+    $c->advance(.mins(2));
+    expect($cache->get('k', .expires(.mins(1)), $make))->is('made');
+    expect($calls->n)->is(2 as int64);
+}
+
+test without_a_lifetime_the_default_applies
+{
+    $c = calendar::ManualClock(time::timestamp::from_unix_secs(1700000000));
+    $m = MemoryStore(clock: $c);
+    $cache = cacheOn($m);
+    expect($cache->get('a', () => 'one'))->is('one');
+    expect($cache->put('b', 'two'))->fine();
+    $c->advance(.mins(9));
+    expect($cache->get('a', () => 'again'))->is('one');
+    string? $b = expect($cache->get('b'))->ok();
+    expect($b ?? '<none>')->is('two');
+    $c->advance(.mins(2));
+    expect($cache->get('a', () => 'again'))->is('again');
+    string? $gone = expect($cache->get('b'))->ok();
+    expect($gone == null)->yes();
+}
+
+test forever_is_kept_through_the_default
+{
+    $c = calendar::ManualClock(time::timestamp::from_unix_secs(1700000000));
+    $cache = cacheOn(MemoryStore(clock: $c));
+    expect($cache->get('a', .forever, () => 'one'))->is('one');
+    $c->advance(.hours(1000));
+    expect($cache->get('a', .forever, () => 'two'))->is('one');
+}
+
+test a_lapsed_lifetime_keeps_nothing
+{
+    $m = MemoryStore();
+    $cache = cacheOn($m);
+    expect($cache->put('a', .forever, 'one'))->fine();
+    expect($cache->put('a', .expires(.zero()), 'two'))->fine();
+    expect($m->count() as int64)->is(0 as int64);
+    expect($cache->get('b', .expires(.secs(-1)), () => 'made'))->is('made');
+    expect($m->count() as int64)->is(0 as int64);
+}
+
+test a_failing_callback_keeps_nothing
+{
+    $m = MemoryStore();
+    $cache = cacheOn($m);
+    result<string, string> $r = $cache->get('a', .forever, function() : result<string, string> {
+        return .error('no database');
+    });
+    expect($r->or('fell back'))->is('fell back');
+    expect($m->count() as int64)->is(0 as int64);
+    result<string, string> $ok = $cache->get('a', .forever, function() : result<string, string> {
+        return .ok('one');
+    });
+    expect($ok->or('fell back'))->is('one');
+    expect($m->count() as int64)->is(1 as int64);
+}
+
+test a_store_that_is_down_is_a_miss_and_a_warning
+{
+    $app = TestApp([nexus::cache::Extension(store: DownStore())], []);
+    Cache $cache = $app->kernel->services->get<Cache>();
+    expect($cache->get('a', () => 'made'))->is('made');
+    $app->expectLogged(.warn, 'cache read failed');
+    $app->expectLogged(.warn, 'cache write failed');
+    expect($cache->get('a'))->fails();
+}

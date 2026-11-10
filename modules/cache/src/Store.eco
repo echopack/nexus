@@ -1,0 +1,31 @@
+namespace nexus::cache;
+
+/**
+ * Where a `Cache` keeps its entries: the `MemoryStore`, or nexus-cache-redis's `RedisStore`. One
+ * store serves every thread of the process.
+ */
+public interface Store
+{
+    /**
+     * A short name for logs, like `memory:` or `redis://127.0.0.1:6379/0`. Never the password.
+     */
+    const function describe() : string;
+
+    /**
+     * The value kept under `$key`, or null when there is none or it has expired.
+     */
+    function get(const string& $key) : result<string?, CacheError>;
+
+    /**
+     * Keeps `$value` under `$key` for `$life`, replacing what was there. `Cache` never passes a
+     * lapsed lifetime: it forgets the key instead.
+     */
+    function put(const string& $key, const string& $value, const Lifetime& $life) : status<CacheError>;
+
+    function forget(const string& $key) : status<CacheError>;
+
+    /**
+     * Forgets every entry of this cache, and nothing else the backend keeps.
+     */
+    function flush() : status<CacheError>;
+}

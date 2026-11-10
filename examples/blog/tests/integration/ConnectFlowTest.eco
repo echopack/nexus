@@ -1,0 +1,86 @@
+/**
+ * Signing in with Google end to end, on the real database: the start, Google sending the browser
+ * back, the blog's `/v1/auth/connect` claiming the attempt and making, finding or linking the user.
+ * Only Google's token endpoint is scripted.
+ */
+
+use ecotest::expect;
+use ecotest::http::{Api, Reply};
+
+/**
+ * One sign in with Google as person `$sub` with `$email`: through the start and the callback, then
+ * the claim, as the page `/signed-in` would post it.
+ */
+internal function google(World& $world, nexus::connect::ScriptedFetch $fake, const string& $sub, const string& $email, bool $verified) : Reply
+{
+    Reply $started = $world->api->post('/auth/connect/google', json: '{}')->status(201);
+    string $url = $started->capture('$.url');
+    string $attempt = $started->capture('$.attempt');
+    json::Value $claims = json::object([
+        'iss' => 'https://accounts.google.com',
+        'aud' => 'blog-google',
+        'sub' => $sub,
+        'email' => $email,
+        'name' => 'Grace Hopper',
+        'nonce' => urlParam($url, 'nonce'),
+    ]);
+    $claims['email_verified'] = json::bool($verified);
+    $claims['iat'] = json::int(std::time::timestamp::now()->unix_secs());
+    $claims['exp'] = json::int(std::time::timestamp::now()->unix_secs() + 3600);
+    string $header = crypto::base64url('{"alg":"RS256"}');
+    string $body = crypto::base64url(json::dump($claims));
+    json::Value $answer = json::object(['access_token' => 'at', 'id_token' => "{$header}.{$body}.sig"]);
+    $fake->answer(nexus::connect::Google::TOKEN, 200, json::dump($answer));
+    $world->api->get('/auth/connect/google/callback', query: ['state' => urlParam($url, 'state'), 'code' => 'from-google'])
+        ->status(302)
+        ->header('Location', "http://app/signed-in?attempt={$attempt}");
+    json::Value $claim = json::object(['attempt' => $attempt, 'binding' => $started->capture('$.binding')]);
+    return $world->api->post('/v1/auth/connect', json: $claim);
+}
+
+internal function urlParam(const string& $url, const string& $name) : string
+{
+    usize $q = $url->find('?');
+    $pairs = nexus::Query(parse: $url->sub($q + 1, $url->size() - $q - 1));
+    return $pairs->get($name) ?? '';
+}
+
+#[group: "integration"]
+test signing_in_with_google_makes_finds_and_links_users
+{
+    $fake = nexus::connect::ScriptedFetch();
+    $world = World(google: $fake);
+    $world->admin();
+    int64 $users = $world->db->count('users');
+
+    ecotest::step('a new person gets a user, linked, and a token');
+    string $token = google($world, $fake, 'g-1', 'grace@example.com', true)->status(201)->capture('$.token');
+    $world->api->bearer($token)->get('/v1/me')->status(200)->json('$.data.name', 'Grace Hopper');
+    expect($world->db->count('users'))->is($users + 1);
+    expect($world->db->count('connect_links'))->is(1);
+    expect($world->db->count('connect_attempts'))->is(0);
+
+    ecotest::step('the same person again is the same user');
+    google($world, $fake, 'g-1', 'grace@example.com', true)->status(201);
+    expect($world->db->count('users'))->is($users + 1);
+
+    ecotest::step('a verified email of an existing account links to it');
+    string $editor = google($world, $fake, 'g-2', 'editor@example.com', true)->status(201)->capture('$.token');
+    $world->api->bearer($editor)->get('/v1/me')->json('$.data.name', 'The editor');
+    expect($world->db->count('connect_links'))->is(2);
+
+    ecotest::step('an unverified one does not');
+    google($world, $fake, 'g-3', 'editor@example.com', false)->problem(409);
+    expect($world->db->count('connect_links'))->is(2);
+}
+
+#[group: "integration"]
+test a_claim_without_its_binding_signs_nobody_in
+{
+    $fake = nexus::connect::ScriptedFetch();
+    $world = World(google: $fake);
+    Reply $started = $world->api->post('/auth/connect/google', json: '{}');
+    json::Value $claim = json::object(['attempt' => $started->capture('$.attempt'), 'binding' => 'guessed']);
+    $world->api->post('/v1/auth/connect', json: $claim)->problem(401);
+    $world->api->post('/auth/connect/apple', json: '{}')->problem(404);
+}

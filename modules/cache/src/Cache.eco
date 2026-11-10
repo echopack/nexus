@@ -1,0 +1,146 @@
+namespace nexus::cache;
+
+/**
+ * The cache an app reads and writes, bound by the extension: string values under string keys,
+ * each kept for a `Lifetime`. The lifetime comes before the value or the callback; without one,
+ * `NEXUS_CACHE_TTL` applies.
+ *
+ * ```echo
+ * $cache = $payload->get<nexus::cache::Cache>();
+ * string $list = $cache->get('posts:recent', .expires(.mins(5)), () => recent($repo));
+ * string $flags = $cache->get('flags', .forever, () => loadFlags());
+ * guard $cache->put('greeting', .expires(.secs(30)), 'hello');
+ * ```
+ *
+ * The `get` with a callback never fails on the cache's account: a read that fails is a miss and a
+ * write that fails is a warning in the log, so a cache that is down makes the app slower, not
+ * broken.
+ */
+#[atomic]
+public class Cache
+{
+    /**
+     * The lifetime of an entry written without one.
+     */
+    public const Lifetime $lifetime;
+
+    private Store $store;
+    private nexus::Logger $log;
+
+    public constructor(Store $store, Lifetime $lifetime, nexus::Logger $log)
+    {
+        $this->store = $store;
+        $this->lifetime = $lifetime;
+        $this->log = $log;
+    }
+
+    /**
+     * Where entries are kept, like `memory:`.
+     */
+    public const function describe() : string
+    {
+        return $this->store->describe();
+    }
+
+    /**
+     * The value under `$key`, or null when there is none.
+     */
+    public function get(const string& $key) : result<string?, CacheError>
+    {
+        return $this->store->get($key);
+    }
+
+    /**
+     * The value under `$key`; when there is none, what `$make` returns, kept for the default
+     * lifetime.
+     */
+    public function get(const string& $key, function<string()> $make) : string
+    {
+        Lifetime $life = $this->lifetime;
+        return $this->get($key, $life, $make);
+    }
+
+    /**
+     * The value under `$key`; when there is none, what `$make` returns, kept for `$life`.
+     */
+    public function get(const string& $key, const Lifetime& $life, function<string()> $make) : string
+    {
+        string? $hit = $this->read($key);
+        if ($hit != null) {
+            string $v = guard $hit;
+            return $v;
+        }
+        string $made = $make();
+        $this->keep($key, $life, $made);
+        return $made;
+    }
+
+    /**
+     * The value under `$key`; when there is none, what `$make` returns, kept for `$life` when it is
+     * a value. Its error comes back as it is, and nothing is kept.
+     */
+    public function get<E>(const string& $key, const Lifetime& $life, function<result<string, E>()> $make) : result<string, E>
+    {
+        string? $hit = $this->read($key);
+        if ($hit != null) {
+            string $v = guard $hit;
+            return .ok($v);
+        }
+        string $made = try $make();
+        $this->keep($key, $life, $made);
+        return .ok($made);
+    }
+
+    /**
+     * Keeps `$value` under `$key` for the default lifetime.
+     */
+    public function put(const string& $key, const string& $value) : status<CacheError>
+    {
+        Lifetime $life = $this->lifetime;
+        return $this->put($key, $life, $value);
+    }
+
+    /**
+     * Keeps `$value` under `$key` for `$life`. A lapsed lifetime keeps nothing: the key is
+     * forgotten.
+     */
+    public function put(const string& $key, const Lifetime& $life, const string& $value) : status<CacheError>
+    {
+        if ($life->lapsed()) {
+            return $this->store->forget($key);
+        }
+        return $this->store->put($key, $value, $life);
+    }
+
+    public function forget(const string& $key) : status<CacheError>
+    {
+        return $this->store->forget($key);
+    }
+
+    /**
+     * Forgets every entry.
+     */
+    public function flush() : status<CacheError>
+    {
+        return $this->store->flush();
+    }
+
+    // a failed read is a miss
+    private function read(const string& $key) : string?
+    {
+        string? $hit = guard $this->store->get($key) else ($e) {
+            $this->log->warn('cache read failed', ['key' => $key, 'error' => $e->message()]);
+            return null;
+        };
+        return $hit;
+    }
+
+    // a failed write is only logged
+    private function keep(const string& $key, const Lifetime& $life, const string& $value) : void
+    {
+        guard $this->put($key, $life, $value) else ($e) {
+            $this->log->warn('cache write failed', ['key' => $key, 'error' => $e->message()]);
+            return;
+        };
+    }
+}

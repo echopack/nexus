@@ -1,0 +1,68 @@
+namespace nexus::cache;
+
+/**
+ * The cache for a nexus app: reads `NEXUS_CACHE_*` and binds the process-wide `Cache` on the store
+ * `NEXUS_CACHE_URL` names (unless one is given). For `memory:` that is a `MemoryStore`; for
+ * `redis://` nexus-cache-redis binds it, listed after this one.
+ *
+ * ```echo
+ * nexus::cache::Extension(),
+ * nexus::cache::redis::Extension(),   // only when the app may run on Redis
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public Store? $store;
+    public calendar::Clock $clock;
+
+    public constructor(store: Store? $store = null, clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->store = $store;
+        $this->clock = $clock;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-cache';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        CacheConfig $config = $s->get<CacheConfig>();
+        if ($config->ttl <= std::time::duration::zero()) {
+            return .error(.extension('nexus-cache', "NEXUS_CACHE_TTL is {$config->ttl}; expected more than 0s"));
+        }
+        Lifetime $life = .expires($config->ttl);
+        nexus::Logger $log = $s->get<nexus::Logger>();
+        if ($this->store != null) {
+            Store $given = guard $this->store;
+            $s->bind<Cache>(put: Cache($given, $life, $log));
+            return .ok;
+        }
+        string $kind = scheme($config->url);
+        if ($kind == 'memory') {
+            $s->bind<Cache>(put: Cache(MemoryStore(max: $config->maxEntries as usize, clock: $this->clock), $life, $log));
+            return .ok;
+        }
+        if ($kind == 'redis' || $kind == 'rediss') {
+            // nexus-cache-redis binds the cache; boot checks that it did
+            return .ok;
+        }
+        return .error(.extension('nexus-cache', "NEXUS_CACHE_URL has the scheme '{$kind}'; expected memory: or redis://host"));
+    }
+
+    public function commands(nexus::Commands& $cmds) : void
+    {
+        $cmds->add(ClearCommand());
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        if (!$kernel->services->has<Cache>()) {
+            return .error(.extension('nexus-cache', 'NEXUS_CACHE_URL names Redis; list nexus::cache::redis::Extension() after nexus::cache::Extension()'));
+        }
+        Cache $cache = $kernel->services->get<Cache>();
+        $kernel->log->debug("cache in {$cache->describe()}");
+        return .ok;
+    }
+}

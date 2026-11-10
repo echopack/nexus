@@ -1,0 +1,92 @@
+namespace nexus::connect;
+
+use std::thread;
+
+// one URL's answers still to give, and the last one given, which repeats once they run out
+internal struct Script
+{
+    public array<Fetched> $queued = [];
+    public Fetched? $last = null;
+}
+
+/**
+ * A provider in a test: answers what the test told it to, by URL, and keeps what was sent. A URL
+ * nobody scripted is a 503, as an unreachable provider is.
+ *
+ * ```echo
+ * $google = nexus::connect::ScriptedFetch();
+ * $google->answer('https://oauth2.googleapis.com/token', 200, '{"id_token": "..."}');
+ * nexus::connect::Extension(connectors: [...], fetch: $google),
+ * ```
+ */
+#[atomic]
+public class ScriptedFetch : Fetch
+{
+    private thread::mutex<map<string, Script>> $answers;
+    private thread::mutex<array<Sent>> $log;
+
+    public constructor()
+    {
+        $this->answers = thread::mutex<map<string, Script>>(map<string, Script>());
+        $this->log = thread::mutex<array<Sent>>(array<Sent>());
+    }
+
+    /**
+     * The next request to `$url` gets `$status` and `$body`. Answers to one URL are given in the
+     * order they were scripted; the last one repeats until another is scripted.
+     */
+    public function answer(const string& $url, int32 $status, const string& $body) : ScriptedFetch
+    {
+        thread::locked<map<string, Script>> $held = $this->answers->lock();
+        if (!$held->value->has($url)) {
+            $held->value[$url] = Script();
+        }
+        Script& $script = $held->value->at($url);
+        $script->queued[] = Fetched($status, $body);
+        return $this;
+    }
+
+    /**
+     * What was sent, in order.
+     */
+    public function sent() : array<Sent>
+    {
+        thread::locked<array<Sent>> $held = $this->log->lock();
+        return $held->value;
+    }
+
+    public function get(const string& $url) : result<Fetched, nexus::Problem>
+    {
+        $this->note(Sent('GET', $url, nexus::Query()));
+        return $this->next($url);
+    }
+
+    public function post(const string& $url, const nexus::Query& $form) : result<Fetched, nexus::Problem>
+    {
+        $this->note(Sent('POST', $url, $form));
+        return $this->next($url);
+    }
+
+    internal function note(Sent $s) : void
+    {
+        thread::locked<array<Sent>> $held = $this->log->lock();
+        $held->value[] = mv $s;
+    }
+
+    internal function next(const string& $url) : result<Fetched, nexus::Problem>
+    {
+        thread::locked<map<string, Script>> $held = $this->answers->lock();
+        if (!$held->value->has($url)) {
+            return .error(.unavailable("{$url} could not be reached: no answer scripted"));
+        }
+        Script& $script = $held->value->at($url);
+        if (!$script->queued->empty()) {
+            $script->last = $script->queued[0];
+            $script->queued->remove(0);
+        }
+        Fetched $f = guard $script->last else {
+            return .error(.unavailable("{$url} could not be reached: no answer scripted"));
+        };
+        return .ok($f);
+    }
+}

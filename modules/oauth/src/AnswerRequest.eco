@@ -1,0 +1,33 @@
+namespace nexus::oauth;
+
+/**
+ * The signed in user's answer on the consent page, `{"allow": true}`. The request is spent; the
+ * answer is where the browser goes next, `{"redirect": "..."}`: back to the client with a code, or
+ * with `access_denied`.
+ */
+#[nexus::through: ["nexus::auth::Authenticate"]]
+public class AnswerRequest : nexus::Action
+{
+    private Grants $grants;
+
+    public constructor(Grants $grants)
+    {
+        $this->grants = $grants;
+    }
+
+    public function handle(nexus::Payload& $payload, string $id, nexus::Body<Decision> $in) : result<json::Value, nexus::Problem>
+    {
+        $me = try $payload->state<nexus::auth::Identity>();
+        Asked $asked = try $this->grants->answer($id);
+        string $issuer = $payload->origin();
+        json::Value $o = json::object();
+        if (!$in->value->allow) {
+            $o['redirect'] = json::str($asked->request->back('error', 'access_denied', $issuer));
+            return .ok($o);
+        }
+        string $code = try $this->grants->code($asked->request, $me->subject);
+        $payload->log->info('oauth code issued', ['client' => $asked->client->id, 'subject' => $me->subject, 'resource' => $asked->request->resource]);
+        $o['redirect'] = json::str($asked->request->back('code', $code, $issuer));
+        return .ok($o);
+    }
+}

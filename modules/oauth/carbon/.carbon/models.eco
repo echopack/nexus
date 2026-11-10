@@ -273,6 +273,7 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
     public static hydrahon::Term<bool> $named = carbon::select::column<bool>('oauth_codes', 'named');
     public static hydrahon::Term<string> $challenge = carbon::select::column<string>('oauth_codes', 'challenge');
     public static hydrahon::Term<string> $scope = carbon::select::column<string>('oauth_codes', 'scope');
+    public static hydrahon::Term<string> $resource = carbon::select::column<string>('oauth_codes', 'resource');
     public static hydrahon::Term<hydrahon::DateTime> $expiresAt = carbon::select::column<hydrahon::DateTime>('oauth_codes', 'expires_at');
     private hydrahon::Table $carbonTable;
 
@@ -298,7 +299,7 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
 
     public const function fields() : array<hydrahon::Field>
     {
-        array<hydrahon::Field> $out = [CodeRowTable::$hash, CodeRowTable::$client, CodeRowTable::$subject, CodeRowTable::$redirect, CodeRowTable::$named, CodeRowTable::$challenge, CodeRowTable::$scope, CodeRowTable::$expiresAt];
+        array<hydrahon::Field> $out = [CodeRowTable::$hash, CodeRowTable::$client, CodeRowTable::$subject, CodeRowTable::$redirect, CodeRowTable::$named, CodeRowTable::$challenge, CodeRowTable::$scope, CodeRowTable::$resource, CodeRowTable::$expiresAt];
         return $out;
     }
 
@@ -346,9 +347,10 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
         bool $c4 = guard $row->bool(4) else { return .error(.column('named', carbon::Problem::of($row, 4))); }
         string $c5 = guard $row->text(5) else { return .error(.column('challenge', carbon::Problem::of($row, 5))); }
         string $c6 = guard $row->text(6) else { return .error(.column('scope', carbon::Problem::of($row, 6))); }
-        hydrahon::DateTime $r7 = guard $row->datetime(7) else { return .error(.column('expires_at', carbon::Problem::of($row, 7))); }
-        std::time::timestamp $c7 = guard carbon::codec::Instant()->decode($r7) else ($p) { return .error(.column('expires_at', $p)); }
-        return .ok(nexus::oauth::carbon::CodeRow($hash: $c0, $client: $c1, $subject: $c2, $redirect: $c3, $named: $c4, $challenge: $c5, $scope: $c6, $expiresAt: $c7));
+        string $c7 = guard $row->text(7) else { return .error(.column('resource', carbon::Problem::of($row, 7))); }
+        hydrahon::DateTime $r8 = guard $row->datetime(8) else { return .error(.column('expires_at', carbon::Problem::of($row, 8))); }
+        std::time::timestamp $c8 = guard carbon::codec::Instant()->decode($r8) else ($p) { return .error(.column('expires_at', $p)); }
+        return .ok(nexus::oauth::carbon::CodeRow($hash: $c0, $client: $c1, $subject: $c2, $redirect: $c3, $named: $c4, $challenge: $c5, $scope: $c6, $resource: $c7, $expiresAt: $c8));
     }
 
     public const function snapshot(const nexus::oauth::carbon::CodeRow& $m) : carbon::change::Snapshot
@@ -368,8 +370,10 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
         $out->values[] = hydrahon::Value::from($s5);
         string $s6 = $m->scope;
         $out->values[] = hydrahon::Value::from($s6);
-        hydrahon::DateTime $s7 = carbon::codec::Instant()->encode($m->expiresAt);
+        string $s7 = $m->resource;
         $out->values[] = hydrahon::Value::from($s7);
+        hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->expiresAt);
+        $out->values[] = hydrahon::Value::from($s8);
         return $out;
     }
 
@@ -404,8 +408,12 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
             $into[CodeRowTable::$scope] = $s6;
         }
         if ($only->has(7)) {
-            hydrahon::DateTime $s7 = carbon::codec::Instant()->encode($m->expiresAt);
-            $into[CodeRowTable::$expiresAt] = $s7;
+            string $s7 = $m->resource;
+            $into[CodeRowTable::$resource] = $s7;
+        }
+        if ($only->has(8)) {
+            hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->expiresAt);
+            $into[CodeRowTable::$expiresAt] = $s8;
         }
     }
 
@@ -451,6 +459,7 @@ public class CodeRowTableAlias : hydrahon::Source
     public const hydrahon::Term<bool> $named;
     public const hydrahon::Term<string> $challenge;
     public const hydrahon::Term<string> $scope;
+    public const hydrahon::Term<string> $resource;
     public const hydrahon::Term<hydrahon::DateTime> $expiresAt;
     private hydrahon::Table $carbonTable;
 
@@ -468,6 +477,7 @@ public class CodeRowTableAlias : hydrahon::Source
         $this->named = $this->carbonTable->column<bool>('named');
         $this->challenge = $this->carbonTable->column<string>('challenge');
         $this->scope = $this->carbonTable->column<string>('scope');
+        $this->resource = $this->carbonTable->column<string>('resource');
         $this->expiresAt = $this->carbonTable->column<hydrahon::DateTime>('expires_at');
     }
 
@@ -545,6 +555,7 @@ public class GrantRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carb
     public static hydrahon::Term<string> $client = carbon::select::column<string>('oauth_grants', 'client');
     public static hydrahon::Term<string> $subject = carbon::select::column<string>('oauth_grants', 'subject');
     public static hydrahon::Term<string> $scope = carbon::select::column<string>('oauth_grants', 'scope');
+    public static hydrahon::Term<string> $resource = carbon::select::column<string>('oauth_grants', 'resource');
     public static hydrahon::Term<string> $accessHash = carbon::select::column<string>('oauth_grants', 'access_hash');
     public static hydrahon::Term<hydrahon::DateTime> $accessExpiresAt = carbon::select::column<hydrahon::DateTime>('oauth_grants', 'access_expires_at');
     public static hydrahon::Term<string> $refreshHash = carbon::select::column<string>('oauth_grants', 'refresh_hash');
@@ -576,7 +587,7 @@ public class GrantRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carb
 
     public const function fields() : array<hydrahon::Field>
     {
-        array<hydrahon::Field> $out = [GrantRowTable::$id, GrantRowTable::$client, GrantRowTable::$subject, GrantRowTable::$scope, GrantRowTable::$accessHash, GrantRowTable::$accessExpiresAt, GrantRowTable::$refreshHash, GrantRowTable::$refreshExpiresAt, GrantRowTable::$previousHash, GrantRowTable::$createdAt, GrantRowTable::$usedAt];
+        array<hydrahon::Field> $out = [GrantRowTable::$id, GrantRowTable::$client, GrantRowTable::$subject, GrantRowTable::$scope, GrantRowTable::$resource, GrantRowTable::$accessHash, GrantRowTable::$accessExpiresAt, GrantRowTable::$refreshHash, GrantRowTable::$refreshExpiresAt, GrantRowTable::$previousHash, GrantRowTable::$createdAt, GrantRowTable::$usedAt];
         return $out;
     }
 
@@ -621,18 +632,19 @@ public class GrantRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carb
         string $c1 = guard $row->text(1) else { return .error(.column('client', carbon::Problem::of($row, 1))); }
         string $c2 = guard $row->text(2) else { return .error(.column('subject', carbon::Problem::of($row, 2))); }
         string $c3 = guard $row->text(3) else { return .error(.column('scope', carbon::Problem::of($row, 3))); }
-        string $c4 = guard $row->text(4) else { return .error(.column('access_hash', carbon::Problem::of($row, 4))); }
-        hydrahon::DateTime $r5 = guard $row->datetime(5) else { return .error(.column('access_expires_at', carbon::Problem::of($row, 5))); }
-        std::time::timestamp $c5 = guard carbon::codec::Instant()->decode($r5) else ($p) { return .error(.column('access_expires_at', $p)); }
-        string $c6 = guard $row->text(6) else { return .error(.column('refresh_hash', carbon::Problem::of($row, 6))); }
-        hydrahon::DateTime $r7 = guard $row->datetime(7) else { return .error(.column('refresh_expires_at', carbon::Problem::of($row, 7))); }
-        std::time::timestamp $c7 = guard carbon::codec::Instant()->decode($r7) else ($p) { return .error(.column('refresh_expires_at', $p)); }
-        string $c8 = guard $row->text(8) else { return .error(.column('previous_hash', carbon::Problem::of($row, 8))); }
-        hydrahon::DateTime $r9 = guard $row->datetime(9) else { return .error(.column('created_at', carbon::Problem::of($row, 9))); }
-        std::time::timestamp $c9 = guard carbon::codec::Instant()->decode($r9) else ($p) { return .error(.column('created_at', $p)); }
-        hydrahon::DateTime $r10 = guard $row->datetime(10) else { return .error(.column('used_at', carbon::Problem::of($row, 10))); }
-        std::time::timestamp $c10 = guard carbon::codec::Instant()->decode($r10) else ($p) { return .error(.column('used_at', $p)); }
-        return .ok(nexus::oauth::carbon::GrantRow($id: $c0, $client: $c1, $subject: $c2, $scope: $c3, $accessHash: $c4, $accessExpiresAt: $c5, $refreshHash: $c6, $refreshExpiresAt: $c7, $previousHash: $c8, $createdAt: $c9, $usedAt: $c10));
+        string $c4 = guard $row->text(4) else { return .error(.column('resource', carbon::Problem::of($row, 4))); }
+        string $c5 = guard $row->text(5) else { return .error(.column('access_hash', carbon::Problem::of($row, 5))); }
+        hydrahon::DateTime $r6 = guard $row->datetime(6) else { return .error(.column('access_expires_at', carbon::Problem::of($row, 6))); }
+        std::time::timestamp $c6 = guard carbon::codec::Instant()->decode($r6) else ($p) { return .error(.column('access_expires_at', $p)); }
+        string $c7 = guard $row->text(7) else { return .error(.column('refresh_hash', carbon::Problem::of($row, 7))); }
+        hydrahon::DateTime $r8 = guard $row->datetime(8) else { return .error(.column('refresh_expires_at', carbon::Problem::of($row, 8))); }
+        std::time::timestamp $c8 = guard carbon::codec::Instant()->decode($r8) else ($p) { return .error(.column('refresh_expires_at', $p)); }
+        string $c9 = guard $row->text(9) else { return .error(.column('previous_hash', carbon::Problem::of($row, 9))); }
+        hydrahon::DateTime $r10 = guard $row->datetime(10) else { return .error(.column('created_at', carbon::Problem::of($row, 10))); }
+        std::time::timestamp $c10 = guard carbon::codec::Instant()->decode($r10) else ($p) { return .error(.column('created_at', $p)); }
+        hydrahon::DateTime $r11 = guard $row->datetime(11) else { return .error(.column('used_at', carbon::Problem::of($row, 11))); }
+        std::time::timestamp $c11 = guard carbon::codec::Instant()->decode($r11) else ($p) { return .error(.column('used_at', $p)); }
+        return .ok(nexus::oauth::carbon::GrantRow($id: $c0, $client: $c1, $subject: $c2, $scope: $c3, $resource: $c4, $accessHash: $c5, $accessExpiresAt: $c6, $refreshHash: $c7, $refreshExpiresAt: $c8, $previousHash: $c9, $createdAt: $c10, $usedAt: $c11));
     }
 
     public const function snapshot(const nexus::oauth::carbon::GrantRow& $m) : carbon::change::Snapshot
@@ -646,20 +658,22 @@ public class GrantRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carb
         $out->values[] = hydrahon::Value::from($s2);
         string $s3 = $m->scope;
         $out->values[] = hydrahon::Value::from($s3);
-        string $s4 = $m->accessHash;
+        string $s4 = $m->resource;
         $out->values[] = hydrahon::Value::from($s4);
-        hydrahon::DateTime $s5 = carbon::codec::Instant()->encode($m->accessExpiresAt);
+        string $s5 = $m->accessHash;
         $out->values[] = hydrahon::Value::from($s5);
-        string $s6 = $m->refreshHash;
+        hydrahon::DateTime $s6 = carbon::codec::Instant()->encode($m->accessExpiresAt);
         $out->values[] = hydrahon::Value::from($s6);
-        hydrahon::DateTime $s7 = carbon::codec::Instant()->encode($m->refreshExpiresAt);
+        string $s7 = $m->refreshHash;
         $out->values[] = hydrahon::Value::from($s7);
-        string $s8 = $m->previousHash;
+        hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->refreshExpiresAt);
         $out->values[] = hydrahon::Value::from($s8);
-        hydrahon::DateTime $s9 = carbon::codec::Instant()->encode($m->createdAt);
+        string $s9 = $m->previousHash;
         $out->values[] = hydrahon::Value::from($s9);
-        hydrahon::DateTime $s10 = carbon::codec::Instant()->encode($m->usedAt);
+        hydrahon::DateTime $s10 = carbon::codec::Instant()->encode($m->createdAt);
         $out->values[] = hydrahon::Value::from($s10);
+        hydrahon::DateTime $s11 = carbon::codec::Instant()->encode($m->usedAt);
+        $out->values[] = hydrahon::Value::from($s11);
         return $out;
     }
 
@@ -682,32 +696,36 @@ public class GrantRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carb
             $into[GrantRowTable::$scope] = $s3;
         }
         if ($only->has(4)) {
-            string $s4 = $m->accessHash;
-            $into[GrantRowTable::$accessHash] = $s4;
+            string $s4 = $m->resource;
+            $into[GrantRowTable::$resource] = $s4;
         }
         if ($only->has(5)) {
-            hydrahon::DateTime $s5 = carbon::codec::Instant()->encode($m->accessExpiresAt);
-            $into[GrantRowTable::$accessExpiresAt] = $s5;
+            string $s5 = $m->accessHash;
+            $into[GrantRowTable::$accessHash] = $s5;
         }
         if ($only->has(6)) {
-            string $s6 = $m->refreshHash;
-            $into[GrantRowTable::$refreshHash] = $s6;
+            hydrahon::DateTime $s6 = carbon::codec::Instant()->encode($m->accessExpiresAt);
+            $into[GrantRowTable::$accessExpiresAt] = $s6;
         }
         if ($only->has(7)) {
-            hydrahon::DateTime $s7 = carbon::codec::Instant()->encode($m->refreshExpiresAt);
-            $into[GrantRowTable::$refreshExpiresAt] = $s7;
+            string $s7 = $m->refreshHash;
+            $into[GrantRowTable::$refreshHash] = $s7;
         }
         if ($only->has(8)) {
-            string $s8 = $m->previousHash;
-            $into[GrantRowTable::$previousHash] = $s8;
+            hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->refreshExpiresAt);
+            $into[GrantRowTable::$refreshExpiresAt] = $s8;
         }
         if ($only->has(9)) {
-            hydrahon::DateTime $s9 = carbon::codec::Instant()->encode($m->createdAt);
-            $into[GrantRowTable::$createdAt] = $s9;
+            string $s9 = $m->previousHash;
+            $into[GrantRowTable::$previousHash] = $s9;
         }
         if ($only->has(10)) {
-            hydrahon::DateTime $s10 = carbon::codec::Instant()->encode($m->usedAt);
-            $into[GrantRowTable::$usedAt] = $s10;
+            hydrahon::DateTime $s10 = carbon::codec::Instant()->encode($m->createdAt);
+            $into[GrantRowTable::$createdAt] = $s10;
+        }
+        if ($only->has(11)) {
+            hydrahon::DateTime $s11 = carbon::codec::Instant()->encode($m->usedAt);
+            $into[GrantRowTable::$usedAt] = $s11;
         }
     }
 
@@ -750,6 +768,7 @@ public class GrantRowTableAlias : hydrahon::Source
     public const hydrahon::Term<string> $client;
     public const hydrahon::Term<string> $subject;
     public const hydrahon::Term<string> $scope;
+    public const hydrahon::Term<string> $resource;
     public const hydrahon::Term<string> $accessHash;
     public const hydrahon::Term<hydrahon::DateTime> $accessExpiresAt;
     public const hydrahon::Term<string> $refreshHash;
@@ -770,6 +789,7 @@ public class GrantRowTableAlias : hydrahon::Source
         $this->client = $this->carbonTable->column<string>('client');
         $this->subject = $this->carbonTable->column<string>('subject');
         $this->scope = $this->carbonTable->column<string>('scope');
+        $this->resource = $this->carbonTable->column<string>('resource');
         $this->accessHash = $this->carbonTable->column<string>('access_hash');
         $this->accessExpiresAt = $this->carbonTable->column<hydrahon::DateTime>('access_expires_at');
         $this->refreshHash = $this->carbonTable->column<string>('refresh_hash');
@@ -844,6 +864,291 @@ public interface GrantRowWiring
 }
 
 /**
+ * The columns of `oauth_requests` and how `RequestRow` maps onto them.
+ */
+#[atomic]
+public class RequestRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbon::RequestRow, string>
+{
+    public static hydrahon::Term<string> $id = carbon::select::column<string>('oauth_requests', 'id');
+    public static hydrahon::Term<string> $client = carbon::select::column<string>('oauth_requests', 'client');
+    public static hydrahon::Term<string> $redirect = carbon::select::column<string>('oauth_requests', 'redirect');
+    public static hydrahon::Term<bool> $named = carbon::select::column<bool>('oauth_requests', 'named');
+    public static hydrahon::Term<string> $state = carbon::select::column<string>('oauth_requests', 'state');
+    public static hydrahon::Term<string> $challenge = carbon::select::column<string>('oauth_requests', 'challenge');
+    public static hydrahon::Term<string> $scope = carbon::select::column<string>('oauth_requests', 'scope');
+    public static hydrahon::Term<string> $resource = carbon::select::column<string>('oauth_requests', 'resource');
+    public static hydrahon::Term<hydrahon::DateTime> $expiresAt = carbon::select::column<hydrahon::DateTime>('oauth_requests', 'expires_at');
+    private hydrahon::Table $carbonTable;
+
+    public constructor()
+    {
+        $this->carbonTable = hydrahon::Table(name: 'oauth_requests');
+    }
+
+    /**
+     * The table under `$alias`, to join it, or join it twice: `$p = RequestRowTable::alias('p');`, then
+     * `$p->id`. `$schema` names the database for a table that lives in
+     * another one.
+     */
+    public static function alias(string $alias, schema: string? $schema = null) : RequestRowTableAlias
+    {
+        return RequestRowTableAlias(alias: $alias, schema: $schema);
+    }
+
+    public const function table() : hydrahon::Table
+    {
+        return $this->carbonTable;
+    }
+
+    public const function fields() : array<hydrahon::Field>
+    {
+        array<hydrahon::Field> $out = [RequestRowTable::$id, RequestRowTable::$client, RequestRowTable::$redirect, RequestRowTable::$named, RequestRowTable::$state, RequestRowTable::$challenge, RequestRowTable::$scope, RequestRowTable::$resource, RequestRowTable::$expiresAt];
+        return $out;
+    }
+
+    public const function keyIs(string $key) : hydrahon::Term<bool>
+    {
+        return RequestRowTable::$id == $key;
+    }
+
+    public const function keyIn(const array<string>& $keys) : hydrahon::Term<bool>
+    {
+        return RequestRowTable::$id in $keys;
+    }
+
+    public const function keyAfter(string $key) : hydrahon::Term<bool>
+    {
+        return RequestRowTable::$id > $key;
+    }
+
+    public const function byKey() : hydrahon::Order
+    {
+        return RequestRowTable::$id->asc();
+    }
+
+    public const function keyAt() : usize
+    {
+        return 0;
+    }
+
+    public const function generated() : bool
+    {
+        return false;
+    }
+
+    public const function keyOf(const nexus::oauth::carbon::RequestRow& $m) : string
+    {
+        return $m->id;
+    }
+
+    public const function read(const carbon::Cursor& $row, const carbon::select::Selected& $extra) : result<nexus::oauth::carbon::RequestRow, carbon::Error>
+    {
+        string $c0 = guard $row->text(0) else { return .error(.column('id', carbon::Problem::of($row, 0))); }
+        string $c1 = guard $row->text(1) else { return .error(.column('client', carbon::Problem::of($row, 1))); }
+        string $c2 = guard $row->text(2) else { return .error(.column('redirect', carbon::Problem::of($row, 2))); }
+        bool $c3 = guard $row->bool(3) else { return .error(.column('named', carbon::Problem::of($row, 3))); }
+        string $c4 = guard $row->text(4) else { return .error(.column('state', carbon::Problem::of($row, 4))); }
+        string $c5 = guard $row->text(5) else { return .error(.column('challenge', carbon::Problem::of($row, 5))); }
+        string $c6 = guard $row->text(6) else { return .error(.column('scope', carbon::Problem::of($row, 6))); }
+        string $c7 = guard $row->text(7) else { return .error(.column('resource', carbon::Problem::of($row, 7))); }
+        hydrahon::DateTime $r8 = guard $row->datetime(8) else { return .error(.column('expires_at', carbon::Problem::of($row, 8))); }
+        std::time::timestamp $c8 = guard carbon::codec::Instant()->decode($r8) else ($p) { return .error(.column('expires_at', $p)); }
+        return .ok(nexus::oauth::carbon::RequestRow($id: $c0, $client: $c1, $redirect: $c2, $named: $c3, $state: $c4, $challenge: $c5, $scope: $c6, $resource: $c7, $expiresAt: $c8));
+    }
+
+    public const function snapshot(const nexus::oauth::carbon::RequestRow& $m) : carbon::change::Snapshot
+    {
+        carbon::change::Snapshot $out = carbon::change::Snapshot();
+        string $s0 = $m->id;
+        $out->values[] = hydrahon::Value::from($s0);
+        string $s1 = $m->client;
+        $out->values[] = hydrahon::Value::from($s1);
+        string $s2 = $m->redirect;
+        $out->values[] = hydrahon::Value::from($s2);
+        bool $s3 = $m->named;
+        $out->values[] = hydrahon::Value::from($s3);
+        string $s4 = $m->state;
+        $out->values[] = hydrahon::Value::from($s4);
+        string $s5 = $m->challenge;
+        $out->values[] = hydrahon::Value::from($s5);
+        string $s6 = $m->scope;
+        $out->values[] = hydrahon::Value::from($s6);
+        string $s7 = $m->resource;
+        $out->values[] = hydrahon::Value::from($s7);
+        hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->expiresAt);
+        $out->values[] = hydrahon::Value::from($s8);
+        return $out;
+    }
+
+    public const function write(const nexus::oauth::carbon::RequestRow& $m, const carbon::change::Changes& $only, hydrahon::Values& $into) : void
+    {
+        if ($only->has(0)) {
+            string $s0 = $m->id;
+            $into[RequestRowTable::$id] = $s0;
+        }
+        if ($only->has(1)) {
+            string $s1 = $m->client;
+            $into[RequestRowTable::$client] = $s1;
+        }
+        if ($only->has(2)) {
+            string $s2 = $m->redirect;
+            $into[RequestRowTable::$redirect] = $s2;
+        }
+        if ($only->has(3)) {
+            bool $s3 = $m->named;
+            $into[RequestRowTable::$named] = $s3;
+        }
+        if ($only->has(4)) {
+            string $s4 = $m->state;
+            $into[RequestRowTable::$state] = $s4;
+        }
+        if ($only->has(5)) {
+            string $s5 = $m->challenge;
+            $into[RequestRowTable::$challenge] = $s5;
+        }
+        if ($only->has(6)) {
+            string $s6 = $m->scope;
+            $into[RequestRowTable::$scope] = $s6;
+        }
+        if ($only->has(7)) {
+            string $s7 = $m->resource;
+            $into[RequestRowTable::$resource] = $s7;
+        }
+        if ($only->has(8)) {
+            hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->expiresAt);
+            $into[RequestRowTable::$expiresAt] = $s8;
+        }
+    }
+
+    public const function inserted(nexus::oauth::carbon::RequestRow& $m, int64 $key) : void
+    {
+    }
+
+    public const function link(nexus::oauth::carbon::RequestRow& $m) : carbon::Link&
+    {
+        return $m->link;
+    }
+
+    public const function stamp(nexus::oauth::carbon::RequestRow& $m, carbon::Event $event, std::time::timestamp $now) : void
+    {
+    }
+
+    public const function trash(nexus::oauth::carbon::RequestRow& $m, std::time::timestamp? $at) : bool
+    {
+        return false;
+    }
+
+    public const function trashed(const nexus::oauth::carbon::RequestRow& $m) : std::time::timestamp?
+    {
+        return null;
+    }
+
+    public const function live() : hydrahon::Term<bool>?
+    {
+        return null;
+    }
+}
+
+/**
+ * `oauth_requests` under an alias, from `RequestRowTable::alias`.
+ */
+#[atomic]
+public class RequestRowTableAlias : hydrahon::Source
+{
+    public const hydrahon::Term<string> $id;
+    public const hydrahon::Term<string> $client;
+    public const hydrahon::Term<string> $redirect;
+    public const hydrahon::Term<bool> $named;
+    public const hydrahon::Term<string> $state;
+    public const hydrahon::Term<string> $challenge;
+    public const hydrahon::Term<string> $scope;
+    public const hydrahon::Term<string> $resource;
+    public const hydrahon::Term<hydrahon::DateTime> $expiresAt;
+    private hydrahon::Table $carbonTable;
+
+    public constructor(alias: string $alias, schema: string? $schema = null)
+    {
+        $this->carbonTable = hydrahon::Table(name: 'oauth_requests', alias: $alias, $schema: $schema);
+    }
+
+    init
+    {
+        $this->id = $this->carbonTable->column<string>('id');
+        $this->client = $this->carbonTable->column<string>('client');
+        $this->redirect = $this->carbonTable->column<string>('redirect');
+        $this->named = $this->carbonTable->column<bool>('named');
+        $this->state = $this->carbonTable->column<string>('state');
+        $this->challenge = $this->carbonTable->column<string>('challenge');
+        $this->scope = $this->carbonTable->column<string>('scope');
+        $this->resource = $this->carbonTable->column<string>('resource');
+        $this->expiresAt = $this->carbonTable->column<hydrahon::DateTime>('expires_at');
+    }
+
+    public const function table() : hydrahon::Table
+    {
+        return $this->carbonTable;
+    }
+}
+
+/**
+ * What a query for `RequestRow` models gathers: the field a query struct keeps.
+ */
+public type RequestRowRows = carbon::Rows<nexus::oauth::carbon::RequestRow, string, nexus::oauth::carbon::RequestRowTable>;
+
+/**
+ * A query for `RequestRow` models. Declare a struct conforming to
+ * `carbon::Query<RequestRow, …>` in its place to give it scopes of its own.
+ */
+public struct RequestRowQuery : carbon::Query<nexus::oauth::carbon::RequestRow, RequestRowQuery>
+{
+    internal RequestRowRows $rows;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->rows = RequestRowRows($session);
+    }
+
+    public function rows() : RequestRowRows&
+    {
+        return $this->rows;
+    }
+}
+
+/**
+ * The repository of `RequestRow` models: writes and queries, nothing of its own. Declare a
+ * struct conforming to `carbon::Repository<RequestRow, …>` in its place for finders and hooks.
+ */
+public struct RequestRowRepository : carbon::Repository<nexus::oauth::carbon::RequestRow, nexus::oauth::carbon::RequestRowQuery, string>, RequestRowWiring
+{
+    public carbon::Session $session;
+}
+
+/**
+ * What a repository of `RequestRow` models reaches through carbon: its session and the model's
+ * store. A repository written by hand names it and keeps its session in `$session`:
+ * `RequestRowRepository : carbon::Repository<RequestRow, …>, RequestRowWiring`.
+ */
+public interface RequestRowWiring
+{
+    /**
+     * The session the repository was built for.
+     */
+    function session() : carbon::Session
+    {
+        return $this->session;
+    }
+
+    /**
+     * The store of `RequestRow` models, shared by every session.
+     */
+    function store() : carbon::Store<nexus::oauth::carbon::RequestRow, string, nexus::oauth::carbon::RequestRowTable>
+    {
+        carbon::Session $s = $this->session();
+        return $s->store<nexus::oauth::carbon::RequestRow, string, nexus::oauth::carbon::RequestRowTable>();
+    }
+}
+
+/**
  * The wiring of the models of this namespace, registered and checked in one go.
  */
 public struct Carbon
@@ -868,6 +1173,7 @@ public struct Carbon
         guard $db->register<nexus::oauth::carbon::ClientRowRepository>() else ($e) { return .error($e); }
         guard $db->register<nexus::oauth::carbon::CodeRowRepository>() else ($e) { return .error($e); }
         guard $db->register<nexus::oauth::carbon::GrantRowRepository>() else ($e) { return .error($e); }
+        guard $db->register<nexus::oauth::carbon::RequestRowRepository>() else ($e) { return .error($e); }
         return .ok();
     }
 
@@ -890,12 +1196,16 @@ public struct Carbon
         if (!$db->has<nexus::oauth::carbon::GrantRowRepository>()) {
             $missing[] = 'nexus::oauth::carbon::GrantRowRepository';
         }
+        if (!$db->has<nexus::oauth::carbon::RequestRowRepository>()) {
+            $missing[] = 'nexus::oauth::carbon::RequestRowRepository';
+        }
         if ($missing->count() > 0) {
             return .error(.unregistered(str::join($missing, ', ')));
         }
         $db->store<nexus::oauth::carbon::ClientRow, string, nexus::oauth::carbon::ClientRowTable>();
         $db->store<nexus::oauth::carbon::CodeRow, string, nexus::oauth::carbon::CodeRowTable>();
         $db->store<nexus::oauth::carbon::GrantRow, string, nexus::oauth::carbon::GrantRowTable>();
+        $db->store<nexus::oauth::carbon::RequestRow, string, nexus::oauth::carbon::RequestRowTable>();
         return .ok();
     }
 }

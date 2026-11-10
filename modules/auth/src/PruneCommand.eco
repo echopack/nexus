@@ -1,0 +1,37 @@
+namespace nexus::auth;
+
+/**
+ * `auth:prune`: deletes what has expired in every auth store the app has (tokens, sessions, and
+ * what nexus-oauth and nexus-connect add). Safe to run any time; a scheduled task can run it nightly.
+ */
+public class PruneCommand : nexus::Command
+{
+    public const function name() : string
+    {
+        return 'auth:prune';
+    }
+
+    public const function summary() : string
+    {
+        return 'delete expired tokens, sessions, grants and sign-in attempts';
+    }
+
+    public function run(nexus::Invocation& $in) : int32
+    {
+        nexus::Kernel $k = guard $in->kernel() else {
+            return 1;
+        };
+        nexus::Payload $payload = $k->background('auth:prune', nexus::Kernel::id());
+        $payload->door = .cli;
+        result<array<Pruned>, nexus::Problem> $done = $payload->get<Pruning>()->run($payload);
+        nexus::Kernel::finish($payload);
+        array<Pruned> $pruned = guard $done else ($p) {
+            return nexus::Console::report($in->out, $p, $in->mode);
+        };
+        command::CLIContext $out = $in->out;
+        foreach ($pruned as const &$p) {
+            $out->line("pruned  {$p->count} {$p->name}");
+        }
+        return 0;
+    }
+}

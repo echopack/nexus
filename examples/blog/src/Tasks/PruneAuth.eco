@@ -1,21 +1,19 @@
 namespace Blog::Tasks;
 
 /**
- * Every night at three (UTC), deletes the tokens and sessions that have expired: what `auth:prune`
- * does by hand.
+ * Every night at three (UTC), deletes what has expired in every auth store: tokens, sessions, OAuth
+ * requests, codes and grants, sign-in attempts. What `auth:prune` does by hand.
  */
 public struct PruneAuth : nexus::work::Task
 {
     public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
     {
-        $db = $payload->get<carbon::DB>();
-        uint64 $tokens = guard nexus::auth::carbon::PruneCommand::tokens($db) else ($e) {
-            return .error(.retry("pruning tokens: {$e}"));
+        array<nexus::auth::Pruned> $done = guard $payload->get<nexus::auth::Pruning>()->run($payload) else ($p) {
+            return .error(.retry("pruning: {$p->detail(.dev)}"));
         };
-        uint64 $sessions = guard nexus::auth::carbon::PruneCommand::sessions($db) else ($e) {
-            return .error(.retry("pruning sessions: {$e}"));
-        };
-        $payload->log->info('pruned', ['tokens' => $tokens as int64, 'sessions' => $sessions as int64]);
+        foreach ($done as const &$d) {
+            $payload->log->info('pruned', ['what' => $d->name, 'count' => $d->count as int64]);
+        }
         return .ok;
     }
 }

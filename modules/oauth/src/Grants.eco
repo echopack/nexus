@@ -3,8 +3,9 @@ namespace nexus::oauth;
 use std::time;
 
 /**
- * The token side of the server, per request on the store: codes traded for grants, refresh tokens
- * traded for new pairs, access tokens checked and revoked.
+ * The server's side of the flow, per request on the store: authorization requests read and
+ * answered by the consent page, codes traded for grants, refresh tokens traded for new pairs,
+ * access tokens checked (as an identity for the grant's resource only) and revoked.
  */
 public class Grants
 {
@@ -12,25 +13,55 @@ public class Grants
     public const string REFRESH = 'nxr';
 
     public OAuthStore $store;
+    public Clients $clients;
     public const OAuthConfig $config;
     public calendar::Clock $clock;
 
-    public constructor(OAuthStore $store, OAuthConfig $config, calendar::Clock $clock)
+    public constructor(OAuthStore $store, Clients $clients, OAuthConfig $config, calendar::Clock $clock)
     {
         $this->store = $store;
+        $this->clients = $clients;
         $this->config = $config;
         $this->clock = $clock;
     }
 
     /**
-     * A code for what `$asked` asks, allowed by `$subject`: kept as its hash for a minute, handed
-     * out once.
+     * Client `$id`, one the app registers in code or one in the store, or null.
      */
-    public function code(const Asked& $asked, const string& $subject) : result<string, nexus::Problem>
+    public function client(const string& $id) : result<Client?, nexus::Problem>
+    {
+        return $this->clients->find($this->store, $id);
+    }
+
+    /**
+     * Authorization request `$id` and its client, while it can still be answered: one that is
+     * gone, expired or whose client is no longer registered is a 404.
+     */
+    public function request(const string& $id) : result<Asked, nexus::Problem>
+    {
+        AuthRequest? $found = try $this->store->request($id);
+        return $this->checked($found);
+    }
+
+    /**
+     * Authorization request `$id` and its client, removed so it is answered once.
+     */
+    public function answer(const string& $id) : result<Asked, nexus::Problem>
+    {
+        AuthRequest? $found = try $this->store->answer($id);
+        return $this->checked($found);
+    }
+
+    /**
+     * A code for what `$r` asks, allowed by `$subject`: kept as its hash for a minute, handed out
+     * once.
+     */
+    public function code(const AuthRequest& $r, const string& $subject) : result<string, nexus::Problem>
     {
         string $code = nexus::auth::Secrets::hex(32);
-        $c = Code($hash: Grants::hash($code), $client: $asked->client->id, $subject: $subject, $redirect: $asked->redirect->text,
-            $named: $asked->named, $challenge: $asked->challenge, $scope: $asked->scope, $expiresAt: $this->clock->now() + time::duration::secs(60));
+        $c = Code($hash: nexus::auth::Secrets::hash($code), $client: $r->client, $subject: $subject, $redirect: $r->redirect,
+            $named: $r->named, $challenge: $r->challenge, $scope: $r->scope, $resource: $r->resource,
+            $expiresAt: $this->clock->now() + time::duration::secs(60));
         try $this->store->keep($c);
         return .ok($code);
     }
@@ -40,7 +71,7 @@ public class Grants
      */
     public function exchange(const string& $code, const string& $client, const string& $redirect, const string& $verifier) : result<Pair, OAuthError>
     {
-        Code? $taken = try $this->store->take(Grants::hash($code));
+        Code? $taken = try $this->store->take(nexus::auth::Secrets::hash($code));
         Code $c = guard $taken else {
             return .error(.invalidGrant('the code is unknown, used or expired'));
         };
@@ -58,13 +89,13 @@ public class Grants
         if (!Pkce::verify($verifier, $c->challenge)) {
             return .error(.invalidGrant('the code_verifier does not match the code_challenge'));
         }
-        Client? $known = try $this->store->client($client);
+        Client? $known = try $this->client($client);
         if ($known == null) {
             return .error(.invalidClient('the client is no longer registered'));
         }
         $access = nexus::auth::Token(fresh: Grants::ACCESS);
         $refresh = nexus::auth::Token($prefix: Grants::REFRESH, $id: $access->id, $secret: nexus::auth::Secrets::hex(32));
-        $g = Grant($id: $access->id, $client: $client, $subject: $c->subject, $scope: $c->scope,
+        $g = Grant($id: $access->id, $client: $client, $subject: $c->subject, $scope: $c->scope, $resource: $c->resource,
             $accessHash: $access->hash(), $accessExpiresAt: $now + $this->config->access,
             $refreshHash: $refresh->hash(), $refreshExpiresAt: $now + $this->config->refresh,
             $createdAt: $now, $usedAt: $now);
@@ -115,8 +146,8 @@ public class Grants
     }
 
     /**
-     * Who access token `$text` was issued to: a 401 for a token that is malformed, unknown,
-     * replaced or expired.
+     * Who access token `$text` was issued to, for the grant's resource and scopes: a 401 for a token
+     * that is malformed, unknown, replaced or expired.
      */
     public function identify(const string& $text) : result<nexus::auth::Identity, nexus::Problem>
     {
@@ -130,8 +161,26 @@ public class Grants
         if (!$t->matches($g->accessHash) || $g->accessExpiresAt <= $this->clock->now()) {
             return .error(.unauthorized('the token is not valid'));
         }
-        array<string> $scopes = [$g->scope];
-        return .ok(nexus::auth::Identity($via: OAuthGuard::NAME, $subject: $g->subject, $credential: $g->id, $scopes: $scopes));
+        return .ok(nexus::auth::Identity($via: OAuthGuard::NAME, $subject: $g->subject, $credential: $g->id, $scopes: Scopes::split($g->scope),
+            $audience: $g->resource, $client: $g->client));
+    }
+
+    /**
+     * Whether `$subject` already allowed client `$client` the scopes `$r` asks for on its
+     * resource, so a consent page may skip the question.
+     */
+    public function granted(const AuthRequest& $r, const string& $subject) : result<bool, nexus::Problem>
+    {
+        array<Grant> $all = try $this->store->grants($subject);
+        time::timestamp $now = $this->clock->now();
+        array<string> $asked = $r->scopes();
+        foreach ($all as const &$g) {
+            if ($g->client == $r->client && $g->resource == $r->resource && $g->refreshExpiresAt > $now
+                && Scopes::covers(Scopes::split($g->scope), $asked)) {
+                return .ok(true);
+            }
+        }
+        return .ok(false);
     }
 
     /**
@@ -155,11 +204,23 @@ public class Grants
         return .ok;
     }
 
-    /**
-     * The hex sha256 a code is kept by.
-     */
-    public static function hash(const string& $code) : string
+    internal function checked(AuthRequest? $found) : result<Asked, nexus::Problem>
     {
-        return crypto::hex(crypto::sha256($code));
+        AuthRequest $r = guard $found else {
+            return .error(Grants::gone());
+        };
+        if ($r->expiresAt < $this->clock->now()) {
+            return .error(Grants::gone());
+        }
+        Client? $client = try $this->client($r->client);
+        Client $c = guard $client else {
+            return .error(Grants::gone());
+        };
+        return .ok(Asked($client: $c, $request: $r));
+    }
+
+    internal static function gone() : nexus::Problem
+    {
+        return .notFound('the authorization request (it is answered once, within ten minutes; connect the app again)');
     }
 }

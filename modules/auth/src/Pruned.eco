@@ -1,0 +1,10 @@
+namespace nexus::auth;
+
+/**
+ * What one prune removed: the store's name and how many records.
+ */
+public struct Pruned
+{
+    public string $name;
+    public uint64 $count;
+}

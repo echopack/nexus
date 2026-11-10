@@ -1,0 +1,18 @@
+namespace nexus::auth;
+
+/**
+ * The guards nexus-auth brings, for `Extension(guards: [...])`: which credentials the app takes, in
+ * the order they are asked.
+ */
+public enum BuiltinGuard : uint8
+{
+    /**
+     * Signed requests of a session, `Authorization: Nexus-Sig ...` (`SignedGuard`).
+     */
+    case signed = 1;
+
+    /**
+     * The app's bearer tokens, `Authorization: Bearer <prefix>_...` (`BearerGuard`).
+     */
+    case bearer = 2;
+}

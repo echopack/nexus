@@ -1,7 +1,7 @@
 namespace nexus::oauth::carbon;
 
 /**
- * `oauth_clients`, `oauth_codes` and `oauth_grants`. Add it to the app's migrations with
+ * `oauth_clients`, `oauth_requests`, `oauth_codes` and `oauth_grants`. Add it to the app's migrations with
  * `nexus::oauth::carbon::Tables::migrations()`.
  */
 #[carbon::migration: '20261102000600_create_oauth_tables']
@@ -16,6 +16,18 @@ public class CreateOAuthTables : carbon::Migration
             ->datetime('created_at')
             ->datetime('used_at', $nullable: true)
             ->primary(['id']));
+        try $m->create(carbon::ddl::Table('oauth_requests')
+            ->string('id', 32)
+            ->string('client', 32)
+            ->text('redirect')
+            ->bool('named')
+            ->string('state', 500)
+            ->string('challenge', 128)
+            ->string('scope', 500)
+            ->string('resource', 64)
+            ->datetime('expires_at')
+            ->index(['expires_at'])
+            ->primary(['id']));
         try $m->create(carbon::ddl::Table('oauth_codes')
             ->string('hash', 64)
             ->string('client', 32)
@@ -23,7 +35,8 @@ public class CreateOAuthTables : carbon::Migration
             ->text('redirect')
             ->bool('named')
             ->string('challenge', 128)
-            ->string('scope', 190)
+            ->string('scope', 500)
+            ->string('resource', 64)
             ->datetime('expires_at')
             ->index(['expires_at'])
             ->primary(['hash']));
@@ -31,7 +44,8 @@ public class CreateOAuthTables : carbon::Migration
             ->string('id', 12)
             ->string('client', 32)
             ->string('subject', 190)
-            ->string('scope', 190)
+            ->string('scope', 500)
+            ->string('resource', 64)
             ->string('access_hash', 64)
             ->datetime('access_expires_at')
             ->string('refresh_hash', 64)
@@ -48,6 +62,7 @@ public class CreateOAuthTables : carbon::Migration
     {
         try $m->drop('oauth_grants');
         try $m->drop('oauth_codes');
+        try $m->drop('oauth_requests');
         return $m->drop('oauth_clients');
     }
 }

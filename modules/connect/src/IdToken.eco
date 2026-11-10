@@ -1,0 +1,153 @@
+namespace nexus::connect;
+
+use std::time;
+
+/**
+ * How far an ID token's times may be from the server's, in seconds.
+ */
+internal const int64 LEEWAY = 300;
+
+/**
+ * An OpenID Connect ID token, checked as OIDC Core 3.1.3.7 asks: the issuer, the audience (and the
+ * authorized party when there are several), the expiry, the time it was issued and the nonce.
+ *
+ * The signature is not checked. The token comes straight from the provider's token endpoint over
+ * TLS, which nexus-connect verifies, and 3.1.3.7 (6) lets that stand in for the signature. Never
+ * check a token that came any other way (from a browser, in a URL) with this.
+ */
+public struct IdToken
+{
+    /**
+     * The claims of `$raw` as one of `$issuers` issued them for client `$client` and the attempt
+     * with `$nonce`, at `$now`: a 401 for anything that does not hold.
+     */
+    public static function check(const string& $raw, const array<string>& $issuers, const string& $client, const string& $nonce, time::timestamp $now) : result<json::Value, nexus::Problem>
+    {
+        json::Value $claims = guard IdToken::claims($raw) else {
+            return .error(.unauthorized('the ID token is malformed'));
+        };
+        string $iss = IdToken::text($claims, 'iss');
+        bool $known = false;
+        foreach ($issuers as const &$i) {
+            if ($i == $iss) {
+                $known = true;
+            }
+        }
+        if (!$known) {
+            return .error(.unauthorized("the ID token comes from {$iss}, not the provider"));
+        }
+        array<string> $audience = IdToken::texts($claims, 'aud');
+        bool $ours = false;
+        foreach ($audience as const &$a) {
+            if ($a == $client) {
+                $ours = true;
+            }
+        }
+        if (!$ours) {
+            return .error(.unauthorized('the ID token was issued to another client'));
+        }
+        string $azp = IdToken::text($claims, 'azp');
+        if (($audience->count() > 1 || !$azp->empty()) && $azp != $client) {
+            return .error(.unauthorized('the ID token was issued to another client'));
+        }
+        int64 $at = $now->unix_secs();
+        int64 $exp = guard IdToken::number($claims, 'exp') else {
+            return .error(.unauthorized('the ID token has no expiry'));
+        };
+        if ($exp + LEEWAY < $at) {
+            return .error(.unauthorized('the ID token expired'));
+        }
+        int64 $iat = IdToken::number($claims, 'iat') ?? 0;
+        if ($iat > $at + LEEWAY) {
+            return .error(.unauthorized('the ID token was issued in the future'));
+        }
+        if (!crypto::equal(IdToken::text($claims, 'nonce'), $nonce)) {
+            return .error(.unauthorized('the ID token belongs to another sign in'));
+        }
+        if (IdToken::text($claims, 'sub')->empty()) {
+            return .error(.unauthorized('the ID token names nobody'));
+        }
+        return .ok($claims);
+    }
+
+    /**
+     * The identity the claims of a checked token name, for provider `$provider`.
+     */
+    public static function identity(const string& $provider, const json::Value& $claims) : ExternalIdentity
+    {
+        bool $verified = false;
+        json::Value? $v = $claims->get('email_verified');
+        if ($v != null) {
+            json::Value $flag = guard $v;
+            // some providers send the flag as the string "true"
+            $verified = ($flag->asBool() ?? false) || ($flag->asStr() ?? '') == 'true';
+        }
+        return ExternalIdentity($provider: $provider, $subject: IdToken::text($claims, 'sub'), $email: IdToken::text($claims, 'email'),
+            $emailVerified: $verified, $name: IdToken::text($claims, 'name'), $claims: $claims);
+    }
+
+    /**
+     * The claims of a JWT, `header.claims.signature`, as a JSON object; null when it is not one.
+     */
+    public static function claims(const string& $raw) : json::Value?
+    {
+        array<string> $parts = [];
+        foreach (str::split($raw, '.') as const &$p) {
+            $parts[] = string::from($p);
+        }
+        if ($parts->count() != 3) {
+            return null;
+        }
+        string $text = guard crypto::unbase64url($parts[1]) else {
+            return null;
+        };
+        json::Value $doc = guard json::parse($text) else {
+            return null;
+        };
+        if (!$doc->isObject()) {
+            return null;
+        }
+        return $doc;
+    }
+
+    internal static function text(const json::Value& $o, const string& $key) : string
+    {
+        json::Value $v = guard $o->get($key) else {
+            return '';
+        };
+        return $v->asStr() ?? '';
+    }
+
+    internal static function number(const json::Value& $o, const string& $key) : int64?
+    {
+        json::Value $v = guard $o->get($key) else {
+            return null;
+        };
+        return $v->asInt();
+    }
+
+    /**
+     * A claim that is a string or an array of strings (`aud`), as an array.
+     */
+    internal static function texts(const json::Value& $o, const string& $key) : array<string>
+    {
+        array<string> $out = [];
+        json::Value $v = guard $o->get($key) else {
+            return $out;
+        };
+        string? $one = $v->asStr();
+        if ($one != null) {
+            string $only = guard $one;
+            $out[] = $only;
+            return $out;
+        }
+        foreach ($v->asArray() ?? array<json::Value>() as const &$item) {
+            string? $s = $item->asStr();
+            if ($s != null) {
+                string $text = guard $s;
+                $out[] = $text;
+            }
+        }
+        return $out;
+    }
+}

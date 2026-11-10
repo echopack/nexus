@@ -68,6 +68,21 @@ public class MemorySessions : SessionStore
         return .ok;
     }
 
+    public function prune(time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
+        array<string> $gone = [];
+        foreach ($held->value as $id => const &$s) {
+            if ($s->expiresAt < $now) {
+                $gone[] = $id;
+            }
+        }
+        foreach ($gone as const &$id) {
+            $held->value->remove($id);
+        }
+        return .ok($gone->count() as uint64);
+    }
+
     /**
      * How many sessions are kept.
      */

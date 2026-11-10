@@ -2,10 +2,11 @@ namespace Blog;
 
 /**
  * Everything the blog is made of, in boot order: the HTTP server, the database, sign-in with
- * tokens, sessions and OAuth kept in that database, MCP, workers on a queue in that database,
- * and the blog itself. `main.eco` runs it; the integration tests boot the same list.
+ * tokens, sessions, Google and OAuth kept in that database, MCP, workers on a queue in that
+ * database, and the blog itself. `main.eco` runs it; the integration tests boot the same list, with
+ * a `fetch` that answers for Google.
  */
-public function extensions() : array<nexus::Extension>
+public function extensions(fetch: nexus::connect::Fetch $fetch = nexus::connect::CurlFetch()) : array<nexus::Extension>
 {
     array<nexus::Extension> $all = [
         // the HTTP/1.1 server behind `serve`; nexus itself routes every request
@@ -22,12 +23,19 @@ public function extensions() : array<nexus::Extension>
         // keeps those tokens and sessions in the database
         nexus::auth::carbon::Extension(),
 
-        // OAuth 2.1, so an MCP client signs in with a click instead of a pasted token; the stores
-        // come from the next line
+        // OAuth 2.1 for the blog's resources (the MCP endpoint), so an MCP client signs in with a
+        // click instead of a pasted token; the stores come from the next line
         nexus::oauth::Extension(stores: .provided),
 
-        // keeps OAuth clients, codes and grants in the database
+        // keeps OAuth clients, requests, codes and grants in the database
         nexus::oauth::carbon::Extension(),
+
+        // sign in with Google, once NEXUS_CONNECT_GOOGLE_CLIENT_ID and _SECRET are set; the
+        // browser comes back to /signed-in, which posts the attempt to POST /v1/auth/connect
+        nexus::connect::Extension(page: '/signed-in', connectors: [nexus::connect::Google()], stores: .provided, fetch: $fetch),
+
+        // keeps sign-in attempts and the Google accounts linked to users in the database
+        nexus::connect::carbon::Extension(),
 
         // the `/mcp` endpoint that offers the blog's tools to models
         nexus::mcp::Extension(),

@@ -1,0 +1,39 @@
+namespace nexus::connect;
+
+use std::time;
+
+/**
+ * One sign in with a provider, from its start until the app claims it, at most ten minutes. The
+ * store keeps hashes of the state and the binding, never them: the state is the provider's echo of
+ * the attempt, the binding what proves the claim comes from the browser that started it. The
+ * nonce and the PKCE verifier are kept as they are, since the callback needs them.
+ */
+public struct Attempt
+{
+    public string $id;
+    public string $provider;
+    public string $stateHash;
+    public string $bindingHash;
+    public string $nonce;
+    public string $verifier;
+    public time::timestamp $expiresAt;
+
+    /**
+     * Who signed in, once the callback has run and the provider said so.
+     */
+    public ExternalIdentity? $identity = null;
+
+    /**
+     * Why the sign in failed (`access_denied`, `failed`), once the callback has run; empty
+     * otherwise.
+     */
+    public string $error = '';
+
+    /**
+     * Whether the callback has run, well or not.
+     */
+    public const function settled() : bool
+    {
+        return $this->identity != null || !$this->error->empty();
+    }
+}

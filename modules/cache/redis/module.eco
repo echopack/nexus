@@ -1,0 +1,33 @@
+/*
+ * nexus-cache-redis: nexus-cache's entries in Redis, over libredis.
+ *
+ * List it after nexus-cache. When `NEXUS_CACHE_URL` is
+ * `redis://user:pass@host:6379/db` it opens a connection pool, checks the
+ * server answers, and binds the `Cache` on a `RedisStore`; any other URL
+ * leaves the cache to nexus-cache, so tests run on `memory:` with the same
+ * extension list. Every key starts with `NEXUS_CACHE_PREFIX`, and
+ * `cache:clear` forgets only those, never the whole database.
+ */
+
+#[module: "nexus-cache-redis"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "nexus-cache entries in Redis"]
+
+#[depends: "../../.."]
+#[depends: ".."]
+#[depends: "../../../../container"]
+#[depends: "../../../../libjson"]
+#[depends: "../../../../libredis"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../testing"]
+    #[sources: "tests/*.eco"]
+}

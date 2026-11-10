@@ -3,8 +3,8 @@
  * database answers and reads back what was sent.
  */
 
-use nexus::auth::{Identity, Guards, Tokens, Sessions, Issued, Opened};
-use nexus::auth::carbon::{AuthToken, AuthTokenTable, AuthSession, AuthSessionTable, PruneCommand};
+use nexus::auth::{Identity, Guards, Tokens, Sessions, Issued, Opened, Pruning, Pruned};
+use nexus::auth::carbon::{AuthToken, AuthTokenTable, AuthSession, AuthSessionTable};
 use nexus::testing::TestApp;
 use carbon::fake;
 use hydrahon::Mysql;
@@ -124,12 +124,12 @@ test prune_deletes_what_expired
 {
     $r = Rig(true);
     $r->fake->written(3)->written(1);
-    carbon::DB $db = $r->app->kernel->services->get<carbon::DB>();
-    uint64 $tokens = expect(PruneCommand::tokens($db))->ok();
-    expect($tokens)->is(3);
-    expect($r->fake->last())->is('DELETE FROM `auth_tokens` WHERE `auth_tokens`.`expires_at` < ?');
-    uint64 $sessions = expect(PruneCommand::sessions($db))->ok();
-    expect($sessions)->is(1);
+    nexus::Payload $payload = $r->get();
+    array<Pruned> $done = guard $payload->get<Pruning>()->run($payload);
+    expect($done[0]->count)->is(3);
+    expect($done[1]->count)->is(1);
+    array<string> $texts = $r->fake->texts();
+    expect($texts[$texts->count() - 2])->is('DELETE FROM `auth_tokens` WHERE `auth_tokens`.`expires_at` < ?');
     expect($r->fake->last())->is('DELETE FROM `auth_sessions` WHERE `auth_sessions`.`expires_at` < ?');
 }
 

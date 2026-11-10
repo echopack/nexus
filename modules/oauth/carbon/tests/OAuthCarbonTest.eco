@@ -3,8 +3,8 @@
  * database answers and reads back what was sent.
  */
 
-use nexus::oauth::{OAuthStore, Client, Code, Grant, Rotation};
-use nexus::oauth::carbon::{ClientRow, ClientRowTable, CodeRow, CodeRowTable, GrantRow, GrantRowTable};
+use nexus::oauth::{OAuthStore, Client, Code, Grant, Rotation, AuthRequest};
+use nexus::oauth::carbon::{ClientRow, ClientRowTable, CodeRow, CodeRowTable, GrantRow, GrantRowTable, RequestRow, RequestRowTable};
 use nexus::testing::TestApp;
 use carbon::fake;
 use hydrahon::Mysql;
@@ -13,6 +13,24 @@ use ecotest::expect;
 
 internal const int64 START = 1793588340;
 internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+
+/**
+ * Declares resource `mcp`, which nexus-oauth needs something to issue tokens for.
+ */
+internal class TResource : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'test-resource';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        array<string> $scopes = ['mcp'];
+        $s->get<nexus::auth::Resources>()->add($s, nexus::auth::Resource('mcp', '/mcp', $scopes, 'Tools'));
+        return .ok;
+    }
+}
 
 internal class Rig
 {
@@ -33,7 +51,7 @@ internal class Rig
             }
             return .ok($made);
         });
-        array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::oauth::Extension(stores: .provided, clock: $clock), nexus::oauth::carbon::Extension()];
+        array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::oauth::Extension(stores: .provided, clock: $clock), nexus::oauth::carbon::Extension(), TResource()];
         map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
         $this->app = TestApp($exts, $vars);
     }
@@ -47,16 +65,22 @@ internal class Rig
 
     public function code() : Code
     {
-        return Code($hash: 'h1', $client: 'c1', $subject: '7', $redirect: 'http://127.0.0.1/cb', $named: true, $challenge: 'x', $scope: 'mcp',
+        return Code($hash: 'h1', $client: 'c1', $subject: '7', $redirect: 'http://127.0.0.1/cb', $named: true, $challenge: 'x', $scope: 'mcp', $resource: 'mcp',
             $expiresAt: $this->clock->now() + time::duration::secs(60));
     }
 
     public function grant() : Grant
     {
         time::timestamp $now = $this->clock->now();
-        return Grant($id: 'g1', $client: 'c1', $subject: '7', $scope: 'mcp', $accessHash: 'a1', $accessExpiresAt: $now,
+        return Grant($id: 'g1', $client: 'c1', $subject: '7', $scope: 'mcp', $resource: 'mcp', $accessHash: 'a1', $accessExpiresAt: $now,
             $refreshHash: 'r1', $refreshExpiresAt: $now, $createdAt: $now, $usedAt: $now);
     }
+}
+
+internal function answered(OAuthStore $s, const string& $id) : AuthRequest?
+{
+    AuthRequest? $r = guard $s->answer($id);
+    return $r;
 }
 
 internal function takeOne(OAuthStore $s, const string& $hash) : Code?
@@ -97,6 +121,22 @@ test a_code_is_taken_by_the_delete_that_removes_it
     expect(takeOne($r->store(), 'h1'))->none();
 }
 
+test a_request_is_answered_by_the_delete_that_removes_it
+{
+    $r = Rig(true);
+    $asked = AuthRequest($id: 'q1', $client: 'c1', $redirect: 'http://127.0.0.1/cb', $named: false, $state: 's', $challenge: 'x',
+        $scope: 'mcp', $resource: 'mcp', $expiresAt: $r->clock->now());
+    $r->fake->written();
+    guard $r->store()->ask($asked);
+    expect($r->fake->last())->starts('INSERT INTO `oauth_requests`');
+    $r->fake->rows([RequestRowTable()->row(.of($asked))])->written(1);
+    AuthRequest $got = expect(answered($r->store(), 'q1'))->some();
+    expect($got->resource)->is('mcp');
+    expect($r->fake->last())->is('DELETE FROM `oauth_requests` WHERE `oauth_requests`.`id` = ?');
+    $r->fake->rows([RequestRowTable()->row(.of($asked))])->written(0);
+    expect(answered($r->store(), 'q1'))->none();
+}
+
 test a_refresh_rotates_on_the_hash_it_read
 {
     $r = Rig(true);
@@ -110,12 +150,14 @@ test a_refresh_rotates_on_the_hash_it_read
     expect(rotated($r->store(), $g, 'r1') == Rotation::lost)->yes(says: 'a rotation that changed no row loses');
 }
 
-test prune_drops_expired_codes_and_grants
+test prune_drops_expired_requests_codes_and_grants
 {
     $r = Rig(true);
-    $r->fake->written(2)->written(1);
-    guard $r->store()->prune($r->clock->now());
+    $r->fake->written(4)->written(2)->written(1);
+    uint64 $count = guard $r->store()->prune($r->clock->now());
+    expect($count)->is(7);
     array<string> $sent = $r->fake->texts();
+    expect($sent[$sent->count() - 3])->is('DELETE FROM `oauth_requests` WHERE `oauth_requests`.`expires_at` < ?');
     expect($sent[$sent->count() - 2])->is('DELETE FROM `oauth_codes` WHERE `oauth_codes`.`expires_at` < ?');
     expect($sent[$sent->count() - 1])->is('DELETE FROM `oauth_grants` WHERE `oauth_grants`.`refresh_expires_at` < ?');
 }
@@ -126,7 +168,7 @@ test boot_refuses_a_database_without_the_tables
     $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
         return .ok(carbon::DB($driver));
     });
-    array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::oauth::Extension(stores: .provided), nexus::oauth::carbon::Extension()];
+    array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::oauth::Extension(stores: .provided), nexus::oauth::carbon::Extension(), TResource()];
     map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
     result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
     expect($r)->fails();

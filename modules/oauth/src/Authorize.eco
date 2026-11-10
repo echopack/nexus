@@ -1,41 +1,34 @@
 namespace nexus::oauth;
 
 /**
- * Where a client sends the user: the request is checked, then the browser goes to the app's consent
- * page (`consent`) with the same query. A request whose client or redirect is in doubt is a
- * 400 here; anything else wrong goes back to the client as an OAuth error.
+ * Where a client sends the user. The request is checked and kept for ten minutes, then the browser
+ * goes to the app's consent page (`consent`) with `?request=<id>`. A request whose client or
+ * redirect is in doubt is a 400 here; anything else wrong goes back to the client as an OAuth
+ * error.
  */
 public class Authorize : nexus::Action
 {
-    private OAuthStore $store;
-    private OAuthConfig $config;
+    private Grants $grants;
+    private nexus::auth::Resources $resources;
+    private nexus::Url $consent;
 
-    public constructor(OAuthStore $store, OAuthConfig $config)
+    public constructor(Grants $grants, nexus::auth::Resources $resources, const nexus::Url& $consent)
     {
-        $this->store = $store;
-        $this->config = $config;
+        $this->grants = $grants;
+        $this->resources = $resources;
+        $this->consent = $consent;
     }
 
     public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
     {
-        string $issuer = Metadata::issuer($this->config, $payload->request);
-        Asked $asked = guard Asked::check($payload->request->queryString, $this->store, $issuer, $this->config) else ($d) {
+        Asked $asked = guard Asked::check($payload, $payload->request->query, $this->grants, $this->resources) else ($d) {
             return $d->answer();
         };
-        // the extension checked the consent page at boot
-        nexus::Url $consent = guard nexus::Url::parse($this->config->consent) else ($e) {
-            return .error(.server("consent: {$e->message()}"));
+        try $this->grants->store->ask($asked->request);
+        nexus::Url $consent = guard $payload->absolute($this->consent) else {
+            return .error(.badRequest('the Host header names no host'));
         };
-        if (!$consent->absolute()) {
-            nexus::Url $base = guard nexus::Url::parse($issuer) else {
-                return .error(.badRequest('the Host header names no host'));
-            };
-            $consent = $consent->on($base);
-        }
-        $asks = nexus::Query(parse: $asked->query);
-        foreach ($asks->pairs as const &$p) {
-            $consent->query->add($p->name, $p->value);
-        }
+        $consent->query->add('request', $asked->request->id);
         return .ok(nexus::Response(redirect: $consent));
     }
 }

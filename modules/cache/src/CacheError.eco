@@ -1,0 +1,35 @@
+namespace nexus::cache;
+
+/**
+ * Why the cache could not read or write.
+ */
+public enum CacheError
+{
+    /**
+     * The store could not be reached, or did not answer in time.
+     */
+    case unavailable(string $why);
+
+    /**
+     * The store answered, with an error.
+     */
+    case refused(string $why);
+
+    /**
+     * What went wrong, in words.
+     */
+    public const function message() : string
+    {
+        return match ($this) {
+            CacheError::unavailable($why) => "the cache is unavailable: {$why}",
+            CacheError::refused($why) => "the cache refused: {$why}",
+        };
+    }
+}
+
+namespace str;
+
+public function from(const nexus::cache::CacheError& $e) : string
+{
+    return $e->message();
+}

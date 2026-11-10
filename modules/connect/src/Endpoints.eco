@@ -1,0 +1,10 @@
+namespace nexus::connect;
+
+/**
+ * Where a provider signs people in and trades codes.
+ */
+public struct Endpoints
+{
+    public string $authorize;
+    public string $token;
+}

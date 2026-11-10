@@ -7,6 +7,8 @@
  * nexus-work's workers, queued in the same database. Posts are also
  * reachable from the command line (`posts:show`, `posts:create`) and over
  * MCP (`show_post`, `create_post`), where clients sign in with OAuth.
+ * People sign in with a password or with Google (nexus-connect), once
+ * NEXUS_CONNECT_GOOGLE_CLIENT_ID and _SECRET are set.
  *
  *   NEXUS_DATABASE_URL=mysql://app:secret@127.0.0.1:3306/blog echoc run -- migrate
  *   NEXUS_DATABASE_URL=... echoc run -- user:password --email editor@example.com --password ...
@@ -45,6 +47,8 @@
 #[depends: "../../modules/mcp"]
 #[depends: "../../modules/oauth"]
 #[depends: "../../modules/oauth/carbon"]
+#[depends: "../../modules/connect"]
+#[depends: "../../modules/connect/carbon"]
 #[depends: "../../modules/app"]
 #[depends: "../../../carbon"]
 #[depends: "../../../carbon/drivers/mysql"]

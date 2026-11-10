@@ -24,10 +24,29 @@ public class TestApp
      */
     public constructor(const array<nexus::Extension>& $extensions, map<string, string> $vars = [])
     {
-        $app = guard TestApp::attempt($extensions, mv $vars) else ($e) {
-            string $lines = str::join($e->lines(), '; ');
-            die("nexus-testing: the app did not boot: {$lines}");
-        };
+        $app = TestApp::must($extensions, mv $vars);
+        $this->kernel = $app->kernel;
+        $this->log = $app->log;
+    }
+
+    /**
+     * Boots `$extensions`, then `$replace` on their services, as an extension listed last would:
+     * where a test swaps what reaches outside the process for a fake, and keeps the app's own list.
+     *
+     * ```echo
+     * $google = nexus::connect::ScriptedFetch();
+     * $app = TestApp(Blog::extensions(), $vars, replace: function[$google](nexus::Services& $s) : void {
+     *     $s->replace<nexus::connect::Fetch>(once: function[$google]() : nexus::connect::Fetch {
+     *         return $google;
+     *     });
+     * });
+     * ```
+     */
+    public constructor(const array<nexus::Extension>& $extensions, map<string, string> $vars, replace: function<void(nexus::Services&)> $replace)
+    {
+        array<nexus::Extension> $all = $extensions;
+        $all[] = Replacements($replace);
+        $app = TestApp::must($all, mv $vars);
         $this->kernel = $app->kernel;
         $this->log = $app->log;
     }
@@ -51,6 +70,18 @@ public class TestApp
         $log = nexus::Logger($sinks, .trace);
         $k = try nexus::Kernel::boot($extensions, nexus::Mode::testing, $log, nexus::Env(fixed: mv $vars));
         return .ok(TestApp(booted: $k, $sink));
+    }
+
+    /**
+     * The booted app; a failed boot stops the test with every reason.
+     */
+    internal static function must(const array<nexus::Extension>& $extensions, map<string, string> $vars) : TestApp
+    {
+        $app = guard TestApp::attempt($extensions, mv $vars) else ($e) {
+            string $lines = str::join($e->lines(), '; ');
+            die("nexus-testing: the app did not boot: {$lines}");
+        };
+        return $app;
     }
 
     /**

@@ -1,0 +1,46 @@
+namespace nexus::connect::carbon;
+
+use std::time;
+
+/**
+ * A row of `connect_links`: an outside identity and the user it belongs to, keyed by
+ * `<provider>:<external>`.
+ */
+#[carbon::model: 'connect_links']
+public class LinkRow : carbon::Model<LinkRow, LinkRowRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $id;
+
+    public string $provider;
+    public string $external;
+    public string $subject;
+    public string $email = '';
+    public time::timestamp $createdAt;
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    /**
+     * The row that keeps `$l`. A static, since carbon builds a model with its implicit constructor
+     * and refuses one written out.
+     */
+    public static function of(const nexus::connect::Link& $l) : LinkRow
+    {
+        return LinkRow($id: nexus::connect::Link::key($l->provider, $l->external), $provider: $l->provider, $external: $l->external,
+            $subject: $l->subject, $email: $l->email, $createdAt: $l->createdAt);
+    }
+
+    /**
+     * The link this row keeps.
+     */
+    public const function kept() : nexus::connect::Link
+    {
+        return nexus::connect::Link($provider: $this->provider, $external: $this->external, $subject: $this->subject,
+            $email: $this->email, $createdAt: $this->createdAt);
+    }
+}

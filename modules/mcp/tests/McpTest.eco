@@ -169,12 +169,17 @@ internal class Rig
     }
 }
 
-test a_caller_without_a_credential_is_pointed_at_oauth
+test a_caller_without_a_credential_is_asked_for_a_bearer_token
 {
     $r = Rig();
+    // nobody issues tokens for it without nexus-oauth, so the challenge names no metadata
     $r->app->api()->with('Host', 'blog.test')->post('/mcp', json: '{"jsonrpc":"2.0","id":1,"method":"ping"}')
         ->status(401)
-        ->header('WWW-Authenticate', 'Bearer resource_metadata="http://blog.test/.well-known/oauth-protected-resource/mcp"');
+        ->header('WWW-Authenticate', 'Bearer');
+    $r->app->api()->get('/.well-known/oauth-protected-resource/mcp')
+        ->json('$.resource', 'http://app/mcp')
+        ->json('$.resource_name', 'tests')
+        ->json('$.scopes_supported[0]', 'mcp');
 }
 
 test initialize_answers_the_asked_revision_and_the_server

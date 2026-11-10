@@ -1,26 +1,26 @@
 namespace nexus::oauth;
 
 /**
- * The clients the signed in user allowed, for an account page: the grant id, the client's name,
- * when it was allowed and last used.
+ * The clients the signed in user allowed, for an account page: the grant id, the client's name, the
+ * resource and scopes, when it was allowed and last used.
  */
 #[nexus::through: ["nexus::auth::Authenticate"]]
 public class ListGrants : nexus::Action
 {
-    private OAuthStore $store;
+    private Grants $grants;
 
-    public constructor(OAuthStore $store)
+    public constructor(Grants $grants)
     {
-        $this->store = $store;
+        $this->grants = $grants;
     }
 
     public function handle(nexus::Payload& $payload) : result<json::Value, nexus::Problem>
     {
         $me = try $payload->state<nexus::auth::Identity>();
-        array<Grant> $mine = try $this->store->grants($me->subject);
+        array<Grant> $mine = try $this->grants->store->grants($me->subject);
         json::Value $items = json::arr();
         foreach ($mine as const &$g) {
-            Client? $found = try $this->store->client($g->client);
+            Client? $found = try $this->grants->client($g->client);
             string $name = 'a client no longer registered';
             if ($found != null) {
                 Client $known = guard $found;
@@ -30,6 +30,8 @@ public class ListGrants : nexus::Action
             $o['id'] = json::str($g->id);
             $o['client'] = json::str($g->client);
             $o['name'] = json::str($name);
+            $o['resource'] = json::str($g->resource);
+            $o['scopes'] = Metadata::strings(Scopes::split($g->scope));
             $o['created_at'] = json::int($g->createdAt->unix_secs());
             $o['used_at'] = json::int($g->usedAt->unix_secs());
             $items[] = mv $o;

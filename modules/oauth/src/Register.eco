@@ -79,7 +79,7 @@ public class Register : nexus::Action
 
     /**
      * A name the consent page can show: no control characters and nothing that turns the text
-     * around it, at most 100 bytes, `MCP client` when nothing is left.
+     * around it, at most 100 bytes, `an app` when nothing is left.
      */
     public static function clean(const string& $raw) : string
     {
@@ -110,7 +110,7 @@ public class Register : nexus::Action
             $out = $out->sub(0, $cut);
         }
         if ($out->empty()) {
-            return 'MCP client';
+            return 'an app';
         }
         return $out;
     }

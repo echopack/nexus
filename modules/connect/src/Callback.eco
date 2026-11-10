@@ -1,0 +1,25 @@
+namespace nexus::connect;
+
+/**
+ * Where a provider sends the browser back, `/auth/connect/{provider}/callback`: with a GET and the
+ * code in the query, or with a POST and the code in a form (`response_mode=form_post`). It ends at
+ * the app's page with `?attempt=<id>`.
+ */
+public class Callback : nexus::Action
+{
+    private Connect $connect;
+
+    public constructor(Connect $connect)
+    {
+        $this->connect = $connect;
+    }
+
+    public function handle(nexus::Payload& $payload, string $provider) : nexus::Response
+    {
+        if ($payload->request->method == nexus::Method::post) {
+            $form = nexus::Query(parse: $payload->request->body);
+            return $this->connect->finish($payload, $provider, $form);
+        }
+        return $this->connect->finish($payload, $provider, $payload->request->query);
+    }
+}

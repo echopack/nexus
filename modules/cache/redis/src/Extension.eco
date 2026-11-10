@@ -1,0 +1,53 @@
+namespace nexus::cache::redis;
+
+/**
+ * Keeps nexus-cache's entries in Redis when `NEXUS_CACHE_URL` says `redis://`: opens a pool with
+ * `NEXUS_CACHE_TIMEOUT` on every command, connecting included, pings the server once (a server
+ * that does not answer stops the boot) and binds the `Cache` on a `RedisStore`. Any other URL
+ * leaves the cache to nexus-cache. List it after that one:
+ *
+ * ```echo
+ * nexus::cache::Extension(),
+ * nexus::cache::redis::Extension(),
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    internal redis::Pool? $pool = null;
+
+    public function name() : string
+    {
+        return 'nexus-cache-redis';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::cache::CacheConfig $config = $s->get<nexus::cache::CacheConfig>();
+        string $kind = nexus::cache::scheme($config->url);
+        if ($kind != 'redis' && $kind != 'rediss') {
+            return .ok;
+        }
+        redis::Options $o = guard redis::Options::parse($config->url) else ($e) {
+            return .error(.extension('nexus-cache-redis', "NEXUS_CACHE_URL: {$e}"));
+        };
+        $o->timeout = $config->timeout;
+        $o->connectTimeout = $config->timeout;
+        redis::PoolOptions $limits = redis::PoolOptions();
+        $limits->acquireTimeout = $config->timeout;
+        redis::Pool $pool = redis::Pool($o, $limits);
+        string $at = where($o);
+        guard $pool->ping() else ($e) {
+            $pool->close();
+            return .error(.extension('nexus-cache-redis', "cannot reach {$at}: {$e}"));
+        };
+        $this->pool = $pool;
+        nexus::Logger $log = $s->get<nexus::Logger>();
+        $s->bind<nexus::cache::Cache>(put: nexus::cache::Cache(RedisStore($pool, $config->prefix, $at), .expires($config->ttl), $log));
+        return .ok;
+    }
+
+    public function shutdown(nexus::Kernel $kernel) : void
+    {
+        $this->pool?->close();
+    }
+}

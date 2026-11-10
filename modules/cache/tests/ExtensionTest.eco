@@ -1,0 +1,46 @@
+/**
+ * The extension: what `NEXUS_CACHE_*` picks, and what stops the boot.
+ */
+
+use nexus::cache::{Cache, MemoryStore};
+use nexus::testing::TestApp;
+use ecotest::expect;
+
+test memory_is_the_default
+{
+    $app = TestApp([nexus::cache::Extension()], []);
+    Cache $cache = $app->kernel->services->get<Cache>();
+    expect($cache->describe())->is('memory:');
+    expect($cache->get('a', () => 'one'))->is('one');
+    expect($cache->get('a', () => 'two'))->is('one');
+    expect(str::from($cache->lifetime))->is('1h0m0s');
+}
+
+test the_ttl_sets_the_default_lifetime
+{
+    $app = TestApp([nexus::cache::Extension()], ['NEXUS_CACHE_TTL' => '5m']);
+    Cache $cache = $app->kernel->services->get<Cache>();
+    expect(str::from($cache->lifetime))->is('5m0s');
+}
+
+test bad_settings_stop_the_boot
+{
+    expect(TestApp::attempt([nexus::cache::Extension()], ['NEXUS_CACHE_URL' => 'http://x']))->fails();
+    expect(TestApp::attempt([nexus::cache::Extension()], ['NEXUS_CACHE_TTL' => '0s']))->fails();
+    expect(TestApp::attempt([nexus::cache::Extension()], ['NEXUS_CACHE_TTL' => 'soon']))->fails();
+}
+
+test redis_without_its_extension_stops_the_boot
+{
+    nexus::BootError $e = expect(TestApp::attempt([nexus::cache::Extension()], ['NEXUS_CACHE_URL' => 'redis://127.0.0.1:6379']))->fails();
+    expect(str::join($e->lines(), '; '))->has('list nexus::cache::redis::Extension()');
+}
+
+test a_given_store_wins
+{
+    $m = MemoryStore();
+    $app = TestApp([nexus::cache::Extension(store: $m)], ['NEXUS_CACHE_URL' => 'redis://127.0.0.1:6379']);
+    Cache $cache = $app->kernel->services->get<Cache>();
+    expect($cache->put('a', 'one'))->fine();
+    expect($m->count() as int64)->is(1 as int64);
+}

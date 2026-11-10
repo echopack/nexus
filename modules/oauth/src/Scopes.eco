@@ -1,0 +1,49 @@
+namespace nexus::oauth;
+
+/**
+ * Scopes as OAuth writes them: words separated by spaces.
+ */
+public struct Scopes
+{
+    /**
+     * The words of `$scope`, without empty ones or repeats, in order.
+     */
+    public static function split(const string& $scope) : array<string>
+    {
+        array<string> $out = [];
+        foreach (str::split($scope, ' ') as const &$part) {
+            string $word = string::from($part);
+            if ($word->empty() || Scopes::has($out, $word)) {
+                continue;
+            }
+            $out[] = $word;
+        }
+        return $out;
+    }
+
+    /**
+     * Whether `$all` holds `$scope`.
+     */
+    public static function has(const array<string>& $all, const string& $scope) : bool
+    {
+        foreach ($all as const &$s) {
+            if ($s == $scope) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether every scope of `$asked` is in `$held`.
+     */
+    public static function covers(const array<string>& $held, const array<string>& $asked) : bool
+    {
+        foreach ($asked as const &$s) {
+            if (!Scopes::has($held, $s)) {
+                return false;
+            }
+        }
+        return true;
+    }
+}

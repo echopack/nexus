@@ -14,6 +14,11 @@ public struct Request
     public Query $query = Query();
     public Headers $headers = Headers();
     public string $body = '';
+
+    /**
+     * The client's address, without a port, so a throttle can key on it: the socket's, or behind a
+     * trusted proxy the one it forwarded for. Empty for work that came in another door.
+     */
     public string $peer = '';
     public map<string, string> $params = map<string, string>();
     public string $id = '';

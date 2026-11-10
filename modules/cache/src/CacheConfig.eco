@@ -1,0 +1,58 @@
+namespace nexus::cache;
+
+use std::time;
+
+/**
+ * The cache settings, read from `NEXUS_CACHE_URL`, `NEXUS_CACHE_TTL`, `NEXUS_CACHE_PREFIX`,
+ * `NEXUS_CACHE_TIMEOUT` and `NEXUS_CACHE_MAX_ENTRIES`.
+ */
+#[nexus::config: "NEXUS_CACHE"]
+public struct CacheConfig
+{
+    /**
+     * Where entries are kept: `memory:` (in the process, gone when it stops) or
+     * `redis://user:pass@host:6379/db`, served by nexus-cache-redis.
+     */
+    #[nexus::env: 'URL']
+    #[nexus::secret]
+    public string $url = 'memory:';
+
+    /**
+     * How long an entry is kept when the code names no lifetime, like `1h`.
+     */
+    #[nexus::env: 'TTL']
+    public time::duration $ttl = std::time::duration::hours(1);
+
+    /**
+     * For Redis: what every key starts with, so the cache shares a database with other data and
+     * `flush` forgets only its own.
+     */
+    #[nexus::env: 'PREFIX']
+    public string $prefix = 'cache:';
+
+    /**
+     * For Redis: how long one command may take, connecting included. A slow cache is a miss, not
+     * a slow request.
+     */
+    #[nexus::env: 'TIMEOUT']
+    public time::duration $timeout = std::time::duration::millis(500);
+
+    /**
+     * For memory: how many entries are kept at most. Past it, what expires soonest goes first.
+     */
+    #[nexus::env: 'MAX_ENTRIES']
+    public uint64 $maxEntries = 100000;
+}
+
+/**
+ * The scheme `$url` starts with, lowercased: `memory`, `redis`, `rediss`; empty when it has none.
+ */
+public function scheme(const string& $url) : string
+{
+    string $u = string::from(str::trim($url));
+    usize $colon = $u->find(':');
+    if ($colon >= $u->size()) {
+        return str::lower($u);
+    }
+    return str::lower($u->sub(0, $colon));
+}

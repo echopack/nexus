@@ -20,4 +20,9 @@ public interface SessionStore
     function remove(const string& $id) : status<nexus::Problem>;
 
     function removeAll(const string& $subject) : status<nexus::Problem>;
+
+    /**
+     * Removes the sessions that expired before `$now`, and says how many.
+     */
+    function prune(time::timestamp $now) : result<uint64, nexus::Problem>;
 }

@@ -4,9 +4,10 @@ namespace nexus::mcp;
  * The MCP endpoint: one JSON-RPC message per POST, one JSON answer. It speaks `initialize`, `ping`,
  * `tools/list` and `tools/call`; a notification gets a bare 202.
  *
- * Every message needs a signed in caller, read by nexus-auth's guards on the MCP door (so a
- * credential good for MCP only works here). Without one the answer is a 401 whose
- * `WWW-Authenticate` names the OAuth metadata, which is how a client finds the sign in.
+ * Every message needs a signed in caller, read by nexus-auth's guards: the app's own tokens, or a
+ * token an OAuth client was given for the `mcp` resource, which opens nothing else. Without one the
+ * answer is a 401 whose `WWW-Authenticate` names the resource's metadata
+ * (`nexus::auth::Resources::challenge`), which is how a client finds where to sign in.
  */
 public class Endpoint : nexus::Action
 {
@@ -32,12 +33,9 @@ public class Endpoint : nexus::Action
             return Answer::error(json::nil(), .invalidRequest('send the JSON-RPC message as Content-Type: application/json'), 415);
         }
         $payload->door = .mcp;
-        nexus::auth::Identity? $who = guard $this->guards->identify($payload) else ($p) {
-            return $this->challenge($payload, $p);
+        guard $this->guards->demand($payload) else ($refused) {
+            return $refused;
         };
-        if ($who == null) {
-            return $this->challenge($payload, .unauthorized('this needs a signed in caller'));
-        }
         Call $call = guard Call::parse($payload->request->body) else ($e) {
             return Answer::error(json::nil(), $e);
         };
@@ -125,21 +123,5 @@ public class Endpoint : nexus::Action
             return $run($p, $fields);
         }));
         return Answer::result($call->id, Answer::tool($next->run($payload)));
-    }
-
-    /**
-     * No usable credential: the problem, with a pointer to the OAuth metadata when it is a 401.
-     */
-    internal const function challenge(nexus::Payload& $payload, const nexus::Problem& $p) : nexus::Response
-    {
-        nexus::Response $res = $payload->fail($p);
-        if ($res->status == 401) {
-            string $origin = $this->config->origin;
-            if ($origin->empty()) {
-                $origin = $payload->request->origin();
-            }
-            $res->header('WWW-Authenticate', "Bearer resource_metadata=\"{$origin}/.well-known/oauth-protected-resource/mcp\"");
-        }
-        return $res;
     }
 }

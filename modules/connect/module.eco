@@ -1,0 +1,41 @@
+/*
+ * nexus-connect: signing in with an outside provider (Google, any OpenID
+ * Connect provider), for nexus apps without cookies.
+ *
+ * The app's frontend starts a sign in (`POST /auth/connect/{provider}`)
+ * and gets the provider's URL and a binding secret it keeps. The provider
+ * sends the browser back to `/auth/connect/{provider}/callback`, which
+ * trades the code (PKCE and the client secret), checks the ID token and
+ * sends the browser on to the app's page with `?attempt=<id>`. The page
+ * posts the attempt and its binding to the app's own action, which claims
+ * the outside identity once with `Connect::claim`, links it to a user
+ * (`LinkStore`) and signs them in the way it always does.
+ *
+ * Attempts and links are kept in memory here; nexus-connect-carbon keeps
+ * them in the app's database.
+ */
+
+#[module: "nexus-connect"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "Sign in with Google or any OpenID Connect provider for nexus apps"]
+
+#[depends: "../.."]
+#[depends: "../auth"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../libcurl"]
+#[depends: "../../../libcrypto"]
+#[depends: "../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+}

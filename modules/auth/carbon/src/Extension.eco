@@ -4,7 +4,7 @@ use container::{Builder, Container};
 
 /**
  * Keeps nexus-auth's tokens and sessions in the app's carbon database: binds `TokenStore` and
- * `SessionStore` on each request's `carbon::Session`, and adds `auth:prune`. List it after
+ * `SessionStore` on each request's `carbon::Session`, which nexus-auth's `auth:prune` prunes. List it after
  * nexus-carbon, with nexus-auth set to `stores: .provided`; the app wires the tables on its
  * database and runs the migration with its own:
  *
@@ -34,11 +34,6 @@ public class Extension : nexus::Extension
             return CarbonSessions($c->get<carbon::Session>());
         });
         return .ok;
-    }
-
-    public function commands(nexus::Commands& $cmds) : void
-    {
-        $cmds->add(PruneCommand());
     }
 
     public function boot(nexus::Kernel $kernel) : status<nexus::BootError>

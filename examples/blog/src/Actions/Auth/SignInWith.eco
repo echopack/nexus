@@ -1,0 +1,31 @@
+namespace Blog::Actions::Auth;
+
+use Blog::Inputs::OutsideSignIn;
+use Blog::Services::Accounts;
+
+/**
+ * Finishes a sign in with an outside provider (Google): claims the attempt the page `/signed-in`
+ * got back, with the binding it kept, finds or makes the user, and answers with a bearer token,
+ * shown this once, as `POST /v1/auth/token` does.
+ */
+public class SignInWith : nexus::Action
+{
+    private nexus::connect::Connect $connect;
+    private Accounts $accounts;
+    private nexus::auth::Tokens $tokens;
+
+    public constructor(nexus::connect::Connect $connect, Accounts $accounts, nexus::auth::Tokens $tokens)
+    {
+        $this->connect = $connect;
+        $this->accounts = $accounts;
+        $this->tokens = $tokens;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Body<OutsideSignIn> $in) : result<nexus::Response, nexus::Problem>
+    {
+        nexus::connect::ExternalIdentity $who = try $this->connect->claim($in->value->attempt, $in->value->binding);
+        $u = try $this->accounts->of($who, $payload->locale());
+        $issued = try $this->tokens->issue("{$u->id}", $who->provider);
+        return .ok(nexus::Response(json: $issued->json(), status: 201));
+    }
+}

@@ -1,17 +1,18 @@
 /*
- * nexus-oauth-carbon: nexus-oauth's clients, codes and grants in the app's
- * carbon database.
+ * nexus-oauth-carbon: nexus-oauth's clients, requests, codes and grants in
+ * the app's carbon database.
  *
- * Three tables, `oauth_clients`, `oauth_codes` and `oauth_grants`, in one
- * migration the app adds to its own. A code is taken with a delete that
- * only one caller wins, and a refresh rotates the grant with an update on
- * the refresh hash it read, so several processes never both spend one.
+ * Four tables, `oauth_clients`, `oauth_requests`, `oauth_codes` and
+ * `oauth_grants`, in one migration the app adds to its own. A request and
+ * a code are each taken with a delete that only one caller wins, and a
+ * refresh rotates the grant with an update on the refresh hash it read,
+ * so several processes never both spend one.
  */
 
 #[module: "nexus-oauth-carbon"]
 #[version: "0.1.0"]
 #[epm::license: "MIT"]
-#[epm::description: "nexus-oauth clients, codes and grants in a carbon database"]
+#[epm::description: "nexus-oauth clients, requests, codes and grants in a carbon database"]
 
 #[depends: "../../.."]
 #[depends: ".."]

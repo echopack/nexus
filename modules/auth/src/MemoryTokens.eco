@@ -1,6 +1,7 @@
 namespace nexus::auth;
 
 use std::thread;
+use std::time;
 
 /**
  * Bearer tokens kept in the process: for tests and single-process apps. They are gone when it
@@ -55,6 +56,21 @@ public class MemoryTokens : TokenStore
             $held->value->remove($id);
         }
         return .ok;
+    }
+
+    public function prune(time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        thread::locked<map<string, StoredToken>> $held = $this->tokens->lock();
+        array<string> $gone = [];
+        foreach ($held->value as $id => const &$t) {
+            if ($t->expired($now)) {
+                $gone[] = $id;
+            }
+        }
+        foreach ($gone as const &$id) {
+            $held->value->remove($id);
+        }
+        return .ok($gone->count() as uint64);
     }
 
     /**

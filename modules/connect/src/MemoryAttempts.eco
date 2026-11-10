@@ -1,0 +1,79 @@
+namespace nexus::connect;
+
+use std::thread;
+use std::time;
+
+/**
+ * Sign in attempts kept in the process: for tests and single-process apps.
+ */
+#[atomic]
+public class MemoryAttempts : AttemptStore
+{
+    private thread::mutex<map<string, Attempt>> $attempts;
+
+    public constructor()
+    {
+        $this->attempts = thread::mutex<map<string, Attempt>>(map<string, Attempt>());
+    }
+
+    public function start(const Attempt& $a) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Attempt>> $held = $this->attempts->lock();
+        $held->value[$a->id] = $a;
+        return .ok;
+    }
+
+    public function find(const string& $id) : result<Attempt?, nexus::Problem>
+    {
+        thread::locked<map<string, Attempt>> $held = $this->attempts->lock();
+        if (!$held->value->has($id)) {
+            return .ok(null);
+        }
+        return .ok($held->value->get($id));
+    }
+
+    public function byState(const string& $hash) : result<Attempt?, nexus::Problem>
+    {
+        thread::locked<map<string, Attempt>> $held = $this->attempts->lock();
+        foreach ($held->value as $id => const &$a) {
+            if ($a->stateHash == $hash) {
+                return .ok($a);
+            }
+        }
+        return .ok(null);
+    }
+
+    public function settle(const Attempt& $a) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Attempt>> $held = $this->attempts->lock();
+        if ($held->value->has($a->id)) {
+            $held->value[$a->id] = $a;
+        }
+        return .ok;
+    }
+
+    public function spend(const string& $id) : result<bool, nexus::Problem>
+    {
+        thread::locked<map<string, Attempt>> $held = $this->attempts->lock();
+        if (!$held->value->has($id)) {
+            return .ok(false);
+        }
+        $held->value->remove($id);
+        return .ok(true);
+    }
+
+    public function prune(time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        thread::locked<map<string, Attempt>> $held = $this->attempts->lock();
+        array<string> $gone = [];
+        foreach ($held->value as $id => const &$a) {
+            if ($a->expiresAt < $now) {
+                $gone[] = $id;
+            }
+        }
+        foreach ($gone as const &$id) {
+            $held->value->remove($id);
+        }
+        return .ok($gone->count() as uint64);
+    }
+}

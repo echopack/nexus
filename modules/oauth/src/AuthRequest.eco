@@ -1,0 +1,66 @@
+namespace nexus::oauth;
+
+use std::time;
+
+/**
+ * An authorization request `/oauth/authorize` checked and keeps for the consent page, which names
+ * it by `id` (`?request=<id>`): the client, where it goes back to, the PKCE challenge, the resource
+ * and the scopes asked for. It is answered once, within ten minutes.
+ */
+public struct AuthRequest
+{
+    public string $id;
+    public string $client;
+    public string $redirect;
+
+    /**
+     * `redirect_uri` was in the request, not filled in from the only one registered, so the token
+     * request must name it too.
+     */
+    public bool $named;
+    public string $state;
+    public string $challenge;
+
+    /**
+     * The scopes asked for, space separated.
+     */
+    public string $scope;
+
+    /**
+     * The resource's name (`nexus::auth::Resource::name`).
+     */
+    public string $resource;
+    public time::timestamp $expiresAt;
+
+    /**
+     * Where the browser goes back to with `$name=$value` (a code or an error), plus the state and
+     * the issuer (RFC 9207).
+     */
+    public const function back(const string& $name, const string& $value, const string& $issuer) : string
+    {
+        $params = nexus::Query();
+        $params->add($name, $value);
+        // Asked::check parsed it before it was kept
+        RedirectUri $uri = guard RedirectUri::parse($this->redirect) else {
+            return $this->redirect;
+        };
+        return AuthRequest::returning($uri, mv $params, $this->state, $issuer);
+    }
+
+    /**
+     * The scopes asked for, one by one.
+     */
+    public const function scopes() : array<string>
+    {
+        return Scopes::split($this->scope);
+    }
+
+    internal static function returning(const RedirectUri& $redirect, mv nexus::Query $params, const string& $state, const string& $issuer) : string
+    {
+        if (!$state->empty()) {
+            $params->add('state', $state);
+        }
+        $params->add('iss', $issuer);
+        return $redirect->with($params);
+    }
+}

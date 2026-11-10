@@ -1,0 +1,51 @@
+namespace nexus::cache;
+
+use std::time;
+
+/**
+ * How long an entry is kept: `.forever`, or `.expires(.mins(5))`.
+ */
+public enum Lifetime
+{
+    /**
+     * Kept until it is forgotten, flushed or evicted.
+     */
+    case forever;
+
+    /**
+     * Gone once `$after` has passed. Zero or less keeps nothing.
+     */
+    case expires(time::duration $after);
+
+    /**
+     * How long the entry lasts, or null when it lasts forever.
+     */
+    public const function after() : time::duration?
+    {
+        return match ($this) {
+            Lifetime::forever => null,
+            Lifetime::expires($d) => $d,
+        };
+    }
+
+    /**
+     * True when an entry with this lifetime would be gone at once, so there is nothing to keep.
+     */
+    public const function lapsed() : bool
+    {
+        return match ($this) {
+            Lifetime::forever => false,
+            Lifetime::expires($d) => $d <= time::duration::zero(),
+        };
+    }
+}
+
+namespace str;
+
+public function from(const nexus::cache::Lifetime& $life) : string
+{
+    return match ($life) {
+        nexus::cache::Lifetime::forever => 'forever',
+        nexus::cache::Lifetime::expires($d) => "{$d}",
+    };
+}

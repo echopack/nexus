@@ -267,6 +267,64 @@ public struct OpenSessionDispatch
     }
 }
 
+/**
+ * Runs Blog::Actions::Auth::SignInWith.
+ */
+public struct SignInWithDispatch
+{
+    /**
+     * Reads what Blog::Actions::Auth::SignInWith::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        $fieldsIn = guard nexus::Fields::body($payload) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $valueIn = guard Blog::Inputs::OutsideSignInDecoder::decode($payload, $fieldsIn) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::OutsideSignIn>(mv $valueIn);
+        $action = $payload->get<Blog::Actions::Auth::SignInWith>();
+        $result = $action->handle($payload, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Auth::SignInWith unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'Finishes a sign in with an outside provider (Google): claims the attempt the page `/signed-in` got back, with the binding it kept, finds or makes the user, and answers with a bearer token, shown this once, as `POST /v1/auth/token` does.';
+    }
+
+    /**
+     * What Blog::Actions::Auth::SignInWith offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Auth::SignInWithDispatch::call($payload, $args);
+        };
+        return nexus::mcp::Offer('Blog::Actions::Auth::SignInWith', nexus::mcp::Schema::of('{"type":"object","properties":{"attempt":{"type":"string","minLength":1,"maxLength":64},"binding":{"type":"string","minLength":1,"maxLength":128}},"required":["attempt","binding"],"additionalProperties":false}'), Blog::Actions::Auth::SignInWithDispatch::about(), mv $call);
+    }
+
+    /**
+     * Reads what Blog::Actions::Auth::SignInWith::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        $valueIn = guard Blog::Inputs::OutsideSignInDecoder::decode($payload, $args) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::OutsideSignIn>(mv $valueIn);
+        $target = $payload->get<Blog::Actions::Auth::SignInWith>();
+        $result = $target->handle($payload, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
 
 namespace Blog::Actions::Posts;
 
@@ -1195,6 +1253,59 @@ public struct NewPostDecoder
 }
 
 /**
+ * Reads and checks a Blog::Inputs::OutsideSignIn from request fields.
+ */
+public struct OutsideSignInDecoder
+{
+    /**
+     * A Blog::Inputs::OutsideSignIn from `$f`, or the problem holding everything refused.
+     */
+    public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<Blog::Inputs::OutsideSignIn, nexus::Problem>
+    {
+        $value = OutsideSignInDecoder::read($payload, $f);
+        try $f->done();
+        $out = guard $value;
+        return .ok(mv $out);
+    }
+
+    /**
+     * A Blog::Inputs::OutsideSignIn from `$f`, or null when anything was refused.
+     */
+    public static function read(nexus::Payload& $payload, nexus::Fields& $f) : Blog::Inputs::OutsideSignIn?
+    {
+        $v = $f->check;
+        $v->input = 'Blog::Inputs::OutsideSignIn';
+        usize $before = $v->count();
+        // attempt
+        $v->at('attempt', 'string', '');
+        string? $vAttempt = null;
+        $rAttempt = $f->string('attempt', required: true);
+        if ($rAttempt != null) {
+            $xAttempt = guard $rAttempt;
+            $v->minLength($xAttempt, 1);
+            $v->maxLength($xAttempt, 64);
+            $vAttempt = mv $xAttempt;
+        }
+        // binding
+        $v->at('binding', 'string', '');
+        string? $vBinding = null;
+        $rBinding = $f->string('binding', required: true);
+        if ($rBinding != null) {
+            $xBinding = guard $rBinding;
+            $v->minLength($xBinding, 1);
+            $v->maxLength($xBinding, 128);
+            $vBinding = mv $xBinding;
+        }
+        if ($v->count() != $before) {
+            return null;
+        }
+        $okAttempt = guard $vAttempt;
+        $okBinding = guard $vBinding;
+        return Blog::Inputs::OutsideSignIn($attempt: mv $okAttempt, $binding: mv $okBinding);
+    }
+}
+
+/**
  * Reads and checks a Blog::Inputs::PostBatch from request fields.
  */
 public struct PostBatchDecoder
@@ -1670,6 +1781,9 @@ public function generated(nexus::Generated $g) : void
     $g->action<Blog::Actions::Auth::OpenSession>('Blog::Actions::Auth::OpenSession', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Auth::OpenSessionDispatch::dispatch($payload);
     });
+    $g->action<Blog::Actions::Auth::SignInWith>('Blog::Actions::Auth::SignInWith', [], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Auth::SignInWithDispatch::dispatch($payload);
+    });
     $g->action<Blog::Actions::Health>('Blog::Actions::Health', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::HealthDispatch::dispatch($payload);
     });
@@ -1722,6 +1836,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Inputs::AuthoredPost>('Blog::Inputs::AuthoredPost');
     $g->name<Blog::Inputs::Credentials>('Blog::Inputs::Credentials');
     $g->name<Blog::Inputs::NewPost>('Blog::Inputs::NewPost');
+    $g->name<Blog::Inputs::OutsideSignIn>('Blog::Inputs::OutsideSignIn');
     $g->name<Blog::Inputs::PostBatch>('Blog::Inputs::PostBatch');
     $g->name<Blog::Inputs::PostChanges>('Blog::Inputs::PostChanges');
     $g->name<Blog::Inputs::PostRef>('Blog::Inputs::PostRef');
@@ -1737,6 +1852,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Queues::JobLane>('Blog::Queues::JobLane');
     $g->name<Blog::Queues::WorkerLane>('Blog::Queues::WorkerLane');
     $g->name<Blog::Rules::UniqueEmail>('Blog::Rules::UniqueEmail');
+    $g->name<Blog::Services::Accounts>('Blog::Services::Accounts');
     $g->name<Blog::Services::PostService>('Blog::Services::PostService');
     $g->name<Blog::Services::SignIn>('Blog::Services::SignIn');
     $g->name<Blog::Signals::UserRegistered>('Blog::Signals::UserRegistered');
@@ -1818,6 +1934,7 @@ public function tools(nexus::mcp::Offers $o) : void
     $o->add<Blog::Actions::Auth::Logout>(Blog::Actions::Auth::LogoutDispatch::offer());
     $o->add<Blog::Actions::Auth::Me>(Blog::Actions::Auth::MeDispatch::offer());
     $o->add<Blog::Actions::Auth::OpenSession>(Blog::Actions::Auth::OpenSessionDispatch::offer());
+    $o->add<Blog::Actions::Auth::SignInWith>(Blog::Actions::Auth::SignInWithDispatch::offer());
     $o->add<Blog::Actions::Health>(Blog::Actions::HealthDispatch::offer());
     $o->add<Blog::Actions::Posts::CreatePost>(Blog::Actions::Posts::CreatePostDispatch::offer());
     $o->add<Blog::Actions::Posts::DeletePost>(Blog::Actions::Posts::DeletePostDispatch::offer());

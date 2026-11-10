@@ -1,0 +1,17 @@
+namespace nexus::connect;
+
+/**
+ * Sign in with Google: the OAuth client of the app's Google Cloud project, read from
+ * `NEXUS_CONNECT_GOOGLE_CLIENT_ID` and `NEXUS_CONNECT_GOOGLE_CLIENT_SECRET`. Its authorized redirect
+ * is `<NEXUS_APP_URL>/auth/connect/google/callback`. Without a client id, Google is left out.
+ */
+#[nexus::config: "NEXUS_CONNECT_GOOGLE"]
+public struct GoogleConfig
+{
+    #[nexus::env: 'CLIENT_ID']
+    public string $clientId = '';
+
+    #[nexus::env: 'CLIENT_SECRET']
+    #[nexus::secret]
+    public string $clientSecret = '';
+}

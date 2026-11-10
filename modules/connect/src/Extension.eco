@@ -1,0 +1,110 @@
+namespace nexus::connect;
+
+use container::{Builder, Container};
+use std::time;
+
+/**
+ * Sign in with outside providers. Binds `Connect` per request on the attempt store, `Accounts` on
+ * `LinkStore`, `Connectors` (the ones that are configured) and `Fetch`, how the providers are
+ * reached (libcurl unless `fetch` says otherwise; a test replaces it with a `ScriptedFetch`); routes `POST /auth/connect/{provider}` and its callback; adds the attempts to
+ * `nexus::auth::Pruning`. List it after nexus-auth.
+ *
+ * ```echo
+ * nexus::connect::Extension(page: '/signed-in', connectors: [nexus::connect::Google()], stores: .provided),
+ * nexus::connect::carbon::Extension(),
+ * ```
+ *
+ * `page` is the app's page the browser comes back to with `?attempt=<id>`; it posts the attempt
+ * and the binding it kept to the app's action, which claims it (`Connect::claim`).
+ */
+public class Extension : nexus::Extension
+{
+    public const string $page;
+    public array<Connector> $connectors;
+    public const Stores $stores;
+    public calendar::Clock $clock;
+    public Fetch $fetch;
+    internal nexus::auth::Throttle $starts;
+
+    public constructor(
+        page: const string& $page = '/',
+        connectors: array<Connector> $connectors = array<Connector>(),
+        stores: Stores $stores = .memory,
+        clock: calendar::Clock $clock = calendar::SystemClock(),
+        fetch: Fetch $fetch = CurlFetch()
+    )
+    {
+        $this->page = $page;
+        $this->connectors = mv $connectors;
+        $this->stores = $stores;
+        $this->clock = $clock;
+        $this->fetch = $fetch;
+        $this->starts = nexus::auth::Throttle(30, .mins(15));
+    }
+
+    public function name() : string
+    {
+        return 'nexus-connect';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::auth::Pruning $pruning = guard $s->find<nexus::auth::Pruning>() else {
+            return .error(.extension('nexus-connect', 'the identities it claims are signed in through nexus-auth; list nexus::auth::Extension() before nexus::connect::Extension()'));
+        };
+        if ($this->connectors->empty()) {
+            return .error(.extension('nexus-connect', 'name a provider: nexus::connect::Extension(connectors: [nexus::connect::Google()])'));
+        }
+        nexus::Url $page = guard nexus::Url::parse($this->page) else ($e) {
+            return .error(.extension('nexus-connect', "page: '{$this->page}' is no URL: {$e->message()}"));
+        };
+        $connectors = Connectors();
+        foreach ($this->connectors as $c) {
+            bool $on = try $c->configure($s);
+            if ($on) {
+                if ($connectors->find($c->name()) != null) {
+                    return .error(.extension('nexus-connect', "two providers are called {$c->name()}"));
+                }
+                $connectors->all[] = $c;
+            }
+        }
+        $s->bind<Connectors>(put: $connectors);
+        Fetch $outbound = $this->fetch;
+        $s->bind<Fetch>(once: function[$outbound]() : Fetch {
+            return $outbound;
+        });
+        if ($this->stores == Stores::memory) {
+            $s->bind<MemoryAttempts>(put: MemoryAttempts());
+            $s->alias<AttemptStore, MemoryAttempts>();
+            $s->bind<MemoryLinks>(put: MemoryLinks());
+            $s->alias<LinkStore, MemoryLinks>();
+        }
+        $pruning->add('sign-in attempts', function(Container $c, time::timestamp $now) : result<uint64, nexus::Problem> {
+            return $c->get<AttemptStore>()->prune($now);
+        });
+        calendar::Clock $clock = $this->clock;
+        nexus::auth::Throttle $starts = $this->starts;
+        $s->bind<Connect>(scope: function[$connectors, $clock, $page](Container $c) : Connect {
+            return Connect($c->get<AttemptStore>(), $connectors, $c->get<Fetch>(), $clock, $page);
+        });
+        $s->bind<Accounts>(scope: function[$clock](Container $c) : Accounts {
+            return Accounts($c->get<LinkStore>(), $clock);
+        });
+        $s->bindAction<StartSignIn>(method: .post, path: '/auth/connect/{provider}', function[$starts](Container $c) : StartSignIn {
+            return StartSignIn($c->get<Connect>(), $starts);
+        });
+        $s->bindAction<Callback>(method: .get, path: '/auth/connect/{provider}/callback', function(Container $c) : Callback {
+            return Callback($c->get<Connect>());
+        });
+        $s->route<Callback>(method: .post, path: '/auth/connect/{provider}/callback');
+        return .ok;
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        if (!$kernel->services->has<AttemptStore>() || !$kernel->services->has<LinkStore>()) {
+            return .error(.extension('nexus-connect', 'no store is bound; use stores: .memory or add nexus::connect::carbon::Extension()'));
+        }
+        return .ok;
+    }
+}

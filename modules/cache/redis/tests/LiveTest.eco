@@ -1,0 +1,146 @@
+/**
+ * The cache against a real Redis server, named by CACHE_REDIS_URL (`redis://127.0.0.1:6379/15`);
+ * skipped otherwise. Every test keeps to a prefix of its own.
+ */
+
+use nexus::cache::Cache;
+use nexus::testing::TestApp;
+use ecotest::expect;
+
+internal function liveUrl() : string?
+{
+    string::view? $v = std::env::var('CACHE_REDIS_URL');
+    if ($v == null) {
+        return null;
+    }
+    string::view $url = guard $v;
+    return string($url);
+}
+
+// a prefix no other run shares
+internal function fresh() : string
+{
+    string $run = nexus::Kernel::id();
+    return "test:{$run}:";
+}
+
+internal function liveApp(const string& $url, const string& $prefix) : TestApp
+{
+    return TestApp([nexus::cache::Extension(), nexus::cache::redis::Extension()], ['NEXUS_CACHE_URL' => $url, 'NEXUS_CACHE_PREFIX' => $prefix]);
+}
+
+internal function liveRedis(const string& $url) : redis::Connection
+{
+    redis::Connection $r = guard redis::Connection::open($url) else ($e) {
+        die("connect: {$e}");
+    };
+    return $r;
+}
+
+internal function read(Cache $cache, const string& $key) : string
+{
+    string? $v = expect($cache->get($key))->ok();
+    return $v ?? '<none>';
+}
+
+test live_a_value_put_is_read_back
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('CACHE_REDIS_URL is not set');
+        return;
+    };
+    Cache $cache = liveApp($url, fresh())->kernel->services->get<Cache>();
+    expect($cache->describe())->has('redis://');
+    expect($cache->put('a', .forever, 'one'))->fine();
+    expect(read($cache, 'a'))->is('one');
+    expect($cache->forget('a'))->fine();
+    expect(read($cache, 'a'))->is('<none>');
+    expect($cache->flush())->fine();
+}
+
+test live_an_entry_expires
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('CACHE_REDIS_URL is not set');
+        return;
+    };
+    Cache $cache = liveApp($url, fresh())->kernel->services->get<Cache>();
+    expect($cache->put('a', .expires(.millis(100)), 'one'))->fine();
+    expect(read($cache, 'a'))->is('one');
+    std::time::sleep(.millis(250));
+    expect(read($cache, 'a'))->is('<none>');
+    expect($cache->flush())->fine();
+}
+
+test live_forever_sets_no_expiry_and_the_default_does
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('CACHE_REDIS_URL is not set');
+        return;
+    };
+    string $prefix = fresh();
+    Cache $cache = liveApp($url, $prefix)->kernel->services->get<Cache>();
+    expect($cache->put('a', .forever, 'one'))->fine();
+    expect($cache->put('b', 'two'))->fine();
+    redis::Connection $r = liveRedis($url);
+    expect($r->pttl("{$prefix}a"))->ok(-1 as int64);
+    int64 $left = expect($r->pttl("{$prefix}b"))->ok();
+    // NEXUS_CACHE_TTL defaults to an hour
+    expect($left > 3500000 && $left <= 3600000)->yes();
+    expect($cache->flush())->fine();
+}
+
+test live_flush_forgets_only_the_prefix
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('CACHE_REDIS_URL is not set');
+        return;
+    };
+    string $prefix = fresh();
+    Cache $cache = liveApp($url, $prefix)->kernel->services->get<Cache>();
+    redis::Connection $r = liveRedis($url);
+    // shares the start of the prefix, but is not under it
+    string $outside = "{$prefix}x";
+    $outside = $outside->sub(0, $outside->size() - 2);
+    expect($r->set($outside, 'kept'))->ok();
+    expect($cache->put('a', 'one'))->fine();
+    expect($cache->put('b', 'two'))->fine();
+    expect($cache->flush())->fine();
+    expect(read($cache, 'a'))->is('<none>');
+    expect(read($cache, 'b'))->is('<none>');
+    string? $still = expect($r->get($outside))->ok();
+    expect($still ?? '<none>')->is('kept');
+    expect($r->del([$outside]))->ok();
+}
+
+test live_a_prefix_with_glob_characters_flushes_only_itself
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('CACHE_REDIS_URL is not set');
+        return;
+    };
+    string $base = fresh();
+    Cache $cache = liveApp($url, "{$base}[a]*:")->kernel->services->get<Cache>();
+    redis::Connection $r = liveRedis($url);
+    // matches the prefix read as a glob, not as text
+    string $lookalike = "{$base}a-anything:k";
+    expect($r->set($lookalike, 'kept'))->ok();
+    expect($cache->put('k', 'one'))->fine();
+    expect($cache->flush())->fine();
+    expect(read($cache, 'k'))->is('<none>');
+    string? $still = expect($r->get($lookalike))->ok();
+    expect($still ?? '<none>')->is('kept');
+    expect($r->del([$lookalike]))->ok();
+}
+
+test live_the_callback_get_fills_redis
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('CACHE_REDIS_URL is not set');
+        return;
+    };
+    Cache $cache = liveApp($url, fresh())->kernel->services->get<Cache>();
+    expect($cache->get('a', .expires(.mins(1)), () => 'made'))->is('made');
+    expect($cache->get('a', .expires(.mins(1)), () => 'again'))->is('made');
+    expect($cache->flush())->fine();
+}

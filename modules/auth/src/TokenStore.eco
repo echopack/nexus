@@ -1,5 +1,7 @@
 namespace nexus::auth;
 
+use std::time;
+
 /**
  * Where bearer tokens are kept. `MemoryTokens` keeps them in the process; nexus-auth-carbon keeps
  * them in the app's database, per request.
@@ -16,4 +18,9 @@ public interface TokenStore
      * Removes every token of `$subject`: a password change, a "sign out everywhere".
      */
     function removeAll(const string& $subject) : status<nexus::Problem>;
+
+    /**
+     * Removes the tokens that expired before `$now`, and says how many.
+     */
+    function prune(time::timestamp $now) : result<uint64, nexus::Problem>;
 }

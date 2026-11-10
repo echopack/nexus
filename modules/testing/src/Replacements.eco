@@ -1,0 +1,27 @@
+namespace nexus::testing;
+
+/**
+ * The bindings a test replaces (`TestApp(..., replace: ...)`), listed after the app's extensions so
+ * they win.
+ */
+internal class Replacements : nexus::Extension
+{
+    private function<void(nexus::Services&)> $replace;
+
+    public constructor(function<void(nexus::Services&)> $replace)
+    {
+        $this->replace = $replace;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-testing';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        function<void(nexus::Services&)> $replace = $this->replace;
+        $replace($s);
+        return .ok;
+    }
+}

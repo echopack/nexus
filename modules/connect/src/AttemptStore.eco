@@ -1,0 +1,34 @@
+namespace nexus::connect;
+
+use std::time;
+
+/**
+ * Where sign in attempts are kept between the start, the callback and the claim.
+ * `MemoryAttempts` keeps them in the process; nexus-connect-carbon in the app's database.
+ */
+public interface AttemptStore
+{
+    function start(const Attempt& $a) : status<nexus::Problem>;
+
+    function find(const string& $id) : result<Attempt?, nexus::Problem>;
+
+    /**
+     * The attempt whose state hashes to `$hash`.
+     */
+    function byState(const string& $hash) : result<Attempt?, nexus::Problem>;
+
+    /**
+     * Saves what the callback learned: the identity or the error of `$a`.
+     */
+    function settle(const Attempt& $a) : status<nexus::Problem>;
+
+    /**
+     * Removes attempt `$id`: true for the one caller whose call removed it.
+     */
+    function spend(const string& $id) : result<bool, nexus::Problem>;
+
+    /**
+     * Removes the attempts that expired before `$now`, and says how many.
+     */
+    function prune(time::timestamp $now) : result<uint64, nexus::Problem>;
+}

@@ -5,7 +5,7 @@ use Blog::DB::Repository::PostRepository;
 
 /**
  * The database `NEXUS_DATABASE_URL` names: a MySQL pool with the blog's repositories registered and
- * checked, the auth, tasks and OAuth tables with them.
+ * checked, the auth, tasks, OAuth and sign-in tables with them.
  */
 public function open(const nexus::carbon::DatabaseConfig& $config) : result<carbon::DB, carbon::Error>
 {
@@ -19,8 +19,8 @@ public function open(const nexus::carbon::DatabaseConfig& $config) : result<carb
 }
 
 /**
- * Registers the blog's repositories on `$db` and checks every one the models need, the auth, tasks
- * and OAuth tables included.
+ * Registers the blog's repositories on `$db` and checks every one the models need, the auth, tasks,
+ * OAuth and sign-in tables included.
  */
 public function wire(carbon::DB $db) : status<carbon::Error>
 {
@@ -30,17 +30,19 @@ public function wire(carbon::DB $db) : status<carbon::Error>
     try nexus::auth::carbon::Tables::wire($db);
     try nexus::work::carbon::Tables::wire($db);
     try nexus::oauth::carbon::Tables::wire($db);
+    try nexus::connect::carbon::Tables::wire($db);
     return .ok;
 }
 
 /**
- * The blog's migrations after the auth, tasks and OAuth tables', in id order.
+ * The blog's migrations after the auth, tasks, OAuth and sign-in tables', in id order.
  */
 public function migrations() : array<carbon::migrate::Step>
 {
     $all = nexus::auth::carbon::Tables::migrations();
     $all->extend(nexus::work::carbon::Tables::migrations());
     $all->extend(nexus::oauth::carbon::Tables::migrations());
+    $all->extend(nexus::connect::carbon::Tables::migrations());
     $all->extend(Blog::DB::Migration::Carbon::migrations());
     return $all;
 }

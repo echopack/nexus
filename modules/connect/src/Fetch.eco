@@ -1,0 +1,13 @@
+namespace nexus::connect;
+
+/**
+ * How nexus-connect talks to a provider: a GET for its discovery document, a form POST to its
+ * token endpoint. `CurlFetch` sends them; `ScriptedFetch` answers them in tests. A provider that
+ * cannot be reached is a 503.
+ */
+public interface Fetch
+{
+    function get(const string& $url) : result<Fetched, nexus::Problem>;
+
+    function post(const string& $url, const nexus::Query& $form) : result<Fetched, nexus::Problem>;
+}

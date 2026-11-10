@@ -1,0 +1,28 @@
+namespace nexus::connect;
+
+use std::time;
+
+/**
+ * An outside identity linked to one of the app's users: provider `google`, the provider's id for
+ * the person, and the app's subject (the user id, as text, the way tokens name it).
+ */
+public struct Link
+{
+    public string $provider;
+    public string $external;
+    public string $subject;
+
+    /**
+     * The email the provider gave when it was linked, for an account page.
+     */
+    public string $email = '';
+    public time::timestamp $createdAt;
+
+    /**
+     * What a store keys `$provider`'s person `$external` by.
+     */
+    public static function key(const string& $provider, const string& $external) : string
+    {
+        return "{$provider}:{$external}";
+    }
+}

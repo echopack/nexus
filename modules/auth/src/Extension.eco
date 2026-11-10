@@ -4,9 +4,11 @@ use container::{Builder, Container};
 use std::time;
 
 /**
- * Bearer tokens and signed sessions for the app. Binds `Guards` (signed, then bearer, then the
- * app's own), the `Authenticate` middleware, `Tokens` and `Sessions` per request on the stores,
- * `Passwords` and `Logins`. `NEXUS_AUTH_KEY` must be set: signed session secrets are derived from it.
+ * Who is calling the app. Binds `Guards` (the built-in ones `guards` names, then `extra`, then those
+ * other extensions add), the `Authenticate` middleware, `Resources` (the parts of the app OAuth
+ * clients get tokens for), `Pruning` and `auth:prune`, `Tokens` and `Sessions` per request on the
+ * stores, `Passwords` and `Logins`. `NEXUS_AUTH_KEY` must be set: signed session secrets are derived
+ * from it.
  *
  * ```echo
  * nexus::Kernel::main([
@@ -17,8 +19,8 @@ use std::time;
  * ```
  *
  * `$prefix` starts every token (`blog_3f9a1c2e5d7b_...`). With `stores: .provided` another
- * extension binds `TokenStore` and `SessionStore`; `compat: true` also accepts `X-AccessToken`
- * signatures.
+ * extension binds `TokenStore` and `SessionStore`; `guards: [.bearer]` takes bearer tokens only;
+ * `compat: true` also accepts `X-AccessToken` signatures.
  */
 public class Extension : nexus::Extension
 {
@@ -27,7 +29,8 @@ public class Extension : nexus::Extension
     public const bool $compat;
     public calendar::Clock $clock;
     public const crypto::PasswordCost $cost;
-    public array<Guard> $guards;
+    public array<BuiltinGuard> $builtin;
+    public array<Guard> $extra;
 
     /**
      * How far a signed request's time may be from the server's.
@@ -40,7 +43,8 @@ public class Extension : nexus::Extension
         compat: bool $compat = false,
         clock: calendar::Clock $clock = calendar::SystemClock(),
         cost: crypto::PasswordCost $cost = .standard(),
-        guards: array<Guard> $guards = array<Guard>()
+        guards: array<BuiltinGuard> $guards = [BuiltinGuard::signed, BuiltinGuard::bearer],
+        extra: array<Guard> $extra = array<Guard>()
     )
     {
         $this->prefix = $prefix;
@@ -48,7 +52,8 @@ public class Extension : nexus::Extension
         $this->compat = $compat;
         $this->clock = $clock;
         $this->cost = $cost;
-        $this->guards = mv $guards;
+        $this->builtin = mv $guards;
+        $this->extra = mv $extra;
         $this->window = .mins(5);
     }
 
@@ -72,13 +77,34 @@ public class Extension : nexus::Extension
             $s->alias<TokenStore, MemoryTokens>();
             $s->alias<SessionStore, MemorySessions>();
         }
-        array<Guard> $all = [SignedGuard($this->compat), BearerGuard()];
-        foreach ($this->guards as const &$g) {
+        array<Guard> $all = [];
+        foreach ($this->builtin as $b) {
+            if ($b == BuiltinGuard::signed) {
+                $all[] = SignedGuard($this->compat);
+            }
+            if ($b == BuiltinGuard::bearer) {
+                $all[] = BearerGuard();
+            }
+        }
+        foreach ($this->extra as const &$g) {
             $all[] = $g;
         }
-        $guards = Guards(mv $all);
+        $resources = Resources();
+        $s->bind<Resources>(put: $resources);
+        $s->bind<ResourceMetadata>(scope: function[$resources]() : ResourceMetadata {
+            return ResourceMetadata($resources);
+        });
+        $guards = Guards(mv $all, $resources);
         $s->bind<Guards>(put: $guards);
         $s->bind<Authenticate>(put: Authenticate($guards));
+        $pruning = Pruning($this->clock);
+        $pruning->add('tokens', function(Container $c, time::timestamp $now) : result<uint64, nexus::Problem> {
+            return $c->get<TokenStore>()->prune($now);
+        });
+        $pruning->add('sessions', function(Container $c, time::timestamp $now) : result<uint64, nexus::Problem> {
+            return $c->get<SessionStore>()->prune($now);
+        });
+        $s->bind<Pruning>(put: $pruning);
         $passwords = Passwords($this->cost);
         $s->bind<Passwords>(put: $passwords);
         $s->bind<Logins>(put: Logins($passwords, $this->clock));
@@ -92,5 +118,10 @@ public class Extension : nexus::Extension
             return Sessions($c->get<SessionStore>(), $config->key, $config->sessions, $window, $clock);
         });
         return .ok;
+    }
+
+    public function commands(nexus::Commands& $cmds) : void
+    {
+        $cmds->add(PruneCommand());
     }
 }

@@ -1,24 +1,26 @@
 /*
- * nexus-oauth: OAuth 2.1 for the app's MCP endpoint, so an MCP client
- * connects with a URL and a click instead of a pasted token.
+ * nexus-oauth: an OAuth 2.1 authorization server for a nexus app's
+ * protected resources (nexus-auth's `Resources`: the MCP endpoint, a
+ * public API), so a client connects with a URL and a click instead of a
+ * pasted token.
  *
- * The app is the authorization server and the resource. A client
- * registers itself (RFC 7591), sends the user to `/oauth/authorize`, which
- * hands the browser to the app's own consent page; that page, signed in
- * as the user, asks `/oauth/request` what is asked and answers through
- * `/oauth/approve`. The client trades the code for tokens with its PKCE
- * verifier. Access tokens (`nxo_...`) open the MCP endpoint only; refresh
- * tokens (`nxr_...`) are single use, and one that comes back after it was
- * used ends the grant.
+ * A client registers itself (RFC 7591) or is registered in code, sends
+ * the user to `/oauth/authorize`, which keeps the request and hands the
+ * browser to the app's own consent page with `?request=<id>`; that page,
+ * signed in as the user, reads `/oauth/requests/{id}` and answers it. The
+ * client trades the code for tokens with its PKCE verifier. An access
+ * token (`nxo_...`) opens the one resource it was asked for (RFC 8707);
+ * refresh tokens (`nxr_...`) are single use, and one that comes back
+ * after it was used ends the grant.
  *
- * Clients, codes and grants are kept in memory here; nexus-oauth-carbon
- * keeps them in the app's database.
+ * Clients, requests, codes and grants are kept in memory here;
+ * nexus-oauth-carbon keeps them in the app's database.
  */
 
 #[module: "nexus-oauth"]
 #[version: "0.1.0"]
 #[epm::license: "MIT"]
-#[epm::description: "OAuth 2.1 for the MCP endpoint of nexus apps"]
+#[epm::description: "OAuth 2.1 authorization server for the protected resources of nexus apps"]
 
 #[depends: "../.."]
 #[depends: "../auth"]

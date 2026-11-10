@@ -1,0 +1,93 @@
+/**
+ * The memory store: lifetimes on a clock that moves only when told to, and what goes when it is
+ * full.
+ */
+
+use nexus::cache::MemoryStore;
+use ecotest::expect;
+use std::time;
+
+internal function clock() : calendar::ManualClock
+{
+    return calendar::ManualClock(time::timestamp::from_unix_secs(1700000000));
+}
+
+internal function read(MemoryStore $m, const string& $key) : string
+{
+    string? $v = expect($m->get($key))->ok();
+    return $v ?? '<none>';
+}
+
+test a_value_put_is_read_back
+{
+    $m = MemoryStore();
+    expect($m->put('a', 'one', .forever))->fine();
+    expect(read($m, 'a'))->is('one');
+    expect(read($m, 'b'))->is('<none>');
+    expect($m->put('a', 'two', .forever))->fine();
+    expect(read($m, 'a'))->is('two');
+}
+
+test an_entry_is_gone_once_its_lifetime_passed
+{
+    $c = clock();
+    $m = MemoryStore(clock: $c);
+    expect($m->put('a', 'one', .expires(.mins(5))))->fine();
+    $c->advance(.mins(4));
+    expect(read($m, 'a'))->is('one');
+    $c->advance(.mins(1));
+    expect(read($m, 'a'))->is('<none>');
+    // dropped on that read, not only hidden
+    expect($m->count() as int64)->is(0 as int64);
+}
+
+test a_forever_entry_outlives_any_clock
+{
+    $c = clock();
+    $m = MemoryStore(clock: $c);
+    expect($m->put('a', 'one', .forever))->fine();
+    $c->advance(.hours(24 * 365 * 10));
+    expect(read($m, 'a'))->is('one');
+}
+
+test forget_and_flush_drop_entries
+{
+    $m = MemoryStore();
+    expect($m->put('a', 'one', .forever))->fine();
+    expect($m->put('b', 'two', .forever))->fine();
+    expect($m->forget('a'))->fine();
+    expect(read($m, 'a'))->is('<none>');
+    expect(read($m, 'b'))->is('two');
+    expect($m->forget('nothing'))->fine();
+    expect($m->flush())->fine();
+    expect($m->count() as int64)->is(0 as int64);
+}
+
+test a_full_store_drops_the_expired_first
+{
+    $c = clock();
+    $m = MemoryStore(max: 2, clock: $c);
+    expect($m->put('old', '1', .expires(.secs(10))))->fine();
+    expect($m->put('kept', '2', .expires(.hours(1))))->fine();
+    $c->advance(.secs(20));
+    expect($m->put('new', '3', .expires(.secs(30))))->fine();
+    expect($m->count() as int64)->is(2 as int64);
+    expect(read($m, 'kept'))->is('2');
+    expect(read($m, 'new'))->is('3');
+}
+
+test a_full_store_drops_what_expires_soonest
+{
+    $m = MemoryStore(max: 2, clock: clock());
+    expect($m->put('forever', '1', .forever))->fine();
+    expect($m->put('soon', '2', .expires(.mins(1))))->fine();
+    expect($m->put('later', '3', .expires(.mins(10))))->fine();
+    expect(read($m, 'soon'))->is('<none>');
+    expect(read($m, 'forever'))->is('1');
+    expect(read($m, 'later'))->is('3');
+    // only forever entries left besides the one written: one of them goes, never the new one
+    expect($m->put('later', '4', .forever))->fine();
+    expect($m->put('newest', '5', .expires(.secs(1))))->fine();
+    expect($m->count() as int64)->is(2 as int64);
+    expect(read($m, 'newest'))->is('5');
+}

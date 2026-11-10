@@ -4,8 +4,9 @@ use container::{Builder, Container};
 
 /**
  * MCP for a nexus app: binds `Tools` (the tools `tools` gives by hand, and every one an extension
- * offers after it with `Tools::offer`), the offers `nexus gen` wrote, and routes the endpoint at
- * `/mcp`. List it after nexus-auth, whose guards say who calls, and before the app.
+ * offers after it with `Tools::offer`), the offers `nexus gen` wrote, routes the endpoint at `/mcp`
+ * and declares it nexus-auth's resource `mcp` (scope `mcp`), so with nexus-oauth an MCP client
+ * signs in by itself. List it after nexus-auth, whose guards say who calls, and before the app.
  *
  * ```echo
  * nexus::auth::Extension('blog'),
@@ -55,6 +56,12 @@ public class Extension : nexus::Extension
         $config->version = $this->version ?? $config->version;
         $config->instructions = $this->instructions ?? $config->instructions;
         $s->replace<McpConfig>(put: $config);
+        array<string> $scopes = ['mcp'];
+        string $title = $config->title;
+        if ($title->empty()) {
+            $title = $config->name;
+        }
+        $s->get<nexus::auth::Resources>()->add($s, nexus::auth::Resource('mcp', '/mcp', $scopes, $title));
         $offers = Offers();
         foreach (attr::of<ToolTable>('nexus::mcp::tools') as const &$t) {
             function<void(Offers)> $add = $t->call;

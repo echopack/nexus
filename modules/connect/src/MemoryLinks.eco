@@ -1,0 +1,57 @@
+namespace nexus::connect;
+
+use std::thread;
+
+/**
+ * Links kept in the process: for tests and single-process apps.
+ */
+#[atomic]
+public class MemoryLinks : LinkStore
+{
+    private thread::mutex<map<string, Link>> $links;
+
+    public constructor()
+    {
+        $this->links = thread::mutex<map<string, Link>>(map<string, Link>());
+    }
+
+    public function find(const string& $provider, const string& $external) : result<Link?, nexus::Problem>
+    {
+        thread::locked<map<string, Link>> $held = $this->links->lock();
+        string $key = Link::key($provider, $external);
+        if (!$held->value->has($key)) {
+            return .ok(null);
+        }
+        return .ok($held->value->get($key));
+    }
+
+    public function link(const Link& $l) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Link>> $held = $this->links->lock();
+        string $key = Link::key($l->provider, $l->external);
+        if ($held->value->has($key)) {
+            return .error(.conflict('this identity is linked to an account already'));
+        }
+        $held->value[$key] = $l;
+        return .ok;
+    }
+
+    public function unlink(const string& $provider, const string& $external) : status<nexus::Problem>
+    {
+        thread::locked<map<string, Link>> $held = $this->links->lock();
+        $held->value->remove(Link::key($provider, $external));
+        return .ok;
+    }
+
+    public function of(const string& $subject) : result<array<Link>, nexus::Problem>
+    {
+        thread::locked<map<string, Link>> $held = $this->links->lock();
+        array<Link> $out = [];
+        foreach ($held->value as $key => const &$l) {
+            if ($l->subject == $subject) {
+                $out[] = $l;
+            }
+        }
+        return .ok($out);
+    }
+}

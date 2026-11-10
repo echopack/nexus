@@ -1,0 +1,71 @@
+namespace nexus::auth;
+
+use container::Container;
+use std::time;
+
+// one store's pruner and the name `auth:prune` reports it by
+internal struct Pruner
+{
+    public string $name;
+    public function<result<uint64, nexus::Problem>(Container, time::timestamp)> $prune;
+}
+
+/**
+ * Everything the auth extensions keep that expires, in one place: nexus-auth adds its tokens and
+ * sessions, nexus-oauth its codes, requests and grants, nexus-connect its sign-in attempts. `auth:prune`
+ * and an app's scheduled task run them all:
+ *
+ * ```echo
+ * array<nexus::auth::Pruned> $done = try $payload->get<nexus::auth::Pruning>()->run($payload);
+ * ```
+ *
+ * Each pruner gets the payload's container, so a store bound per request (on a database session) is
+ * the one it prunes.
+ */
+#[atomic]
+public class Pruning
+{
+    internal array<Pruner> $pruners = [];
+    public calendar::Clock $clock;
+
+    public constructor(calendar::Clock $clock)
+    {
+        $this->clock = $clock;
+    }
+
+    /**
+     * Adds a pruner called `$name`, from an extension's `services`.
+     */
+    public function add(const string& $name, function<result<uint64, nexus::Problem>(Container, time::timestamp)> $prune) : void
+    {
+        $this->pruners[] = Pruner($name, $prune);
+    }
+
+    /**
+     * The names of the pruners, in the order they run.
+     */
+    public const function names() : array<string>
+    {
+        array<string> $out = [];
+        foreach ($this->pruners as const &$p) {
+            $out[] = $p->name;
+        }
+        return $out;
+    }
+
+    /**
+     * Runs every pruner on `$payload`'s container, as of now: what each removed. The first one that
+     * fails stops the rest.
+     */
+    public function run(nexus::Payload& $payload) : result<array<Pruned>, nexus::Problem>
+    {
+        time::timestamp $now = $this->clock->now();
+        array<Pruned> $done = [];
+        foreach ($this->pruners as const &$p) {
+            function<result<uint64, nexus::Problem>(Container, time::timestamp)> $prune = $p->prune;
+            uint64 $count = try $prune($payload->services, $now);
+            $done[] = Pruned($p->name, $count);
+        }
+        return .ok($done);
+    }
+}

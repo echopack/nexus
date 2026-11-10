@@ -1,0 +1,11 @@
+namespace nexus::connect;
+
+/**
+ * A request `ScriptedFetch` was sent: the method, the URL and the form of a POST.
+ */
+public struct Sent
+{
+    public string $method;
+    public string $url;
+    public nexus::Query $form;
+}

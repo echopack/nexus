@@ -1,0 +1,26 @@
+namespace nexus::connect;
+
+use std::time;
+
+/**
+ * A sign in just started: where to send the browser, the attempt's id, and the binding the
+ * frontend keeps (in `sessionStorage`) to claim it with, shown this once. Answers as
+ * `{"url": "...", "attempt": "...", "binding": "...", "expires_at": "..."}`.
+ */
+public struct Started
+{
+    public string $url;
+    public string $attempt;
+    public string $binding;
+    public time::timestamp $expiresAt;
+
+    public const function json() : json::Value
+    {
+        json::Value $o = json::object();
+        $o['url'] = json::str($this->url);
+        $o['attempt'] = json::str($this->attempt);
+        $o['binding'] = json::str($this->binding);
+        $o['expires_at'] = nexus::auth::Issued::stamp($this->expiresAt);
+        return $o;
+    }
+}

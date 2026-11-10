@@ -1,0 +1,20 @@
+namespace nexus::connect;
+
+/**
+ * Who an outside provider says signed in: the provider (`google`), its id for the person (`sub`,
+ * stable and never reused), and what it tells about them. Link accounts by `provider` and
+ * `subject`; trust `email` for an existing account only when `emailVerified`.
+ */
+public struct ExternalIdentity
+{
+    public string $provider;
+    public string $subject;
+    public string $email = '';
+    public bool $emailVerified = false;
+    public string $name = '';
+
+    /**
+     * Every claim of the ID token, for what the fields above leave out (`picture`, `locale`).
+     */
+    public json::Value $claims = json::object();
+}

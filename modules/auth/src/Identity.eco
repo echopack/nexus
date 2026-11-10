@@ -2,8 +2,9 @@ namespace nexus::auth;
 
 /**
  * Who a request's credential names: the subject the token or session was issued to (a user id, as
- * text), the guard that read it (`via`), the credential's own id (to revoke it) and the scopes it
- * carries. `Authenticate` leaves it in the payload, and an app's middleware builds its user on it:
+ * text), the guard that read it (`via`), the credential's own id (to revoke it), the scopes it
+ * carries, and for a token an OAuth client holds, the resource it was issued for (`audience`) and
+ * the client (`client`). `Authenticate` leaves it in the payload, and an app's middleware builds its user on it:
  *
  * ```echo
  * public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
@@ -30,6 +31,17 @@ public struct Identity
     public array<string> $scopes = [];
 
     /**
+     * The resource the credential was issued for (`Resource::name`); empty for the app's own tokens
+     * and sessions, which open every part of it.
+     */
+    public string $audience = '';
+
+    /**
+     * The OAuth client that holds the credential; empty for the app's own.
+     */
+    public string $client = '';
+
+    /**
      * The subject as a number, for apps that key users by an integer id.
      */
     public const function number() : int64?
@@ -38,12 +50,21 @@ public struct Identity
     }
 
     /**
-     * Whether the credential carries `$scope`. A credential issued without scopes carries every
-     * one.
+     * Whether the app issued the credential to its own frontend or command line, not to an OAuth
+     * client for one resource.
+     */
+    public const function firstParty() : bool
+    {
+        return $this->audience->empty();
+    }
+
+    /**
+     * Whether the credential carries `$scope`. One the app issued without scopes carries every
+     * one; a token an OAuth client holds carries what it was granted.
      */
     public const function has(const string& $scope) : bool
     {
-        if ($this->scopes->empty()) {
+        if ($this->scopes->empty() && $this->firstParty()) {
             return true;
         }
         foreach ($this->scopes as const &$s) {

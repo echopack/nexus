@@ -5,7 +5,7 @@
  * Two tables, `auth_tokens` and `auth_sessions`, in one migration the app
  * adds to its own; the repositories are registered with the app's, and
  * the extension binds the stores on each request's carbon session.
- * `auth:prune` deletes what has expired.
+ * nexus-auth's `auth:prune` deletes what has expired.
  */
 
 #[module: "nexus-auth-carbon"]

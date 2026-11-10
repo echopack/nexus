@@ -1,0 +1,52 @@
+namespace nexus::oauth;
+
+/**
+ * What the consent page shows the signed in user: which client asks, where it goes back to, the
+ * resource and the scopes, and whether this user allowed all of that before (`granted_before`), so
+ * the page may answer without asking again.
+ *
+ * ```json
+ * {"id": "...", "client": {"id": "...", "name": "Claude"}, "redirect": "https://...",
+ *  "resource": {"name": "mcp", "title": "Blog", "url": "https://blog.example.com/mcp"},
+ *  "scopes": ["mcp"], "granted_before": false}
+ * ```
+ */
+#[nexus::through: ["nexus::auth::Authenticate"]]
+public class ShowRequest : nexus::Action
+{
+    private Grants $grants;
+    private nexus::auth::Resources $resources;
+
+    public constructor(Grants $grants, nexus::auth::Resources $resources)
+    {
+        $this->grants = $grants;
+        $this->resources = $resources;
+    }
+
+    public function handle(nexus::Payload& $payload, string $id) : result<json::Value, nexus::Problem>
+    {
+        $me = try $payload->state<nexus::auth::Identity>();
+        Asked $asked = try $this->grants->request($id);
+        AuthRequest $r = $asked->request;
+        json::Value $client = json::object();
+        $client['id'] = json::str($asked->client->id);
+        $client['name'] = json::str($asked->client->name);
+        json::Value $resource = json::object();
+        $resource['name'] = json::str($r->resource);
+        nexus::auth::Resource? $named = $this->resources->named($r->resource);
+        if ($named != null) {
+            nexus::auth::Resource $res = guard $named;
+            $resource['title'] = json::str($res->title);
+            $resource['url'] = json::str($this->resources->url($payload, $res));
+        }
+        json::Value $o = json::object();
+        $o['id'] = json::str($r->id);
+        $o['client'] = mv $client;
+        $o['redirect'] = json::str($r->redirect);
+        $o['resource'] = mv $resource;
+        $o['scopes'] = Metadata::strings($r->scopes());
+        bool $before = try $this->grants->granted($r, $me->subject);
+        $o['granted_before'] = json::bool($before);
+        return .ok($o);
+    }
+}

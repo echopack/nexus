@@ -3,7 +3,7 @@
  * login throttles, on memory stores and a clock the tests move.
  */
 
-use nexus::auth::{Identity, Guards, Authenticate, Tokens, Sessions, Issued, Opened, Signer, Logins, Passwords, MemoryTokens, TokenStore};
+use nexus::auth::{Identity, Guards, Authenticate, Tokens, Sessions, Issued, Opened, Signer, Logins, Passwords, MemoryTokens, TokenStore, Resource, Resources, Pruning, Pruned};
 use nexus::testing::TestApp;
 use std::time;
 use ecotest::expect;
@@ -69,6 +69,61 @@ internal class Counting : nexus::auth::Guard
     }
 }
 
+/**
+ * Reads `X-Test-Client: <resource>`: a token an OAuth client holds for that resource, for user 7.
+ */
+#[atomic]
+internal class TClientGuard : nexus::auth::Guard
+{
+    public function name() : string
+    {
+        return 'client';
+    }
+
+    public function identify(nexus::Payload& $payload) : result<Identity?, nexus::Problem>
+    {
+        string $audience = guard $payload->request->header('X-Test-Client') else {
+            return .ok(null);
+        };
+        array<string> $scopes = ['tools'];
+        return .ok(Identity($via: 'client', $subject: '7', $credential: 'c1', $scopes: $scopes, $audience: $audience, $client: 'app-1'));
+    }
+}
+
+/**
+ * Declares the resources `$paths` names (`name => path`), and that this app issues their tokens
+ * when `$issued`.
+ */
+internal class TResources : nexus::Extension
+{
+    public map<string, string> $paths;
+    public bool $issued;
+
+    public constructor(map<string, string> $paths, bool $issued)
+    {
+        $this->paths = $paths;
+        $this->issued = $issued;
+    }
+
+    public function name() : string
+    {
+        return 'test-resources';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        Resources $all = $s->get<Resources>();
+        foreach ($this->paths as $name => const &$path) {
+            array<string> $scopes = ['tools'];
+            $all->add($s, Resource($name, $path, $scopes, "The {$name}"));
+        }
+        if ($this->issued) {
+            $all->issuedHere();
+        }
+        return .ok;
+    }
+}
+
 internal class Rig
 {
     public TestApp $app;
@@ -78,8 +133,35 @@ internal class Rig
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
         map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_AUTH_TOKENS' => '1h', 'NEXUS_AUTH_SESSIONS' => '2h'];
-        array<nexus::Extension> $exts = [nexus::auth::Extension('test', compat: $compat, clock: $this->clock, cost: crypto::PasswordCost(8, 1), guards: $extra)];
+        array<nexus::Extension> $exts = [nexus::auth::Extension('test', compat: $compat, clock: $this->clock, cost: crypto::PasswordCost(8, 1), extra: $extra)];
         $this->app = TestApp($exts, $vars);
+    }
+
+    /**
+     * A rig with resource `mcp` at `/mcp`, the test client guard, and this app issuing the tokens
+     * when `$issued`.
+     */
+    public constructor(resources: bool $issued)
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_AUTH_TOKENS' => '1h', 'NEXUS_AUTH_SESSIONS' => '2h'];
+        array<nexus::auth::Guard> $extra = [TClientGuard()];
+        map<string, string> $paths = ['mcp' => '/mcp'];
+        array<nexus::Extension> $exts = [
+            nexus::auth::Extension('test', clock: $this->clock, cost: crypto::PasswordCost(8, 1), extra: $extra),
+            TResources($paths, $issued),
+        ];
+        $this->app = TestApp($exts, $vars);
+    }
+
+    /**
+     * A request to `$target` with the test client's token for `$audience`.
+     */
+    public function client(const string& $target, const string& $audience) : nexus::Payload
+    {
+        $req = nexus::Request(.get, $target);
+        $req->headers->set('X-Test-Client', $audience);
+        return $this->payload(mv $req);
     }
 
     /**
@@ -87,7 +169,7 @@ internal class Rig
      */
     public function payload(nexus::Request $req) : nexus::Payload
     {
-        $req->peer = '10.0.0.1:50000';
+        $req->peer = '10.0.0.1';
         return nexus::Payload($request: mv $req, $services: $this->app->kernel->services->child(), $mode: .testing, $log: nexus::Logger([], .info));
     }
 
@@ -450,4 +532,94 @@ test boot_needs_a_key_and_a_good_prefix
     expect(TestApp::attempt($bad, $ok))->fails();
     array<nexus::Extension> $good = [nexus::auth::Extension('ok1', cost: crypto::PasswordCost(8, 1))];
     expect(TestApp::attempt($good, $ok)->failed())->no(says: 'a good key and prefix boot');
+}
+
+test a_resource_token_opens_its_resource_only
+{
+    $r = Rig(resources: true);
+    expect(subject($r->client('/mcp', 'mcp')))->is('client:7');
+    expect(subject($r->client('/mcp/tools', 'mcp')))->is('client:7');
+    expect(subject($r->client('/v1/me', 'mcp')))->is('401');
+    expect(subject($r->client('/mcpx', 'mcp')))->is('401');
+    expect(subject($r->client('/mcp', 'api')))->is('401');
+    nexus::Payload $elsewhere = $r->client('/v1/me', 'mcp');
+    nexus::Problem $p = expect($elsewhere->get<Guards>()->identify($elsewhere))->fails();
+    expect($p->detail(.dev))->has('opens /mcp only');
+
+    // the app's own tokens open every part of it
+    string $token = $r->issue('7')->token;
+    expect(subject($r->bearer('/mcp', $token)))->is('bearer:7');
+    expect(subject($r->bearer('/v1/me', $token)))->is('bearer:7');
+
+    Identity $id = identity($r->client('/mcp', 'mcp'));
+    expect($id->firstParty())->no(says: 'a client token is not the app\'s own');
+    expect($id->has('tools'))->yes(says: 'a client token holds what it was granted');
+    expect($id->has('posts:write'))->no(says: 'and nothing else, though the app\'s own without scopes hold all');
+}
+
+test a_resource_has_metadata_and_a_401_points_at_it
+{
+    $r = Rig(resources: true);
+    $r->app->api()->with('Host', 'blog.test')->get('/.well-known/oauth-protected-resource/mcp')
+        ->status(200)
+        ->json('$.resource', 'http://blog.test/mcp')
+        ->json('$.resource_name', 'The mcp')
+        ->json('$.authorization_servers[0]', 'http://blog.test')
+        ->json('$.scopes_supported[0]', 'tools');
+    $r->app->api()->get('/.well-known/oauth-protected-resource')->json('$.resource', 'http://app/mcp');
+    $r->app->api()->get('/.well-known/oauth-protected-resource/other')->status(404);
+
+    nexus::Payload $payload = $r->get('/mcp');
+    nexus::Response $res = $r->app->kernel->services->get<Resources>()->challenge($payload, .unauthorized('who are you'));
+    expect($res->header('WWW-Authenticate'))->some('Bearer resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"');
+    nexus::Payload $outside = $r->get('/v1/me');
+    nexus::Response $plain = $r->app->kernel->services->get<Resources>()->challenge($outside, .unauthorized('who are you'));
+    expect($plain->header('WWW-Authenticate'))->none();
+
+    // without an issuer the metadata names no server, and the 401 only says Bearer
+    $alone = Rig(resources: false);
+    $alone->app->api()->get('/.well-known/oauth-protected-resource/mcp')->count('$.authorization_servers', 0);
+    nexus::Payload $bare = $alone->get('/mcp');
+    nexus::Response $res2 = $alone->app->kernel->services->get<Resources>()->challenge($bare, .unauthorized('who are you'));
+    expect($res2->header('WWW-Authenticate'))->some('Bearer');
+}
+
+test resources_that_clash_or_have_no_path_stop_the_boot
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
+    map<string, string> $clash = ['one' => '/mcp'];
+    map<string, string> $again = ['two' => '/mcp'];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), TResources($clash, false), TResources($again, false)];
+    nexus::BootError $e = expect(TestApp::attempt($exts, $vars))->fails();
+    expect($e->lines()[0])->has('clashes with one');
+    map<string, string> $slash = ['api' => '/v1/'];
+    array<nexus::Extension> $bad = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), TResources($slash, false)];
+    expect(TestApp::attempt($bad, $vars))->fails();
+}
+
+test pruning_removes_what_expired_in_every_store
+{
+    Rig $r = rig();
+    Issued $old = $r->issue('7');
+    Opened $session = $r->open('7');
+    $r->clock->advance(.mins(90));
+    Issued $fresh = $r->issue('8');
+    nexus::Payload $payload = $r->get('/');
+    expect($payload->get<Pruning>()->names())->is(['tokens', 'sessions']);
+    array<Pruned> $done = guard $payload->get<Pruning>()->run($payload);
+    expect($done[0]->count)->is(1 as uint64);
+    expect($done[1]->count)->is(0 as uint64);
+    expect(subject($r->bearer('/', $fresh->token)))->is('bearer:8');
+    $r->clock->advance(.mins(31));
+    array<Pruned> $later = guard $payload->get<Pruning>()->run($payload);
+    expect($later[1]->count)->is(1 as uint64);
+}
+
+test the_built_in_guards_are_chosen
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1), guards: [nexus::auth::BuiltinGuard::bearer])];
+    TestApp $app = TestApp($exts, $vars);
+    expect($app->kernel->services->get<Guards>()->guards->count())->is(1 as usize);
+    expect($app->kernel->services->get<Guards>()->guards[0]->name())->is('bearer');
 }

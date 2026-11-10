@@ -3,7 +3,7 @@ namespace nexus::oauth;
 use std::time;
 
 /**
- * Where clients, codes and grants are kept. `MemoryOAuth` keeps them in the process;
+ * Where clients, pending authorization requests, codes and grants are kept. `MemoryOAuth` keeps them in the process;
  * nexus-oauth-carbon in the app's database, per request.
  */
 public interface OAuthStore
@@ -26,6 +26,21 @@ public interface OAuthStore
      * Removes the clients registered before `$before` that were never used.
      */
     function sweep(time::timestamp $before) : status<nexus::Problem>;
+
+    /**
+     * Keeps authorization request `$r` until the consent page answers it.
+     */
+    function ask(const AuthRequest& $r) : status<nexus::Problem>;
+
+    /**
+     * Authorization request `$id`, still there for the consent page to show.
+     */
+    function request(const string& $id) : result<AuthRequest?, nexus::Problem>;
+
+    /**
+     * Authorization request `$id`, removed as it is read: it is answered once.
+     */
+    function answer(const string& $id) : result<AuthRequest?, nexus::Problem>;
 
     function keep(const Code& $c) : status<nexus::Problem>;
 
@@ -52,7 +67,7 @@ public interface OAuthStore
     function grants(const string& $subject) : result<array<Grant>, nexus::Problem>;
 
     /**
-     * Removes the codes and grants that expired before `$now`.
+     * Removes the requests, codes and grants that expired before `$now`, and says how many.
      */
-    function prune(time::timestamp $now) : status<nexus::Problem>;
+    function prune(time::timestamp $now) : result<uint64, nexus::Problem>;
 }

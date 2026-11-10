@@ -19,6 +19,7 @@ public class CodeRow : carbon::Model<CodeRow, CodeRowRepository>
     public bool $named;
     public string $challenge;
     public string $scope;
+    public string $resource;
     public time::timestamp $expiresAt;
 
     public function link() : carbon::Link&
@@ -33,7 +34,7 @@ public class CodeRow : carbon::Model<CodeRow, CodeRowRepository>
     public static function of(const nexus::oauth::Code& $c) : CodeRow
     {
         return CodeRow($hash: $c->hash, $client: $c->client, $subject: $c->subject, $redirect: $c->redirect, $named: $c->named,
-            $challenge: $c->challenge, $scope: $c->scope, $expiresAt: $c->expiresAt);
+            $challenge: $c->challenge, $scope: $c->scope, $resource: $c->resource, $expiresAt: $c->expiresAt);
     }
 
     /**
@@ -42,6 +43,6 @@ public class CodeRow : carbon::Model<CodeRow, CodeRowRepository>
     public const function code() : nexus::oauth::Code
     {
         return nexus::oauth::Code($hash: $this->hash, $client: $this->client, $subject: $this->subject, $redirect: $this->redirect,
-            $named: $this->named, $challenge: $this->challenge, $scope: $this->scope, $expiresAt: $this->expiresAt);
+            $named: $this->named, $challenge: $this->challenge, $scope: $this->scope, $resource: $this->resource, $expiresAt: $this->expiresAt);
     }
 }

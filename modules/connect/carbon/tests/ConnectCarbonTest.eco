@@ -1,0 +1,138 @@
+/**
+ * nexus-connect's stores in a carbon database, on carbon's fake driver: each test queues what the
+ * database answers and reads back what was sent.
+ */
+
+use nexus::connect::{AttemptStore, Attempt, ExternalIdentity, LinkStore, Link, Oidc};
+use nexus::connect::carbon::{AttemptRow, AttemptRowTable, LinkRow, LinkRowTable};
+use nexus::testing::TestApp;
+use carbon::fake;
+use hydrahon::Mysql;
+use std::time;
+use ecotest::expect;
+
+internal const int64 START = 1793588340;
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+
+internal class Rig
+{
+    public fake::Driver<Mysql> $fake;
+    public calendar::ManualClock $clock;
+    public TestApp $app;
+
+    public constructor(bool $register)
+    {
+        $driver = fake::Driver<Mysql>();
+        $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        $this->fake = $driver;
+        $this->clock = $clock;
+        $db = nexus::carbon::Extension(function[$driver, $clock, $register](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+            $made = carbon::DB($driver, clock: $clock);
+            if ($register) {
+                try nexus::connect::carbon::Tables::wire($made);
+            }
+            return .ok($made);
+        });
+        array<nexus::connect::Connector> $providers = [Oidc('acme', issuer: 'https://id.acme.test', client: 'c', secret: 's', authorize: 'https://id.acme.test/a', token: 'https://id.acme.test/t')];
+        array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::connect::Extension(connectors: $providers, stores: .provided, clock: $clock), nexus::connect::carbon::Extension()];
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
+        $this->app = TestApp($exts, $vars);
+    }
+
+    public function attempts() : AttemptStore
+    {
+        nexus::Payload $payload = $this->app->kernel->background('test', 'c');
+        AttemptStore $s = $payload->get<AttemptStore>();
+        return $s;
+    }
+
+    public function links() : LinkStore
+    {
+        nexus::Payload $payload = $this->app->kernel->background('test', 'c');
+        LinkStore $s = $payload->get<LinkStore>();
+        return $s;
+    }
+
+    public function attempt() : Attempt
+    {
+        return Attempt($id: 'a1', $provider: 'acme', $stateHash: 's1', $bindingHash: 'b1', $nonce: 'n1', $verifier: 'v1',
+            $expiresAt: $this->clock->now() + time::duration::mins(10));
+    }
+}
+
+internal function spent(AttemptStore $s, const string& $id) : bool
+{
+    bool $mine = guard $s->spend($id);
+    return $mine;
+}
+
+test an_attempt_keeps_who_signed_in
+{
+    $r = Rig(true);
+    Attempt $a = $r->attempt();
+    $r->fake->written();
+    guard $r->attempts()->start($a);
+    expect($r->fake->last())->starts('INSERT INTO `connect_attempts`');
+    json::Value $claims = json::object();
+    $claims['picture'] = json::str('https://pics.test/ann');
+    $a->identity = ExternalIdentity($provider: 'acme', $subject: 'p1', $email: 'ann@example.com', $emailVerified: true, $name: 'Ann', $claims: $claims);
+    $r->fake->written();
+    guard $r->attempts()->settle($a);
+    expect($r->fake->last())->starts('UPDATE `connect_attempts` SET `error` = ?, `external_subject` = ?');
+
+    $r->fake->rows([AttemptRowTable()->row(.of($a))]);
+    Attempt? $found = guard $r->attempts()->find('a1');
+    Attempt $back = expect($found)->some();
+    ExternalIdentity $who = expect($back->identity)->some();
+    expect($who->email)->is('ann@example.com');
+    expect($who->emailVerified)->yes(says: 'the flag survives the row');
+    expect(json::dump($who->claims))->has('pics.test');
+
+    $r->fake->written(1);
+    expect(spent($r->attempts(), 'a1'))->yes(says: 'the delete that removed the row spent it');
+    expect($r->fake->last())->is('DELETE FROM `connect_attempts` WHERE `connect_attempts`.`id` = ?');
+    $r->fake->written(0);
+    expect(spent($r->attempts(), 'a1'))->no(says: 'a second delete removes nothing');
+}
+
+test an_unsettled_attempt_has_no_identity
+{
+    $r = Rig(true);
+    AttemptRow $row = .of($r->attempt());
+    expect($row->attempt()->identity)->none();
+    expect($row->attempt()->settled())->no(says: 'a fresh attempt is not settled');
+}
+
+test a_link_is_kept_once_per_outside_identity
+{
+    $r = Rig(true);
+    $l = Link($provider: 'acme', $external: 'p1', $subject: '7', $email: 'ann@example.com', $createdAt: $r->clock->now());
+    $r->fake->rows([])->written();
+    guard $r->links()->link($l);
+    expect($r->fake->last())->starts('INSERT INTO `connect_links`');
+    $r->fake->rows([LinkRowTable()->row(.of($l))]);
+    expect($r->links()->link($l))->fails();
+    expect(LinkRow::of($l)->id)->is('acme:p1');
+}
+
+test prune_drops_expired_attempts
+{
+    $r = Rig(true);
+    $r->fake->written(3);
+    uint64 $n = guard $r->attempts()->prune($r->clock->now());
+    expect($n)->is(3);
+    expect($r->fake->last())->is('DELETE FROM `connect_attempts` WHERE `connect_attempts`.`expires_at` < ?');
+}
+
+test boot_refuses_a_database_without_the_tables
+{
+    $driver = fake::Driver<Mysql>();
+    $db = nexus::carbon::Extension(function[$driver](nexus::carbon::DatabaseConfig $cfg) : result<carbon::DB, carbon::Error> {
+        return .ok(carbon::DB($driver));
+    });
+    array<nexus::connect::Connector> $providers = [Oidc('acme', issuer: 'https://id.acme.test', client: 'c', secret: 's', authorize: 'https://id.acme.test/a', token: 'https://id.acme.test/t')];
+    array<nexus::Extension> $exts = [$db, nexus::auth::Extension('test'), nexus::connect::Extension(connectors: $providers, stores: .provided), nexus::connect::carbon::Extension()];
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
+    nexus::BootError $e = expect(TestApp::attempt($exts, $vars))->fails();
+    expect($e->lines()[0])->has('Tables::wire');
+}

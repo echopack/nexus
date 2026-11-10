@@ -24,7 +24,7 @@ public struct EndpointDispatch
      */
     public static function about() : string
     {
-        return str::join(['The MCP endpoint: one JSON-RPC message per POST, one JSON answer. It speaks `initialize`, `ping`, `tools/list` and `tools/call`; a notification gets a bare 202.', '', 'Every message needs a signed in caller, read by nexus-auth\'s guards on the MCP door (so a credential good for MCP only works here). Without one the answer is a 401 whose `WWW-Authenticate` names the OAuth metadata, which is how a client finds the sign in.'], "\n");
+        return str::join(['The MCP endpoint: one JSON-RPC message per POST, one JSON answer. It speaks `initialize`, `ping`, `tools/list` and `tools/call`; a notification gets a bare 202.', '', 'Every message needs a signed in caller, read by nexus-auth\'s guards: the app\'s own tokens, or a token an OAuth client was given for the `mcp` resource, which opens nothing else. Without one the answer is a 401 whose `WWW-Authenticate` names the resource\'s metadata (`nexus::auth::Resources::challenge`), which is how a client finds where to sign in.'], "\n");
     }
 
     /**
@@ -133,14 +133,8 @@ public function generated(nexus::Generated $g) : void
 public function configs(nexus::Env $env, container::Builder& $b) : status<nexus::BootError>
 {
     $s = nexus::Settings($env);
-    string $okC0Origin = '';
-    $vC0Origin = $s->string('NEXUS_MCP_ORIGIN', required: false);
-    if ($vC0Origin != null) {
-        $xC0Origin = guard $vC0Origin;
-        $okC0Origin = mv $xC0Origin;
-    }
     try $s->done();
-    $b->param<nexus::mcp::McpConfig>(nexus::mcp::McpConfig($origin: mv $okC0Origin));
+    $b->param<nexus::mcp::McpConfig>(nexus::mcp::McpConfig());
     return .ok;
 }
 
@@ -151,8 +145,6 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
 public function envs() : array<nexus::EnvVar>
 {
     array<nexus::EnvVar> $all = [];
-    string $d0 = '';
-    $all[] = nexus::EnvVar($name: 'NEXUS_MCP_ORIGIN', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'The public origin the OAuth metadata link in a 401 points at; empty takes it from the request.', $owner: 'nexus::mcp::McpConfig');
     return $all;
 }
 

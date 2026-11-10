@@ -11,17 +11,6 @@ public enum Denial
     case back(string $location);
 
     /**
-     * The denial as a problem, for the consent page to show.
-     */
-    public const function problem() : nexus::Problem
-    {
-        return match ($this) {
-            Denial::shown($p) => $p,
-            Denial::back($location) => .badRequest('the request is not one this server grants'),
-        };
-    }
-
-    /**
      * The denial as an action's answer: the problem, or the redirect back.
      */
     public const function answer() : result<nexus::Response, nexus::Problem>

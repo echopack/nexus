@@ -55,6 +55,42 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
         return .ok;
     }
 
+    public function ask(const nexus::oauth::AuthRequest& $r) : status<nexus::Problem>
+    {
+        RequestRowRepository $repo = try $this->requestRepo();
+        try $repo->create(.of($r));
+        return .ok;
+    }
+
+    public function request(const string& $id) : result<nexus::oauth::AuthRequest?, nexus::Problem>
+    {
+        RequestRowRepository $repo = try $this->requestRepo();
+        RequestRow? $found = try $repo->find()->get($id);
+        if ($found == null) {
+            return .ok(null);
+        }
+        RequestRow $row = guard $found;
+        return .ok($row->request());
+    }
+
+    /**
+     * Reads the request, then deletes it; only the caller whose delete removed the row gets it.
+     */
+    public function answer(const string& $id) : result<nexus::oauth::AuthRequest?, nexus::Problem>
+    {
+        RequestRowRepository $repo = try $this->requestRepo();
+        RequestRow? $found = try $repo->find()->get($id);
+        if ($found == null) {
+            return .ok(null);
+        }
+        RequestRow $row = guard $found;
+        uint64 $gone = try $repo->find()->where(RequestRowTable::$id == $id)->purge();
+        if ($gone != 1) {
+            return .ok(null);
+        }
+        return .ok($row->request());
+    }
+
     public function keep(const nexus::oauth::Code& $c) : status<nexus::Problem>
     {
         CodeRowRepository $repo = try $this->codeRepo();
@@ -137,18 +173,26 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
         return .ok($out);
     }
 
-    public function prune(time::timestamp $now) : status<nexus::Problem>
+    public function prune(time::timestamp $now) : result<uint64, nexus::Problem>
     {
+        RequestRowRepository $requests = try $this->requestRepo();
+        uint64 $asked = try $requests->find()->where(RequestRowTable::$expiresAt < $now)->purge();
         CodeRowRepository $codes = try $this->codeRepo();
-        try $codes->find()->where(CodeRowTable::$expiresAt < $now)->purge();
+        uint64 $coded = try $codes->find()->where(CodeRowTable::$expiresAt < $now)->purge();
         GrantRowRepository $grants = try $this->grantRepo();
-        try $grants->find()->where(GrantRowTable::$refreshExpiresAt < $now)->purge();
-        return .ok;
+        uint64 $ended = try $grants->find()->where(GrantRowTable::$refreshExpiresAt < $now)->purge();
+        return .ok($asked + $coded + $ended);
     }
 
     internal function clientRepo() : result<ClientRowRepository, nexus::Problem>
     {
         ClientRowRepository $repo = try $this->session->repo<ClientRowRepository>();
+        return .ok($repo);
+    }
+
+    internal function requestRepo() : result<RequestRowRepository, nexus::Problem>
+    {
+        RequestRowRepository $repo = try $this->session->repo<RequestRowRepository>();
         return .ok($repo);
     }
 

@@ -9,8 +9,9 @@
 # same server. Mail goes to a throwaway Mailpit in Docker: each welcome is
 # read back from its API, and nexus-mail's live test runs against it. Doors:
 # `posts:show` and `posts:create` on the command line, and an MCP client
-# that registers, is allowed by the editor, trades its code with PKCE,
-# calls the post tools and refreshes its token.
+# that registers, is allowed by the editor on the request the authorize
+# step kept, trades its code with PKCE, calls the post tools and
+# refreshes its token.
 #
 #   scripts/smoke.sh                     # mysql:8.0
 #   IMAGE=mariadb:11 scripts/smoke.sh
@@ -62,9 +63,9 @@ for _ in $(seq 1 90); do
     migrated=""
     sleep 1
 done
-check "migrate"           6 "$(printf '%s\n' "${migrated}" | grep -c '^migrated')"
+check "migrate"           7 "$(printf '%s\n' "${migrated}" | grep -c '^migrated')"
 check "migrate again"     "nothing to do" "$(./ecobuild/blog migrate 2>&1)"
-check "migrate:status"    6 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^ran')"
+check "migrate:status"    7 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^ran')"
 check "password, nobody"  1 "$(./ecobuild/blog user:password --email nobody@example.com --password smoke-password-1 >/dev/null 2>&1; echo $?)"
 check "password, short"   1 "$(./ecobuild/blog user:password --email editor@example.com --password short >/dev/null 2>&1; echo $?)"
 check "password"          "password set for editor@example.com" "$(./ecobuild/blog user:password --email editor@example.com --password smoke-password-1 2>&1)"
@@ -184,15 +185,21 @@ check "register, http"    400 "$(code -X POST -H "${json}" -d '{"redirect_uris":
 verifier="$(openssl rand -hex 32)"
 challenge="$(printf '%s' "${verifier}" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 query="response_type=code&client_id=${client}&redirect_uri=http%3A%2F%2F127.0.0.1%3A9%2Fcallback&code_challenge=${challenge}&code_challenge_method=S256&state=smoke&scope=mcp"
-check "authorize"         "${base}/oauth/consent?${query}" "$(curl -s -o /dev/null -w '%{redirect_url}' "${base}/oauth/authorize?${query}")"
-check "consent asks"      '"name":"Smoke client"' "$(body -H "${key}" "${base}/oauth/request?${query}" | grep -o '"name":"Smoke client"')"
-back="$(body -X POST -H "${key}" -H "${json}" -d "{\"query\":\"${query}\",\"allow\":true}" "${base}/oauth/approve" | field redirect)"
+consent="$(curl -s -o /dev/null -w '%{redirect_url}' "${base}/oauth/authorize?${query}")"
+request="$(printf '%s' "${consent}" | sed -n 's/.*[?&]request=\([0-9a-f]*\).*/\1/p')"
+check "authorize"         "${base}/oauth/consent?request=${request}" "${consent}"
+check "consent asks"      '"name":"Smoke client"' "$(body -H "${key}" "${base}/oauth/requests/${request}" | grep -o '"name":"Smoke client"')"
+check "consent, resource" '"url":"'"${base}"'/mcp"' "$(body -H "${key}" "${base}/oauth/requests/${request}" | grep -o '"url":"[^"]*"')"
+back="$(body -X POST -H "${key}" -H "${json}" -d '{"allow":true}' "${base}/oauth/requests/${request}" | field redirect)"
 oauth_code="$(printf '%s' "${back}" | sed -n 's/.*[?&]code=\([0-9a-f]*\).*/\1/p')"
 check "approved"          64 "${#oauth_code}"
+check "answered once"     404 "$(code -X POST -H "${key}" -H "${json}" -d '{"allow":true}' "${base}/oauth/requests/${request}")"
 trade="grant_type=authorization_code&client_id=${client}&code=${oauth_code}&redirect_uri=http%3A%2F%2F127.0.0.1%3A9%2Fcallback"
 check "pkce, wrong"       400 "$(code -X POST --data "${trade}&code_verifier=wrong-verifier-wrong-verifier-wrong-verifier" "${base}/oauth/token")"
 # the wrong try spent the code; ask again
-back="$(body -X POST -H "${key}" -H "${json}" -d "{\"query\":\"${query}\",\"allow\":true}" "${base}/oauth/approve" | field redirect)"
+consent="$(curl -s -o /dev/null -w '%{redirect_url}' "${base}/oauth/authorize?${query}")"
+request="$(printf '%s' "${consent}" | sed -n 's/.*[?&]request=\([0-9a-f]*\).*/\1/p')"
+back="$(body -X POST -H "${key}" -H "${json}" -d '{"allow":true}' "${base}/oauth/requests/${request}" | field redirect)"
 oauth_code="$(printf '%s' "${back}" | sed -n 's/.*[?&]code=\([0-9a-f]*\).*/\1/p')"
 trade="grant_type=authorization_code&client_id=${client}&code=${oauth_code}&redirect_uri=http%3A%2F%2F127.0.0.1%3A9%2Fcallback"
 pair="$(body -X POST --data "${trade}&code_verifier=${verifier}" "${base}/oauth/token")"
@@ -214,6 +221,8 @@ check "old access gone"   401 "$(code -X POST -H "${app}" -H "${json}" -d "${mcp
 check "new access works"  200 "$(code -X POST -H "Authorization: Bearer ${next_access}" -H "${json}" -d "${mcp}" "${base}/mcp")"
 check "refresh reused"    '"error":"invalid_grant"' "$(body -X POST --data "grant_type=refresh_token&client_id=${client}&refresh_token=${refresh}" "${base}/oauth/token" | grep -o '"error":"invalid_grant"')"
 check "grant ended"       401 "$(code -X POST -H "Authorization: Bearer ${next_access}" -H "${json}" -d "${mcp}" "${base}/mcp")"
+# sign in with Google is left out without NEXUS_CONNECT_GOOGLE_CLIENT_ID
+check "google, unset"     404 "$(code -X POST -H "${json}" -d '{}' "${base}/auth/connect/google")"
 
 check "wrong method"      405 "$(code -X PUT "${base}/v1/posts")"
 check "wrong media"       415 "$(code -X POST -H "${key}" -H 'Content-Type: text/xml' -d '<x/>' "${base}/v1/posts")"
@@ -306,10 +315,9 @@ check "welcome mailed, de" '"Subject":"Willkommen bei A nexus blog"' "$(mailed s
 kill -TERM "${pid}"
 wait "${pid}"
 
-check "auth:prune"        "pruned  0 tokens, 0 sessions" "$(./ecobuild/blog auth:prune 2>&1)"
-check "oauth:prune"       "pruned expired OAuth codes and grants" "$(./ecobuild/blog oauth:prune 2>&1)"
+check "auth:prune"        "pruned  0 tokens|pruned  0 sessions|pruned  0 oauth requests, codes and grants|pruned  0 sign-in attempts" "$(./ecobuild/blog auth:prune 2>&1 | paste -sd '|' -)"
 check "reset wants force" 1 "$(./ecobuild/blog migrate:reset --mode prod >/dev/null 2>&1; echo $?)"
 check "work:failed, end"  "no failed tasks" "$(./ecobuild/blog work:failed 2>&1)"
-check "migrate:reset"     6 "$(./ecobuild/blog migrate:reset 2>&1 | grep -c '^undone')"
-check "all pending"       6 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^pending')"
+check "migrate:reset"     7 "$(./ecobuild/blog migrate:reset 2>&1 | grep -c '^undone')"
+check "all pending"       7 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^pending')"
 exit ${failed}

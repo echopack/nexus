@@ -4,25 +4,28 @@
 namespace nexus::oauth;
 
 /**
- * Runs nexus::oauth::Approve.
+ * Runs nexus::oauth::AnswerRequest.
  */
-public struct ApproveDispatch
+public struct AnswerRequestDispatch
 {
     /**
-     * Reads what nexus::oauth::Approve::handle() asks for, calls it and turns
+     * Reads what nexus::oauth::AnswerRequest::handle() asks for, calls it and turns
      * the result into a response.
      */
     internal static function dispatch(nexus::Payload& $payload) : nexus::Response
     {
+        $argId = guard nexus::Param::string($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
         $fieldsIn = guard nexus::Fields::body($payload) else ($p) {
             return nexus::Reply::problem($payload, $p);
         };
-        $valueIn = guard nexus::oauth::ApprovalDecoder::decode($payload, $fieldsIn) else ($p) {
+        $valueIn = guard nexus::oauth::DecisionDecoder::decode($payload, $fieldsIn) else ($p) {
             return nexus::Reply::problem($payload, $p);
         };
-        $argIn = nexus::Body<nexus::oauth::Approval>(mv $valueIn);
-        $action = $payload->get<nexus::oauth::Approve>();
-        $result = $action->handle($payload, mv $argIn);
+        $argIn = nexus::Body<nexus::oauth::Decision>(mv $valueIn);
+        $action = $payload->get<nexus::oauth::AnswerRequest>();
+        $result = $action->handle($payload, $argId, mv $argIn);
         return nexus::Reply::of($payload, $result);
     }
 }
@@ -82,23 +85,6 @@ public struct ListGrantsDispatch
 }
 
 /**
- * Runs nexus::oauth::Pending.
- */
-public struct PendingDispatch
-{
-    /**
-     * Reads what nexus::oauth::Pending::handle() asks for, calls it and turns
-     * the result into a response.
-     */
-    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
-    {
-        $action = $payload->get<nexus::oauth::Pending>();
-        $result = $action->handle($payload);
-        return nexus::Reply::of($payload, $result);
-    }
-}
-
-/**
  * Runs nexus::oauth::Register.
  */
 public struct RegisterDispatch
@@ -110,23 +96,6 @@ public struct RegisterDispatch
     internal static function dispatch(nexus::Payload& $payload) : nexus::Response
     {
         $action = $payload->get<nexus::oauth::Register>();
-        $result = $action->handle($payload);
-        return $result;
-    }
-}
-
-/**
- * Runs nexus::oauth::ResourceMetadata.
- */
-public struct ResourceMetadataDispatch
-{
-    /**
-     * Reads what nexus::oauth::ResourceMetadata::handle() asks for, calls it and turns
-     * the result into a response.
-     */
-    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
-    {
-        $action = $payload->get<nexus::oauth::ResourceMetadata>();
         $result = $action->handle($payload);
         return $result;
     }
@@ -167,6 +136,26 @@ public struct ServerMetadataDispatch
 }
 
 /**
+ * Runs nexus::oauth::ShowRequest.
+ */
+public struct ShowRequestDispatch
+{
+    /**
+     * Reads what nexus::oauth::ShowRequest::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        $argId = guard nexus::Param::string($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $action = $payload->get<nexus::oauth::ShowRequest>();
+        $result = $action->handle($payload, $argId);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+/**
  * Runs nexus::oauth::TokenEndpoint.
  */
 public struct TokenEndpointDispatch
@@ -184,39 +173,29 @@ public struct TokenEndpointDispatch
 }
 
 /**
- * Reads and checks a nexus::oauth::Approval from request fields.
+ * Reads and checks a nexus::oauth::Decision from request fields.
  */
-public struct ApprovalDecoder
+public struct DecisionDecoder
 {
     /**
-     * A nexus::oauth::Approval from `$f`, or the problem holding everything refused.
+     * A nexus::oauth::Decision from `$f`, or the problem holding everything refused.
      */
-    public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<nexus::oauth::Approval, nexus::Problem>
+    public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<nexus::oauth::Decision, nexus::Problem>
     {
-        $value = ApprovalDecoder::read($payload, $f);
+        $value = DecisionDecoder::read($payload, $f);
         try $f->done();
         $out = guard $value;
         return .ok(mv $out);
     }
 
     /**
-     * A nexus::oauth::Approval from `$f`, or null when anything was refused.
+     * A nexus::oauth::Decision from `$f`, or null when anything was refused.
      */
-    public static function read(nexus::Payload& $payload, nexus::Fields& $f) : nexus::oauth::Approval?
+    public static function read(nexus::Payload& $payload, nexus::Fields& $f) : nexus::oauth::Decision?
     {
         $v = $f->check;
-        $v->input = 'nexus::oauth::Approval';
+        $v->input = 'nexus::oauth::Decision';
         usize $before = $v->count();
-        // query
-        $v->at('query', 'string', '');
-        string? $vQuery = null;
-        $rQuery = $f->string('query', required: true);
-        if ($rQuery != null) {
-            $xQuery = guard $rQuery;
-            $v->minLength($xQuery, 1);
-            $v->maxLength($xQuery, 8000);
-            $vQuery = mv $xQuery;
-        }
         // allow
         $v->at('allow', 'boolean', '');
         bool $okAllow = false;
@@ -228,8 +207,7 @@ public struct ApprovalDecoder
         if ($v->count() != $before) {
             return null;
         }
-        $okQuery = guard $vQuery;
-        return nexus::oauth::Approval($query: mv $okQuery, $allow: $okAllow);
+        return nexus::oauth::Decision($allow: $okAllow);
     }
 }
 
@@ -244,10 +222,10 @@ namespace nexusgen::nexus_oauth;
 #[nexus::generated: 'nexus-oauth']
 public function generated(nexus::Generated $g) : void
 {
-    $g->action<nexus::oauth::Approve>('nexus::oauth::Approve', [], function(nexus::Payload& $payload) : nexus::Response {
-        return nexus::oauth::ApproveDispatch::dispatch($payload);
+    $g->action<nexus::oauth::AnswerRequest>('nexus::oauth::AnswerRequest', [nexus::PathParam('id', '', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return nexus::oauth::AnswerRequestDispatch::dispatch($payload);
     });
-    $g->through<nexus::oauth::Approve>([nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')]);
+    $g->through<nexus::oauth::AnswerRequest>([nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')]);
     $g->action<nexus::oauth::Authorize>('nexus::oauth::Authorize', [], function(nexus::Payload& $payload) : nexus::Response {
         return nexus::oauth::AuthorizeDispatch::dispatch($payload);
     });
@@ -259,15 +237,8 @@ public function generated(nexus::Generated $g) : void
         return nexus::oauth::ListGrantsDispatch::dispatch($payload);
     });
     $g->through<nexus::oauth::ListGrants>([nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')]);
-    $g->action<nexus::oauth::Pending>('nexus::oauth::Pending', [], function(nexus::Payload& $payload) : nexus::Response {
-        return nexus::oauth::PendingDispatch::dispatch($payload);
-    });
-    $g->through<nexus::oauth::Pending>([nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')]);
     $g->action<nexus::oauth::Register>('nexus::oauth::Register', [], function(nexus::Payload& $payload) : nexus::Response {
         return nexus::oauth::RegisterDispatch::dispatch($payload);
-    });
-    $g->action<nexus::oauth::ResourceMetadata>('nexus::oauth::ResourceMetadata', [], function(nexus::Payload& $payload) : nexus::Response {
-        return nexus::oauth::ResourceMetadataDispatch::dispatch($payload);
     });
     $g->action<nexus::oauth::Revoke>('nexus::oauth::Revoke', [], function(nexus::Payload& $payload) : nexus::Response {
         return nexus::oauth::RevokeDispatch::dispatch($payload);
@@ -275,13 +246,19 @@ public function generated(nexus::Generated $g) : void
     $g->action<nexus::oauth::ServerMetadata>('nexus::oauth::ServerMetadata', [], function(nexus::Payload& $payload) : nexus::Response {
         return nexus::oauth::ServerMetadataDispatch::dispatch($payload);
     });
+    $g->action<nexus::oauth::ShowRequest>('nexus::oauth::ShowRequest', [nexus::PathParam('id', '', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return nexus::oauth::ShowRequestDispatch::dispatch($payload);
+    });
+    $g->through<nexus::oauth::ShowRequest>([nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')]);
     $g->action<nexus::oauth::TokenEndpoint>('nexus::oauth::TokenEndpoint', [], function(nexus::Payload& $payload) : nexus::Response {
         return nexus::oauth::TokenEndpointDispatch::dispatch($payload);
     });
-    $g->name<nexus::oauth::Approval>('nexus::oauth::Approval');
     $g->name<nexus::oauth::Asked>('nexus::oauth::Asked');
+    $g->name<nexus::oauth::AuthRequest>('nexus::oauth::AuthRequest');
     $g->name<nexus::oauth::Client>('nexus::oauth::Client');
+    $g->name<nexus::oauth::Clients>('nexus::oauth::Clients');
     $g->name<nexus::oauth::Code>('nexus::oauth::Code');
+    $g->name<nexus::oauth::Decision>('nexus::oauth::Decision');
     $g->name<nexus::oauth::Extension>('nexus::oauth::Extension');
     $g->name<nexus::oauth::Grant>('nexus::oauth::Grant');
     $g->name<nexus::oauth::Grants>('nexus::oauth::Grants');
@@ -291,8 +268,8 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::oauth::OAuthGuard>('nexus::oauth::OAuthGuard');
     $g->name<nexus::oauth::Pair>('nexus::oauth::Pair');
     $g->name<nexus::oauth::Pkce>('nexus::oauth::Pkce');
-    $g->name<nexus::oauth::PruneCommand>('nexus::oauth::PruneCommand');
     $g->name<nexus::oauth::RedirectUri>('nexus::oauth::RedirectUri');
+    $g->name<nexus::oauth::Scopes>('nexus::oauth::Scopes');
 }
 
 /**
@@ -302,12 +279,6 @@ public function generated(nexus::Generated $g) : void
 public function configs(nexus::Env $env, container::Builder& $b) : status<nexus::BootError>
 {
     $s = nexus::Settings($env);
-    string $okC0Issuer = '';
-    $vC0Issuer = $s->string('NEXUS_OAUTH_ISSUER', required: false);
-    if ($vC0Issuer != null) {
-        $xC0Issuer = guard $vC0Issuer;
-        $okC0Issuer = mv $xC0Issuer;
-    }
     std::time::duration $okC0Access = std::time::duration::hours(1);
     $vC0Access = $s->duration('NEXUS_OAUTH_ACCESS', required: false);
     if ($vC0Access != null) {
@@ -327,7 +298,7 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
         $okC0Clients = $xC0Clients;
     }
     try $s->done();
-    $b->param<nexus::oauth::OAuthConfig>(nexus::oauth::OAuthConfig($issuer: mv $okC0Issuer, $access: mv $okC0Access, $refresh: mv $okC0Refresh, $clients: $okC0Clients));
+    $b->param<nexus::oauth::OAuthConfig>(nexus::oauth::OAuthConfig($access: mv $okC0Access, $refresh: mv $okC0Refresh, $clients: $okC0Clients));
     return .ok;
 }
 
@@ -338,13 +309,11 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
 public function envs() : array<nexus::EnvVar>
 {
     array<nexus::EnvVar> $all = [];
-    string $d0 = '';
-    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_ISSUER', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'The app\'s public origin, like `https://blog.example.com`; empty takes it from each request.', $owner: 'nexus::oauth::OAuthConfig');
-    std::time::duration $d1 = std::time::duration::hours(1);
-    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_ACCESS', $type: 'duration', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How long an access token lasts.', $owner: 'nexus::oauth::OAuthConfig');
-    std::time::duration $d2 = std::time::duration::hours(720);
-    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_REFRESH', $type: 'duration', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'How long a refresh token lasts from its last use.', $owner: 'nexus::oauth::OAuthConfig');
-    uint32 $d3 = 1000;
-    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_CLIENTS', $type: 'uint32', $fallback: nexus::EnvVar::text($d3), $required: false, $secret: false, $doc: 'How many clients are registered at most at once.', $owner: 'nexus::oauth::OAuthConfig');
+    std::time::duration $d0 = std::time::duration::hours(1);
+    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_ACCESS', $type: 'duration', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'How long an access token lasts.', $owner: 'nexus::oauth::OAuthConfig');
+    std::time::duration $d1 = std::time::duration::hours(720);
+    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_REFRESH', $type: 'duration', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How long a refresh token lasts from its last use.', $owner: 'nexus::oauth::OAuthConfig');
+    uint32 $d2 = 1000;
+    $all[] = nexus::EnvVar($name: 'NEXUS_OAUTH_CLIENTS', $type: 'uint32', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'How many clients are registered at most at once.', $owner: 'nexus::oauth::OAuthConfig');
     return $all;
 }

@@ -1,0 +1,76 @@
+namespace nexus::connect::carbon;
+
+use std::time;
+
+/**
+ * A row of `connect_attempts`: a sign in attempt, and once the callback has run, who signed in or
+ * why it failed.
+ */
+#[carbon::model: 'connect_attempts']
+public class AttemptRow : carbon::Model<AttemptRow, AttemptRowRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    public string $id;
+
+    public string $provider;
+    public string $stateHash;
+    public string $bindingHash;
+    public string $nonce;
+    public string $verifier;
+    public time::timestamp $expiresAt;
+    public string $error = '';
+
+    /**
+     * The outside identity's `sub`, empty until the callback learned it.
+     */
+    public string $externalSubject = '';
+    public string $externalEmail = '';
+    public bool $externalEmailVerified = false;
+    public string $externalName = '';
+
+    /**
+     * Every claim of the ID token, as JSON.
+     */
+    public string $externalClaims = '';
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    /**
+     * The row that keeps `$a`. A static, since carbon builds a model with its implicit constructor
+     * and refuses one written out.
+     */
+    public static function of(const nexus::connect::Attempt& $a) : AttemptRow
+    {
+        $row = AttemptRow($id: $a->id, $provider: $a->provider, $stateHash: $a->stateHash, $bindingHash: $a->bindingHash,
+            $nonce: $a->nonce, $verifier: $a->verifier, $expiresAt: $a->expiresAt, $error: $a->error);
+        if ($a->identity != null) {
+            nexus::connect::ExternalIdentity $who = guard $a->identity;
+            $row->externalSubject = $who->subject;
+            $row->externalEmail = $who->email;
+            $row->externalEmailVerified = $who->emailVerified;
+            $row->externalName = $who->name;
+            $row->externalClaims = json::dump($who->claims);
+        }
+        return $row;
+    }
+
+    /**
+     * The attempt this row keeps.
+     */
+    public const function attempt() : nexus::connect::Attempt
+    {
+        $a = nexus::connect::Attempt($id: $this->id, $provider: $this->provider, $stateHash: $this->stateHash, $bindingHash: $this->bindingHash,
+            $nonce: $this->nonce, $verifier: $this->verifier, $expiresAt: $this->expiresAt, $error: $this->error);
+        if (!$this->externalSubject->empty()) {
+            json::Value $claims = json::parse($this->externalClaims)->or(json::object());
+            $a->identity = nexus::connect::ExternalIdentity($provider: $this->provider, $subject: $this->externalSubject,
+                $email: $this->externalEmail, $emailVerified: $this->externalEmailVerified, $name: $this->externalName, $claims: $claims);
+        }
+        return $a;
+    }
+}

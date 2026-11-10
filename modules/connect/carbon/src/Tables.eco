@@ -1,0 +1,29 @@
+namespace nexus::connect::carbon;
+
+/**
+ * The sign in tables on the app's database: one call in the function that opens it, before it is
+ * sealed.
+ *
+ * ```echo
+ * try nexus::connect::carbon::Tables::wire($db);
+ * ```
+ */
+public struct Tables
+{
+    /**
+     * Registers the sign in repositories on `$db`.
+     */
+    public static function wire(carbon::DB $db) : status<carbon::Error>
+    {
+        try Carbon::register($db);
+        return Carbon::check($db);
+    }
+
+    /**
+     * The sign in migration, to add to the app's own.
+     */
+    public static function migrations() : array<carbon::migrate::Step>
+    {
+        return Carbon::migrations();
+    }
+}

@@ -1,0 +1,25 @@
+namespace nexus::connect;
+
+/**
+ * Which outside identities belong to which of the app's users. `MemoryLinks` keeps them in the
+ * process; nexus-connect-carbon in the app's database.
+ */
+public interface LinkStore
+{
+    /**
+     * The link of `$provider`'s person `$external`, or null when they never signed in here.
+     */
+    function find(const string& $provider, const string& $external) : result<Link?, nexus::Problem>;
+
+    /**
+     * Links an outside identity to a user; a link of the same person is a 409.
+     */
+    function link(const Link& $l) : status<nexus::Problem>;
+
+    function unlink(const string& $provider, const string& $external) : status<nexus::Problem>;
+
+    /**
+     * Every link of user `$subject`, for an account page.
+     */
+    function of(const string& $subject) : result<array<Link>, nexus::Problem>;
+}

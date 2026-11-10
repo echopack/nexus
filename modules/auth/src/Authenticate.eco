@@ -17,8 +17,9 @@ namespace nexus::auth;
  * }
  * ```
  *
- * An app with users of its own writes a middleware like this one that loads its user too, with the
- * repository in its constructor.
+ * A 401 under a protected resource points the client at the resource's metadata
+ * (`Resources::challenge`). An app with users of its own writes a middleware like this one that
+ * loads its user too, with the repository in its constructor.
  */
 #[atomic]
 public class Authenticate : nexus::Middleware
@@ -32,11 +33,8 @@ public class Authenticate : nexus::Middleware
 
     public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
     {
-        Identity? $found = guard $this->guards->identify($payload) else ($p) {
-            return $payload->fail($p);
-        };
-        Identity $id = guard $found else {
-            return $payload->fail(.unauthorized('this needs a signed in caller'));
+        Identity $id = guard $this->guards->demand($payload) else ($refused) {
+            return $refused;
         };
         $payload->put<Identity>($id);
         return $next->run($payload);

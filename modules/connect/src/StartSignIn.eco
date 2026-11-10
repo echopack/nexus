@@ -1,0 +1,30 @@
+namespace nexus::connect;
+
+/**
+ * Starts a sign in with a provider, `POST /auth/connect/{provider}`: answers where to send the
+ * browser and the binding to keep (`Started`). Thirty starts per address in fifteen minutes.
+ */
+public class StartSignIn : nexus::Action
+{
+    private Connect $connect;
+    private nexus::auth::Throttle $throttle;
+
+    public constructor(Connect $connect, nexus::auth::Throttle $throttle)
+    {
+        $this->connect = $connect;
+        $this->throttle = $throttle;
+    }
+
+    public function handle(nexus::Payload& $payload, string $provider) : result<nexus::Response, nexus::Problem>
+    {
+        string $peer = $payload->request->peer;
+        std::time::timestamp $now = $this->connect->clock->now();
+        if (!$this->throttle->take($peer, $now)) {
+            return .error(.tooMany($this->throttle->wait($peer, $now)));
+        }
+        Started $s = try $this->connect->start($payload, $provider);
+        $res = nexus::Response(json: $s->json(), status: 201);
+        $res->header('Cache-Control', 'no-store');
+        return .ok($res);
+    }
+}

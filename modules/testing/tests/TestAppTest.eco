@@ -24,6 +24,11 @@ internal class KEcho : nexus::Action
     }
 }
 
+internal struct KWord
+{
+    public string $word;
+}
+
 internal class KApp : nexus::Extension
 {
     public function name() : string
@@ -36,6 +41,7 @@ internal class KApp : nexus::Extension
         $s->bind<KEcho>(scope: function() : KEcho {
             return KEcho();
         });
+        $s->bind<KWord>(put: KWord($word: 'real'));
 
         array<nexus::Method> $m = [.get, .post];
         array<nexus::MiddlewareRef> $w = [];
@@ -136,10 +142,21 @@ test an_app_answers_through_its_api_from_loopback
     $app = kernelApp();
     $api = $app->api();
 
-    $api->with('X-Who', 'tester')->get('/echo')->ok()->json('$.who', 'tester')->json('$.peer', '127.0.0.1:0');
+    $api->with('X-Who', 'tester')->get('/echo')->ok()->json('$.who', 'tester')->json('$.peer', '127.0.0.1');
     $api->get('/nope')->problem(404);
     $api->delete('/echo')->problem(405)->header('Allow', 'GET, POST, OPTIONS, HEAD');
     $app->expectLogged(.info, 'GET /echo 200')->expectNotLogged('GET /echo 500');
+}
+
+test a_test_replaces_what_the_app_bound
+{
+    array<nexus::Extension> $exts = [KApp()];
+    map<string, string> $vars = [];
+    $app = TestApp($exts, $vars, replace: function(nexus::Services& $s) : void {
+        $s->replace<KWord>(put: KWord($word: 'fake'));
+    });
+    expect($app->kernel->services->get<KWord>()->word)->is('fake');
+    expect(kernelApp()->kernel->services->get<KWord>()->word)->is('real');
 }
 
 test log_checks_fail_at_the_callers_line_and_list_the_log

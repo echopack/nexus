@@ -11,8 +11,9 @@
  *
  * The endpoint is `POST /mcp`, the stateless form of the Streamable HTTP
  * transport: one JSON-RPC message per request, answered with one JSON
- * body. Every call needs a signed in caller, through nexus-auth's guards;
- * nexus-oauth lets an MCP client sign in with OAuth.
+ * body. Every call needs a signed in caller, through nexus-auth's guards.
+ * The endpoint is nexus-auth's resource `mcp`, so with nexus-oauth an MCP
+ * client finds the sign in through the 401 and gets a token for it alone.
  */
 
 #[module: "nexus-mcp"]

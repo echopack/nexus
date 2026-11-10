@@ -1,0 +1,48 @@
+namespace nexus::connect::carbon;
+
+use container::{Builder, Container};
+
+/**
+ * Keeps nexus-connect's attempts and links in the app's carbon database: binds `AttemptStore` and
+ * `LinkStore` on each request's `carbon::Session`. List it after nexus-carbon, with nexus-connect
+ * set to `stores: .provided`; the app wires the tables on its database and runs the migration with
+ * its own:
+ *
+ * ```echo
+ * // the database the app opens
+ * try nexus::connect::carbon::Tables::wire($db);
+ *
+ * // main.eco
+ * nexus::connect::Extension(page: '/signed-in', connectors: [nexus::connect::Google()], stores: .provided),
+ * nexus::connect::carbon::Extension(),
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'nexus-connect-carbon';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<CarbonAttempts>(scope: function(Container $c) : CarbonAttempts {
+            return CarbonAttempts($c->get<carbon::Session>());
+        });
+        $s->alias<nexus::connect::AttemptStore, CarbonAttempts>();
+        $s->bind<CarbonLinks>(scope: function(Container $c) : CarbonLinks {
+            return CarbonLinks($c->get<carbon::Session>());
+        });
+        $s->alias<nexus::connect::LinkStore, CarbonLinks>();
+        return .ok;
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        carbon::DB $db = $kernel->services->get<carbon::DB>();
+        if (!$db->has<AttemptRowRepository>() || !$db->has<LinkRowRepository>()) {
+            return .error(.extension('nexus-connect-carbon', 'wire the sign in tables on the database: nexus::connect::carbon::Tables::wire($db)'));
+        }
+        return .ok;
+    }
+}

@@ -1,0 +1,36 @@
+namespace nexus::cache;
+
+/**
+ * `cache:clear`: forgets every entry of the app's cache. In Redis, only the keys under
+ * `NEXUS_CACHE_PREFIX`.
+ */
+public class ClearCommand : nexus::Command
+{
+    public const function name() : string
+    {
+        return 'cache:clear';
+    }
+
+    public const function summary() : string
+    {
+        return 'forget every entry of the cache';
+    }
+
+    public const function bound(container::Container $services) : bool
+    {
+        return $services->has<Cache>();
+    }
+
+    public function run(nexus::Invocation& $in) : int32
+    {
+        nexus::Kernel $k = guard $in->kernel() else {
+            return 1;
+        };
+        Cache $cache = $k->services->get<Cache>();
+        guard $cache->flush() else ($e) {
+            return nexus::Console::report($in->out, .unavailable($e->message()), $in->mode);
+        };
+        $in->out->line("cleared {$cache->describe()}");
+        return 0;
+    }
+}

@@ -1,0 +1,53 @@
+namespace nexus::auth;
+
+/**
+ * Protected resource metadata (RFC 9728): `/.well-known/oauth-protected-resource<path>` for each
+ * resource the app has, and the bare well-known path for the first one. It names the resource, its
+ * scopes and the server that issues its tokens.
+ */
+public class ResourceMetadata : nexus::Action
+{
+    private Resources $resources;
+
+    public constructor(Resources $resources)
+    {
+        $this->resources = $resources;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        string $path = $payload->request->path;
+        string $known = Resources::WELL_KNOWN;
+        Resource? $found = null;
+        foreach ($this->resources->all() as const &$r) {
+            if ($path == $known || $path == "{$known}{$r->path}") {
+                $found = $r;
+                break;
+            }
+        }
+        Resource $r = guard $found else {
+            return .error(.notFound('the resource'));
+        };
+        json::Value $o = json::object();
+        $o['resource'] = json::str($this->resources->url($payload, $r));
+        if (!$r->title->empty()) {
+            $o['resource_name'] = json::str($r->title);
+        }
+        json::Value $servers = json::arr();
+        string? $server = $this->resources->server($payload);
+        if ($server != null) {
+            string $issuer = guard $server;
+            $servers[] = json::str($issuer);
+        }
+        $o['authorization_servers'] = mv $servers;
+        json::Value $methods = json::arr();
+        $methods[] = json::str('header');
+        $o['bearer_methods_supported'] = mv $methods;
+        json::Value $scopes = json::arr();
+        foreach ($r->scopes as const &$s) {
+            $scopes[] = json::str($s);
+        }
+        $o['scopes_supported'] = mv $scopes;
+        return .ok(nexus::Response(json: $o));
+    }
+}

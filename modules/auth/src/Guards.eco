@@ -4,15 +4,20 @@ namespace nexus::auth;
  * The app's guards, in the order they look at a request. Middleware asks them who is calling
  * (`Authenticate`, or the app's own that loads its user too); what they found is kept in the
  * payload's container, so a second ask in the same request does not run them again.
+ *
+ * A credential issued for one resource (an OAuth client's token for `/mcp`) is a 401 anywhere else:
+ * the request's path says which resource it asks for, `Resources::of`.
  */
 #[atomic]
 public class Guards
 {
     public array<Guard> $guards;
+    public Resources $resources;
 
-    public constructor(mv array<Guard> $guards)
+    public constructor(mv array<Guard> $guards, Resources $resources)
     {
         $this->guards = mv $guards;
+        $this->resources = $resources;
     }
 
     /**
@@ -37,12 +42,55 @@ public class Guards
         foreach ($this->guards as $g) {
             Identity? $found = try $g->identify($payload);
             if ($found != null) {
-                $payload->put<Resolved>(Resolved($found));
-                return .ok($found);
+                Identity $id = guard $found;
+                try $this->admits($payload, $id);
+                $payload->put<Resolved>(Resolved($id));
+                return .ok($id);
             }
         }
         $payload->put<Resolved>(Resolved());
         return .ok(null);
+    }
+
+    /**
+     * Who is calling, for a door that needs a signed in caller: else the 401 (or the guard's
+     * problem) as this request's answer, pointing a client under a resource at its metadata
+     * (`Resources::challenge`).
+     */
+    public function demand(nexus::Payload& $payload) : result<Identity, nexus::Response>
+    {
+        Identity? $found = guard $this->identify($payload) else ($p) {
+            return .error($this->resources->challenge($payload, $p));
+        };
+        Identity $id = guard $found else {
+            return .error($this->resources->challenge($payload, .unauthorized('this needs a signed in caller')));
+        };
+        return .ok($id);
+    }
+
+    /**
+     * A 401 unless credential `$id` opens the resource this request is for: the app's own open
+     * everything, one issued for a resource opens that resource only.
+     */
+    internal const function admits(const nexus::Payload& $payload, const Identity& $id) : status<nexus::Problem>
+    {
+        if ($id->firstParty()) {
+            return .ok;
+        }
+        Resource? $here = $this->resources->of($payload->request->path);
+        if ($here != null) {
+            Resource $r = guard $here;
+            if ($r->name == $id->audience) {
+                return .ok;
+            }
+        }
+        string $audience = $id->audience;
+        Resource? $named = $this->resources->named($audience);
+        if ($named != null) {
+            Resource $for = guard $named;
+            return .error(.unauthorized("this token opens {$for->path} only"));
+        }
+        return .error(.unauthorized('this token opens another resource only'));
     }
 
     /**

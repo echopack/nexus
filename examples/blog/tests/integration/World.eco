@@ -49,14 +49,34 @@ internal class World
     {
         $server = Database::server(env: ['BLOG_TEST_DATABASE_URL', 'ECOTEST_MYSQL_URL']);
         $this->db = Database(server: $server, migrations: Blog::DB::migrations(), prefix: 'blog_test');
+        $this->app = TestApp(Blog::extensions(), World::vars($this->db));
+        $this->api = $this->app->api();
+    }
+
+    /**
+     * The world with sign in with Google configured (client `blog-google`), and `$google`
+     * answering for Google's token endpoint: the one outside service a test cannot reach.
+     */
+    public constructor(google: nexus::connect::ScriptedFetch $google)
+    {
+        $server = Database::server(env: ['BLOG_TEST_DATABASE_URL', 'ECOTEST_MYSQL_URL']);
+        $this->db = Database(server: $server, migrations: Blog::DB::migrations(), prefix: 'blog_test');
+        map<string, string> $vars = World::vars($this->db);
+        $vars['NEXUS_CONNECT_GOOGLE_CLIENT_ID'] = 'blog-google';
+        $vars['NEXUS_CONNECT_GOOGLE_CLIENT_SECRET'] = 'a-google-secret';
+        $this->app = TestApp(Blog::extensions(fetch: $google), mv $vars);
+        $this->api = $this->app->api();
+    }
+
+    internal static function vars(const Database& $db) : map<string, string>
+    {
         map<string, string> $vars = [
-            'NEXUS_DATABASE_URL' => $this->db->url,
+            'NEXUS_DATABASE_URL' => $db->url,
             'NEXUS_AUTH_KEY' => 'an-integration-key-of-at-least-32-chars',
             'NEXUS_MAIL_URL' => 'memory:',
             'NEXUS_MAIL_FROM' => 'hello@blog.test',
         ];
-        $this->app = TestApp(Blog::extensions(), mv $vars);
-        $this->api = $this->app->api();
+        return $vars;
     }
 
     /**
