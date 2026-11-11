@@ -35,7 +35,7 @@ public struct Topics
         while ($i > 0) {
             $i = $i - 1;
             Event $e = $events[$i];
-            json::Value $row = json::parse($e->data)->or(json::object());
+            json::Value $row = $e->record->json();
             $row['seq'] = json::int($e->seq as int64);
             if ($row->get('at') == null) {
                 $row['at'] = json::str(nexus::log::Stamp::rfc3339($e->at));

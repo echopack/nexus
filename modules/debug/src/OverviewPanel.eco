@@ -52,6 +52,7 @@ public class OverviewPanel : Panel
             $stats[] = OverviewPanel::stat('Requests', json::int($this->requests->ring->last() as int64), 'answered since boot');
             $stats[] = OverviewPanel::stat('Routes', json::int($k->router->count() as int64), 'routed');
             $stats[] = OverviewPanel::stat('Mode', json::str($k->mode->name()), 'NEXUS_MODE');
+            $stats[] = OverviewPanel::stat('Build', json::str(nexus::Build::name()), OverviewPanel::build());
             $o = json::object();
             $o['stats'] = mv $stats;
             return .ok($o);
@@ -60,6 +61,7 @@ public class OverviewPanel : Panel
             $fields = json::arr();
             $fields[] = OverviewPanel::field('Mode', json::str($k->mode->name()));
             $fields[] = OverviewPanel::field('Started', json::str(nexus::log::Stamp::rfc3339($this->debug->started)));
+            $fields[] = OverviewPanel::field('Build', json::str(nexus::Build::name()));
             $fields[] = OverviewPanel::field('Extensions', json::Value::from($k->extensionNames()));
             $fields[] = OverviewPanel::field('Console', json::str($this->debug->base));
             $fields[] = OverviewPanel::field('Gate', json::str($this->debug->gate->name()));
@@ -89,6 +91,17 @@ public class OverviewPanel : Panel
         $o['value'] = mv $value;
         $o['hint'] = json::str($hint);
         return $o;
+    }
+
+    /**
+     * What the build stat means for the timings next to it.
+     */
+    public static function build() : string
+    {
+        if (nexus::Build::checked()) {
+            return 'checks on, timings several times slower than release';
+        }
+        return 'optimized';
     }
 
     /**

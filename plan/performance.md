@@ -109,3 +109,37 @@ For the access-log rows, stderr went to a file. In `dev.sh` it goes to a termina
 | nexus release, lean, c=64 | 148k | ≥160k |
 | nexus release, lean, c=1 p50 | 37 µs | ≤25 µs |
 | posts query, release, native MySQL | not measured | within 10% of Rust |
+
+## Steps 1–3 done (2026-11-11)
+
+What changed:
+- **Honest numbers:** `Payload::started` is set at kernel entry, and the console's `ms` and the
+  blog's `Server-Timing` count from it. `nexus::Build::checked()` detects a debug build: the
+  console shows a Build stat and `serve` warns at boot. `examples/blog/scripts/bench.sh` measures
+  all four variants; `BLOG=<binary>` benches a binary built elsewhere.
+- **Access log:**
+  - `serve` logs through `log::Async` by default (`NEXUS_LOG_ASYNC=8192`; `0` turns it off).
+  - `Async` swaps out the whole waiting batch at once, and `flush` waits on a condition instead
+    of sleeping. `flush` also waits until every dropped entry has been reported.
+  - `Stream` writes each line in one write, and buffers behind `Async`.
+  - The kernel builds the access line only when something will write it.
+  - Work runs flush only their own sink.
+- **Console recorder:**
+  - `Traces` is split into 64 shards keyed by `pthread_self`.
+  - Topics keep `Record`s and encode them when someone reads.
+  - The timeline lives on the request's record, and `Timelines` is gone.
+  - `LogTap` keeps the log entry and encodes it on read.
+  - `Trace::finish` freezes the total.
+
+`scripts/bench.sh`, `/health`, release build. Before is the binary built before the change; the
+same script measured both.
+
+| Variant | c=1 p50 before → after | c=64 req/s before → after |
+|---|---|---|
+| lean | 35 → 33 µs | 133k → 156k |
+| log | 42 → 42 µs | 85k → 144k |
+| console | 65 → 38 µs | 57k → 135k |
+| both (dev defaults) | 71 → 39 µs | 48k → 125k |
+
+`/v1/posts` is bound by the Docker MySQL round trip either way, at about 1.2k req/s with one
+connection and 7–8k with 64.

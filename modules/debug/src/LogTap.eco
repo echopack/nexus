@@ -3,7 +3,8 @@ namespace nexus::debug;
 /**
  * Hands every log entry of the app to the `logs` topic. Tapped into the root logger at boot, so it
  * sees what the console's sinks see, at the level `NEXUS_LOG` lets through. The console's own
- * requests log untapped (see `Recorder`), so they never reach it.
+ * requests log untapped (see `Recorder`), so they never reach it. The entry is kept as it is and
+ * encoded when the console reads it.
  */
 #[atomic]
 public class LogTap : nexus::log::Sink
@@ -17,6 +18,6 @@ public class LogTap : nexus::log::Sink
 
     public function write(const nexus::log::Entry& $e) : void
     {
-        $this->topic->publish(Entries::json($e, $e->all()));
+        $this->topic->publish(LogRecord($e));
     }
 }

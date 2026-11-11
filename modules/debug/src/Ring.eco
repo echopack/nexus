@@ -5,8 +5,9 @@ use std::time;
 
 /**
  * The last events of a topic, in a fixed number of slots: a new event past the size takes the
- * oldest one's place. Shared by every thread; writers lock briefly, readers copy out what they ask
- * for. A reader keeps the number of the last event it saw and asks for what came after it.
+ * oldest one's place. Shared by every thread; writers lock briefly to drop in a record, readers copy
+ * out the events they ask for and encode them on their own thread. A reader keeps the number of the
+ * last event it saw and asks for what came after it.
  */
 #[atomic]
 public class Ring
@@ -26,13 +27,22 @@ public class Ring
     }
 
     /**
-     * Adds an event with `$data`, a JSON object, and answers its number.
+     * Adds an event with `$data`, a JSON object already encoded, and answers its number.
      */
     public function publish(const string& $data) : uint64
     {
+        return $this->publish(Encoded($data));
+    }
+
+    /**
+     * Adds an event saying `$record`, encoded when a reader asks, and answers its number.
+     */
+    public function publish(Record $record) : uint64
+    {
+        time::timestamp $now = time::timestamp::now();
         thread::locked<array<Event>> $held = $this->slots->lock();
         uint64 $seq = $this->last->load() + 1;
-        $e = Event($seq, time::timestamp::now(), $data);
+        $e = Event($seq, $now, $record);
         if ($held->value->count() < $this->size) {
             $held->value[] = mv $e;
         } else {
@@ -40,6 +50,25 @@ public class Ring
         }
         $this->last->store($seq);
         return $seq;
+    }
+
+    /**
+     * The newest kept event whose record has key `$key`, or null when none has (any more).
+     */
+    public const function find(const string& $key) : Event?
+    {
+        thread::locked<array<Event>> $held = $this->slots->lock();
+        uint64 $newest = $this->last->load();
+        uint64 $kept = $held->value->count() as uint64;
+        uint64 $seq = $newest;
+        while ($seq > 0 && $seq + $kept > $newest) {
+            Event $e = $held->value[(($seq - 1) % ($this->size as uint64)) as usize];
+            if ($e->record->key() == $key) {
+                return $e;
+            }
+            $seq = $seq - 1;
+        }
+        return null;
     }
 
     /**

@@ -1,28 +1,25 @@
 namespace nexus::debug;
 
-use std::time;
-
 /**
  * Tells the `requests` topic about every request the app answers, the console's own aside: method,
  * path, status, time taken, the action, the caller's address, the headers (credentials masked),
  * how many queries it ran and what the request logged. Bodies are not kept.
  *
  * Each request is also traced: its middleware, action, spans, queries, cache calls and mails go on
- * a timeline, kept in `Timelines` under the request id.
+ * a timeline the request's record keeps. Nothing is encoded while the request runs: the record is
+ * dropped into the topic and turned into JSON when the console reads it.
  */
 #[atomic]
 public class Recorder : nexus::Middleware
 {
     private Debug $debug;
     private Topic $topic;
-    private Timelines $timelines;
     private nexus::trace::Traces $traces;
 
-    public constructor(Debug $debug, Topic $topic, Timelines $timelines, nexus::trace::Traces $traces)
+    public constructor(Debug $debug, Topic $topic, nexus::trace::Traces $traces)
     {
         $this->debug = $debug;
         $this->topic = $topic;
-        $this->timelines = $timelines;
         $this->traces = $traces;
     }
 
@@ -33,7 +30,6 @@ public class Recorder : nexus::Middleware
             $payload->useLog($payload->log->with(['console' => true])->untapped());
             return $next->run($payload);
         }
-        time::instant $start = .now();
         $capture = Capture(50);
         $trace = nexus::trace::Trace();
         $payload->trace = $trace;
@@ -41,62 +37,12 @@ public class Recorder : nexus::Middleware
         $this->traces->enter($trace);
         nexus::Response $res = $next->run($payload);
         $this->traces->leave();
-        float64 $ms = ($start->elapsed()->as_micros() as float64) / 1000.0;
-        nexus::trace::Tally $db = $trace->sum(.query);
-
-        $o = json::object();
-        $o['id'] = json::str($payload->request->id);
-        $o['method'] = json::str($payload->request->method->verb());
-        $o['target'] = json::str($payload->request->target);
-        $o['status'] = json::int($res->status as int64);
-        $o['ms'] = json::float($ms);
-        $o['action'] = json::str($payload->action);
-        $o['queries'] = json::int($db->count as int64);
-        $o['dbMs'] = json::float($db->ms);
-        json::Value $logs = $capture->json();
-
-        // the request's timeline with its logs, for the Timeline tab; the headers stay on the row
-        $doc = json::object();
-        $doc['request'] = $o;
-        $doc['timeline'] = $trace->json();
-        $doc['logs'] = $logs;
-        $this->timelines->put($payload->request->id, json::dump($doc));
-
-        $o['path'] = json::str($payload->request->path);
-        $o['peer'] = json::str($payload->request->peer);
-        $o['headers'] = Recorder::headers($payload->request->headers);
-        $o['responseHeaders'] = Recorder::headers($res->headers);
-        $o['logs'] = mv $logs;
-        uint64 $dropped = $capture->dropped();
-        if ($dropped > 0) {
-            $o['logsDropped'] = json::int($dropped as int64);
-        }
-        $this->topic->publish($o);
+        $trace->finish();
+        // the kernel's access line comes after this, on the same logger; it is not the request's
+        $capture->seal();
+        // from the kernel taking the request, so its routing and this recorder count too
+        float64 $ms = ($payload->started->elapsed()->as_micros() as float64) / 1000.0;
+        $this->topic->publish(RequestRecord($payload->request, $res, $payload->action, $ms, $trace, $capture));
         return $res;
-    }
-
-    /**
-     * `$h` as an object of name to value, a credential replaced by `***`.
-     */
-    public static function headers(const nexus::Headers& $h) : json::Value
-    {
-        $o = json::object();
-        foreach ($h->items as const &$item) {
-            string $value = $item->value;
-            if (Recorder::secret($item->name)) {
-                $value = '***';
-            }
-            $o[$item->name] = json::str($value);
-        }
-        return $o;
-    }
-
-    /**
-     * Whether a header carries a credential.
-     */
-    public static function secret(const string& $name) : bool
-    {
-        string $n = str::lower($name);
-        return $n == 'authorization' || $n == 'cookie' || $n == 'set-cookie' || $n == 'x-accesstoken' || $n == 'proxy-authorization';
     }
 }

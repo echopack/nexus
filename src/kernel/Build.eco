@@ -1,0 +1,43 @@
+namespace nexus;
+
+/**
+ * How the running binary was built. A debug build (`echoc build --debug`, `echoc run`, `echoc test`)
+ * keeps `assert` and the runtime checks and is often several times slower, so a timing read from
+ * it says little about production:
+ *
+ * ```echo
+ * if (nexus::Build::checked()) {
+ *     $log->warn('serving a debug build; timings are not representative');
+ * }
+ * ```
+ */
+public class Build
+{
+    /**
+     * Whether this binary keeps its asserts: true for a debug build, false for a release build.
+     */
+    public static function checked() : bool
+    {
+        bool $kept = false;
+        // a release build compiles the assert out, call and all
+        assert(Build::mark($kept));
+        return $kept;
+    }
+
+    /**
+     * What the build calls itself, `debug` or `release`, for a person reading a console or a log.
+     */
+    public static function name() : string
+    {
+        if (Build::checked()) {
+            return 'debug';
+        }
+        return 'release';
+    }
+
+    private static function mark(bool& $kept) : bool
+    {
+        $kept = true;
+        return true;
+    }
+}

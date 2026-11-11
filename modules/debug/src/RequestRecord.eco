@@ -1,0 +1,119 @@
+namespace nexus::debug;
+
+/**
+ * One answered request as the `requests` topic keeps it: what the request and its answer said, the
+ * timeline it was traced on and what it logged. Copied out of the request when it is answered and
+ * encoded only when the console reads it, as a row of the request tables (`json`) or as the
+ * request's timeline (`detail`).
+ */
+#[atomic]
+public class RequestRecord : Record
+{
+    public const string $id;
+    public const string $method;
+    public const string $target;
+    public const string $path;
+    public const string $peer;
+    public const string $action;
+    public const int64 $status;
+    public const float64 $ms;
+    public const nexus::Headers $headers;
+    public const nexus::Headers $responseHeaders;
+    public const nexus::trace::Trace $trace;
+    public const Capture $logs;
+
+    public constructor(const nexus::Request& $req, const nexus::Response& $res, const string& $action, float64 $ms, nexus::trace::Trace $trace, Capture $logs)
+    {
+        $this->id = $req->id;
+        $this->method = $req->method->verb();
+        $this->target = $req->target;
+        $this->path = $req->path;
+        $this->peer = $req->peer;
+        $this->action = $action;
+        $this->status = $res->status as int64;
+        $this->ms = $ms;
+        $this->headers = $req->headers;
+        $this->responseHeaders = $res->headers;
+        $this->trace = $trace;
+        $this->logs = $logs;
+    }
+
+    /**
+     * The row: the summary, the path and peer, the headers with their credentials masked and what
+     * the request logged.
+     */
+    public const function json() : json::Value
+    {
+        json::Value $logs = $this->logs->json();
+        $o = $this->summary();
+        $o['path'] = json::str($this->path);
+        $o['peer'] = json::str($this->peer);
+        $o['headers'] = RequestRecord::masked($this->headers);
+        $o['responseHeaders'] = RequestRecord::masked($this->responseHeaders);
+        $o['logs'] = mv $logs;
+        uint64 $dropped = $this->logs->dropped();
+        if ($dropped > 0) {
+            $o['logsDropped'] = json::int($dropped as int64);
+        }
+        return $o;
+    }
+
+    public const function key() : string
+    {
+        return $this->id;
+    }
+
+    /**
+     * The timeline: the summary, the trace's marks and the logs, for the request sheet's Timeline
+     * tab.
+     */
+    public const function detail() : json::Value?
+    {
+        $doc = json::object();
+        $doc['request'] = $this->summary();
+        $doc['timeline'] = $this->trace->json();
+        $doc['logs'] = $this->logs->json();
+        return $doc;
+    }
+
+    // what the row and the timeline both start with
+    private const function summary() : json::Value
+    {
+        nexus::trace::Tally $db = $this->trace->sum(.query);
+        $o = json::object();
+        $o['id'] = json::str($this->id);
+        $o['method'] = json::str($this->method);
+        $o['target'] = json::str($this->target);
+        $o['status'] = json::int($this->status);
+        $o['ms'] = json::float($this->ms);
+        $o['action'] = json::str($this->action);
+        $o['queries'] = json::int($db->count as int64);
+        $o['dbMs'] = json::float($db->ms);
+        return $o;
+    }
+
+    /**
+     * `$h` as an object of name to value, a credential replaced by `***`.
+     */
+    public static function masked(const nexus::Headers& $h) : json::Value
+    {
+        $o = json::object();
+        foreach ($h->items as const &$item) {
+            string $value = $item->value;
+            if (RequestRecord::secret($item->name)) {
+                $value = '***';
+            }
+            $o[$item->name] = json::str($value);
+        }
+        return $o;
+    }
+
+    /**
+     * Whether a header carries a credential.
+     */
+    public static function secret(const string& $name) : bool
+    {
+        string $n = str::lower($name);
+        return $n == 'authorization' || $n == 'cookie' || $n == 'set-cookie' || $n == 'x-accesstoken' || $n == 'proxy-authorization';
+    }
+}

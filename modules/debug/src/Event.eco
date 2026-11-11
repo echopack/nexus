@@ -3,14 +3,22 @@ namespace nexus::debug;
 use std::time;
 
 /**
- * One event of a topic: its number in the topic (from 1, never reused), when it happened and its
- * data, already encoded as a JSON object.
+ * One event of a topic: its number in the topic (from 1, never reused), when it happened and what
+ * it says, a `Record` encoded when someone reads it.
  */
 public struct Event
 {
     public uint64 $seq;
     public time::timestamp $at;
-    public string $data;
+    public Record $record;
+
+    /**
+     * The event's data as JSON text.
+     */
+    public const function data() : string
+    {
+        return $this->record->text();
+    }
 
     /**
      * The event as the API writes it: `{"seq": 7, "at": "...", "data": {...}}`.
@@ -18,6 +26,6 @@ public struct Event
     public const function json() : string
     {
         string $at = nexus::log::Stamp::rfc3339($this->at);
-        return "\{\"seq\":{$this->seq},\"at\":\"{$at}\",\"data\":{$this->data}}";
+        return "\{\"seq\":{$this->seq},\"at\":\"{$at}\",\"data\":{$this->data()}}";
     }
 }

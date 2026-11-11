@@ -4,6 +4,7 @@
  * embedded web app's fallback.
  */
 
+use std::thread;
 use ecotest::expect;
 use ecotest::http::{Api, Reply};
 use nexus::testing::TestApp;
@@ -316,7 +317,10 @@ test the_request_feed_records_the_app_and_not_itself
         ->json('$.rows[0].action', 'THello')
         ->json('$.rows[0].headers.Authorization', '***')
         ->json('$.rows[0].logs[0].message', 'said hi')
+        // the kernel's access line comes after the request is recorded; it is not one of its logs
+        ->count('$.rows[0].logs', 1)
         ->lacks('a-secret-of-the-app');
+    $api->get('/__nexus/api/panels/overview/stats')->ok()->json('$.stats[4].label', 'Build')->json('$.stats[4].value', 'debug');
 }
 
 test a_requests_timeline_shows_its_action_and_the_spans_inside_it
@@ -399,10 +403,59 @@ test the_ring_keeps_the_newest
     $all = $ring->since(0, 10);
     expect($all)->size(3);
     expect($all[0]->seq)->is(3 as uint64);
-    expect($all[2]->data)->is('{"n":5}');
+    expect($all[2]->data())->is('{"n":5}');
     expect($ring->since(4, 10))->size(1);
     expect($ring->since(5, 10))->size(0);
     expect($ring->since(0, 2)[0]->seq)->is(4 as uint64);
+}
+
+// a record that counts how often it was encoded, found by its key
+#[atomic]
+internal class DCounted : nexus::debug::Record
+{
+    public const string $name;
+    // json is const; the lock is how it still counts
+    public thread::mutex<usize> $encodes = thread::mutex<usize>(0);
+
+    public constructor(const string& $name)
+    {
+        $this->name = $name;
+    }
+
+    public const function encoded() : usize
+    {
+        thread::locked<usize> $held = $this->encodes->lock();
+        return $held->value;
+    }
+
+    public const function json() : json::Value
+    {
+        thread::locked<usize> $held = $this->encodes->lock();
+        $held->value = $held->value + 1;
+        $o = json::object();
+        $o['name'] = json::str($this->name);
+        return $o;
+    }
+
+    public const function key() : string
+    {
+        return $this->name;
+    }
+}
+
+test the_ring_encodes_a_record_only_when_read_and_finds_it_by_key
+{
+    $ring = nexus::debug::Ring(2);
+    $a = DCounted('a');
+    $ring->publish($a);
+    $ring->publish(DCounted('b'));
+    expect($a->encoded())->is(0 as usize);
+    nexus::debug::Event $found = expect($ring->find('a'))->some();
+    expect($found->data())->is('{"name":"a"}');
+    expect($a->encoded())->is(1 as usize);
+    $ring->publish(DCounted('c'));
+    expect($ring->find('a') == null)->yes(says: 'pushed out by the third');
+    expect($ring->find('nobody') == null)->yes(says: 'never there');
 }
 
 test the_web_app_falls_back_to_its_index

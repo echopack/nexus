@@ -25,7 +25,6 @@ public class Extension : nexus::Extension
     internal Debug? $debug = null;
     internal Topic? $requests = null;
     internal Topic? $logs = null;
-    internal Timelines? $timelines = null;
     internal nexus::trace::Traces? $traces = null;
 
     public constructor(gate: Gate? $gate = null, panels: array<Panel> $panels = array<Panel>())
@@ -52,8 +51,7 @@ public class Extension : nexus::Extension
         Topic $requests = $debug->topic('requests', 'Requests');
         Topic $logs = $debug->topic('logs', 'Logs');
         $debug->panel(OverviewPanel($debug, $requests));
-        $timelines = Timelines($config->keep as usize);
-        $debug->panel(RequestsPanel($requests, $timelines));
+        $debug->panel(RequestsPanel($requests));
         $debug->panel(LogsPanel($logs));
         $debug->panel(RoutesPanel($debug));
         $debug->panel(EnvPanel($debug));
@@ -64,7 +62,6 @@ public class Extension : nexus::Extension
         $this->debug = $debug;
         $this->requests = $requests;
         $this->logs = $logs;
-        $this->timelines = $timelines;
         $this->traces = $s->get<nexus::trace::Traces>();
 
         // every API call but the sign in goes through the gate, then through its own middleware
@@ -102,9 +99,8 @@ public class Extension : nexus::Extension
             return;
         };
         Topic $requests = guard $this->requests;
-        Timelines $timelines = guard $this->timelines;
         nexus::trace::Traces $traces = guard $this->traces;
-        $p->add(Recorder($debug, $requests, $timelines, $traces), name: 'nexus::debug::Recorder');
+        $p->add(Recorder($debug, $requests, $traces), name: 'nexus::debug::Recorder');
     }
 
     public function boot(nexus::Kernel $kernel) : status<nexus::BootError>

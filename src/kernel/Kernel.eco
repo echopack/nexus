@@ -196,6 +196,7 @@ public class Kernel
         $log = $this->log->with(['req' => $req->id]);
         $scope->put<Logger>($log);
         $payload = Payload($req, $scope, $this->mode, $log);
+        $payload->started = $start;
         // matched once up front, so the global middleware already knows the route; an unmatched
         // request is still answered by `route`, at the end of the chain
         map<string, string> $params = [];
@@ -222,12 +223,14 @@ public class Kernel
         }
         $this->served->add(1);
 
-        float64 $ms = ($start->elapsed()->as_micros() as float64) / 1000.0;
-        string $line = "{$req->method->verb()} {$req->path} {$res->status}";
+        // the access line, built only when a sink or tap takes it
+        log::Level $level = .info;
         if ($res->status >= 500) {
-            $payload->log->warn($line, ['ms' => $ms, 'action' => $payload->action]);
-        } else {
-            $payload->log->info($line, ['ms' => $ms, 'action' => $payload->action]);
+            $level = .warn;
+        }
+        if ($payload->log->enabled($level)) {
+            float64 $ms = ($start->elapsed()->as_micros() as float64) / 1000.0;
+            $payload->log->write($level, "{$req->method->verb()} {$req->path} {$res->status}", ['ms' => $ms, 'action' => $payload->action]);
         }
         $scope->drop();
         return $res;

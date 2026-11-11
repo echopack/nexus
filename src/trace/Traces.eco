@@ -2,26 +2,46 @@ namespace nexus::trace;
 
 use std::thread;
 
+#[if: family != windows]
+internal extern {
+    function pthread_self as tracedThread() : usize;
+}
+#[end]
+
 /**
  * Which trace belongs to the request on the current thread, for the services every request shares
  * (the cache, the mailer, a database listener) that never see a payload. The kernel binds one in
  * the root container; the debug console `enter`s a request's trace around it. With none entered,
  * `here` costs one atomic load.
+ *
+ * The threads are spread over shards by their id, each behind its own lock, so a thread only ever
+ * waits for the few that share its shard, not for every request in flight.
  */
 #[atomic]
 public class Traces
 {
-    private thread::mutex<array<Here>> $by = thread::mutex<array<Here>>([]);
+    public const usize SHARDS = 64;
+    private array<thread::mutex<array<Here>>> $shards;
     private atomic<usize> $live = atomic<usize>(0);
+
+    public constructor()
+    {
+        $this->shards = arr::room<thread::mutex<array<Here>>>(Traces::SHARDS);
+        usize $i = 0;
+        while ($i < Traces::SHARDS) {
+            $this->shards[] = thread::mutex<array<Here>>([]);
+            $i++;
+        }
+    }
 
     /**
      * Makes `$t` the trace of the current thread until `leave`.
      */
     public function enter(Trace $t) : void
     {
-        thread::locked<array<Here>> $held = $this->by->lock();
+        thread::locked<array<Here>> $held = $this->shards[Traces::shard()]->lock();
         $held->value[] = Here(thread::current(), $t);
-        $this->live->store($held->value->count());
+        $this->live->add(1);
     }
 
     /**
@@ -29,17 +49,17 @@ public class Traces
      */
     public function leave() : void
     {
-        thread::locked<array<Here>> $held = $this->by->lock();
+        thread::locked<array<Here>> $held = $this->shards[Traces::shard()]->lock();
         thread::id $me = thread::current();
         usize $i = $held->value->count();
         while ($i > 0) {
             $i = $i - 1;
             if ($held->value[$i]->thread == $me) {
                 $held->value->pluck($i);
+                $this->live->sub(1);
                 break;
             }
         }
-        $this->live->store($held->value->count());
     }
 
     /**
@@ -50,7 +70,7 @@ public class Traces
         if ($this->live->load() == 0) {
             return null;
         }
-        thread::locked<array<Here>> $held = $this->by->lock();
+        thread::locked<array<Here>> $held = $this->shards[Traces::shard()]->lock();
         thread::id $me = thread::current();
         foreach ($held->value as const &$h) {
             if ($h->thread == $me) {
@@ -58,6 +78,18 @@ public class Traces
             }
         }
         return null;
+    }
+
+    // the current thread's shard. A thread id is a page-aligned address whose threads sit a stack
+    // apart, so the low bits are the same for all of them: fold the page number's bits instead
+    private static function shard() : usize
+    {
+        #[if: family != windows]
+        usize $t = tracedThread();
+        return (($t >> 12) ^ ($t >> 18) ^ ($t >> 24)) % Traces::SHARDS;
+        #[else]
+        return 0;
+        #[end]
     }
 }
 

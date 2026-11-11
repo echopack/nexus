@@ -11,6 +11,8 @@ public class Capture : nexus::log::Sink
     public const usize $cap;
     private thread::mutex<array<nexus::log::Entry>> $entries = thread::mutex<array<nexus::log::Entry>>([]);
     private atomic<uint64> $dropped = atomic<uint64>(0);
+    // 1 once the request is done: later lines (the kernel's access line) are not the request's
+    private atomic<uint32> $sealed = atomic<uint32>(0);
 
     public constructor(usize $cap)
     {
@@ -19,12 +21,23 @@ public class Capture : nexus::log::Sink
 
     public function write(const nexus::log::Entry& $e) : void
     {
+        if ($this->sealed->load() != 0) {
+            return;
+        }
         thread::locked<array<nexus::log::Entry>> $held = $this->entries->lock();
         if ($held->value->count() >= $this->cap) {
             $this->dropped->add(1);
             return;
         }
         $held->value[] = $e;
+    }
+
+    /**
+     * Takes no more entries; what comes after is neither kept nor counted.
+     */
+    public function seal() : void
+    {
+        $this->sealed->store(1);
     }
 
     /**

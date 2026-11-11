@@ -50,14 +50,20 @@ public enum RunLog
     }
 
     /**
-     * Whether the run brings a sink of its own, which is flushed when the run ends.
+     * Writes out what the run's own sink still holds, when it brings one. The app's sinks are left
+     * alone: behind a writer thread, flushing them would wait for every other request's lines.
      */
-    public const function owns() : bool
+    public function flush() : void
     {
-        return match ($this) {
-            RunLog::also($sink) => true,
-            RunLog::only($sink) => true,
-            else => false,
+        match ($this) {
+            RunLog::also($sink) => {
+                $sink->flush();
+            },
+            RunLog::only($sink) => {
+                $sink->flush();
+            },
+            else => {
+            },
         };
     }
 

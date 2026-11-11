@@ -46,6 +46,10 @@ public class ServeCommand : Command
         $options->workers = $w as uint32;
         $options->work = !$in->flag('no-work');
         $options->schedule = !$in->flag('no-schedule');
+        // a request never waits on the terminal: the log gets a writer thread unless told otherwise
+        if ($in->env->get('NEXUS_LOG_ASYNC') == null) {
+            $in->env->set('NEXUS_LOG_ASYNC', EnvList::LOG_ASYNC);
+        }
         Kernel $k = guard $in->kernel() else {
             return 1;
         };

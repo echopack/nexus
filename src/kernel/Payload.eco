@@ -1,5 +1,6 @@
 namespace nexus;
 
+use std::time;
 use nexus::trace;
 
 /**
@@ -50,6 +51,12 @@ public struct Payload
      * Middleware and the action mark themselves on it.
      */
     public trace::Trace? $trace = null;
+
+    /**
+     * When the kernel took the request, before its id, scope and route: what every duration of the
+     * request (the access log, the debug console, a `Server-Timing` header) counts from.
+     */
+    public time::instant $started = .now();
 
     /**
      * The service of type `T` for this request.

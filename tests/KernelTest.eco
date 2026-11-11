@@ -234,6 +234,13 @@ test every_request_writes_an_access_log_line
     expect($k->served())->is(1);
 }
 
+test a_test_binary_says_it_is_a_debug_build
+{
+    // echoc test keeps the asserts, so the build is a checked one
+    expect(nexus::Build::checked())->yes(says: 'tests run with asserts');
+    expect(nexus::Build::name())->is('debug');
+}
+
 test unbound_action_fails_boot
 {
     $app = KApp();

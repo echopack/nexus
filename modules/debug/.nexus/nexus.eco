@@ -197,15 +197,15 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::debug::LogsPanel>('nexus::debug::LogsPanel');
     $g->name<nexus::debug::OpenGate>('nexus::debug::OpenGate');
     $g->name<nexus::debug::OverviewPanel>('nexus::debug::OverviewPanel');
+    $g->name<nexus::debug::Encoded>('nexus::debug::Encoded');
+    $g->name<nexus::debug::LogRecord>('nexus::debug::LogRecord');
     $g->name<nexus::debug::Recorder>('nexus::debug::Recorder');
+    $g->name<nexus::debug::RequestRecord>('nexus::debug::RequestRecord');
     $g->name<nexus::debug::RequestsPanel>('nexus::debug::RequestsPanel');
     $g->name<nexus::debug::Ranked>('nexus::debug::Ranked');
     $g->name<nexus::debug::Ring>('nexus::debug::Ring');
     $g->name<nexus::debug::RoutesPanel>('nexus::debug::RoutesPanel');
     $g->name<nexus::debug::Static>('nexus::debug::Static');
-    $g->name<nexus::debug::Timelines>('nexus::debug::Timelines');
-    $g->name<nexus::debug::Kept>('nexus::debug::Kept');
-    $g->name<nexus::debug::Shelf>('nexus::debug::Shelf');
     $g->name<nexus::debug::TokenGate>('nexus::debug::TokenGate');
     $g->name<nexus::debug::Topic>('nexus::debug::Topic');
     $g->name<nexus::debug::Topics>('nexus::debug::Topics');

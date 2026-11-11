@@ -70,9 +70,7 @@ public struct Inline
         $payload->useLog($log);
         function<status<Failure>(nexus::Payload&)> $handle = $item->handle;
         status<Failure> $status = $handle($payload);
-        if ($chosen->owns()) {
-            $log->flush();
-        }
+        $chosen->flush();
         $payload->useLog($before);
         guard $status else ($f) {
             return .error($f);

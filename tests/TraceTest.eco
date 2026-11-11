@@ -89,6 +89,60 @@ test traces_answer_the_trace_the_current_thread_entered
     expect($traces->here() == null)->yes(says: 'left');
 }
 
+// what the threads of a test count between them
+#[atomic]
+internal class TrTally
+{
+    public atomic<int32> $wrong = atomic<int32>(0);
+}
+
+test traces_keep_each_threads_trace_apart_while_many_are_in_flight
+{
+    $traces = Traces();
+    $tally = TrTally();
+    array<std::thread::handle> $workers = [];
+    int32 $w = 0;
+    while ($w < 8) {
+        std::thread::handle $h = guard std::thread::spawn(function[$traces, $tally]() : void {
+            int32 $round = 0;
+            while ($round < 200) {
+                $t = Trace();
+                $traces->enter($t);
+                Trace? $found = $traces->here();
+                if ($found == null) {
+                    $tally->wrong->add(1);
+                } else {
+                    // a mark through what here() answered lands on this thread's own trace
+                    Trace $here = guard $found;
+                    $here->close($here->open(.cache, 'mine', ''));
+                    if ($t->marks()->count() != 1) {
+                        $tally->wrong->add(1);
+                    }
+                }
+                $traces->leave();
+                $round++;
+            }
+        });
+        $workers[] = $h;
+        $w++;
+    }
+    foreach ($workers as &$h) {
+        $h->join();
+    }
+    expect($tally->wrong->load())->is(0);
+    expect($traces->here() == null)->yes(says: 'every thread left');
+}
+
+test a_finished_trace_keeps_its_total
+{
+    $t = Trace();
+    $t->finish();
+    float64 $total = guard $t->json()->get('total')?->asFloat();
+    time::sleep(.millis(5));
+    float64 $later = guard $t->json()->get('total')?->asFloat();
+    expect($later == $total)->yes(says: 'reading it later does not stretch it');
+}
+
 test a_traced_loggers_span_is_marked_even_when_the_level_drops_its_close
 {
     $mem = nexus::log::Memory();

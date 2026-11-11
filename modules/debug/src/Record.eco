@@ -1,0 +1,82 @@
+namespace nexus::debug;
+
+/**
+ * What a topic keeps for one event. It turns into JSON when a reader asks, not when the event
+ * happens, so the thread that published it (a request, a log call) never pays for the encoding.
+ * Every reader's thread may call it at once: an implementation is an `#[atomic]` class that does
+ * not change once published.
+ */
+public interface Record
+{
+    /**
+     * The event's data, a JSON object.
+     */
+    const function json() : json::Value;
+
+    /**
+     * The data encoded as JSON text.
+     */
+    const function text() : string
+    {
+        return json::dump($this->json());
+    }
+
+    /**
+     * What a reader finds the record by (a request's id), empty when it is not looked up.
+     */
+    const function key() : string
+    {
+        return '';
+    }
+
+    /**
+     * The record's longer document, read by `key` (a request's timeline), or null.
+     */
+    const function detail() : json::Value?
+    {
+        return null;
+    }
+}
+
+/**
+ * An event that came already encoded.
+ */
+#[atomic]
+public class Encoded : Record
+{
+    public const string $data;
+
+    public constructor(string $data)
+    {
+        $this->data = mv $data;
+    }
+
+    public const function json() : json::Value
+    {
+        return json::parse($this->data)->or(json::object());
+    }
+
+    public const function text() : string
+    {
+        return $this->data;
+    }
+}
+
+/**
+ * A log entry, encoded when read.
+ */
+#[atomic]
+public class LogRecord : Record
+{
+    public const nexus::log::Entry $entry;
+
+    public constructor(const nexus::log::Entry& $entry)
+    {
+        $this->entry = $entry;
+    }
+
+    public const function json() : json::Value
+    {
+        return Entries::json($this->entry);
+    }
+}

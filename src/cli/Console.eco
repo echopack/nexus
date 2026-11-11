@@ -190,6 +190,9 @@ public struct Console
             }
         });
         $log->info("listening on {$options->host}:{$options->port}");
+        if (Build::checked()) {
+            $log->warn('serving a debug build: asserts and runtime checks are on, so it answers several times slower than a release build');
+        }
         status<BootError> $served = $t->serve($k, $options);
         $done->raise();
         $ticker->join();
@@ -328,21 +331,31 @@ public struct Console
      * - `NEXUS_LOG_FILE`: also append to this file, as JSON unless `NEXUS_LOG_FORMAT` says
      *   otherwise; `NEXUS_LOG_ROTATE` (`never`, `daily`, a size like `64mb`) and `NEXUS_LOG_KEEP`
      *   (5) rotate it.
-     * - `NEXUS_LOG_ASYNC`: a queue size; each sink gets a writer thread. `NEXUS_LOG_OVERFLOW`
-     *   (`block`, `drop`) says what a full queue does.
+     * - `NEXUS_LOG_ASYNC`: a queue size; each sink gets a writer thread, so a request never waits
+     *   on a terminal or a file. `serve` sets it to 8192 unless it is set; `0` writes on the
+     *   logging thread. `NEXUS_LOG_OVERFLOW` (`block`, `drop`) says what a full queue does.
      */
     public static function logFor(Mode $m, const Env& $environment) : result<Logger, log::ConfigError>
     {
         string $levelName = $environment->get('NEXUS_LOG') ?? EnvList::LOG;
         log::Level $level = try log::Level::parse($levelName);
         string? $formatName = $environment->get('NEXUS_LOG_FORMAT');
+        // 0 or unset writes on the logging thread
+        uint32 $capacity = 0;
+        string $queued = $environment->get('NEXUS_LOG_ASYNC') ?? '0';
+        if (str::trim($queued) != '0') {
+            uint32 $n = try Console::count('NEXUS_LOG_ASYNC', $queued);
+            $capacity = $n;
+        }
+        // behind a writer thread the stream holds lines until the writer flushes a batch
+        bool $buffered = $capacity > 0;
         array<log::Sink> $sinks = [];
         if ($m == Mode::dev) {
             log::Format $pretty = try log::Format::parse($formatName ?? 'pretty');
-            $sinks[] = log::Stream(.stderr, $pretty);
+            $sinks[] = log::Stream(.stderr, $pretty, buffered: $buffered);
         } else if ($m == Mode::prod) {
             log::Format $json = try log::Format::parse($formatName ?? 'json');
-            $sinks[] = log::Stream(.stdout, $json);
+            $sinks[] = log::Stream(.stdout, $json, buffered: $buffered);
         }
         string? $file = $environment->get('NEXUS_LOG_FILE');
         if ($file != null) {
@@ -355,10 +368,7 @@ public struct Console
             };
             $sinks[] = $sink;
         }
-        string? $queued = $environment->get('NEXUS_LOG_ASYNC');
-        if ($queued != null) {
-            string $q = guard $queued;
-            uint32 $capacity = try Console::count('NEXUS_LOG_ASYNC', $q);
+        if ($capacity > 0) {
             log::Overflow $overflow = try log::Overflow::parse($environment->get('NEXUS_LOG_OVERFLOW') ?? EnvList::LOG_OVERFLOW);
             array<log::Sink> $queuedSinks = [];
             foreach ($sinks as const &$s) {

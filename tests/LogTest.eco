@@ -296,6 +296,89 @@ test async_drop_counts_what_it_drops
     expect($written + $dropped + $queue->dropped())->is(51 as uint64);
 }
 
+test async_flush_waits_until_every_drop_is_reported
+{
+    $slow = Slow();
+    $queue = Async($slow, 2, .drop);
+    array<Sink> $sinks = [$queue];
+    $log = Logger($sinks, .info);
+    int32 $i = 0;
+    while ($i < 50) {
+        $log->info('tick');
+        $i++;
+    }
+    // no entry after the last drop: flush alone has to get the report out
+    $log->flush();
+    uint64 $written = 0;
+    uint64 $reported = 0;
+    foreach ($slow->mem->entries() as const &$e) {
+        if ($e->message == 'tick') {
+            $written++;
+        } else {
+            Value $n = guard $e->fields->get('dropped');
+            int64 $d = guard str::int($n->text());
+            $reported = $reported + ($d as uint64);
+        }
+    }
+    expect($reported > 0)->yes(says: 'a two entry queue drops some of fifty');
+    expect($written + $reported)->is(50 as uint64);
+    expect($queue->dropped())->is(0 as uint64);
+}
+
+test async_keeps_each_threads_entries_in_order
+{
+    $mem = Memory();
+    $queue = Async($mem, 8, .block);
+    array<Sink> $sinks = [$queue];
+    $log = Logger($sinks, .info);
+    array<thread::handle> $workers = [];
+    int32 $w = 0;
+    while ($w < 4) {
+        Logger $mine = $log->with(['worker' => $w]);
+        thread::handle $h = guard thread::spawn(function[$mine]() : void {
+            int32 $i = 0;
+            while ($i < 300) {
+                $mine->info('tick', ['i' => $i]);
+                $i++;
+            }
+        });
+        $workers[] = $h;
+        $w++;
+    }
+    foreach ($workers as &$h) {
+        $h->join();
+    }
+    $log->flush();
+    map<string, int64> $last = [];
+    int32 $out = 0;
+    foreach ($mem->entries() as const &$e) {
+        Fields $all = $e->all();
+        Value $worker = guard $all->get('worker');
+        Value $at = guard $e->fields->get('i');
+        int64 $i = guard str::int($at->text());
+        string $who = $worker->text();
+        if ($last->has($who) && $last->get($who) >= $i) {
+            $out++;
+        }
+        $last[$who] = $i;
+    }
+    expect($mem->entries())->size(1200);
+    expect($out)->is(0);
+}
+
+test the_console_logs_on_the_calling_thread_when_the_queue_is_zero
+{
+    $dir = TempDir();
+    map<string, string> $vars = ['NEXUS_LOG_FILE' => $dir->file('now.log'), 'NEXUS_LOG_FORMAT' => 'logfmt', 'NEXUS_LOG_ASYNC' => '0'];
+    Logger $log = guard Console::logFor(.testing, Env(fixed: $vars));
+    $log->info('right away');
+    // no flush: a synchronous file sink has written the line already
+    string $text = guard std::fs::readfile($dir->file('now.log'));
+    expect($text)->has('msg="right away"');
+    map<string, string> $bad = ['NEXUS_LOG_ASYNC' => 'many'];
+    expect(Console::logFor(.testing, Env(fixed: $bad)))->fails();
+}
+
 test a_file_rotates_by_size_and_keeps_its_count
 {
     $dir = TempDir();

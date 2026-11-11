@@ -22,6 +22,8 @@ public struct EnvList
     public const string LOG_ROTATE = 'never';
     public const string LOG_KEEP = '5';
     public const string LOG_OVERFLOW = 'block';
+    // what serve queues when NEXUS_LOG_ASYNC is unset
+    public const string LOG_ASYNC = '8192';
 
     /**
      * The variables the core reads itself, outside any config struct.
@@ -37,7 +39,7 @@ public struct EnvList
             EnvVar($name: 'NEXUS_LOG_FILE', $type: 'string', $doc: 'Also append the log to this file.', $owner: 'nexus'),
             EnvVar($name: 'NEXUS_LOG_ROTATE', $type: 'string', $fallback: EnvList::LOG_ROTATE, $doc: 'When the log file rotates: never, daily or a size like 64mb.', $owner: 'nexus'),
             EnvVar($name: 'NEXUS_LOG_KEEP', $type: 'uint32', $fallback: EnvList::LOG_KEEP, $doc: 'How many rotated log files are kept.', $owner: 'nexus'),
-            EnvVar($name: 'NEXUS_LOG_ASYNC', $type: 'uint32', $doc: 'A queue size; each log sink then gets a writer thread.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_LOG_ASYNC', $type: 'uint32', $doc: 'A queue size; each log sink then gets a writer thread. serve uses 8192 when unset, 0 turns it off.', $owner: 'nexus'),
             EnvVar($name: 'NEXUS_LOG_OVERFLOW', $type: 'string', $fallback: EnvList::LOG_OVERFLOW, $doc: 'What a full log queue does: block or drop.', $owner: 'nexus'),
         ];
         return $all;

@@ -24,6 +24,8 @@ public class Trace
     public const usize $cap;
     private thread::mutex<Book> $book = thread::mutex<Book>(Book());
     private atomic<uint64> $dropped = atomic<uint64>(0);
+    // microseconds from the start to `finish`, -1 while it runs
+    private atomic<int64> $endUs = atomic<int64>(-1);
 
     public constructor(usize $cap = 2000)
     {
@@ -95,6 +97,14 @@ public class Trace
     }
 
     /**
+     * Ends the trace now: `json` reports its total as of this call, however much later it is read.
+     */
+    public function finish() : void
+    {
+        $this->endUs->store($this->start->elapsed()->as_micros());
+    }
+
+    /**
      * How many marks did not fit.
      */
     public const function dropped() : uint64
@@ -135,11 +145,14 @@ public class Trace
      * The trace as the console reads it: `{"began": "...", "total": 41.2, "dropped": 0, "marks":
      * [{"id": 1, "parent": 0, "kind": "middleware", "name": "...", "detail": "", "note": "",
      * "start": 0.05, "ms": 41.1, "failed": false}]}`, times in milliseconds from the start. A mark
-     * still open ends at `total`, noted `open`.
+     * still open ends at `total`, noted `open`. `total` runs to `finish`, or to now before it.
      */
     public const function json() : json::Value
     {
-        int64 $total = $this->start->elapsed()->as_micros();
+        int64 $total = $this->endUs->load();
+        if ($total < 0) {
+            $total = $this->start->elapsed()->as_micros();
+        }
         thread::locked<Book> $held = $this->book->lock();
         $o = json::object();
         $o['began'] = json::str(nexus::log::Stamp::rfc3339($this->began));

@@ -250,9 +250,7 @@ public class Pool
         } else {
             $this->settle($n, $o);
         }
-        if ($chosen->owns()) {
-            $log->flush();
-        }
+        $chosen->flush();
         nexus::Kernel::finish($payload);
         $this->wake->notify_all();
     }

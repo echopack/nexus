@@ -6,6 +6,10 @@ use std::thread;
 /**
  * Lines on stdout or stderr: pretty on stderr in dev, JSON on stdout in prod. The pretty format is
  * coloured when the stream is a terminal.
+ *
+ * Each line goes out in one write. A `buffered: true` stream holds lines until `flush` and then
+ * writes them together: what an `Async` writer wants, which flushes once per batch. Anywhere else
+ * keep it unbuffered, or lines wait for a flush that may not come.
  */
 #[atomic]
 public class Stream : Sink
@@ -13,23 +17,35 @@ public class Stream : Sink
     public const Output $to;
     public const Format $format;
     public const bool $color;
-    private thread::mutex<int32> $lock = thread::mutex<int32>(0);
+    public const bool $buffered;
+    private thread::mutex<io::writer> $out;
 
-    public constructor(Output $to, Format $format)
+    public constructor(Output $to, Format $format, buffered: bool $buffered = false)
     {
         $this->to = $to;
         $this->format = $format;
         $this->color = $format == Format::pretty && $to->terminal();
+        $this->buffered = $buffered;
+        if ($to == Output::stdout) {
+            $this->out = thread::mutex<io::writer>(io::writer(io::stdout));
+        } else {
+            $this->out = thread::mutex<io::writer>(io::writer(io::stderr));
+        }
     }
 
     public function write(const Entry& $e) : void
     {
         string $line = $this->format->render($e, $this->color);
-        thread::locked<int32> $held = $this->lock->lock();
-        if ($this->to == Output::stdout) {
-            io::println($line);
-        } else {
-            io::eprintln($line);
+        thread::locked<io::writer> $held = $this->out->lock();
+        result<usize, io::ioerror> $ignored = $held->value->writeline($line);
+        if (!$this->buffered) {
+            result<usize, io::ioerror> $flushed = $held->value->flush();
         }
+    }
+
+    public function flush() : void
+    {
+        thread::locked<io::writer> $held = $this->out->lock();
+        result<usize, io::ioerror> $ignored = $held->value->flush();
     }
 }

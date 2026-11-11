@@ -1,9 +1,119 @@
 namespace nexus::log;
 
-// what an Async sink and its writer thread both count
+use std::thread;
+
+// what an Async sink's writers and its writer thread share: the entries waiting, and how far the
+// writer got. Writers push one entry under the lock; the writer takes every waiting entry at once
 #[atomic]
 internal class Backlog
 {
-    public atomic<usize> $pending = atomic<usize>(0);
+    // dropped and not reported yet
     public atomic<uint64> $dropped = atomic<uint64>(0);
+    private thread::mutex<Queue> $queue = thread::mutex<Queue>(Queue());
+    // something to write or to report, or the queue closed
+    private thread::condition $ready = thread::condition();
+    // the writer took what was waiting
+    private thread::condition $room = thread::condition();
+    // the writer wrote a batch
+    private thread::condition $done = thread::condition();
+
+    /**
+     * Queues `$e`. With `.drop` a full queue counts it as dropped instead; with `.block` the caller
+     * waits until the writer took what was waiting. A closed queue refuses it: false.
+     */
+    public function push(const Entry& $e, usize $capacity, Overflow $overflow) : bool
+    {
+        // copied before the lock, so the writers wait on each other only for the append
+        Entry $copy = $e;
+        thread::locked<Queue> $held = $this->queue->lock();
+        while (!$held->value->closed && $held->value->items->count() >= $capacity) {
+            if ($overflow == Overflow::drop) {
+                // the writer is busy with a full queue, so it reports the drop after this batch
+                $this->dropped->add(1);
+                $held->value->queued = $held->value->queued + 1;
+                return true;
+            }
+            $this->room->wait($held);
+        }
+        if ($held->value->closed) {
+            return false;
+        }
+        bool $woke = $held->value->items->empty();
+        $held->value->items[] = mv $copy;
+        $held->value->queued = $held->value->queued + 1;
+        if ($woke) {
+            $this->ready->notify();
+        }
+        return true;
+    }
+
+    /**
+     * Every waiting entry, waiting until there is one or a drop to report. Null once the queue is
+     * closed and empty: the writer is done.
+     */
+    public function take() : array<Entry>?
+    {
+        thread::locked<Queue> $held = $this->queue->lock();
+        while (!$held->value->closed && $held->value->items->empty() && $this->dropped->load() == 0) {
+            $this->ready->wait($held);
+        }
+        if ($held->value->closed && $held->value->items->empty()) {
+            return null;
+        }
+        array<Entry> $batch = $held->value->drain();
+        $this->room->notify_all();
+        return $batch;
+    }
+
+    /**
+     * The writer is done with `$count` more entries, written or reported as dropped.
+     */
+    public function wrote(uint64 $count) : void
+    {
+        thread::locked<Queue> $held = $this->queue->lock();
+        $held->value->written = $held->value->written + $count;
+        $this->done->notify_all();
+    }
+
+    /**
+     * Waits until the writer wrote every entry queued before this call and reported every drop
+     * counted before it, or the queue closed.
+     */
+    public function settle() : void
+    {
+        thread::locked<Queue> $held = $this->queue->lock();
+        uint64 $target = $held->value->queued;
+        while (!$held->value->closed && $held->value->written < $target) {
+            $this->done->wait($held);
+        }
+    }
+
+    /**
+     * No more entries: the writer finishes what is queued and stops, and blocked writers return.
+     */
+    public function close() : void
+    {
+        thread::locked<Queue> $held = $this->queue->lock();
+        $held->value->closed = true;
+        $this->ready->notify_all();
+        $this->room->notify_all();
+        $this->done->notify_all();
+    }
+}
+
+internal struct Queue
+{
+    public array<Entry> $items = [];
+    public bool $closed = false;
+    // entries accepted or dropped, and entries the writer wrote or reported
+    public uint64 $queued = 0;
+    public uint64 $written = 0;
+
+    // every waiting entry, moved out, the queue left empty
+    public function drain() : array<Entry>
+    {
+        array<Entry> $all = mv $this->items;
+        $this->items = [];
+        return $all;
+    }
 }

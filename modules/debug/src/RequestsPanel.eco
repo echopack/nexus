@@ -8,12 +8,10 @@ namespace nexus::debug;
 public class RequestsPanel : Panel
 {
     private Topic $topic;
-    private Timelines $timelines;
 
-    public constructor(Topic $topic, Timelines $timelines)
+    public constructor(Topic $topic)
     {
         $this->topic = $topic;
-        $this->timelines = $timelines;
     }
 
     public function name() : string
@@ -48,11 +46,12 @@ public class RequestsPanel : Panel
         if ($id->empty()) {
             return .error(.badRequest('name the request: ?id=<request id>'));
         }
-        string $kept = guard $this->timelines->find($id) else {
+        // the request's record keeps its timeline for as long as the topic keeps the request
+        Event $e = guard $this->topic->ring->find($id) else {
             return .error(.notFound("the timeline of request {$id}"));
         };
-        json::Value $doc = guard json::parse($kept) else {
-            return .error(.server("the timeline of request {$id} is no JSON"));
+        json::Value $doc = guard $e->record->detail() else {
+            return .error(.notFound("the timeline of request {$id}"));
         };
         return .ok($doc);
     }
