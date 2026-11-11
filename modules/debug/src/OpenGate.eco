@@ -1,0 +1,37 @@
+namespace nexus::debug;
+
+/**
+ * Lets in whoever asks from this machine, with no sign in: for the developer at their desk. Refused
+ * at boot in prod, and a request from any other address gets a 403.
+ */
+#[atomic]
+public class OpenGate : Gate
+{
+    public function name() : string
+    {
+        return 'open';
+    }
+
+    public function admit(nexus::Payload& $payload) : result<Viewer, nexus::Response>
+    {
+        if (!Gates::loopback($payload->request->peer)) {
+            return .error($payload->fail(.forbidden('the open debug console answers localhost only')));
+        }
+        return .ok(Viewer('open', 'localhost'));
+    }
+
+    public function signIn() : json::Value
+    {
+        $o = json::object();
+        $o['kind'] = json::str('open');
+        return $o;
+    }
+
+    public function check(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        if ($kernel->mode == nexus::Mode::prod) {
+            return .error(.extension('nexus-debug', 'the open debug console is for dev; set NEXUS_DEBUG_TOKEN or pass a gate'));
+        }
+        return .ok;
+    }
+}

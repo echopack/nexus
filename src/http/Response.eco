@@ -12,6 +12,12 @@ public struct Response
     public string $body = '';
 
     /**
+     * The body written while it runs, for an answer that is not done when the action returns: a
+     * server-sent event stream, a long download. Null for an answer in `body`.
+     */
+    public function<void(Writer)>? $stream = null;
+
+    /**
      * A body of any content type.
      */
     public constructor(int32 $status, const string& $body, type: const string& $type)
@@ -54,6 +60,20 @@ public struct Response
     public constructor(html: const string& $body, status: int32 $status = 200)
     {
         $this = Response($status, $body, type: 'text/html; charset=utf-8');
+    }
+
+    /**
+     * A body `$fn` writes as it goes, of content type `$type`. The transport calls it after the
+     * request is answered, when the request's container is dropped already: the closure keeps only
+     * what outlives the request (shared `#[atomic]` services), never a scoped one.
+     *
+     *     return Response(stream: function[$feed](nexus::Writer $w) : void { ... }, type: 'text/event-stream');
+     */
+    public constructor(stream: function<void(Writer)> $fn, type: const string& $type, status: int32 $status = 200)
+    {
+        $this = Response($status);
+        $this->stream = $fn;
+        $this->headers->set('Content-Type', $type);
     }
 
     /**

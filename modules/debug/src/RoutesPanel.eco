@@ -1,0 +1,66 @@
+namespace nexus::debug;
+
+/**
+ * The route table, with each route's middleware, and the actions `nexus gen` saw that no route
+ * reaches.
+ */
+#[atomic]
+public class RoutesPanel : Panel
+{
+    private Debug $debug;
+
+    public constructor(Debug $debug)
+    {
+        $this->debug = $debug;
+    }
+
+    public function name() : string
+    {
+        return 'routes';
+    }
+
+    public function title() : string
+    {
+        return 'Routes';
+    }
+
+    public function views() : array<View>
+    {
+        array<View> $v = [
+            View('routes', 'Routes', .table)
+                ->column('methods', 'Methods', 'code')
+                ->column('path', 'Path', 'code')
+                ->column('action', 'Action')
+                ->column('middleware', 'Middleware'),
+            View('unrouted', 'Unrouted actions', .table)->column('action', 'Action'),
+        ];
+        return $v;
+    }
+
+    public function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>
+    {
+        nexus::Kernel $k = try $this->debug->booted();
+        $rows = json::arr();
+        if ($view == 'unrouted') {
+            foreach (nexus::Console::unrouted($k) as const &$a) {
+                $r = json::object();
+                $r['action'] = json::str($a);
+                $rows[] = mv $r;
+            }
+        } else {
+            foreach ($k->router->routes() as const &$route) {
+                array<string> $verbs = [];
+                foreach ($route->methods as const &$m) {
+                    $verbs[] = $m->verb();
+                }
+                $r = json::object();
+                $r['methods'] = json::str(str::join($verbs, ' '));
+                $r['path'] = json::str($route->path);
+                $r['action'] = json::str($route->action);
+                $r['middleware'] = json::str(str::join(nexus::MiddlewareRef::names($route->middleware), ', '));
+                $rows[] = mv $r;
+            }
+        }
+        return .ok(View::rows(mv $rows));
+    }
+}

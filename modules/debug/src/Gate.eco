@@ -1,0 +1,52 @@
+namespace nexus::debug;
+
+/**
+ * Decides who opens the console. Every API call goes through it, as the route middleware `Admit`;
+ * the web app's files do not, they hold no data. Shared by every request, so `#[atomic]`.
+ *
+ * Three come with the module: `TokenGate` (a token from `NEXUS_DEBUG_TOKEN`), `GuardGate` (the app's
+ * own sign in, through nexus-auth and the app's middleware) and `OpenGate` (localhost in dev).
+ */
+public interface Gate
+{
+    /**
+     * What the console calls it, like `token`.
+     */
+    function name() : string;
+
+    /**
+     * Who is asking, or the answer that turns them away (a 401 or a 403).
+     */
+    function admit(nexus::Payload& $payload) : result<Viewer, nexus::Response>;
+
+    /**
+     * How the web app signs in, for the API's description: `{"kind": "token"}` asks for a token,
+     * `{"kind": "login", ...}` shows the app's sign in form, `{"kind": "open"}` asks nothing.
+     */
+    function signIn() : json::Value;
+
+    /**
+     * The middleware an admitted call goes through next, after `admit`, on every API route.
+     */
+    function middleware() : array<nexus::MiddlewareRef>
+    {
+        array<nexus::MiddlewareRef> $none = [];
+        return $none;
+    }
+
+    /**
+     * Wires what the gate needs while the app is wired; an error stops the boot.
+     */
+    function wire(nexus::Services& $s) : status<nexus::BootError>
+    {
+        return .ok;
+    }
+
+    /**
+     * Checks the booted app, before the first request: a gate refuses a mode it is not for here.
+     */
+    function check(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        return .ok;
+    }
+}

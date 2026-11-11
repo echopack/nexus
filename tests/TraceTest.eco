@@ -1,0 +1,212 @@
+/**
+ * A request's timeline: marks nesting in the one open, marks told after the fact, the cap, the
+ * trace of the current thread, logger spans and the middleware and action of a watched request.
+ */
+
+use std::time;
+use nexus::{Kernel, Tables, Extension, Services, Pipeline, Generated, GeneratedTable, PathParam, Request, Response, Mode, Logger, Env, Payload, Problem, Reply, ConfigTable, Middleware, Next, BootError};
+use nexus::trace::{Trace, Traces, Timed, Kind, Mark};
+use container::Container;
+use ecotest::expect;
+
+test marks_nest_in_the_one_open_and_close_once
+{
+    $t = Trace();
+    uint32 $outer = $t->open(.middleware, 'outer', '');
+    uint32 $inner = $t->open(.action, 'inner', '');
+    $t->close($inner, false, 'done');
+    $t->close($outer);
+    $t->close($inner, true);
+    array<Mark> $marks = $t->marks();
+    expect($marks)->size(2);
+    expect($marks[0]->parent)->is(0 as uint32);
+    expect($marks[1]->parent)->is($outer);
+    expect($marks[1]->note)->is('done');
+    expect($marks[1]->failed)->no(says: 'closing it again changes nothing');
+    expect($marks[0]->durUs >= $marks[1]->durUs)->yes(says: 'the outer mark holds the inner one');
+}
+
+test a_mark_told_after_the_fact_goes_inside_the_one_open
+{
+    $t = Trace();
+    time::instant $from = .now();
+    uint32 $action = $t->open(.action, 'list', '');
+    $t->add(.query, 'query', 'select 1', $from, time::duration::millis(3), false);
+    $t->close($action);
+    array<Mark> $marks = $t->marks();
+    expect($marks[1]->kind == Kind::query)->yes();
+    expect($marks[1]->parent)->is($action);
+    expect($marks[1]->durUs)->is(3000 as int64);
+    expect($t->sum(.query)->count)->is(1 as usize);
+    expect($t->sum(.query)->ms)->is(3.0);
+}
+
+test past_the_cap_marks_are_counted_not_kept
+{
+    $t = Trace(2);
+    $t->close($t->open(.span, 'a', ''));
+    $t->close($t->open(.span, 'b', ''));
+    uint32 $third = $t->open(.span, 'c', '');
+    expect($third)->is(0 as uint32);
+    expect($t->marks())->size(2);
+    expect($t->dropped())->is(1 as uint64);
+    expect(json::dump($t->json()))->has('"dropped":1');
+}
+
+test a_mark_still_open_ends_at_the_total
+{
+    $t = Trace();
+    $t->open(.action, 'slow', '');
+    expect(json::dump($t->json()))->has('"note":"open"');
+}
+
+test timed_closes_when_it_goes_out_of_scope_and_does_nothing_without_a_trace
+{
+    $t = Trace();
+    {
+        Timed $m = Timed($t, .mail, 'mail', 'ada@example.com');
+        $m->fail();
+    }
+    {
+        Timed $none = Timed(null, .mail, 'mail', '');
+    }
+    array<Mark> $marks = $t->marks();
+    expect($marks)->size(1);
+    expect($marks[0]->durUs >= 0)->yes();
+    expect($marks[0]->failed)->yes();
+}
+
+test traces_answer_the_trace_the_current_thread_entered
+{
+    $traces = Traces();
+    expect($traces->here() == null)->yes(says: 'nothing entered');
+    $t = Trace();
+    $traces->enter($t);
+    Trace $here = guard $traces->here();
+    $here->close($here->open(.cache, 'cache read', 'k'));
+    expect($t->marks())->size(1);
+    $traces->leave();
+    expect($traces->here() == null)->yes(says: 'left');
+}
+
+test a_traced_loggers_span_is_marked_even_when_the_level_drops_its_close
+{
+    $mem = nexus::log::Memory();
+    array<nexus::log::Sink> $sinks = [$mem];
+    $t = Trace();
+    Logger $log = Logger(mv $sinks, .info)->traced($t);
+    {
+        nexus::log::Span $s = $log->with(['req' => 'r1'])->span('import', ['file' => 'a.csv'], $close: .debug);
+    }
+    expect($mem->saw('import closed'))->no(says: 'debug is below the level');
+    array<Mark> $marks = $t->marks();
+    expect($marks)->size(1);
+    expect($marks[0]->kind == Kind::span)->yes();
+    expect($marks[0]->name)->is('import');
+    expect($marks[0]->detail)->is('file=a.csv');
+    expect($marks[0]->durUs >= 0)->yes();
+}
+
+// the global middleware that watches every request, the way the debug console does
+internal class TrWatch : Middleware
+{
+    public Trace? $last = null;
+
+    public function handle(Payload& $payload, Next $next) : Response
+    {
+        $t = Trace();
+        $payload->trace = $t;
+        $this->last = $t;
+        return $next->run($payload);
+    }
+}
+
+internal class TrPass : Middleware
+{
+    public function handle(Payload& $payload, Next $next) : Response
+    {
+        return $next->run($payload);
+    }
+}
+
+internal class TrHello : nexus::Action
+{
+    public function handle(Payload& $payload) : result<string, Problem>
+    {
+        return .ok('hi');
+    }
+}
+
+internal class TrApp : Extension
+{
+    public TrWatch $watch = TrWatch();
+
+    public function name() : string
+    {
+        return 'trapp';
+    }
+
+    public function services(Services& $s) : status<BootError>
+    {
+        $s->bind<TrPass>(scope: () => TrPass());
+        $s->bindAction<TrHello>(method: .get, path: '/hello', (Container $c) => TrHello())
+            ->middleware<TrPass>();
+        $s->middleware<TrPass>();
+        return .ok;
+    }
+
+    public function middleware(Pipeline& $p, Container $services) : void
+    {
+        $p->add(TrWatch(), name: 'TrUnwatched');
+        $p->add($this->watch, name: 'TrWatch');
+    }
+}
+
+internal function trBoot(TrApp $app) : result<Kernel, BootError>
+{
+    array<Extension> $exts = [$app];
+    array<nexus::log::Sink> $sinks = [nexus::log::Memory()];
+    array<ConfigTable> $configs = [];
+    array<GeneratedTable> $tables = [];
+    $tables[] = GeneratedTable('tests', function(Generated $g) : void {
+        array<PathParam> $none = [];
+        $g->action<TrHello>('TrHello', $none, function(Payload& $payload) : Response {
+            $action = $payload->get<TrHello>();
+            return Reply::of($payload, $action->handle($payload));
+        });
+        $g->name<TrPass>('TrPass');
+    });
+    $vars = map<string, string>();
+    return Kernel::boot($exts, .testing, Logger($sinks, .info), Env(fixed: $vars), tables: Tables($configs: $configs, $generated: $tables));
+}
+
+test a_watched_request_marks_each_middleware_by_name_and_the_action_inside_them
+{
+    $app = TrApp();
+    Kernel $k = guard trBoot($app);
+    expect($k->services->find<Traces>() != null)->yes(says: 'the kernel binds the registry');
+    Response $r = $k->handle(Request(.get, '/hello'));
+    expect($r->status)->is(200);
+    Trace $t = guard $app->watch->last;
+    array<Mark> $marks = $t->marks();
+    // the app's middleware, the route's, then the action; the watcher itself is not marked
+    expect($marks)->size(3);
+    expect($marks[0]->name)->is('TrPass');
+    expect($marks[0]->parent)->is(0 as uint32);
+    expect($marks[1]->kind == Kind::middleware)->yes();
+    expect($marks[1]->parent)->is($marks[0]->id);
+    expect($marks[2]->kind == Kind::action)->yes();
+    expect($marks[2]->name)->is('TrHello');
+    expect($marks[2]->parent)->is($marks[1]->id);
+}
+
+test a_request_no_route_answers_marks_only_the_middleware_around_it
+{
+    $app = TrApp();
+    Kernel $k = guard trBoot($app);
+    Response $r = $k->handle(Request(.get, '/nowhere'));
+    expect($r->status)->is(404);
+    Trace $t = guard $app->watch->last;
+    expect($t->marks())->size(1);
+    expect($t->marks()[0]->name)->is('TrPass');
+}

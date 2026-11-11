@@ -42,7 +42,7 @@ public class Extension : nexus::Extension
         };
         $this->pool = $pool;
         nexus::Logger $log = $s->get<nexus::Logger>();
-        $s->bind<nexus::cache::Cache>(put: nexus::cache::Cache(RedisStore($pool, $config->prefix, $at), .expires($config->ttl), $log));
+        $s->bind<nexus::cache::Cache>(put: nexus::cache::Cache(RedisStore($pool, $config->prefix, $at), .expires($config->ttl), $log, traces: $s->get<nexus::trace::Traces>()));
         return .ok;
     }
 

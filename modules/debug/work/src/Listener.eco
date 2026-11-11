@@ -1,0 +1,38 @@
+namespace nexus::debug::work;
+
+/**
+ * Counts what happens to tasks per lane and tells the console's `jobs` topic.
+ */
+#[atomic]
+public class Listener : nexus::work::Observer
+{
+    private nexus::debug::Topic $topic;
+    private Counts $counts;
+
+    public constructor(nexus::debug::Topic $topic, Counts $counts)
+    {
+        $this->topic = $topic;
+        $this->counts = $counts;
+    }
+
+    public function saw(const nexus::work::Seen& $s) : void
+    {
+        $this->counts->add($s);
+        $o = json::object();
+        $o['at'] = json::str(nexus::log::Stamp::rfc3339($s->at));
+        $o['lane'] = json::str($s->lane);
+        $o['kind'] = json::str($s->kind->name());
+        $o['name'] = json::str($s->name);
+        $o['id'] = json::str($s->id);
+        if ($s->attempt > 0) {
+            $o['attempt'] = json::int($s->attempt);
+        }
+        if ($s->ms > 0.0) {
+            $o['ms'] = json::float($s->ms);
+        }
+        if (!$s->why->empty()) {
+            $o['why'] = json::str($s->why);
+        }
+        $this->topic->publish($o);
+    }
+}

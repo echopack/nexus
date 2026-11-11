@@ -1,0 +1,53 @@
+namespace nexus::debug;
+
+/**
+ * Log entries as the console reads them.
+ */
+public struct Entries
+{
+    /**
+     * `{"level": "info", "message": "...", "span": "...", "fields": {...}}`, the context's fields and
+     * the call's merged, the request id among them as `req`.
+     */
+    public static function json(const nexus::log::Entry& $e) : json::Value
+    {
+        return Entries::json($e, $e->all());
+    }
+
+    /**
+     * `json`, with the entry's merged fields `$all` already at hand.
+     */
+    public static function json(const nexus::log::Entry& $e, const nexus::log::Fields& $all) : json::Value
+    {
+        $o = json::object();
+        $o['at'] = json::str(nexus::log::Stamp::rfc3339($e->at));
+        $o['level'] = json::str($e->level->name());
+        $o['message'] = json::str($e->message);
+        string $span = $e->span();
+        if (!$span->empty()) {
+            $o['span'] = json::str($span);
+        }
+        $fields = json::object();
+        foreach ($all->items as const &$f) {
+            $fields[$f->key] = Entries::value($f->value);
+        }
+        $o['fields'] = mv $fields;
+        return $o;
+    }
+
+    /**
+     * One field's value as JSON: numbers and booleans as they are, already encoded JSON parsed,
+     * everything else as its text.
+     */
+    public static function value(const nexus::log::Value& $v) : json::Value
+    {
+        return match ($v) {
+            .int($n) => json::int($n),
+            .uint($n) => json::int($n as int64),
+            .float($n) => json::float($n),
+            .bool($b) => json::bool($b),
+            .raw($text) => json::parse($text)->or(json::str($text)),
+            else => json::str($v->text()),
+        };
+    }
+}

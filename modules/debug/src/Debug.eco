@@ -1,0 +1,124 @@
+namespace nexus::debug;
+
+use std::time;
+
+/**
+ * The console of a running app: its settings, its gate, its panels and live topics. Bound by the
+ * extension when the console is on, so another extension finds it with
+ * `$s->find<nexus::debug::Debug>()` and adds what it knows:
+ *
+ * ```echo
+ * Debug? $found = $s->find<nexus::debug::Debug>();
+ * if ($found != null) {
+ *     Debug $debug = guard $found;
+ *     $debug->panel(QueuesPanel(...));
+ *     Topic $jobs = $debug->topic('jobs', 'Jobs');
+ * }
+ * ```
+ *
+ * Panels and topics are added while the app is wired; from the first request on they are only read.
+ */
+#[atomic]
+public class Debug
+{
+    public const DebugConfig $config;
+    public Gate $gate;
+    public array<Listed> $panels = [];
+    public array<Topic> $topics = [];
+    public const time::timestamp $started;
+
+    /**
+     * Where the console lives, without a trailing slash: `/__nexus`.
+     */
+    public const string $base;
+    private const string $below;
+
+    /**
+     * The booted app, null until its `boot` hook ran.
+     */
+    public nexus::Kernel? $kernel = null;
+
+    public constructor(DebugConfig $config, Gate $gate)
+    {
+        $this->config = $config;
+        $this->gate = $gate;
+        $this->started = time::timestamp::now();
+        string $p = $config->path;
+        while ($p->size() > 1 && $p->ends('/')) {
+            $p = $p->sub(0, $p->size() - 1)->clone();
+        }
+        if (!$p->starts('/')) {
+            $p = "/{$p}";
+        }
+        $this->base = $p;
+        $this->below = "{$p}/";
+    }
+
+    /**
+     * The booted app, for a panel that reads it: a 503 until the app booted.
+     */
+    public const function booted() : result<nexus::Kernel, nexus::Problem>
+    {
+        nexus::Kernel $k = guard $this->kernel else {
+            return .error(.unavailable('the app is still booting'));
+        };
+        return .ok($k);
+    }
+
+    /**
+     * Adds `$p` to the console's menu, after the ones before it.
+     */
+    public function panel(Panel $p) : void
+    {
+        $this->panels[] = Listed($p);
+    }
+
+    /**
+     * The topic called `$name`, made with `$title` the first time it is asked for.
+     */
+    public function topic(const string& $name, const string& $title) : Topic
+    {
+        Topic? $have = $this->named($name);
+        if ($have != null) {
+            Topic $found = guard $have;
+            return $found;
+        }
+        $t = Topic($name, $title, $this->config->keep as usize);
+        $this->topics[] = $t;
+        return $t;
+    }
+
+    /**
+     * The panel called `$name` with its views, or null.
+     */
+    public const function find(const string& $name) : Listed?
+    {
+        foreach ($this->panels as $l) {
+            if ($l->panel->name() == $name) {
+                return $l;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The topic called `$name` if there is one, without making it.
+     */
+    public function named(const string& $name) : Topic?
+    {
+        foreach ($this->topics as $t) {
+            if ($t->name == $name) {
+                return $t;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether `$path` is the console's own, so the request feed leaves it out.
+     */
+    public const function owns(const string& $path) : bool
+    {
+        return $path == $this->base || $path->starts($this->below);
+    }
+}

@@ -1,0 +1,55 @@
+namespace nexus::debug;
+
+/**
+ * Topic events as the API answers them.
+ */
+public struct Topics
+{
+    /**
+     * `{"topic": "logs", "last": 42, "events": [...]}`: the events after `$after`, at most `$limit`.
+     */
+    public static function page(Topic $t, uint64 $after, usize $limit) : string
+    {
+        string $out = "\{\"topic\":\"{$t->name}\",\"last\":{$t->ring->last()},\"events\":[";
+        bool $first = true;
+        foreach ($t->ring->since($after, $limit) as const &$e) {
+            if (!$first) {
+                $out->push(44);
+            }
+            $first = false;
+            $out->append($e->json());
+        }
+        $out->append(']}');
+        return $out;
+    }
+
+    /**
+     * The newest `$limit` events as table rows, newest first: each event's data with its `seq` and
+     * `at` added.
+     */
+    public static function rows(Topic $t, usize $limit) : json::Value
+    {
+        $rows = json::arr();
+        array<Event> $events = $t->ring->since(0, $limit);
+        usize $i = $events->count();
+        while ($i > 0) {
+            $i = $i - 1;
+            Event $e = $events[$i];
+            json::Value $row = json::parse($e->data)->or(json::object());
+            $row['seq'] = json::int($e->seq as int64);
+            if ($row->get('at') == null) {
+                $row['at'] = json::str(nexus::log::Stamp::rfc3339($e->at));
+            }
+            $rows[] = mv $row;
+        }
+        return $rows;
+    }
+
+    /**
+     * One server-sent event: `id`, `event` (the topic) and the event as `data`.
+     */
+    public static function sse(const string& $topic, const Event& $e) : string
+    {
+        return "id: {$e->seq}\nevent: {$topic}\ndata: {$e->json()}\n\n";
+    }
+}

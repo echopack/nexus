@@ -2,25 +2,34 @@ namespace Blog::Actions::Auth;
 
 use Blog::Inputs::Credentials;
 use Blog::Services::SignIn;
+use Blog::Transformers::UserTransformer;
 
 /**
- * Signs in with an email and a password and answers with a bearer token, shown this once.
+ * Signs in with an email and a password on the session the request is signed with: from now on
+ * that session's requests are the user's. Answers the user, as `/v1/me` does; a session somebody
+ * signed in on already is a 409.
  */
 public class Login : nexus::Action
 {
     private SignIn $signIn;
-    private nexus::auth::Tokens $tokens;
+    private nexus::auth::Sessions $sessions;
+    private UserTransformer $transformer;
 
-    public constructor(SignIn $signIn, nexus::auth::Tokens $tokens)
+    public constructor(SignIn $signIn, nexus::auth::Sessions $sessions, UserTransformer $transformer)
     {
         $this->signIn = $signIn;
-        $this->tokens = $tokens;
+        $this->sessions = $sessions;
+        $this->transformer = $transformer;
     }
 
     public function handle(nexus::Payload& $payload, nexus::Body<Credentials> $in) : result<nexus::Response, nexus::Problem>
     {
+        $session = try $payload->state<nexus::auth::Identity>();
+        if (!$session->anonymous()) {
+            return .error(nexus::auth::Sessions::taken());
+        }
         $u = try $this->signIn->check($payload, $in->value);
-        $issued = try $this->tokens->issue("{$u->id}", 'login');
-        return .ok(nexus::Response(json: $issued->json(), status: 201));
+        try $this->sessions->attach($session->credential, "{$u->id}");
+        return $this->transformer->own($payload, $u, nexus::rest::Meta());
     }
 }

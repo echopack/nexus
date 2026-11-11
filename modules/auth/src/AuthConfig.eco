@@ -3,7 +3,8 @@ namespace nexus::auth;
 use std::time;
 
 /**
- * The auth settings, read from `NEXUS_AUTH_KEY`, `NEXUS_AUTH_TOKENS` and `NEXUS_AUTH_SESSIONS`.
+ * The auth settings, read from `NEXUS_AUTH_KEY`, `NEXUS_AUTH_TOKENS`, `NEXUS_AUTH_SESSIONS` and
+ * `NEXUS_AUTH_GUESTS`.
  */
 #[nexus::config: "NEXUS_AUTH"]
 public struct AuthConfig
@@ -27,4 +28,11 @@ public struct AuthConfig
      */
     #[nexus::env: 'SESSIONS']
     public time::duration $sessions = std::time::duration::hours(720);
+
+    /**
+     * How long a session for nobody lives, like `1h`. It slides too; signing in gives it the
+     * lifetime of `sessions`.
+     */
+    #[nexus::env: 'GUESTS']
+    public time::duration $guests = std::time::duration::hours(1);
 }

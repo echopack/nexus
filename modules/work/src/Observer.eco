@@ -1,0 +1,11 @@
+namespace nexus::work;
+
+/**
+ * Hears what happens to every task on every lane of the process, the way a console counts and shows
+ * them. Told on the thread where it happened, often a worker's, so it is quick, `#[atomic]` and
+ * safe to call from many threads. Add one with `Work::observe` while the app wires or boots.
+ */
+public interface Observer
+{
+    function saw(const Seen& $s) : void;
+}

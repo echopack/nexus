@@ -1,0 +1,14 @@
+namespace Blog::Actions;
+
+/**
+ * The blog in a browser: one page, embedded at build time, that reads and writes through the API.
+ */
+public class Home : nexus::Action
+{
+    public function handle() : nexus::Response
+    {
+        $r = nexus::Response(html: std::embed::text('../../resources/web/index.html'));
+        $r->header('Cache-Control', 'no-cache');
+        return $r;
+    }
+}

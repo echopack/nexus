@@ -1,0 +1,29 @@
+namespace nexus::debug;
+
+/**
+ * A live feed of the console: the log, the requests, the jobs. Whatever has something to tell
+ * publishes a JSON object to it; readers follow it as server-sent events or ask for what came after
+ * the last event they saw.
+ */
+#[atomic]
+public class Topic
+{
+    public const string $name;
+    public const string $title;
+    public Ring $ring;
+
+    public constructor(const string& $name, const string& $title, usize $keep)
+    {
+        $this->name = $name;
+        $this->title = $title;
+        $this->ring = Ring($keep);
+    }
+
+    /**
+     * Adds an event with `$data`; answers its number.
+     */
+    public function publish(const json::Value& $data) : uint64
+    {
+        return $this->ring->publish(json::dump($data));
+    }
+}

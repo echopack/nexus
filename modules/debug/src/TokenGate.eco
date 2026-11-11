@@ -1,0 +1,48 @@
+namespace nexus::debug;
+
+/**
+ * Opens the console to `Authorization: Bearer <token>`, the token compared in constant time. The
+ * gate the extension picks when `NEXUS_DEBUG_TOKEN` is set and the app passes none.
+ */
+#[atomic]
+public class TokenGate : Gate
+{
+    private const string $token;
+
+    public constructor(const string& $token)
+    {
+        $this->token = $token;
+    }
+
+    public function name() : string
+    {
+        return 'token';
+    }
+
+    public function admit(nexus::Payload& $payload) : result<Viewer, nexus::Response>
+    {
+        string $given = nexus::auth::BearerGuard::token($payload->request) ?? '';
+        if ($given->empty()) {
+            return .error(Gates::challenge($payload, 'the debug console needs its token as a bearer token'));
+        }
+        if (!crypto::equal($given, $this->token)) {
+            return .error(Gates::challenge($payload, 'that is not the debug token'));
+        }
+        return .ok(Viewer('token', 'debug'));
+    }
+
+    public function signIn() : json::Value
+    {
+        $o = json::object();
+        $o['kind'] = json::str('token');
+        return $o;
+    }
+
+    public function wire(nexus::Services& $s) : status<nexus::BootError>
+    {
+        if ($this->token->size() < 32) {
+            return .error(.extension('nexus-debug', 'the debug token has to be at least 32 characters'));
+        }
+        return .ok;
+    }
+}

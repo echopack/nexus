@@ -39,8 +39,14 @@ internal class KStamp : Middleware
 {
     public function handle(Payload& $payload, Next $next) : Response
     {
+        // routing ran before this global middleware, so it already knows the route
+        string $routed = $payload->action;
+        if ($payload->route != null) {
+            $routed = "{$routed} {$payload->param('name') ?? ''}";
+        }
         $r = $next->run($payload);
         $r->header('X-Stamp', 'global');
+        $r->header('X-Routed', $routed);
         return $r;
     }
 }
@@ -177,6 +183,20 @@ test unknown_path_is_404_and_wrong_method_405
     Response $wrong = $k->handle(Request(.post, '/hello/bob'));
     expect($wrong->status)->is(405);
     expect($wrong->header('Allow'))->some('GET, OPTIONS, HEAD');
+}
+
+test global_middleware_sees_the_route_and_still_runs_for_a_miss
+{
+    Kernel $k = kKernel();
+    Response $hit = $k->handle(Request(.get, '/hello/bob'));
+    expect($hit->header('X-Routed'))->some('KHello bob');
+    Response $missing = $k->handle(Request(.get, '/nope'));
+    expect($missing->status)->is(404);
+    expect($missing->header('X-Stamp'))->some('global');
+    expect($missing->header('X-Routed'))->some('');
+    Response $wrong = $k->handle(Request(.post, '/hello/bob'));
+    expect($wrong->status)->is(405);
+    expect($wrong->header('X-Routed'))->some('');
 }
 
 test head_and_options_are_answered
@@ -361,4 +381,14 @@ test one_path_takes_many_methods_and_another_path_the_same_action
     Response $r = $k->handle(Request(.get, '/hi/ann'));
     expect($r->status)->is(200);
     expect($r->body)->is('hello ann');
+}
+
+test a_tap_reaches_the_logger_a_service_took_while_wiring
+{
+    Kernel $k = kKernel();
+    Logger $wired = $k->services->get<Logger>();
+    $tapped = nexus::log::Memory();
+    $k->log->tap($tapped);
+    $wired->info('from a service');
+    expect($tapped->saw('from a service'))->yes(says: 'the wired logger writes to the tap');
 }

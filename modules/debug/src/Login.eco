@@ -1,0 +1,53 @@
+namespace nexus::debug;
+
+/**
+ * Where the app signs people in, so the console can show that form instead of asking for a token.
+ * With a bearer token login it posts the fields as JSON to `endpoint` and takes the token from the
+ * key `token` of the answer (`token` by default, dots for nested keys: `data.token`). With
+ * `session`, it first opens a signed session there, posts the fields to `endpoint` signed with it,
+ * and signs every console request with that session after.
+ *
+ * ```echo
+ * Login('/v1/auth/token')                                        // email and password, token in "token"
+ * Login(session: '/v1/auth/session', endpoint: '/v1/auth/signin') // a session, then a signed sign in
+ * ```
+ */
+public struct Login
+{
+    public string $endpoint;
+    public array<LoginField> $fields = [LoginField('email', 'Email', 'email'), LoginField('password', 'Password', 'password')];
+    public string $token = 'token';
+
+    /**
+     * Where a signed session for nobody opens, empty for a bearer token login.
+     */
+    public string $session = '';
+
+    public constructor(const string& $endpoint)
+    {
+        $this->endpoint = $endpoint;
+    }
+
+    public constructor(session: const string& $session, endpoint: const string& $endpoint)
+    {
+        $this->endpoint = $endpoint;
+        $this->session = $session;
+    }
+
+    public const function json() : json::Value
+    {
+        $o = json::object();
+        $o['kind'] = json::str('login');
+        $o['endpoint'] = json::str($this->endpoint);
+        $fields = json::arr();
+        foreach ($this->fields as const &$f) {
+            $fields[] = $f->json();
+        }
+        $o['fields'] = mv $fields;
+        $o['token'] = json::str($this->token);
+        if (!$this->session->empty()) {
+            $o['session'] = json::str($this->session);
+        }
+        return $o;
+    }
+}

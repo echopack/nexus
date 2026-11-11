@@ -43,4 +43,16 @@ public struct MiddlewareRef
         }
         return $links;
     }
+
+    /**
+     * The names of `$refs`, in order.
+     */
+    public static function names(const array<MiddlewareRef>& $refs) : array<string>
+    {
+        array<string> $out = [];
+        foreach ($refs as const &$ref) {
+            $out[] = $ref->name;
+        }
+        return $out;
+    }
 }

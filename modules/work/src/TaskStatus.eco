@@ -11,4 +11,29 @@ public enum TaskStatus : uint8
     case done = 2;
     case failed = 3;
     case cancelled = 4;
+
+    public const function name() : string
+    {
+        return match ($this) {
+            TaskStatus::waiting => 'waiting',
+            TaskStatus::running => 'running',
+            TaskStatus::done => 'done',
+            TaskStatus::failed => 'failed',
+            TaskStatus::cancelled => 'cancelled',
+        };
+    }
+
+    /**
+     * The status called `$name`, or null.
+     */
+    public static function parse(const string& $name) : TaskStatus?
+    {
+        array<TaskStatus> $all = [.waiting, .running, .done, .failed, .cancelled];
+        foreach ($all as $s) {
+            if ($s->name() == $name) {
+                return $s;
+            }
+        }
+        return null;
+    }
 }

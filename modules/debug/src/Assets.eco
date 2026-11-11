@@ -1,0 +1,56 @@
+namespace nexus::debug;
+
+// written by ui/scripts/embed.mjs from ui/dist; do not edit
+
+/**
+ * The files of the embedded web app.
+ */
+public struct Assets
+{
+    /**
+     * The file at `$path` (`index.html`, `assets/index-abc.js`), or null.
+     */
+    public static function find(const string& $path) : Asset?
+    {
+        if ($path == 'assets/index-CMgsqoPK.js') {
+            return Asset('assets/index-CMgsqoPK.js', 'text/javascript; charset=utf-8', std::embed::bytes('../ui/dist/assets/index-CMgsqoPK.js'), std::embed::bytes('../ui/dist/assets/index-CMgsqoPK.js.gz'), '"cc7d46827357cdf1"');
+        }
+        if ($path == 'assets/index-ujtqaoyM.css') {
+            return Asset('assets/index-ujtqaoyM.css', 'text/css; charset=utf-8', std::embed::bytes('../ui/dist/assets/index-ujtqaoyM.css'), std::embed::bytes('../ui/dist/assets/index-ujtqaoyM.css.gz'), '"88fa43f626e435ab"');
+        }
+        if ($path == 'assets/jetbrains-mono-cyrillic-ext-wght-normal-EocZY2iu.woff2') {
+            return Asset('assets/jetbrains-mono-cyrillic-ext-wght-normal-EocZY2iu.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/jetbrains-mono-cyrillic-ext-wght-normal-EocZY2iu.woff2'), '', '"593ccd6fe36e299e"');
+        }
+        if ($path == 'assets/jetbrains-mono-cyrillic-wght-normal-D73BlboJ.woff2') {
+            return Asset('assets/jetbrains-mono-cyrillic-wght-normal-D73BlboJ.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/jetbrains-mono-cyrillic-wght-normal-D73BlboJ.woff2'), '', '"d274604c40757f98"');
+        }
+        if ($path == 'assets/jetbrains-mono-greek-wght-normal-Bw9x6K1M.woff2') {
+            return Asset('assets/jetbrains-mono-greek-wght-normal-Bw9x6K1M.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/jetbrains-mono-greek-wght-normal-Bw9x6K1M.woff2'), '', '"ee863198077f3093"');
+        }
+        if ($path == 'assets/jetbrains-mono-latin-ext-wght-normal-DBQx-q_a.woff2') {
+            return Asset('assets/jetbrains-mono-latin-ext-wght-normal-DBQx-q_a.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/jetbrains-mono-latin-ext-wght-normal-DBQx-q_a.woff2'), '', '"79bfdab9ba467e26"');
+        }
+        if ($path == 'assets/jetbrains-mono-latin-wght-normal-B9CIFXIH.woff2') {
+            return Asset('assets/jetbrains-mono-latin-wght-normal-B9CIFXIH.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/jetbrains-mono-latin-wght-normal-B9CIFXIH.woff2'), '', '"18be452724bfdc23"');
+        }
+        if ($path == 'assets/jetbrains-mono-vietnamese-wght-normal-Bt-aOZkq.woff2') {
+            return Asset('assets/jetbrains-mono-vietnamese-wght-normal-Bt-aOZkq.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/jetbrains-mono-vietnamese-wght-normal-Bt-aOZkq.woff2'), '', '"2288795da89dd97e"');
+        }
+        if ($path == 'assets/public-sans-latin-ext-wght-normal-MQgHevqp.woff2') {
+            return Asset('assets/public-sans-latin-ext-wght-normal-MQgHevqp.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/public-sans-latin-ext-wght-normal-MQgHevqp.woff2'), '', '"3a00a32f0242b723"');
+        }
+        if ($path == 'assets/public-sans-latin-wght-normal-DdeTHZLK.woff2') {
+            return Asset('assets/public-sans-latin-wght-normal-DdeTHZLK.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/public-sans-latin-wght-normal-DdeTHZLK.woff2'), '', '"5ed4d31c988e73b2"');
+        }
+        if ($path == 'assets/public-sans-vietnamese-wght-normal-CtlIRbEm.woff2') {
+            return Asset('assets/public-sans-vietnamese-wght-normal-CtlIRbEm.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/public-sans-vietnamese-wght-normal-CtlIRbEm.woff2'), '', '"94593e69fad0885b"');
+        }
+        if ($path == 'favicon.svg') {
+            return Asset('favicon.svg', 'image/svg+xml', std::embed::bytes('../ui/dist/favicon.svg'), std::embed::bytes('../ui/dist/favicon.svg.gz'), '"f6332c47effde57d"');
+        }
+        if ($path == 'index.html') {
+            return Asset('index.html', 'text/html; charset=utf-8', std::embed::bytes('../ui/dist/index.html'), '', '"b546ba1e4284f56f"');
+        }
+        return null;
+    }
+}

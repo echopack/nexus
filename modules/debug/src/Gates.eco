@@ -1,0 +1,25 @@
+namespace nexus::debug;
+
+/**
+ * What the gates share.
+ */
+public struct Gates
+{
+    /**
+     * A 401 with `WWW-Authenticate: Bearer`, saying `$why`.
+     */
+    public static function challenge(nexus::Payload& $payload, const string& $why) : nexus::Response
+    {
+        nexus::Response $r = $payload->fail(.unauthorized($why, $reason: 'gate_closed'));
+        $r->header('WWW-Authenticate', 'Bearer realm="nexus-debug"');
+        return $r;
+    }
+
+    /**
+     * Whether `$peer` (a request's address, without a port) is this machine.
+     */
+    public static function loopback(const string& $peer) : bool
+    {
+        return $peer == '::1' || $peer == '[::1]' || $peer->starts('127.') || $peer == 'localhost';
+    }
+}

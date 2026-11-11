@@ -5,7 +5,7 @@
  * clock the tests move, requests as host `app`.
  */
 
-use nexus::connect::{Connect, ExternalIdentity, ScriptedFetch, Sent, Oidc, Google, IdToken, Link, LinkStore};
+use nexus::connect::{Accounts, Connect, ExternalIdentity, ScriptedFetch, Sent, Oidc, Google, IdToken, Link, LinkStore, Users};
 use nexus::testing::TestApp;
 use ecotest::http::Reply;
 use std::time;
@@ -29,9 +29,9 @@ internal class Rig
         array<nexus::connect::Connector> $providers = [$provider, Google()];
         array<nexus::Extension> $exts = [
             nexus::auth::Extension('test', clock: $this->clock, cost: crypto::PasswordCost(8, 1)),
-            nexus::connect::Extension(page: '/signed-in', connectors: $providers, clock: $this->clock, fetch: $this->acme),
+            nexus::connect::Extension(page: '/signed-in', connectors: $providers, clock: $this->clock),
         ];
-        $this->app = TestApp($exts, $vars);
+        $this->app = TestApp($exts, $vars, replace: $this->acme->replacing());
     }
 
     /**
@@ -43,18 +43,12 @@ internal class Rig
     }
 
     /**
-     * Scripts the token endpoint to answer with an ID token of `$claims` (the nonce filled in from
-     * the authorization URL `$url` unless the claims have one).
+     * Scripts the token endpoint to answer with an ID token of `$claims` for the sign in sent to
+     * `$url`.
      */
     public function token(const string& $url, json::Value $claims) : void
     {
-        if ($claims->get('nonce') == null) {
-            $claims['nonce'] = json::str(param($url, 'nonce'));
-        }
-        json::Value $o = json::object();
-        $o['access_token'] = json::str('at');
-        $o['id_token'] = json::str(jwt($claims));
-        $this->acme->answer(TOKEN, 200, json::dump($o));
+        $this->acme->signedIn(TOKEN, $url, $claims);
     }
 
     /**
@@ -64,7 +58,7 @@ internal class Rig
     public function back(const string& $url) : string
     {
         return $this->app->api()
-            ->get('/auth/connect/acme/callback', query: ['state' => param($url, 'state'), 'code' => 'c1'])
+            ->get('/auth/connect/acme/callback', query: ['state' => ScriptedFetch::param($url, 'state'), 'code' => 'c1'])
             ->status(302)
             ->capture(header: 'Location');
     }
@@ -121,26 +115,6 @@ internal function claims() : json::Value
     return $c;
 }
 
-/**
- * A JWT carrying `$claims`, with a signature nobody checks.
- */
-internal function jwt(const json::Value& $claims) : string
-{
-    string $header = crypto::base64url('{"alg":"RS256","typ":"JWT"}');
-    string $body = crypto::base64url(json::dump($claims));
-    return "{$header}.{$body}.c2lnbmF0dXJl";
-}
-
-internal function param(const string& $url, const string& $name) : string
-{
-    usize $q = $url->find('?');
-    if ($q >= $url->size()) {
-        return '';
-    }
-    $pairs = nexus::Query(parse: $url->sub($q + 1, $url->size() - $q - 1));
-    return $pairs->get($name) ?? '';
-}
-
 test a_sign_in_goes_to_the_provider_and_back
 {
     $r = rig();
@@ -149,10 +123,10 @@ test a_sign_in_goes_to_the_provider_and_back
     string $attempt = $started->capture('$.attempt');
     string $binding = $started->capture('$.binding');
     expect($url)->starts('https://id.acme.test/auth?response_type=code&client_id=cid&redirect_uri=');
-    expect(param($url, 'redirect_uri'))->is('http://app/auth/connect/acme/callback');
-    expect(param($url, 'scope'))->is('openid email profile');
-    expect(param($url, 'code_challenge_method'))->is('S256');
-    expect(param($url, 'state'))->length(64);
+    expect(ScriptedFetch::param($url, 'redirect_uri'))->is('http://app/auth/connect/acme/callback');
+    expect(ScriptedFetch::param($url, 'scope'))->is('openid email profile');
+    expect(ScriptedFetch::param($url, 'code_challenge_method'))->is('S256');
+    expect(ScriptedFetch::param($url, 'state'))->length(64);
     expect($binding)->length(64);
 
     $r->token($url, claims());
@@ -164,7 +138,7 @@ test a_sign_in_goes_to_the_provider_and_back
     expect($sent[0]->form->get('client_secret') ?? '')->is('shh');
     expect($sent[0]->form->get('redirect_uri') ?? '')->is('http://app/auth/connect/acme/callback');
     string $verifier = $sent[0]->form->get('code_verifier') ?? '';
-    expect(crypto::base64url(crypto::sha256($verifier)))->is(param($url, 'code_challenge'));
+    expect(crypto::base64url(crypto::sha256($verifier)))->is(ScriptedFetch::param($url, 'code_challenge'));
 
     ExternalIdentity $who = guard $r->claim($attempt, $binding);
     expect($who->provider)->is('acme');
@@ -222,7 +196,7 @@ test a_user_who_says_no_comes_back_with_access_denied
     Reply $started = $r->start();
     string $url = $started->capture('$.url');
     string $attempt = $started->capture('$.attempt');
-    string $back = $r->app->api()->get('/auth/connect/acme/callback', query: ['state' => param($url, 'state'), 'error' => 'access_denied'])->capture(header: 'Location');
+    string $back = $r->app->api()->get('/auth/connect/acme/callback', query: ['state' => ScriptedFetch::param($url, 'state'), 'error' => 'access_denied'])->capture(header: 'Location');
     expect($back)->is("http://app/signed-in?attempt={$attempt}&error=access_denied");
     nexus::Problem $p = expect($r->claim($attempt, $started->capture('$.binding')))->fails();
     expect($p->status())->is(401);
@@ -279,7 +253,7 @@ test the_callback_takes_a_form_post
     string $url = $started->capture('$.url');
     string $attempt = $started->capture('$.attempt');
     $r->token($url, claims());
-    $r->app->api()->post('/auth/connect/acme/callback', form: ['state' => param($url, 'state'), 'code' => 'c1'])
+    $r->app->api()->post('/auth/connect/acme/callback', form: ['state' => ScriptedFetch::param($url, 'state'), 'code' => 'c1'])
         ->status(302)
         ->header('Location', "http://app/signed-in?attempt={$attempt}");
     ExternalIdentity $who = guard $r->claim($attempt, $started->capture('$.binding'));
@@ -296,8 +270,8 @@ test google_is_left_out_until_it_is_configured
     $g = Rig(mv $vars, acme());
     string $url = $g->app->api()->post('/auth/connect/google', json: '{}')->status(201)->capture('$.url');
     expect($url)->starts('https://accounts.google.com/o/oauth2/v2/auth?');
-    expect(param($url, 'client_id'))->is('g-id');
-    expect(param($url, 'redirect_uri'))->is('http://app/auth/connect/google/callback');
+    expect(ScriptedFetch::param($url, 'client_id'))->is('g-id');
+    expect(ScriptedFetch::param($url, 'redirect_uri'))->is('http://app/auth/connect/google/callback');
 
     map<string, string> $half = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_CONNECT_GOOGLE_CLIENT_ID' => 'g-id'];
     array<nexus::connect::Connector> $providers = [Google()];
@@ -356,8 +330,98 @@ test attempts_are_pruned_with_the_rest
 
 test the_jwt_claims_are_read_without_trusting_them
 {
-    json::Value $c = expect(IdToken::claims(jwt(claims())))->some();
+    json::Value $c = expect(IdToken::claims(ScriptedFetch::idToken(claims())))->some();
     expect(IdToken::identity('acme', $c)->subject)->is('p1');
     expect(IdToken::claims('not.a.jwt.at.all'))->none();
     expect(IdToken::claims('two.parts'))->none();
+}
+
+/**
+ * The app's users for `Accounts`: subjects by email, and the ones made here.
+ */
+internal class FakeUsers : Users
+{
+    public map<string, string> $emails = [];
+    public array<string> $made = [];
+
+    public function exists(const string& $subject) : result<bool, nexus::Problem>
+    {
+        foreach ($this->emails as $email => const &$s) {
+            if ($s == $subject) {
+                return .ok(true);
+            }
+        }
+        return .ok(false);
+    }
+
+    public function withEmail(const string& $email) : result<string?, nexus::Problem>
+    {
+        if (!$this->emails->has($email)) {
+            return .ok(null);
+        }
+        return .ok($this->emails->get($email));
+    }
+
+    public function create(const ExternalIdentity& $who) : result<string, nexus::Problem>
+    {
+        string $subject = "u{$this->made->count()}";
+        $this->emails[$who->email] = $subject;
+        $this->made[] = $subject;
+        return .ok($subject);
+    }
+}
+
+internal function person(const string& $sub, const string& $email, bool $verified) : ExternalIdentity
+{
+    return ExternalIdentity($provider: 'acme', $subject: $sub, $email: $email, $emailVerified: $verified, $name: '', $claims: json::object());
+}
+
+test accounts_find_link_or_make_the_user
+{
+    $r = rig();
+    nexus::Payload $payload = $r->app->kernel->background('accounts', 'test');
+    Accounts $accounts = $payload->get<Accounts>();
+    $users = FakeUsers();
+    $users->emails['editor@example.com'] = 'u-editor';
+
+    ecotest::step('a new person is made a user and linked');
+    string $grace = guard $accounts->of(person('p1', 'grace@example.com', true), $users);
+    expect($users->made)->is([$grace]);
+    ecotest::step('the same person again is that user, whatever their email says now');
+    string $same = guard $accounts->of(person('p1', 'other@example.com', false), $users);
+    expect($same)->is($grace);
+    expect($users->made)->size(1);
+
+    ecotest::step('a verified email of an existing user links to it');
+    string $editor = guard $accounts->of(person('p2', 'editor@example.com', true), $users);
+    expect($editor)->is('u-editor');
+    Link? $linked = guard $payload->get<LinkStore>()->find('acme', 'p2');
+    Link $l = expect($linked)->some();
+    expect($l->subject)->is('u-editor');
+    expect($l->createdAt == $r->clock->now())->yes(says: 'linked at the clock of the extension');
+
+    ecotest::step('an unverified one does not, and links nothing');
+    expect(expect($accounts->of(person('p3', 'editor@example.com', false), $users))->fails()->status())->is(409 as int32);
+    Link? $none = guard $payload->get<LinkStore>()->find('acme', 'p3');
+    expect($none)->none();
+
+    ecotest::step('no email is a 403 for a person not linked yet');
+    expect(expect($accounts->of(person('p4', '', true), $users))->fails()->status())->is(403 as int32);
+    nexus::Kernel::finish($payload);
+}
+
+test a_link_to_a_user_that_is_gone_is_replaced
+{
+    $r = rig();
+    nexus::Payload $payload = $r->app->kernel->background('accounts', 'test');
+    Accounts $accounts = $payload->get<Accounts>();
+    $users = FakeUsers();
+    string $first = guard $accounts->of(person('p1', 'grace@example.com', true), $users);
+    $users->emails->remove('grace@example.com');
+    string $again = guard $accounts->of(person('p1', 'grace@example.com', true), $users);
+    expect($again)->isNot($first);
+    Link? $linked = guard $payload->get<LinkStore>()->find('acme', 'p1');
+    Link $l = expect($linked)->some();
+    expect($l->subject)->is($again);
+    nexus::Kernel::finish($payload);
 }

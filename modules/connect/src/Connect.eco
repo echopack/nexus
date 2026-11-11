@@ -7,9 +7,9 @@ use std::time;
  * callback are nexus-connect's routes; the claim is the app's, in the action its page posts to:
  *
  * ```echo
- * nexus::connect::ExternalIdentity $ext = try $this->connect->claim($in->value->attempt, $in->value->binding);
- * nexus::connect::Link? $known = try $this->links->find($ext->provider, $ext->subject);
- * // the linked user, or the one with this verified email, or a new one; then a token
+ * nexus::connect::ExternalIdentity $who = try $this->connect->claim($in->value->attempt, $in->value->binding);
+ * string $subject = try $this->accounts->of($who, BlogUsers($this->users, $this->signals, $payload->locale()));
+ * // then a token for $subject
  * ```
  */
 public class Connect
@@ -106,7 +106,7 @@ public class Connect
             return .error(Connect::gone());
         }
         if (!crypto::equal(nexus::auth::Secrets::hash($binding), $a->bindingHash)) {
-            return .error(.unauthorized('this sign in was started somewhere else'));
+            return .error(.unauthorized('this sign in was started somewhere else', $reason: 'sign_in_elsewhere'));
         }
         if (!$a->settled()) {
             return .error(.conflict('the provider has not sent the browser back yet'));
@@ -116,7 +116,7 @@ public class Connect
             return .error(Connect::gone());
         }
         ExternalIdentity $who = guard $a->identity else {
-            return .error(.unauthorized("the sign in did not work out: {$a->error}"));
+            return .error(.unauthorized("the sign in did not work out: {$a->error}", $reason: 'sign_in_failed'));
         };
         return .ok($who);
     }

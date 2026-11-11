@@ -1,0 +1,30 @@
+namespace nexus::debug;
+
+/**
+ * A panel of the console with its views, read once when it was added.
+ */
+#[atomic]
+public class Listed
+{
+    public Panel $panel;
+    public const array<View> $views;
+
+    public constructor(Panel $panel)
+    {
+        $this->panel = $panel;
+        $this->views = $panel->views();
+    }
+
+    /**
+     * Whether the panel has a view called `$name`.
+     */
+    public const function has(const string& $name) : bool
+    {
+        foreach ($this->views as const &$v) {
+            if ($v->name == $name) {
+                return true;
+            }
+        }
+        return false;
+    }
+}

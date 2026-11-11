@@ -11,12 +11,14 @@ internal struct Script
 
 /**
  * A provider in a test: answers what the test told it to, by URL, and keeps what was sent. A URL
- * nobody scripted is a 503, as an unreachable provider is.
+ * nobody scripted is a 503, as an unreachable provider is. `signedIn` scripts the answer of a
+ * sign in that went well, so a test speaks in claims, not in HTTP:
  *
  * ```echo
  * $google = nexus::connect::ScriptedFetch();
- * $google->answer('https://oauth2.googleapis.com/token', 200, '{"id_token": "..."}');
- * nexus::connect::Extension(connectors: [...], fetch: $google),
+ * $app = TestApp($extensions, $vars, replace: $google->replacing());
+ * // the start answered `$url`, where the browser goes to sign in
+ * $google->signedIn(nexus::connect::Google::TOKEN, $url, json::object(['iss' => 'https://accounts.google.com', 'sub' => 'g-1']));
  * ```
  */
 #[atomic]
@@ -32,6 +34,19 @@ public class ScriptedFetch : Fetch
     }
 
     /**
+     * Puts this in place of the app's `Fetch`, as `TestApp(replace:)` takes it.
+     */
+    public function replacing() : function<void(nexus::Services&)>
+    {
+        ScriptedFetch $me = $this;
+        return function[$me](nexus::Services& $s) : void {
+            $s->replace<Fetch>(once: function[$me]() : Fetch {
+                return $me;
+            });
+        };
+    }
+
+    /**
      * The next request to `$url` gets `$status` and `$body`. Answers to one URL are given in the
      * order they were scripted; the last one repeats until another is scripted.
      */
@@ -44,6 +59,45 @@ public class ScriptedFetch : Fetch
         Script& $script = $held->value->at($url);
         $script->queued[] = Fetched($status, $body);
         return $this;
+    }
+
+    /**
+     * Token endpoint `$token` answers as a provider does once the person signed in: with an ID
+     * token of `$claims`, filled in from the authorization URL `$url` the sign in went to (its
+     * `nonce`, its `client_id` as `aud`) and with `iat` and `exp` from now, unless the claims name
+     * their own.
+     */
+    public function signedIn(const string& $token, const string& $url, json::Value $claims) : ScriptedFetch
+    {
+        nexus::Query $asked = ScriptedFetch::query($url);
+        if ($claims->get('nonce') == null) {
+            $claims['nonce'] = json::str($asked->get('nonce') ?? '');
+        }
+        if ($claims->get('aud') == null) {
+            $claims['aud'] = json::str($asked->get('client_id') ?? '');
+        }
+        int64 $now = std::time::timestamp::now()->unix_secs();
+        if ($claims->get('iat') == null) {
+            $claims['iat'] = json::int($now);
+        }
+        if ($claims->get('exp') == null) {
+            $claims['exp'] = json::int($now + 3600);
+        }
+        json::Value $o = json::object();
+        $o['access_token'] = json::str('at');
+        $o['id_token'] = json::str(ScriptedFetch::idToken($claims));
+        return $this->answer($token, 200, json::dump($o));
+    }
+
+    /**
+     * An ID token carrying `$claims`, with a signature nobody checks: nexus-connect reads the
+     * tokens it fetched itself over TLS without one (OIDC Core 3.1.3.7 (6)).
+     */
+    public static function idToken(const json::Value& $claims) : string
+    {
+        string $header = crypto::base64url('{"alg":"RS256","typ":"JWT"}');
+        string $body = crypto::base64url(json::dump($claims));
+        return "{$header}.{$body}.c2lnbmF0dXJl";
     }
 
     /**
@@ -65,6 +119,23 @@ public class ScriptedFetch : Fetch
     {
         $this->note(Sent('POST', $url, $form));
         return $this->next($url);
+    }
+
+    /**
+     * Query parameter `$name` of `$url`, empty when it has none: what a test reads off the URL a
+     * start sent the browser to.
+     */
+    public static function param(const string& $url, const string& $name) : string
+    {
+        return ScriptedFetch::query($url)->get($name) ?? '';
+    }
+
+    internal static function query(const string& $url) : nexus::Query
+    {
+        nexus::Url $at = guard nexus::Url::parse($url) else {
+            return nexus::Query();
+        };
+        return $at->query;
     }
 
     internal function note(Sent $s) : void

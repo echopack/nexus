@@ -1,0 +1,24 @@
+/**
+ * The debug console on the real database: a request's timeline holds every statement it ran.
+ */
+
+use ecotest::expect;
+
+test a_requests_timeline_holds_the_queries_it_ran
+{
+    map<string, string> $more = ['NEXUS_DEBUG_ENABLED' => 'true'];
+    $world = World($more);
+    $admin = $world->admin();
+    $admin->post('/v1/posts', json: newPost('Hello'))->status(201);
+    $admin->with('X-Request-Id', 'list-posts-1')->get('/v1/posts')->ok();
+    $admin->get('/__nexus/api/panels/requests/timeline?id=list-posts-1')->ok()
+        ->json('$.request.target', '/v1/posts')
+        ->json('$.timeline.dropped', 0)
+        ->has('"kind":"query"')
+        ->has('"kind":"action"')
+        ->has('posts');
+    string $queries = $admin->get('/__nexus/api/panels/requests/recent')->ok()
+        ->json('$.rows[0].id', 'list-posts-1')
+        ->capture('$.rows[0].queries');
+    expect($queries == '0')->no(says: 'the row counts the queries');
+}

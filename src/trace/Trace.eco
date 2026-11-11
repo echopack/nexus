@@ -1,0 +1,203 @@
+namespace nexus::trace;
+
+use std::thread;
+use std::time;
+
+/**
+ * The timeline of one request: every middleware, the action, the app's spans, the queries, cache
+ * calls and mails, each a `Mark` placed in time from the start of the trace and nested in the mark
+ * that was open when it began. The debug console opens one per request and draws it as a waterfall.
+ *
+ * What runs on other threads (an async task the request pushed) and a streamed body, which is
+ * written after the request is answered, are not on it. Past `cap` marks the rest are counted, not
+ * kept.
+ */
+#[atomic]
+public class Trace
+{
+    public const time::instant $start;
+
+    /**
+     * When it started on the wall clock, to place log entries on it.
+     */
+    public const time::timestamp $began;
+    public const usize $cap;
+    private thread::mutex<Book> $book = thread::mutex<Book>(Book());
+    private atomic<uint64> $dropped = atomic<uint64>(0);
+
+    public constructor(usize $cap = 2000)
+    {
+        $this->start = .now();
+        $this->began = time::timestamp::now();
+        $this->cap = $cap;
+    }
+
+    /**
+     * Opens a mark inside the one open now and answers its id, 0 when the trace is full.
+     */
+    public function open(Kind $kind, const string& $name, const string& $detail) : uint32
+    {
+        int64 $at = $this->start->elapsed()->as_micros();
+        thread::locked<Book> $held = $this->book->lock();
+        if ($held->value->marks->count() >= $this->cap) {
+            $this->dropped->add(1);
+            return 0;
+        }
+        uint32 $id = ($held->value->marks->count() + 1) as uint32;
+        uint32 $parent = $held->value->top();
+        $held->value->marks[] = Mark($id, $parent, $kind, $name, $detail, $at);
+        $held->value->open[] = $id;
+        return $id;
+    }
+
+    /**
+     * Closes mark `$id`, failed or not, with `$note` when one is given. Closing it again does
+     * nothing.
+     */
+    public function close(uint32 $id, bool $failed = false, const string& $note = '') : void
+    {
+        int64 $at = $this->start->elapsed()->as_micros();
+        thread::locked<Book> $held = $this->book->lock();
+        if ($id == 0 || ($id as usize) > $held->value->marks->count()) {
+            return;
+        }
+        Mark& $m = $held->value->marks[($id - 1) as usize];
+        if ($m->durUs >= 0) {
+            return;
+        }
+        $m->durUs = $at - $m->startUs;
+        $m->failed = $failed;
+        if (!$note->empty()) {
+            $m->note = $note;
+        }
+        $held->value->shut($id);
+    }
+
+    /**
+     * Adds a mark that already ended: it started at `$from` and took `$took`. For what is told
+     * after the fact, like a query a database listener hears about.
+     */
+    public function add(Kind $kind, const string& $name, const string& $detail, time::instant $from, time::duration $took, bool $failed = false, const string& $note = '') : void
+    {
+        int64 $at = ($from - $this->start)->as_micros();
+        if ($at < 0) {
+            $at = 0;
+        }
+        thread::locked<Book> $held = $this->book->lock();
+        if ($held->value->marks->count() >= $this->cap) {
+            $this->dropped->add(1);
+            return;
+        }
+        uint32 $id = ($held->value->marks->count() + 1) as uint32;
+        uint32 $parent = $held->value->top();
+        $m = Mark($id, $parent, $kind, $name, $detail, $at, $note, $took->as_micros(), $failed);
+        $held->value->marks[] = mv $m;
+    }
+
+    /**
+     * How many marks did not fit.
+     */
+    public const function dropped() : uint64
+    {
+        return $this->dropped->load();
+    }
+
+    /**
+     * The marks so far, in the order they began.
+     */
+    public const function marks() : array<Mark>
+    {
+        thread::locked<Book> $held = $this->book->lock();
+        return $held->value->marks->clone();
+    }
+
+    /**
+     * The marks of kind `$kind`, counted and their time added up.
+     */
+    public const function sum(Kind $kind) : Tally
+    {
+        thread::locked<Book> $held = $this->book->lock();
+        $t = Tally();
+        int64 $us = 0;
+        foreach ($held->value->marks as const &$m) {
+            if ($m->kind == $kind) {
+                $t->count++;
+                if ($m->durUs > 0) {
+                    $us = $us + $m->durUs;
+                }
+            }
+        }
+        $t->ms = Trace::ms($us);
+        return $t;
+    }
+
+    /**
+     * The trace as the console reads it: `{"began": "...", "total": 41.2, "dropped": 0, "marks":
+     * [{"id": 1, "parent": 0, "kind": "middleware", "name": "...", "detail": "", "note": "",
+     * "start": 0.05, "ms": 41.1, "failed": false}]}`, times in milliseconds from the start. A mark
+     * still open ends at `total`, noted `open`.
+     */
+    public const function json() : json::Value
+    {
+        int64 $total = $this->start->elapsed()->as_micros();
+        thread::locked<Book> $held = $this->book->lock();
+        $o = json::object();
+        $o['began'] = json::str(nexus::log::Stamp::rfc3339($this->began));
+        $o['total'] = json::float(Trace::ms($total));
+        $o['dropped'] = json::int($this->dropped->load() as int64);
+        $marks = json::arr();
+        foreach ($held->value->marks as const &$m) {
+            $j = json::object();
+            $j['id'] = json::int($m->id as int64);
+            $j['parent'] = json::int($m->parent as int64);
+            $j['kind'] = json::str($m->kind->name());
+            $j['name'] = json::str($m->name);
+            $j['detail'] = json::str($m->detail);
+            string $note = $m->note;
+            int64 $dur = $m->durUs;
+            if ($dur < 0) {
+                $dur = $total - $m->startUs;
+                $note = 'open';
+            }
+            $j['note'] = json::str($note);
+            $j['start'] = json::float(Trace::ms($m->startUs));
+            $j['ms'] = json::float(Trace::ms($dur));
+            $j['failed'] = json::bool($m->failed);
+            $marks[] = mv $j;
+        }
+        $o['marks'] = mv $marks;
+        return $o;
+    }
+
+    private static function ms(int64 $us) : float64
+    {
+        return ($us as float64) / 1000.0;
+    }
+}
+
+// the marks and the ids of the ones open, innermost last
+internal struct Book
+{
+    public array<Mark> $marks = [];
+    public array<uint32> $open = [];
+
+    public const function top() : uint32
+    {
+        if ($this->open->empty()) {
+            return 0;
+        }
+        return $this->open[$this->open->count() - 1];
+    }
+
+    public function shut(uint32 $id) : void
+    {
+        usize $i = $this->open->count();
+        while ($i > 0) {
+            $i = $i - 1;
+            if ($this->open[$i] == $id) {
+                $this->open->remove($i);
+                return;
+            }
+        }
+    }
+}

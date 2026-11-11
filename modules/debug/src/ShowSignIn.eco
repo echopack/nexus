@@ -1,0 +1,20 @@
+namespace nexus::debug;
+
+/**
+ * `GET <base>/api/sign-in`: how the web app signs in, for a browser that has no credential yet.
+ * Open, since it says no more than the sign in form would.
+ */
+public class ShowSignIn : nexus::Action
+{
+    private Debug $debug;
+
+    public constructor(Debug $debug)
+    {
+        $this->debug = $debug;
+    }
+
+    public function handle() : nexus::Response
+    {
+        return Api::json($this->debug->gate->signIn());
+    }
+}

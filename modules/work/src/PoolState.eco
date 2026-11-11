@@ -1,0 +1,16 @@
+namespace nexus::work;
+
+/**
+ * A pool at one moment: its workers, the tasks they run, and how many wait (ready, waiting for
+ * others, or delayed for a retry).
+ */
+public struct PoolState
+{
+    public string $lane;
+    public uint32 $threads;
+    public int32 $alive;
+    public array<RunningTask> $running = [];
+    public uint64 $ready = 0;
+    public uint64 $blocked = 0;
+    public uint64 $delayed = 0;
+}

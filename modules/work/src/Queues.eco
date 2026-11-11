@@ -65,7 +65,7 @@ public struct Queues
             $s->fail(.extension('nexus-work', $e));
             return $d;
         };
-        $s->bind<DistributedQueue<L>>(put: DistributedQueue<L>($store, $lane, $w->codecs, $w->clock));
+        $s->bind<DistributedQueue<L>>(put: DistributedQueue<L>($d->store, $lane, $w->codecs, $w->clock));
         return $d;
     }
 

@@ -1,0 +1,38 @@
+namespace nexus::work;
+
+/**
+ * What happened to a task, as an observer hears it.
+ */
+public enum SeenKind : uint8
+{
+    case pushed = 1;
+    case started = 2;
+    case done = 3;
+    case retry = 4;
+    case failed = 5;
+    case expired = 6;
+
+    /**
+     * A failed task sent back to wait again.
+     */
+    case requeued = 7;
+
+    /**
+     * A waiting task cancelled, or dropped because a task before it failed for good.
+     */
+    case cancelled = 8;
+
+    public const function name() : string
+    {
+        return match ($this) {
+            SeenKind::pushed => 'pushed',
+            SeenKind::started => 'started',
+            SeenKind::done => 'done',
+            SeenKind::retry => 'retry',
+            SeenKind::failed => 'failed',
+            SeenKind::expired => 'expired',
+            SeenKind::requeued => 'requeued',
+            SeenKind::cancelled => 'cancelled',
+        };
+    }
+}

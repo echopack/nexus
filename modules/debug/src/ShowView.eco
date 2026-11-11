@@ -1,0 +1,24 @@
+namespace nexus::debug;
+
+/**
+ * `GET <base>/api/panels/{panel}/{view}`: a view's data.
+ */
+public class ShowView : nexus::Action
+{
+    private Debug $debug;
+
+    public constructor(Debug $debug)
+    {
+        $this->debug = $debug;
+    }
+
+    public function handle(nexus::Payload& $payload, string $panel, string $view) : result<nexus::Response, nexus::Problem>
+    {
+        Listed $l = try Api::panel($this->debug, $panel);
+        if (!$l->has($view)) {
+            return .error(.notFound("view {$view} of panel {$panel}"));
+        }
+        json::Value $data = try $l->panel->read($payload, $view);
+        return .ok(Api::json($data));
+    }
+}

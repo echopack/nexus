@@ -1,0 +1,23 @@
+namespace nexus::debug;
+
+/**
+ * `GET <base>/{rest*}`: the embedded web app (see `Static`). A path under `api/` that no API route
+ * answers is a 404, not the app's index.
+ */
+public class ServeAsset : nexus::Action
+{
+    private Debug $debug;
+
+    public constructor(Debug $debug)
+    {
+        $this->debug = $debug;
+    }
+
+    public function handle(nexus::Payload& $payload, string $rest) : nexus::Response
+    {
+        if ($rest == 'api' || $rest->starts('api/')) {
+            return $payload->fail(.notFound($payload->request->path));
+        }
+        return Static::serve($payload, $this->debug->base, $rest);
+    }
+}

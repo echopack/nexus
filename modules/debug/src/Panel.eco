@@ -1,0 +1,42 @@
+namespace nexus::debug;
+
+/**
+ * A page of the console. A panel says which views it has and answers each one's data as JSON; the
+ * console draws them by their kind, so a panel is Echo only. Add one with
+ * `nexus::debug::Extension(panels: [...])` or, from another extension, with
+ * `$s->find<nexus::debug::Debug>()?->panel(...)`.
+ *
+ * A panel is shared by every request, so its class is `#[atomic]` and keeps no per-request state.
+ */
+public interface Panel
+{
+    /**
+     * Its name in URLs, like `queues`: lowercase letters, digits and `-`.
+     */
+    function name() : string;
+
+    /**
+     * Its name in the console's menu.
+     */
+    function title() : string;
+
+    /**
+     * What it shows, in order.
+     */
+    function views() : array<View>;
+
+    /**
+     * The data of view `$view`. The request's query carries the view's filters and anything a
+     * link added (`?id=...`).
+     */
+    function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>;
+
+    /**
+     * Runs action `$action` of one of its views with `$input` (the row's key, or `{}`), and answers
+     * what to tell the viewer, like `{"message": "requeued 3"}`.
+     */
+    function act(nexus::Payload& $payload, const string& $action, const json::Value& $input) : result<json::Value, nexus::Problem>
+    {
+        return .error(.notFound("action {$action}"));
+    }
+}

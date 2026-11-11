@@ -1,0 +1,220 @@
+/**
+ * What an observer of the lanes hears, the pool's state at a moment, and what a store lists for a
+ * console: its recent tasks.
+ */
+
+use std::thread;
+use std::time;
+use ecotest::expect;
+use nexus::work::{Observer, Seen, SeenKind, Pushed, StoredTask, TaskStatus, Store, Distributed, Pipeline, Step};
+
+/**
+ * Keeps every `lane kind name` it hears, and `lane kind without an id` for an event that names no
+ * task id.
+ */
+#[atomic]
+internal class THeard : Observer
+{
+    public Tally $tally = Tally();
+
+    public function saw(const Seen& $s) : void
+    {
+        $this->tally->add("{$s->lane} {$s->kind->name()} {$s->name}");
+        if ($s->id->empty()) {
+            $this->tally->add("{$s->lane} {$s->kind->name()} without an id");
+        }
+    }
+}
+
+test an_observer_hears_an_async_task_go_through
+{
+    $r = rig();
+    $heard = THeard();
+    $r->work()->observe($heard);
+    $r->start();
+    pushed($r->workers()->push(TSay('hello')));
+    pushed($r->workers()->push(TSay('doomed')));
+    $r->wait(2);
+    thread::sleep(50);
+    $r->stop();
+    expect($heard->tally->has('workers pushed TSay'))->yes(says: 'the push was heard');
+    expect($heard->tally->has('workers started TSay'))->yes(says: 'the start was heard');
+    expect($heard->tally->has('workers done TSay'))->yes(says: 'the done was heard');
+    expect($heard->tally->has('workers failed TSay'))->yes(says: 'the failure was heard');
+}
+
+test an_observer_hears_a_stored_task_under_its_lane
+{
+    $r = rig();
+    $heard = THeard();
+    $r->work()->observe($heard);
+    $r->start();
+    pushed($r->jobs()->push(TSay('stored')));
+    $r->until('stored');
+    $r->drained();
+    $r->stop();
+    expect($heard->tally->has('jobs pushed TSay'))->yes(says: 'the stored push was heard');
+    expect($heard->tally->has('jobs started TSay'))->yes(says: 'the run was heard under the stored lane');
+    expect($heard->tally->has('jobs done TSay'))->yes(says: 'the settle was heard under the stored lane');
+}
+
+/**
+ * How often `$heard` heard `$s`.
+ */
+internal function times(THeard $heard, const string& $s) : int64
+{
+    int64 $n = 0;
+    foreach ($heard->tally->all() as const &$line) {
+        if ($line == $s) {
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/**
+ * Waits, at most five seconds, until `$heard` heard `$s`.
+ */
+internal function hears(THeard $heard, const string& $s) : void
+{
+    int32 $waited = 0;
+    while (!$heard->tally->has($s) && $waited < 500) {
+        thread::sleep(10);
+        $waited++;
+    }
+}
+
+test an_observer_hears_what_an_async_task_spawns
+{
+    $r = rig();
+    $heard = THeard();
+    $r->work()->observe($heard);
+    $r->start();
+    pushed($r->workers()->push(TSay('parent', $spawn: 2)));
+    $r->until('parent.0');
+    $r->until('parent.1');
+    thread::sleep(50);
+    $r->stop();
+    expect(times($heard, 'workers pushed TSay'))->is(3);
+}
+
+test a_stored_task_that_retries_is_not_heard_spawning
+{
+    $r = rig();
+    $heard = THeard();
+    $r->work()->observe($heard);
+    $r->start();
+    pushed($r->jobs()->push(TSay('flaky', $spawn: 1)));
+    hears($heard, 'jobs retry TSay');
+    $r->stop();
+    expect($heard->tally->has('jobs retry TSay'))->yes(says: 'the retry was heard');
+    expect(times($heard, 'jobs pushed TSay'))->is(1);
+}
+
+test sending_back_and_cancelling_stored_tasks_is_heard
+{
+    $r = rig();
+    $heard = THeard();
+    $r->work()->observe($heard);
+    Distributed $d = expect($r->work()->lanes->store('jobs'))->some();
+    Store $s = $d->store;
+    time::timestamp $now = $r->clock->now();
+    pushed($r->jobs()->push(TSay('one')));
+    pushed($r->jobs()->push(TSay('two')));
+    array<StoredTask> $claimed = got($s->claim('jobs', $now, $now + time::duration::mins(1), 10));
+    foreach ($claimed as const &$t) {
+        guard $s->fail($t, $now, 'broken');
+    }
+    StoredTask? $sent = got($s->again($claimed[0]->id, $now));
+    expect($sent)->some();
+    expect(got($s->cancel($claimed[0]->id, $now)))->size(1);
+    expect(got($s->againAll('jobs', $now)))->size(1);
+    expect(times($heard, 'jobs pushed TSay'))->is(2);
+    expect(times($heard, 'jobs requeued TSay'))->is(2);
+    expect(times($heard, 'jobs cancelled TSay'))->is(1);
+}
+
+test a_distributed_queue_cancels_a_waiting_task_by_id
+{
+    $r = rig();
+    $heard = THeard();
+    $r->work()->observe($heard);
+    string $id = expect(pushed($r->jobs()->push(TSay('later')))->id())->some();
+    expect(got($r->jobs()->cancel($id)))->is(1 as uint64);
+    expect(got($r->jobs()->cancel($id)))->is(0 as uint64);
+    expect(times($heard, 'jobs cancelled TSay'))->is(1);
+}
+
+test cancelling_an_async_task_is_heard_with_what_waited_for_it
+{
+    $r = rig();
+    $heard = THeard();
+    $r->work()->observe($heard);
+    $p = Pipeline();
+    Step $a = $p->add(TSay('a'));
+    $p->add(TSay('b'), after: [$a]);
+    pushed($r->workers()->push($p));
+    string $id = expect($a->id())->some();
+    expect($r->workers()->cancel($id))->is(2);
+    expect(times($heard, 'workers cancelled TSay'))->is(2);
+    expect(times($heard, 'workers cancelled without an id'))->is(0);
+}
+
+test the_tasks_behind_an_async_failure_are_heard_going_with_it
+{
+    $r = rig();
+    $heard = THeard();
+    $r->work()->observe($heard);
+    $r->start();
+    $p = Pipeline();
+    Step $a = $p->add(TSay('doomed'));
+    $p->add(TSay('after'), after: [$a]);
+    pushed($r->workers()->push($p));
+    hears($heard, 'workers cancelled TSay');
+    $r->stop();
+    expect($heard->tally->has('workers failed TSay'))->yes(says: 'the failure was heard');
+    expect(times($heard, 'workers cancelled TSay'))->is(1);
+    expect(times($heard, 'workers cancelled without an id'))->is(0);
+}
+
+test a_pool_tells_its_state
+{
+    $r = rig();
+    $r->start();
+    pushed($r->workers()->push(TSay('long', $hold: true)));
+    $r->until('start long');
+    nexus::work::PoolState $s = $r->work()->lanes->pool('workers')?->state() ?? nexus::work::PoolState('none', 0, 0);
+    expect($s->lane)->is('workers');
+    expect($s->threads)->is(2 as uint32);
+    expect($s->running)->size(1);
+    expect($s->running[0]->name)->is('TSay');
+    $r->gate->release();
+    $r->until('end long');
+    $r->stop();
+}
+
+test a_store_lists_its_recent_tasks
+{
+    $r = rig();
+    Pushed $first = pushed($r->jobs()->push(TSay('one')));
+    $r->clock->advance(time::duration::secs(1));
+    pushed($r->jobs()->push(TSay('two')));
+    array<StoredTask> $all = guard $r->store->recent('jobs', null, 10);
+    expect($all)->size(2);
+    expect($all[1]->id)->is($first->id() ?? '');
+    array<StoredTask> $newest = guard $r->store->recent('', null, 1);
+    expect($newest)->size(1);
+    array<StoredTask> $other = guard $r->store->recent('other', null, 10);
+    expect($other)->size(0);
+    array<StoredTask> $failed = guard $r->store->recent('jobs', TaskStatus::failed, 10);
+    expect($failed)->size(0);
+}
+
+test a_plan_says_its_task_and_next_slot
+{
+    $r = Rig(map<string, string>(), $plans: true);
+    nexus::work::Planned $tick = $r->work()->scheduler->plans[0];
+    expect($tick->task())->is('TSay');
+    time::timestamp $next = guard $tick->next(time::timestamp::from_unix_secs(START), $r->work()->zone);
+    expect($next->unix_secs())->is(START + 60);
+}

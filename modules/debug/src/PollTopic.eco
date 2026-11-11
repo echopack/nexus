@@ -1,0 +1,37 @@
+namespace nexus::debug;
+
+use std::time;
+
+/**
+ * `GET <base>/api/topics/{topic}?after=&limit=&wait=`: the events after a cursor as JSON, waiting
+ * up to `wait` seconds for one. Suits a script or an agent.
+ */
+public class PollTopic : nexus::Action
+{
+    private Debug $debug;
+
+    public constructor(Debug $debug)
+    {
+        $this->debug = $debug;
+    }
+
+    public function handle(nexus::Payload& $payload, string $topic) : result<nexus::Response, nexus::Problem>
+    {
+        Topic $t = try Api::topic($this->debug, $topic);
+        uint64 $after = Api::number($payload->request->query->get('after'), 0) as uint64;
+        usize $limit = Api::number($payload->request->query->get('limit'), 100) as usize;
+        if ($limit > 1000) {
+            $limit = 1000;
+        }
+        int64 $wait = Api::number($payload->request->query->get('wait'), 0);
+        if ($wait > Api::WAIT) {
+            $wait = Api::WAIT;
+        }
+        if ($wait > 0) {
+            $t->ring->wait($after, time::duration::secs($wait), function() : bool {
+                return false;
+            });
+        }
+        return .ok(Api::encoded(Topics::page($t, $after, $limit)));
+    }
+}

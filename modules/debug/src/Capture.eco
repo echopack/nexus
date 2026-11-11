@@ -1,0 +1,50 @@
+namespace nexus::debug;
+
+use std::thread;
+
+/**
+ * What one request logged, kept for the request feed: up to a cap, the rest counted.
+ */
+#[atomic]
+public class Capture : nexus::log::Sink
+{
+    public const usize $cap;
+    private thread::mutex<array<nexus::log::Entry>> $entries = thread::mutex<array<nexus::log::Entry>>([]);
+    private atomic<uint64> $dropped = atomic<uint64>(0);
+
+    public constructor(usize $cap)
+    {
+        $this->cap = $cap;
+    }
+
+    public function write(const nexus::log::Entry& $e) : void
+    {
+        thread::locked<array<nexus::log::Entry>> $held = $this->entries->lock();
+        if ($held->value->count() >= $this->cap) {
+            $this->dropped->add(1);
+            return;
+        }
+        $held->value[] = $e;
+    }
+
+    /**
+     * The entries as a JSON array.
+     */
+    public const function json() : json::Value
+    {
+        thread::locked<array<nexus::log::Entry>> $held = $this->entries->lock();
+        $out = json::arr();
+        foreach ($held->value as const &$e) {
+            $out[] = Entries::json($e);
+        }
+        return $out;
+    }
+
+    /**
+     * How many entries did not fit.
+     */
+    public const function dropped() : uint64
+    {
+        return $this->dropped->load();
+    }
+}

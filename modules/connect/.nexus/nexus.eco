@@ -60,6 +60,7 @@ public function generated(nexus::Generated $g) : void
     $g->action<nexus::connect::StartSignIn>('nexus::connect::StartSignIn', [nexus::PathParam('provider', '', false)], function(nexus::Payload& $payload) : nexus::Response {
         return nexus::connect::StartSignInDispatch::dispatch($payload);
     });
+    $g->name<nexus::connect::Accounts>('nexus::connect::Accounts');
     $g->name<nexus::connect::Attempt>('nexus::connect::Attempt');
     $g->name<nexus::connect::Connect>('nexus::connect::Connect');
     $g->name<nexus::connect::Connectors>('nexus::connect::Connectors');

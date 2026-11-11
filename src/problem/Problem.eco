@@ -7,7 +7,14 @@ namespace nexus;
 public enum Problem
 {
     case badRequest(string $detail);
-    case unauthorized(string $detail);
+
+    // no default for `$reason`: echoc 0.14.2 drops the value passed to a defaulted case argument
+
+    /**
+     * No credential, or one that does not hold. `$reason` is a stable snake_case code a client can
+     * act on (`session_required`, `token_invalid`), sent as the `reason` member beside the detail.
+     */
+    case unauthorized(string $detail, string $reason);
     case forbidden(string $why);
     case notFound(string $what);
     case methodNotAllowed(array<Method> $allow);
@@ -27,7 +34,7 @@ public enum Problem
     {
         return match ($this) {
             Problem::badRequest($d) => 400,
-            Problem::unauthorized($d) => 401,
+            Problem::unauthorized($d, $r) => 401,
             Problem::forbidden($w) => 403,
             Problem::notFound($w) => 404,
             Problem::methodNotAllowed($a) => 405,
@@ -49,7 +56,7 @@ public enum Problem
     {
         return match ($this) {
             Problem::badRequest($d) => 'Bad Request',
-            Problem::unauthorized($d) => 'Unauthorized',
+            Problem::unauthorized($d, $r) => 'Unauthorized',
             Problem::forbidden($w) => 'Forbidden',
             Problem::notFound($w) => 'Not Found',
             Problem::methodNotAllowed($a) => 'Method Not Allowed',
@@ -83,7 +90,7 @@ public enum Problem
     {
         return match ($this) {
             Problem::badRequest($d) => $d,
-            Problem::unauthorized($d) => $d,
+            Problem::unauthorized($d, $r) => $d,
             Problem::forbidden($w) => $w,
             Problem::notFound($w) => "{$w} not found",
             Problem::methodNotAllowed($a) => 'the resource does not answer this method',
@@ -95,6 +102,17 @@ public enum Problem
             Problem::unavailable($d) => $d,
             Problem::server($c) => Problem::hidden($c, $mode),
             Problem::custom($d) => $d->detail,
+        };
+    }
+
+    /**
+     * The stable code saying why, for a client to switch on; empty when the problem carries none.
+     */
+    public const function reason() : string
+    {
+        return match ($this) {
+            Problem::unauthorized($d, $r) => $r,
+            else => '',
         };
     }
 
@@ -118,6 +136,10 @@ public enum Problem
         string $detail = $this->detail($mode);
         if (!$detail->empty()) {
             $o['detail'] = json::str($detail);
+        }
+        string $reason = $this->reason();
+        if (!$reason->empty()) {
+            $o['reason'] = json::str($reason);
         }
         if (!$requestId->empty()) {
             $o['requestId'] = json::str($requestId);

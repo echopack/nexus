@@ -9,23 +9,20 @@ test the_prune_deletes_only_what_expired
 {
     $world = World();
     $admin = $world->admin();
-    $world->api->post('/v1/auth/session', json: credentials('editor@example.com', World::PASSWORD))->status(201);
 
-    ecotest::step('a token and a session that ended yesterday');
-    $world->db->run("UPDATE auth_tokens SET expires_at = '2000-01-01 00:00:00'");
+    ecotest::step('the visitor and the admin have sessions that ended yesterday');
     $world->db->run("UPDATE auth_sessions SET expires_at = '2000-01-01 00:00:00'");
-    // signed in again after: this token is still good
+    // signed in again after: this session is still good
     $fresh = $world->author('Ada');
-    expect($world->db->count('auth_tokens'))->is(2);
-    expect($world->db->count('auth_sessions'))->is(1);
+    expect($world->db->count('auth_sessions'))->is(3);
 
     ecotest::step('the prune deletes them and logs it');
     expect($world->run(Blog::Tasks::PruneAuth()))->fine();
     expect($world->app->logged('pruned'))->yes(says: 'the prune was logged');
-    expect($world->db->count('auth_tokens'))->is(1);
-    expect($world->db->count('auth_sessions'))->is(0);
+    expect($world->db->count('auth_sessions'))->is(1);
 
-    ecotest::step('the good token still signs in, the old one does not');
+    ecotest::step('the good session still signs in, the old ones do not');
     $fresh->get('/v1/me')->status(200)->json('$.data.name', 'Ada');
     $admin->get('/v1/me')->problem(401);
+    $world->api->get('/v1/posts')->problem(401);
 }

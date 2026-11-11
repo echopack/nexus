@@ -1,0 +1,35 @@
+/*
+ * nexus-debug-work: the queues in the debug console.
+ *
+ * A panel of every lane (async and distributed) with what runs and waits
+ * on it and how many tasks went through it since boot, the schedules and
+ * when they push next, and for distributed lanes the tasks their store
+ * keeps: failed ones to retry, recent ones by status, a task's graph. A
+ * live `jobs` topic tells every push, start and settle as it happens.
+ * List it after nexus-work and nexus-debug; with the console off it does
+ * nothing.
+ */
+
+#[module: "nexus-debug-work"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "The queues in the nexus debug console"]
+
+#[depends: "../../.."]
+#[depends: ".."]
+#[depends: "../../work"]
+#[depends: "../../../../container"]
+#[depends: "../../../../libjson"]
+#[depends: "../../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../testing"]
+    #[sources: "tests/*.eco"]
+}

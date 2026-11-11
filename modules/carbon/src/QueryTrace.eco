@@ -1,0 +1,32 @@
+namespace nexus::carbon;
+
+use std::time;
+
+/**
+ * Marks every statement on the timeline of the request whose thread ran it, when someone watches
+ * that request (the debug console). The statement's text is kept, cut at 2000 bytes; its
+ * parameters are not, as they may be secrets.
+ */
+#[atomic]
+public class QueryTrace : carbon::Listener
+{
+    private nexus::trace::Traces $traces;
+
+    public constructor(nexus::trace::Traces $traces)
+    {
+        $this->traces = $traces;
+    }
+
+    public function ran(const carbon::listen::Ran& $event) : void
+    {
+        nexus::trace::Trace $t = guard $this->traces->here() else {
+            return;
+        };
+        string $text = $event->statement->text;
+        if ($text->size() > 2000) {
+            $text = string($text->sub(0, 2000));
+        }
+        time::instant $from = time::instant::now() - $event->took;
+        $t->add(.query, 'query', $text, $from, $event->took, $event->failed);
+    }
+}

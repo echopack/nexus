@@ -1,0 +1,36 @@
+namespace nexus::testing;
+
+use ecotest::http::{Request, Response, Transport, TransportError};
+
+/**
+ * Sends every request through another transport with an `Authorization` that `sign` makes from
+ * its method, target (path and query, as the server sees it) and body: a signed session's
+ * signature, which differs per request. `TestApp::api(signed:)` is built on it.
+ *
+ * ```echo
+ * $s = nexus::auth::Signer($id, $secret);
+ * $api = $app->api(signed: function[$s](string $method, string $target, string $body) : string {
+ *     return $s->header($method, $target, std::time::timestamp::now()->unix_secs(), $body);
+ * });
+ * ```
+ */
+public class SignedTransport : Transport
+{
+    public Transport $inner;
+    public function<string(string, string, string)> $sign;
+
+    public constructor(Transport $inner, function<string(string, string, string)> $sign)
+    {
+        $this->inner = $inner;
+        $this->sign = $sign;
+    }
+
+    public function send(const Request& $request) : result<Response, TransportError>
+    {
+        Request $signed = $request;
+        function<string(string, string, string)> $make = $this->sign;
+        $signed->set('Authorization', $make($request->verb->value(), KernelTransport::target($request->url), $request->body));
+        Transport $carrier = $this->inner;
+        return $carrier->send($signed);
+    }
+}

@@ -26,7 +26,7 @@ internal class ThRequireWho : Middleware
     public function handle(Payload& $payload, Next $next) : Response
     {
         string $who = guard $payload->request->header('X-Who') else {
-            return $payload->fail(.unauthorized('say who'));
+            return $payload->fail(.unauthorized('say who', $reason: 'signed_in_required'));
         };
         $payload->put<ThSeen>(mv $who);
         $r = $next->run($payload);

@@ -21,7 +21,7 @@ public class CreateAuthTables : carbon::Migration
             ->primary(['id']));
         return $m->create(carbon::ddl::Table('auth_sessions')
             ->string('id', 32)
-            ->string('subject', 190)
+            ->string('subject', 190, $nullable: true)
             ->string('scopes', 1000)
             ->datetime('created_at')
             ->datetime('expires_at')

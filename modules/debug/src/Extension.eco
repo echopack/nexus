@@ -1,0 +1,137 @@
+namespace nexus::debug;
+
+use container::Container;
+
+/**
+ * The debug console: when `NEXUS_DEBUG_ENABLED` is true, a web app and its JSON API at
+ * `NEXUS_DEBUG_PATH` (`/__nexus`), the requests and the log fed live into it, behind a gate. Off, it
+ * binds nothing.
+ *
+ * ```echo
+ * nexus::auth::Extension('blog'),
+ * nexus::debug::Extension(),                                   // NEXUS_DEBUG_TOKEN, or localhost in dev
+ * nexus::debug::Extension(gate: nexus::debug::GuardGate(...)), // the app's own sign in
+ * ```
+ *
+ * The gate: the one given, else a `TokenGate` when `NEXUS_DEBUG_TOKEN` is set, else an `OpenGate`,
+ * which the boot refuses in prod. `panels` adds the app's own; another extension adds its own
+ * through `Debug` (nexus-debug-work adds the queues). List it early, so its request feed times the
+ * whole request, and after nexus-auth when the gate reads it.
+ */
+public class Extension : nexus::Extension
+{
+    internal Gate? $gate;
+    internal array<Panel> $extra;
+    internal Debug? $debug = null;
+    internal Topic? $requests = null;
+    internal Topic? $logs = null;
+    internal Timelines? $timelines = null;
+    internal nexus::trace::Traces? $traces = null;
+
+    public constructor(gate: Gate? $gate = null, panels: array<Panel> $panels = array<Panel>())
+    {
+        $this->gate = $gate;
+        $this->extra = mv $panels;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-debug';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        DebugConfig $config = $s->get<DebugConfig>();
+        if (!$config->enabled) {
+            return .ok;
+        }
+        Gate $gate = Extension::chosen($this->gate, $config);
+        try $gate->wire($s);
+
+        $debug = Debug($config, $gate);
+        Topic $requests = $debug->topic('requests', 'Requests');
+        Topic $logs = $debug->topic('logs', 'Logs');
+        $debug->panel(OverviewPanel($debug, $requests));
+        $timelines = Timelines($config->keep as usize);
+        $debug->panel(RequestsPanel($requests, $timelines));
+        $debug->panel(LogsPanel($logs));
+        $debug->panel(RoutesPanel($debug));
+        $debug->panel(EnvPanel($debug));
+        foreach ($this->extra as $p) {
+            $debug->panel($p);
+        }
+        $s->bind<Debug>(put: $debug);
+        $this->debug = $debug;
+        $this->requests = $requests;
+        $this->logs = $logs;
+        $this->timelines = $timelines;
+        $this->traces = $s->get<nexus::trace::Traces>();
+
+        // every API call but the sign in goes through the gate, then through its own middleware
+        $s->bind<Admit>(put: Admit($gate));
+        array<nexus::MiddlewareRef> $through = $gate->middleware();
+
+        string $base = $debug->base;
+        $s->bindAction<ShowManifest>(method: .get, path: "{$base}/api", function[$debug](Container $c) : ShowManifest {
+            return ShowManifest($debug);
+        })->middleware<Admit>()->through($through);
+        $s->bindAction<ShowSignIn>(method: .get, path: "{$base}/api/sign-in", function[$debug](Container $c) : ShowSignIn {
+            return ShowSignIn($debug);
+        });
+        $s->bindAction<ShowView>(method: .get, path: "{$base}/api/panels/\{panel}/\{view}", function[$debug](Container $c) : ShowView {
+            return ShowView($debug);
+        })->middleware<Admit>()->through($through);
+        $s->bindAction<RunAction>(method: .post, path: "{$base}/api/panels/\{panel}/actions/\{action}", function[$debug](Container $c) : RunAction {
+            return RunAction($debug);
+        })->middleware<Admit>()->through($through);
+        $s->bindAction<PollTopic>(method: .get, path: "{$base}/api/topics/\{topic}", function[$debug](Container $c) : PollTopic {
+            return PollTopic($debug);
+        })->middleware<Admit>()->through($through);
+        $s->bindAction<StreamTopic>(method: .get, path: "{$base}/api/topics/\{topic}/stream", function[$debug](Container $c) : StreamTopic {
+            return StreamTopic($debug);
+        })->middleware<Admit>()->through($through);
+        $s->bindAction<ServeAsset>(method: .get, path: "{$base}/\{rest*}", function[$debug](Container $c) : ServeAsset {
+            return ServeAsset($debug);
+        });
+        return .ok;
+    }
+
+    public function middleware(nexus::Pipeline& $p, Container $services) : void
+    {
+        Debug $debug = guard $this->debug else {
+            return;
+        };
+        Topic $requests = guard $this->requests;
+        Timelines $timelines = guard $this->timelines;
+        nexus::trace::Traces $traces = guard $this->traces;
+        $p->add(Recorder($debug, $requests, $timelines, $traces), name: 'nexus::debug::Recorder');
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        Debug $debug = guard $this->debug else {
+            return .ok;
+        };
+        try $debug->gate->check($kernel);
+        $debug->kernel = $kernel;
+        Topic $logs = guard $this->logs;
+        $kernel->log->tap(LogTap($logs));
+        $kernel->log->info('debug console', ['at' => "{$debug->base}/", 'gate' => $debug->gate->name()]);
+        return .ok;
+    }
+
+    /**
+     * The gate the app gave, else the token gate when a token is set, else the open one.
+     */
+    private static function chosen(Gate? $given, const DebugConfig& $config) : Gate
+    {
+        if ($given != null) {
+            Gate $g = guard $given;
+            return $g;
+        }
+        if (!$config->token->empty()) {
+            return TokenGate($config->token);
+        }
+        return OpenGate();
+    }
+}

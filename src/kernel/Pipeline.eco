@@ -8,8 +8,14 @@ public class Pipeline
 {
     public array<Middleware> $links = [];
 
-    public function add(Middleware $m) : void
+    /**
+     * The name of each link, for the request's timeline.
+     */
+    public array<string> $names = [];
+
+    public function add(Middleware $m, name: string $name = '') : void
     {
         $this->links[] = $m;
+        $this->names[] = mv $name;
     }
 }

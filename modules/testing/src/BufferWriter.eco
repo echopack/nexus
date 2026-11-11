@@ -1,0 +1,33 @@
+namespace nexus::testing;
+
+/**
+ * Collects a streamed body in memory. The reader leaves after the first flush, the way a client
+ * that reads one batch and closes does, so a stream that runs until nobody listens returns and a
+ * test sees what it sent first.
+ */
+public class BufferWriter : nexus::Writer
+{
+    public string $body = '';
+    private bool $left = false;
+
+    public function write(const string& $bytes) : bool
+    {
+        if ($this->left) {
+            return false;
+        }
+        $this->body->append($bytes);
+        return true;
+    }
+
+    public function flush() : bool
+    {
+        bool $was = !$this->left;
+        $this->left = true;
+        return $was;
+    }
+
+    public function open() : bool
+    {
+        return !$this->left;
+    }
+}

@@ -1,6 +1,8 @@
 namespace nexus;
 
 use std::time;
+use nexus::log;
+use nexus::trace;
 
 /**
  * The running app: its extensions, the sealed container, the route table and the global middleware.
@@ -27,10 +29,19 @@ public class Kernel
      * The app's middleware around every request, built per request.
      */
     internal array<MiddlewareRef> $around;
+
+    /**
+     * The name of each global and around link, in chain order.
+     */
+    internal array<string> $names;
     internal atomic<int64> $served = atomic<int64>(0);
 
-    internal constructor(array<Extension> $extensions, Mode $mode, Logger $log, Env $env, container::Container $services, Router $router, array<Middleware> $global, array<MiddlewareRef> $around, Generated $generated)
+    internal constructor(array<Extension> $extensions, Mode $mode, Logger $log, Env $env, container::Container $services, Router $router, array<Middleware> $global, array<string> $names, array<MiddlewareRef> $around, Generated $generated)
     {
+        foreach (MiddlewareRef::names($around) as const &$n) {
+            $names[] = $n;
+        }
+        $this->names = mv $names;
         $this->around = mv $around;
         $this->generated = $generated;
         $this->extensions = mv $extensions;
@@ -75,7 +86,9 @@ public class Kernel
         $b->name<Env>('nexus::Env');
         $b->name<Messages>('nexus::Messages');
         $b->name<Request>('nexus::Request');
+        $b->name<trace::Traces>('nexus::trace::Traces');
         $b->bind<Logger>(put: $log);
+        $b->bind<trace::Traces>(put: trace::Traces());
         $b->bind<Env>(put: $env);
         $messages = Messages();
         $inputs = Inputs($messages);
@@ -152,7 +165,7 @@ public class Kernel
         foreach ($extensions as &$ext) {
             $ext->middleware($p, $root);
         }
-        $k = Kernel(mv $extensions, $mode, $log, $env, $root, $router, $p->links, $s->around, $generated);
+        $k = Kernel(mv $extensions, $mode, $log, $env, $root, $router, $p->links, $p->names, $s->around, $generated);
         // every binding once, in a throwaway request: a missing one, a cycle
         // or a once binding that takes a per-request one stops the boot here
         // with its chain, not some request later
@@ -183,6 +196,12 @@ public class Kernel
         $log = $this->log->with(['req' => $req->id]);
         $scope->put<Logger>($log);
         $payload = Payload($req, $scope, $this->mode, $log);
+        // matched once up front, so the global middleware already knows the route; an unmatched
+        // request is still answered by `route`, at the end of the chain
+        map<string, string> $params = [];
+        $payload->route = $this->router->find($req->method, $req->path, $params, $payload->allow);
+        $payload->request->params = mv $params;
+        $payload->action = $payload->route?->action ?? '';
 
         Kernel $self = $this;
         array<Middleware> $links = $this->global;
@@ -191,7 +210,7 @@ public class Kernel
                 $links[] = $m;
             }
         }
-        $chain = Chain(mv $links, function(Payload& $ctx) : Response {
+        $chain = Chain(mv $links, names: $this->names, function(Payload& $ctx) : Response {
             return $self->route($ctx);
         });
         $next = Next(mv $chain);
@@ -199,6 +218,7 @@ public class Kernel
         $res->header('X-Request-Id', $req->id);
         if ($req->method == Method::head) {
             $res->body = '';
+            $res->stream = null;
         }
         $this->served->add(1);
 
@@ -249,6 +269,18 @@ public class Kernel
             return str::from(time::timestamp::now()->unix_nanos());
         };
         return crypto::hex($bytes);
+    }
+
+    /**
+     * The names of the extensions the app was booted with, in order.
+     */
+    public const function extensionNames() : array<string>
+    {
+        array<string> $names = [];
+        foreach ($this->extensions as $ext) {
+            $names[] = $ext->name();
+        }
+        return $names;
     }
 
     /**
@@ -321,9 +353,8 @@ public class Kernel
 
     internal function route(Payload& $payload) : Response
     {
-        map<string, string> $params = [];
-        array<Method> $allow = [];
-        Route $route = guard $this->router->find($payload->request->method, $payload->request->path, $params, $allow) else {
+        Route $route = guard $payload->route else {
+            array<Method> $allow = $payload->allow;
             if ($allow->empty()) {
                 return $payload->fail(.notFound($payload->request->path));
             }
@@ -338,13 +369,22 @@ public class Kernel
             }
             return $payload->fail(.methodNotAllowed(mv $allow));
         };
-        $payload->request->params = mv $params;
-        $payload->action = $route->action;
+        $dispatch = $route->dispatch;
+        array<string> $names = [];
+        if ($payload->trace != null) {
+            // a watched request: the route's middleware named, the action marked
+            string $name = $route->action;
+            $inner = $dispatch;
+            $dispatch = function[$name, $inner](Payload& $p) : Response {
+                trace::Timed $t = trace::Timed($p->trace, .action, $name, '');
+                return $inner($p);
+            };
+            $names = MiddlewareRef::names($route->middleware);
+        }
         if ($route->middleware->empty()) {
-            $dispatch = $route->dispatch;
             return $dispatch($payload);
         }
-        $next = Next(Chain(MiddlewareRef::make($route->middleware, $payload->services), $route->dispatch));
+        $next = Next(Chain(MiddlewareRef::make($route->middleware, $payload->services), names: mv $names, $dispatch));
         return $next->run($payload);
     }
 

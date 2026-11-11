@@ -1,0 +1,33 @@
+namespace nexus::debug::work;
+
+/**
+ * What went through one lane since the process booted.
+ */
+public struct Count
+{
+    public uint64 $pushed = 0;
+    public uint64 $started = 0;
+    public uint64 $done = 0;
+    public uint64 $retried = 0;
+    public uint64 $failed = 0;
+    public uint64 $expired = 0;
+    public uint64 $requeued = 0;
+    public uint64 $cancelled = 0;
+
+    /**
+     * Milliseconds the settled runs took, together.
+     */
+    public float64 $ms = 0.0;
+
+    /**
+     * Milliseconds a settled run took on average, 0 before the first.
+     */
+    public const function average() : float64
+    {
+        uint64 $runs = $this->done + $this->retried + $this->failed;
+        if ($runs == 0) {
+            return 0.0;
+        }
+        return $this->ms / ($runs as float64);
+    }
+}

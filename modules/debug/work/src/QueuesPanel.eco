@@ -1,0 +1,406 @@
+namespace nexus::debug::work;
+
+use std::time;
+use nexus::debug::{ActionSpec, View, Topic};
+use nexus::work::{Distributed, Graph, Pool, PoolState, StoredTask, TaskStatus, Work};
+
+/**
+ * The app's queues: every lane with what runs and waits on it and what went through it since boot,
+ * what happens live, the schedules, and what distributed lanes keep in their store (failed tasks to
+ * retry, recent tasks by status, a task's graph).
+ */
+#[atomic]
+public class QueuesPanel : nexus::debug::Panel
+{
+    private Work $work;
+    private Counts $counts;
+    private Topic $jobs;
+
+    public constructor(Work $work, Counts $counts, Topic $jobs)
+    {
+        $this->work = $work;
+        $this->counts = $counts;
+        $this->jobs = $jobs;
+    }
+
+    public function name() : string
+    {
+        return 'queues';
+    }
+
+    public function title() : string
+    {
+        return 'Queues';
+    }
+
+    public function views() : array<View>
+    {
+        array<View> $v = [
+            View('lanes', 'Lanes', .table)
+                ->column('lane', 'Lane', 'code')
+                ->column('kind', 'Kind')
+                ->column('threads', 'Threads', 'number')
+                ->column('running', 'Running', 'number')
+                ->column('waiting', 'Waiting', 'number')
+                ->column('pushed', 'Pushed', 'number')
+                ->column('done', 'Done', 'number')
+                ->column('retried', 'Retried', 'number')
+                ->column('failed', 'Failed', 'number')
+                ->column('requeued', 'Sent back', 'number')
+                ->column('cancelled', 'Cancelled', 'number')
+                ->column('avg', 'Avg run', 'ms')
+                ->every(3),
+            View('running', 'Running now', .table)
+                ->column('lane', 'Lane', 'code')
+                ->column('name', 'Task')
+                ->column('id', 'Id', 'code')
+                ->column('attempt', 'Try', 'number')
+                ->link('id', 'task')
+                ->every(2),
+            View('events', 'Live', .table)
+                ->live($this->jobs->name)
+                ->column('at', 'At', 'time')
+                ->column('lane', 'Lane', 'code')
+                ->column('kind', 'What', 'status')
+                ->column('name', 'Task')
+                ->column('id', 'Id', 'code')
+                ->column('ms', 'Took', 'ms')
+                ->column('why', 'Why')
+                ->link('id', 'task'),
+            View('schedules', 'Schedules', .table)
+                ->column('task', 'Task')
+                ->column('schedule', 'Schedule', 'code')
+                ->column('into', 'Lane', 'code')
+                ->column('next', 'Next push', 'time')
+                ->every(30),
+            View('failed', 'Failed', .table)
+                ->column('lane', 'Lane', 'code')
+                ->column('name', 'Task')
+                ->column('id', 'Id', 'code')
+                ->column('attempts', 'Tries', 'number')
+                ->column('failedAt', 'Failed', 'time')
+                ->column('error', 'Error')
+                ->link('id', 'task')
+                ->filter('lane')
+                ->action(ActionSpec('retry', 'Retry', $row: true, $confirm: false))
+                ->action(ActionSpec('retry-all', 'Retry all', $confirm: true)),
+            View('history', 'Stored tasks', .table)
+                ->column('lane', 'Lane', 'code')
+                ->column('name', 'Task')
+                ->column('id', 'Id', 'code')
+                ->column('status', 'Status', 'status')
+                ->column('attempts', 'Tries', 'number')
+                ->column('createdAt', 'Pushed', 'time')
+                ->column('error', 'Error')
+                ->link('id', 'task')
+                ->filter('lane')
+                ->filter('status')
+                ->action(ActionSpec('cancel', 'Cancel', $row: true, $confirm: true, $destructive: true, $when: 'status=waiting')),
+            View('task', 'Task', .graph)->filter('id'),
+        ];
+        return $v;
+    }
+
+    public function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>
+    {
+        if ($view == 'lanes') {
+            return .ok(View::rows($this->lanes()));
+        }
+        if ($view == 'running') {
+            return .ok(View::rows($this->running()));
+        }
+        if ($view == 'events') {
+            return .ok(View::rows(nexus::debug::Topics::rows($this->jobs, 200)));
+        }
+        if ($view == 'schedules') {
+            return .ok(View::rows($this->schedules()));
+        }
+        string $lane = $payload->request->query->get('lane') ?? '';
+        if ($view == 'failed') {
+            json::Value $rows = try $this->failed($lane);
+            return .ok(View::rows(mv $rows));
+        }
+        if ($view == 'history') {
+            string $named = $payload->request->query->get('status') ?? '';
+            TaskStatus? $status = TaskStatus::parse($named);
+            if (!$named->empty() && $status == null) {
+                return .error(.badRequest("no status {$named}; one of waiting, running, done, failed, cancelled"));
+            }
+            json::Value $rows = try $this->history($lane, $status);
+            return .ok(View::rows(mv $rows));
+        }
+        string $id = $payload->request->query->get('id') ?? '';
+        if ($id->empty()) {
+            return .error(.badRequest('name the task: ?id=<task id>'));
+        }
+        return $this->graph($id);
+    }
+
+    public function act(nexus::Payload& $payload, const string& $action, const json::Value& $input) : result<json::Value, nexus::Problem>
+    {
+        time::timestamp $now = $this->work->clock->now();
+        string $id = $input->get('id')?->asStr() ?? '';
+        string $lane = $input->get('lane')?->asStr() ?? '';
+        if ($action == 'retry') {
+            if ($id->empty()) {
+                return .error(.badRequest('name the task to retry: {"id": "..."}'));
+            }
+            foreach ($this->stores($lane) as $d) {
+                StoredTask? $sent = try $d->store->again($id, $now);
+                if ($sent != null) {
+                    StoredTask $t = guard $sent;
+                    return .ok(QueuesPanel::said("sent {$id} back to {$t->lane}"));
+                }
+            }
+            return .error(.notFound("failed task {$id}"));
+        }
+        if ($action == 'retry-all') {
+            uint64 $sent = 0;
+            foreach ($this->stores($lane) as $d) {
+                uint64 $n = try $d->retryAll($now);
+                $sent = $sent + $n;
+            }
+            return .ok(QueuesPanel::said("sent {$sent} failed tasks back"));
+        }
+        if ($action == 'cancel') {
+            if ($id->empty()) {
+                return .error(.badRequest('name the task to cancel: {"id": "..."}'));
+            }
+            uint64 $gone = 0;
+            foreach ($this->stores($lane) as $d) {
+                array<StoredTask> $cancelled = try $d->store->cancel($id, $now);
+                $gone = $gone + ($cancelled->count() as uint64);
+            }
+            if ($gone == 0) {
+                return .error(.conflict("{$id} is not waiting; only a waiting task is cancelled"));
+            }
+            return .ok(QueuesPanel::said("cancelled {$gone} tasks"));
+        }
+        return .error(.notFound("action {$action}"));
+    }
+
+    /**
+     * Every lane, async ones first: what runs and waits, and what went through it.
+     */
+    internal function lanes() : json::Value
+    {
+        $rows = json::arr();
+        foreach ($this->work->lanes->pools() as $p) {
+            PoolState $s = $p->state();
+            $r = json::object();
+            $r['lane'] = json::str($p->lane);
+            $r['kind'] = json::str('async');
+            $r['threads'] = json::int($p->threads as int64);
+            $r['running'] = json::int($s->running->count() as int64);
+            $r['waiting'] = json::int(($s->ready + $s->blocked + $s->delayed) as int64);
+            $r['ready'] = json::int($s->ready as int64);
+            $r['blocked'] = json::int($s->blocked as int64);
+            $r['delayed'] = json::int($s->delayed as int64);
+            $r['alive'] = json::int($s->alive as int64);
+            QueuesPanel::counted($r, $this->counts->of($p->lane));
+            $rows[] = mv $r;
+        }
+        foreach ($this->work->lanes->stores() as $d) {
+            $r = json::object();
+            $r['lane'] = json::str($d->lane);
+            $r['kind'] = json::str("distributed into {$d->into}");
+            $r['threads'] = json::int(0);
+            $r['running'] = json::int($this->work->lanes->busy($d->lane) as int64);
+            $r['waiting'] = json::int($d->store->waiting($d->lane)->or(0) as int64);
+            QueuesPanel::counted($r, $this->counts->of($d->lane));
+            $rows[] = mv $r;
+        }
+        return $rows;
+    }
+
+    /**
+     * What the workers run now, and what this process claimed from each store.
+     */
+    internal function running() : json::Value
+    {
+        $rows = json::arr();
+        foreach ($this->work->lanes->pools() as $p) {
+            foreach ($p->state()->running as const &$t) {
+                if ($t->fed) {
+                    continue;
+                }
+                $r = json::object();
+                $r['lane'] = json::str($p->lane);
+                $r['name'] = json::str($t->name);
+                $r['id'] = json::str($t->id);
+                $r['attempt'] = json::int($t->attempt);
+                $rows[] = mv $r;
+            }
+        }
+        foreach ($this->work->lanes->stores() as $d) {
+            foreach ($this->work->lanes->inflight($d->lane) as const &$t) {
+                $r = json::object();
+                $r['lane'] = json::str($d->lane);
+                $r['name'] = json::str($t->name);
+                $r['id'] = json::str($t->id);
+                $r['attempt'] = json::int($t->attempts);
+                $rows[] = mv $r;
+            }
+        }
+        return $rows;
+    }
+
+    /**
+     * Every plan, with when it pushes next.
+     */
+    internal function schedules() : json::Value
+    {
+        $rows = json::arr();
+        time::timestamp $now = $this->work->clock->now();
+        foreach ($this->work->scheduler->plans as $p) {
+            $r = json::object();
+            $r['task'] = json::str($p->task());
+            $r['schedule'] = json::str($p->text());
+            $r['into'] = json::str($p->into);
+            time::timestamp? $next = $p->next($now, $this->work->zone);
+            if ($next != null) {
+                time::timestamp $at = guard $next;
+                $r['next'] = QueuesPanel::stamp($at);
+            }
+            $rows[] = mv $r;
+        }
+        return $rows;
+    }
+
+    internal function failed(const string& $lane) : result<json::Value, nexus::Problem>
+    {
+        $rows = json::arr();
+        foreach ($this->stores($lane) as $d) {
+            array<StoredTask> $failed = try $d->store->failed($d->lane, 200);
+            foreach ($failed as const &$t) {
+                $rows[] = QueuesPanel::task($t);
+            }
+        }
+        return .ok($rows);
+    }
+
+    internal function history(const string& $lane, TaskStatus? $status) : result<json::Value, nexus::Problem>
+    {
+        $rows = json::arr();
+        foreach ($this->stores($lane) as $d) {
+            array<StoredTask> $found = try $d->store->recent($d->lane, $status, 200);
+            foreach ($found as const &$t) {
+                $rows[] = QueuesPanel::task($t);
+            }
+        }
+        return .ok($rows);
+    }
+
+    /**
+     * Task `$id` and every task connected to it, as nodes and edges, from the store that has it.
+     */
+    internal function graph(const string& $id) : result<json::Value, nexus::Problem>
+    {
+        foreach ($this->stores('') as $d) {
+            Graph $g = try $d->store->graph($id, 32);
+            map<string, StoredTask> $byId = [];
+            foreach ($g->tasks as const &$t) {
+                $byId[$t->id] = $t;
+            }
+            if (!$byId->has($id)) {
+                continue;
+            }
+            StoredTask $task = $byId->get($id);
+            $nodes = json::arr();
+            foreach ($g->tasks as const &$t) {
+                $n = json::object();
+                $n['id'] = json::str($t->id);
+                $n['label'] = json::str($t->name);
+                $n['state'] = json::str($g->state($t, $byId));
+                $n['current'] = json::bool($t->id == $id);
+                $nodes[] = mv $n;
+            }
+            $edges = json::arr();
+            foreach ($g->edges as const &$e) {
+                $edge = json::object();
+                $edge['from'] = json::str($e->after);
+                $edge['to'] = json::str($e->task);
+                $edges[] = mv $edge;
+            }
+            $o = json::object();
+            $o['task'] = QueuesPanel::task($task);
+            $o['nodes'] = mv $nodes;
+            $o['edges'] = mv $edges;
+            return .ok($o);
+        }
+        return .error(.notFound("task {$id} in any store"));
+    }
+
+    /**
+     * The distributed lanes, only `$lane` when it is not empty.
+     */
+    internal function stores(const string& $lane) : array<Distributed>
+    {
+        array<Distributed> $out = [];
+        foreach ($this->work->lanes->stores() as $d) {
+            if ($lane->empty() || $d->lane == $lane) {
+                $out[] = $d;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * `$t` as a row: what it is, where it stands, its times and its data.
+     */
+    public static function task(const StoredTask& $t) : json::Value
+    {
+        $r = json::object();
+        $r['id'] = json::str($t->id);
+        $r['name'] = json::str($t->name);
+        $r['lane'] = json::str($t->lane);
+        $r['status'] = json::str($t->status->name());
+        $r['attempts'] = json::int($t->attempts);
+        $r['tries'] = json::int($t->tries);
+        $r['priority'] = json::int($t->priority as int64);
+        $r['pending'] = json::int($t->pending);
+        $r['createdAt'] = QueuesPanel::stamp($t->createdAt);
+        $r['availableAt'] = QueuesPanel::stamp($t->availableAt);
+        if ($t->doneAt != null) {
+            time::timestamp $done = guard $t->doneAt;
+            $r['doneAt'] = QueuesPanel::stamp($done);
+        }
+        if ($t->failedAt != null) {
+            time::timestamp $failedAt = guard $t->failedAt;
+            $r['failedAt'] = QueuesPanel::stamp($failedAt);
+        }
+        if (!$t->error->empty()) {
+            $r['error'] = json::str($t->error);
+        }
+        if (!$t->holdKey->empty()) {
+            $r['holdKey'] = json::str($t->holdKey);
+        }
+        $r['data'] = json::parse($t->data)->or(json::str($t->data));
+        return $r;
+    }
+
+    internal static function stamp(time::timestamp $at) : json::Value
+    {
+        return json::str(nexus::log::Stamp::rfc3339($at));
+    }
+
+    internal static function counted(json::Value& $r, const Count& $c) : void
+    {
+        $r['pushed'] = json::int($c->pushed as int64);
+        $r['started'] = json::int($c->started as int64);
+        $r['done'] = json::int($c->done as int64);
+        $r['retried'] = json::int($c->retried as int64);
+        $r['failed'] = json::int($c->failed as int64);
+        $r['expired'] = json::int($c->expired as int64);
+        $r['requeued'] = json::int($c->requeued as int64);
+        $r['cancelled'] = json::int($c->cancelled as int64);
+        $r['avg'] = json::float($c->average());
+    }
+
+    internal static function said(const string& $message) : json::Value
+    {
+        $o = json::object();
+        $o['message'] = json::str($message);
+        return $o;
+    }
+}

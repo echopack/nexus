@@ -61,14 +61,14 @@ public class Tokens
     public function check(const string& $text) : result<Identity, nexus::Problem>
     {
         Token $t = guard Token::parse($this->prefix, $text) else {
-            return .error(.unauthorized('the token is not valid'));
+            return .error(.unauthorized('the token is not valid', $reason: 'token_invalid'));
         };
         StoredToken? $found = try $this->store->find($t->id);
         StoredToken $s = guard $found else {
-            return .error(.unauthorized('the token is not valid'));
+            return .error(.unauthorized('the token is not valid', $reason: 'token_invalid'));
         };
         if (!$t->matches($s->hash) || $s->expired($this->clock->now())) {
-            return .error(.unauthorized('the token is not valid'));
+            return .error(.unauthorized('the token is not valid', $reason: 'token_invalid'));
         }
         return .ok(Identity($via: BearerGuard::NAME, $subject: $s->subject, $credential: $s->id, $scopes: $s->scopes));
     }

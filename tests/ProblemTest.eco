@@ -15,6 +15,15 @@ test not_found_renders_a_problem_document
     expect($r->body)->is('{"type":"about:blank","title":"Not Found","status":404,"detail":"post not found","requestId":"req1"}');
 }
 
+test an_unauthorized_problem_carries_its_reason
+{
+    Problem $p = .unauthorized('this needs a session', $reason: 'session_required');
+    expect($p->reason())->is('session_required');
+    expect($p->response(.prod, 'req1')->body)->is('{"type":"about:blank","title":"Unauthorized","status":401,"detail":"this needs a session","reason":"session_required","requestId":"req1"}');
+    Problem $plain = .unauthorized('who are you', $reason: '');
+    expect($plain->response(.prod, '')->body)->lacks('reason');
+}
+
 test server_cause_is_hidden_in_prod
 {
     Problem $p = .server('db exploded');

@@ -1,0 +1,32 @@
+namespace nexus::debug;
+
+/**
+ * Something a view lets the viewer do, like retrying a failed task. The console posts to
+ * `<path>/api/panels/<panel>/actions/<name>`; with `row` it does that for one row of a table,
+ * sending that row as the body, else for the whole view with the view's filters (`{}` without).
+ * `confirm` asks first, `destructive` draws it in red. `when` (`status=waiting`) offers a row action
+ * only on the rows whose key holds that value.
+ */
+public struct ActionSpec
+{
+    public string $name;
+    public string $title;
+    public bool $row = false;
+    public bool $confirm = false;
+    public bool $destructive = false;
+    public string $when = '';
+
+    public const function json() : json::Value
+    {
+        $o = json::object();
+        $o['name'] = json::str($this->name);
+        $o['title'] = json::str($this->title);
+        $o['row'] = json::bool($this->row);
+        $o['confirm'] = json::bool($this->confirm);
+        $o['destructive'] = json::bool($this->destructive);
+        if (!$this->when->empty()) {
+            $o['when'] = json::str($this->when);
+        }
+        return $o;
+    }
+}

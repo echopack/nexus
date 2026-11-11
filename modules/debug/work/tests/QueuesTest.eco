@@ -1,0 +1,214 @@
+/**
+ * The queues in the debug console: lanes with their counts, the live jobs topic, failed stored
+ * tasks sent back, recent stored tasks, a task's graph, and the schedules.
+ */
+
+use std::thread;
+use std::time;
+use ecotest::expect;
+use nexus::testing::TestApp;
+use nexus::work::{Task, Failure, TaskData, DataError, Queues, MemoryStore, AsyncQueue, DistributedQueue, Lane, Distributed, Work, Planned};
+
+internal const TOKEN = 'a-debug-token-of-at-least-thirty-two-chars';
+
+// 2026-11-02T02:59:00Z
+internal const int64 START = 1793588340;
+
+internal struct QWorkers : Lane {}
+internal struct QJobs : Lane {}
+
+/**
+ * Says its text; `doomed` gives up.
+ */
+internal struct QSay : Task
+{
+    public string $text;
+
+    public const function tries() : int64
+    {
+        return 1;
+    }
+
+    public function handle(nexus::Payload& $payload) : status<Failure>
+    {
+        if ($this->text == 'doomed') {
+            return .error(.giveUp('doomed'));
+        }
+        return .ok;
+    }
+}
+
+internal class QExt : nexus::Extension
+{
+    public MemoryStore $store;
+
+    public constructor(MemoryStore $store)
+    {
+        $this->store = $store;
+    }
+
+    public function name() : string
+    {
+        return 'queues-test';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        Work $w = $s->get<Work>();
+        $w->codecs->add<QSay>('QSay', function(const QSay& $t) : string {
+            $p = TaskData();
+            $p->put('text', $t->text);
+            return $p->text();
+        }, function(const string& $text) : result<QSay, DataError> {
+            $p = try TaskData::parse($text);
+            string? $said = $p->string('text', required: true);
+            try $p->done();
+            string $t = guard $said;
+            return .ok(QSay($t));
+        });
+        Queues::bindAsync<QWorkers>($s, threads: 1, name: 'workers');
+        Distributed $d = Queues::bindDistributed<QJobs>($s, $this->store, name: 'jobs');
+        $d->into = 'workers';
+        Planned $tick = Queues::schedule<QSay>($s, QSay('tick'));
+        $tick->every = '15m';
+        $tick->into = 'jobs';
+        return .ok;
+    }
+}
+
+internal class QRig
+{
+    public TestApp $app;
+    public MemoryStore $store;
+    public calendar::ManualClock $clock;
+
+    public constructor(bool $enabled = true)
+    {
+        $this->store = MemoryStore();
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        map<string, string> $vars = ['NEXUS_DEBUG_TOKEN' => TOKEN];
+        if ($enabled) {
+            $vars['NEXUS_DEBUG_ENABLED'] = 'true';
+        }
+        array<nexus::Extension> $exts = [
+            nexus::work::Extension(clock: $this->clock),
+            nexus::debug::Extension(),
+            nexus::debug::work::Extension(),
+            QExt($this->store),
+        ];
+        $this->app = TestApp($exts, $vars);
+    }
+
+    public function api() : ecotest::http::Api
+    {
+        return $this->app->api()->bearer(TOKEN);
+    }
+
+    public function jobs() : DistributedQueue<QJobs>
+    {
+        nexus::Payload $p = $this->app->kernel->background('test', 'push');
+        return $p->get<DistributedQueue<QJobs>>();
+    }
+
+    public function workers() : AsyncQueue<QWorkers>
+    {
+        return $this->app->kernel->services->get<AsyncQueue<QWorkers>>();
+    }
+
+    /**
+     * Waits until the `jobs` topic told `$n` settles, at most two seconds.
+     */
+    public function settled(usize $n) : void
+    {
+        int32 $waited = 0;
+        while ($waited < 2000) {
+            usize $seen = 0;
+            string $body = $this->api()->get('/__nexus/api/topics/jobs?limit=1000')->capture('$');
+            foreach (['"kind":"done"', '"kind":"failed"'] as const &$kind) {
+                usize $at = $body->find($kind);
+                while ($at < $body->size()) {
+                    $seen++;
+                    $at = $body->find($kind, $at + 1);
+                }
+            }
+            if ($seen >= $n) {
+                return;
+            }
+            thread::sleep(10);
+            $waited = $waited + 10;
+        }
+    }
+}
+
+test with_the_console_off_nothing_is_added
+{
+    $r = QRig(false);
+    expect($r->app->kernel->services->find<nexus::debug::Debug>())->none();
+    $r->app->api()->bearer(TOKEN)->get('/__nexus/api')->status(404);
+}
+
+test the_queues_panel_lists_every_lane_with_its_counts
+{
+    $r = QRig();
+    guard $r->app->kernel->start(nexus::Serve());
+    guard $r->workers()->push(QSay('hello'));
+    guard $r->jobs()->push(QSay('stored'));
+    $r->settled(2);
+    $r->app->kernel->drain();
+    $r->api()->get('/__nexus/api')->ok()->json('$.panels[5].name', 'queues')->json('$.topics[2].name', 'jobs');
+    $r->api()->get('/__nexus/api/panels/queues/lanes')->ok()
+        ->json('$.rows[0].lane', 'workers')
+        ->json('$.rows[0].kind', 'async')
+        ->json('$.rows[0].threads', 1)
+        ->json('$.rows[0].pushed', 1)
+        ->json('$.rows[0].done', 1)
+        ->json('$.rows[1].lane', 'jobs')
+        ->json('$.rows[1].kind', 'distributed into workers')
+        ->json('$.rows[1].pushed', 1)
+        ->json('$.rows[1].done', 1);
+    $r->api()->get('/__nexus/api/panels/queues/events')->ok()->has('"kind":"started"');
+    $r->api()->get('/__nexus/api/topics/jobs/stream')->ok()->has('event: jobs');
+}
+
+test a_failed_stored_task_is_listed_and_sent_back
+{
+    $r = QRig();
+    guard $r->app->kernel->start(nexus::Serve());
+    nexus::work::Pushed $p = guard $r->jobs()->push(QSay('doomed'));
+    string $id = $p->id() ?? '';
+    $r->settled(1);
+    $r->app->kernel->drain();
+    $r->api()->get('/__nexus/api/panels/queues/failed')->ok()
+        ->count('$.rows', 1)
+        ->json('$.rows[0].id', $id)
+        ->json('$.rows[0].error', 'doomed')
+        ->json('$.rows[0].data.text', 'doomed');
+    $r->api()->get('/__nexus/api/panels/queues/history?status=failed&lane=jobs')->ok()->count('$.rows', 1);
+    $r->api()->get('/__nexus/api/panels/queues/history?status=nope')->problem(400);
+    $r->api()->get("/__nexus/api/panels/queues/task?id={$id}")->ok()
+        ->json('$.task.status', 'failed')
+        ->json('$.nodes[0].state', 'failed')
+        ->json('$.nodes[0].current', true);
+    $r->api()->get('/__nexus/api/panels/queues/task?id=nope')->problem(404);
+    $r->api()->get('/__nexus/api/panels/queues/task')->problem(400);
+
+    $r->api()->post('/__nexus/api/panels/queues/actions/retry', json: "\{\"id\":\"{$id}\",\"lane\":\"jobs\"}")->ok()->json('$.message', "sent {$id} back to jobs");
+    $r->api()->get('/__nexus/api/panels/queues/failed')->ok()->count('$.rows', 0);
+    $r->api()->post('/__nexus/api/panels/queues/actions/retry', json: "\{\"id\":\"{$id}\"}")->problem(404);
+    $r->api()->post('/__nexus/api/panels/queues/actions/cancel', json: "\{\"id\":\"{$id}\"}")->ok()->json('$.message', 'cancelled 1 tasks');
+    $r->api()->post('/__nexus/api/panels/queues/actions/retry-all', json: '{}')->ok()->json('$.message', 'sent 0 failed tasks back');
+    $r->api()->get('/__nexus/api/panels/queues/lanes')->ok()
+        ->json('$.rows[1].lane', 'jobs')
+        ->json('$.rows[1].requeued', 1)
+        ->json('$.rows[1].cancelled', 1);
+}
+
+test the_schedules_say_when_they_push_next
+{
+    $r = QRig();
+    $r->api()->get('/__nexus/api/panels/queues/schedules')->ok()
+        ->json('$.rows[0].task', 'QSay')
+        ->json('$.rows[0].schedule', 'every 15m')
+        ->json('$.rows[0].into', 'jobs')
+        ->json('$.rows[0].next', '2026-11-02T03:00:00Z');
+}

@@ -1,0 +1,41 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * One thing that happened to a task on a lane: pushed, started, settled (done, retry, failed) or
+ * expired before it ran. A run's `ms` and the reason it did not end done (`why`) come with a settle.
+ * A task fed from a distributed lane is told under that lane.
+ */
+public struct Seen
+{
+    public string $lane;
+    public string $name;
+    public string $id;
+    public SeenKind $kind;
+    public time::timestamp $at;
+    public int64 $attempt = 0;
+    public float64 $ms = 0.0;
+    public string $why = '';
+
+    /**
+     * How a run of `$name` (`$id`) on `$lane` settled.
+     */
+    public static function settled(const string& $lane, const string& $name, const string& $id, const Settle& $s, int64 $attempt, float64 $ms, time::timestamp $at) : Seen
+    {
+        Seen $seen = Seen($lane, $name, $id, .done, $at, $attempt, $ms);
+        match ($s) {
+            Settle::done => {
+            },
+            Settle::retry($when, $why) => {
+                $seen->kind = .retry;
+                $seen->why = $why;
+            },
+            Settle::fail($why) => {
+                $seen->kind = .failed;
+                $seen->why = $why;
+            },
+        };
+        return $seen;
+    }
+}

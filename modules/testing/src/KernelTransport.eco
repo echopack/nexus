@@ -54,6 +54,12 @@ public class KernelTransport : Transport
         $out->ms = $started->elapsed()->as_millis();
         if ($request->verb != Verb::head) {
             $out->body = $got->body;
+            if ($got->stream != null) {
+                function<void(nexus::Writer)> $fn = guard $got->stream;
+                $w = BufferWriter();
+                $fn($w);
+                $out->body = $w->body;
+            }
         }
 
         foreach ($got->headers->items as const &$h) {

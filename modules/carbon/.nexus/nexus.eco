@@ -15,6 +15,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::carbon::Extension>('nexus::carbon::Extension');
     $g->name<nexus::carbon::MigrateCommand>('nexus::carbon::MigrateCommand');
     $g->name<nexus::carbon::Problems>('nexus::carbon::Problems');
+    $g->name<nexus::carbon::QueryTrace>('nexus::carbon::QueryTrace');
     $g->name<nexus::carbon::Repositories>('nexus::carbon::Repositories');
 }
 

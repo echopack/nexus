@@ -35,11 +35,7 @@ public class TestApp
      *
      * ```echo
      * $google = nexus::connect::ScriptedFetch();
-     * $app = TestApp(Blog::extensions(), $vars, replace: function[$google](nexus::Services& $s) : void {
-     *     $s->replace<nexus::connect::Fetch>(once: function[$google]() : nexus::connect::Fetch {
-     *         return $google;
-     *     });
-     * });
+     * $app = TestApp(Blog::extensions(), $vars, replace: $google->replacing());
      * ```
      */
     public constructor(const array<nexus::Extension>& $extensions, map<string, string> $vars, replace: function<void(nexus::Services&)> $replace)
@@ -61,14 +57,15 @@ public class TestApp
     }
 
     /**
-     * Boots and hands back why it failed, for tests about boot itself.
+     * Boots in `$mode` and hands back why it failed, for tests about boot itself, and for a test
+     * about what a mode allows: what prod refuses at boot.
      */
-    public static function attempt(const array<nexus::Extension>& $extensions, map<string, string> $vars) : result<TestApp, nexus::BootError>
+    public static function attempt(const array<nexus::Extension>& $extensions, map<string, string> $vars, mode: nexus::Mode $mode = .testing) : result<TestApp, nexus::BootError>
     {
         $sink = nexus::log::Memory();
         array<nexus::log::Sink> $sinks = [$sink];
         $log = nexus::Logger($sinks, .trace);
-        $k = try nexus::Kernel::boot($extensions, nexus::Mode::testing, $log, nexus::Env(fixed: mv $vars));
+        $k = try nexus::Kernel::boot($extensions, $mode, $log, nexus::Env(fixed: mv $vars));
         return .ok(TestApp(booted: $k, $sink));
     }
 
@@ -91,6 +88,15 @@ public class TestApp
     public const function api() : Api
     {
         return Api(transport: KernelTransport($this->kernel), base: 'http://app');
+    }
+
+    /**
+     * The app as an `Api` whose every request carries the `Authorization` that `signed` makes from
+     * its method, target and body (`SignedTransport`): requests signed with a session.
+     */
+    public const function api(signed: function<string(string, string, string)> $sign) : Api
+    {
+        return Api(transport: SignedTransport(KernelTransport($this->kernel), $sign), base: 'http://app');
     }
 
     /**

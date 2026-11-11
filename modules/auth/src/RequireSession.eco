@@ -1,0 +1,76 @@
+namespace nexus::auth;
+
+/**
+ * Lets through only requests that carry a credential, a session for nobody included: a 401 for any
+ * routed request under `under`, except to the actions `except` names, as the one where a client
+ * opens its session. Everything outside `under` passes untouched (the page, a health check, OAuth,
+ * MCP), and so does a CORS preflight and a request no route answers, which routing then answers
+ * with a 404 or a 405. It leaves the credential's `Identity` for the action, anonymous when nobody
+ * signed in on the session yet.
+ *
+ * It is meant to wrap every request, so every route of the API needs a session without naming it:
+ *
+ * ```echo
+ * $app->bind<nexus::auth::RequireSession>(shared: (Container $c) => nexus::auth::RequireSession(
+ *     $c->get<nexus::auth::Guards>(), under: '/v1', except: [type_id<OpenSession>()]));
+ * $app->middleware<nexus::auth::RequireSession>();
+ * ```
+ *
+ * Actions that need a signed in caller still go through `Authenticate` or the app's own middleware.
+ */
+#[atomic]
+public class RequireSession : nexus::Middleware
+{
+    private Guards $guards;
+    private string $under;
+
+    // `under` ending in `/`, what a path below it starts with
+    private string $prefix;
+    private array<type_id> $except;
+
+    public constructor(Guards $guards, under: const string& $under = '/', except: array<type_id> $except = array<type_id>())
+    {
+        $this->guards = $guards;
+        $this->under = $under;
+        $this->prefix = $under;
+        if (!$this->prefix->ends('/')) {
+            $this->prefix->append('/');
+        }
+        $this->except = mv $except;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        // a preflight never carries a credential; routing answers it
+        if ($payload->request->method == nexus::Method::options) {
+            return $next->run($payload);
+        }
+        nexus::Route $route = guard $payload->route else {
+            return $next->run($payload);
+        };
+        if (!$this->covers($route)) {
+            return $next->run($payload);
+        }
+        Identity? $found = guard $this->guards->credential($payload) else ($p) {
+            return $payload->fail($p);
+        };
+        Identity $id = guard $found else {
+            return $payload->fail(.unauthorized('this needs a session: open one first', $reason: 'session_required'));
+        };
+        $payload->put<Identity>($id);
+        return $next->run($payload);
+    }
+
+    /**
+     * Whether `$route` is under `under` and its action not one of `except`.
+     */
+    internal const function covers(const nexus::Route& $route) : bool
+    {
+        foreach ($this->except as const &$open) {
+            if ($open == $route->type) {
+                return false;
+            }
+        }
+        return $route->path == $this->under || $route->path->starts($this->prefix);
+    }
+}

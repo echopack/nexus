@@ -122,51 +122,119 @@ internal class SessionStore : nexus::work::Store
         return .ok(SessionStore::stored($rows));
     }
 
-    public function again(const string& $id, time::timestamp $now) : result<nexus::work::Requeued, nexus::Problem>
+    public function again(const string& $id, time::timestamp $now) : result<nexus::work::StoredTask?, nexus::Problem>
     {
         QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
         QueuedTask? $found = try $tasks->find()->where(QueuedTaskTable::$id == $id)->where(QueuedTaskTable::$status == SessionStore::status(.failed))->first();
         QueuedTask $row = guard $found else {
-            return .ok(.missing);
+            return .ok(null);
         };
-        $set = hydrahon::Values();
-        $set[QueuedTaskTable::$status] = SessionStore::status(.waiting);
-        $set[QueuedTaskTable::$failedAt] = SessionStore::never();
-        $set[QueuedTaskTable::$expiresAt] = SessionStore::never();
-        $set[QueuedTaskTable::$attempts] = 0;
-        $set[QueuedTaskTable::$availableAt] = $now;
-        if ($row->hold == SessionStore::hold(.unique)) {
-            $set[QueuedTaskTable::$uniqueLive] = $row->holdKey;
+        bool $sent = try $this->sendBack($row, $now);
+        if (!$sent) {
+            return .ok(null);
         }
-        uint64 $n = try $tasks->find()->where(QueuedTaskTable::$id == $id)->where(QueuedTaskTable::$status == SessionStore::status(.failed))->update(mv $set);
-        if ($n != 1) {
-            return .ok(.missing);
-        }
-        return .ok(.sent);
+        nexus::work::StoredTask $back = $row->stored();
+        $back->requeue($now);
+        return .ok($back);
     }
 
-    public function cancel(const string& $id, time::timestamp $now) : result<uint64, nexus::Problem>
+    /**
+     * Sends the failed tasks of `$lane` back with one update; a `.unique` task goes back on its own,
+     * taking its key again. Only what this call sent back is answered: a task another server sent
+     * back in between is not.
+     */
+    public function againAll(const string& $lane, time::timestamp $now) : result<array<nexus::work::StoredTask>, nexus::Problem>
     {
         QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
-        array<string> $ids = [$id];
-        uint64 $count = 0;
-        while (!$ids->empty()) {
-            string $at = $ids[$ids->count() - 1];
-            $ids->pop();
+        array<QueuedTask> $rows = try $tasks->find()
+            ->where(QueuedTaskTable::$lane == $lane)
+            ->where(QueuedTaskTable::$status == SessionStore::status(.failed))
+            ->get();
+        array<string> $plain = [];
+        foreach ($rows as const &$r) {
+            if ($r->hold != SessionStore::hold(.unique)) {
+                $plain[] = $r->id;
+            }
+        }
+        map<string, bool> $sent = [];
+        if (!$plain->empty()) {
+            uint64 $n = try $tasks->find()->where(QueuedTaskTable::$id in $plain)->where(QueuedTaskTable::$status == SessionStore::status(.failed))->update(SessionStore::requeued($now));
+            array<string> $mine = $plain;
+            if ($n < $plain->count() as uint64) {
+                // another server sent some back in between: keep the ones this update did
+                array<QueuedTask> $back = try $tasks->find()->where(QueuedTaskTable::$id in $plain)->where(QueuedTaskTable::$status == SessionStore::status(.waiting))->where(QueuedTaskTable::$availableAt == $now)->get();
+                $mine = SessionStore::ids($back);
+            }
+            foreach ($mine as const &$id) {
+                $sent[$id] = true;
+            }
+        }
+        array<nexus::work::StoredTask> $out = [];
+        foreach ($rows as const &$r) {
+            if ($r->hold == SessionStore::hold(.unique)) {
+                bool $one = try $this->sendBack($r, $now);
+                if (!$one) {
+                    continue;
+                }
+            } else if (!$sent->has($r->id)) {
+                continue;
+            }
+            nexus::work::StoredTask $back = $r->stored();
+            $back->requeue($now);
+            $out[] = mv $back;
+        }
+        return .ok($out);
+    }
+
+    /**
+     * Cancels waiting task `$id` and every waiting task after it, a level of the graph at a time:
+     * one read, one update and one read of the edges per level. Answers what this call cancelled,
+     * `$id` first.
+     */
+    public function cancel(const string& $id, time::timestamp $now) : result<array<nexus::work::StoredTask>, nexus::Problem>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        TaskEdgeRepository $edges = try $this->session->repo<TaskEdgeRepository>();
+        map<string, bool> $seen = [$id => true];
+        array<string> $frontier = [$id];
+        array<nexus::work::StoredTask> $out = [];
+        while (!$frontier->empty()) {
+            array<QueuedTask> $rows = try $tasks->find()->where(QueuedTaskTable::$id in $frontier)->where(QueuedTaskTable::$status == SessionStore::status(.waiting))->get();
+            if ($rows->empty()) {
+                break;
+            }
+            array<string> $ids = SessionStore::ids($rows);
             $set = hydrahon::Values();
             $set[QueuedTaskTable::$status] = SessionStore::status(.cancelled);
             $set[QueuedTaskTable::$doneAt] = $now;
             $set[QueuedTaskTable::$uniqueLive] = SessionStore::none();
-            uint64 $n = try $tasks->find()->where(QueuedTaskTable::$id == $at)->where(QueuedTaskTable::$status == SessionStore::status(.waiting))->update(mv $set);
-            if ($n == 1) {
-                $count = $count + 1;
-                array<string> $after = try $this->after($at);
-                foreach ($after as const &$next) {
-                    $ids[] = $next;
+            uint64 $n = try $tasks->find()->where(QueuedTaskTable::$id in $ids)->where(QueuedTaskTable::$status == SessionStore::status(.waiting))->update(mv $set);
+            array<QueuedTask> $won = mv $rows;
+            if ($n < $ids->count() as uint64) {
+                // another server took some in between: keep the ones this update cancelled
+                array<QueuedTask> $kept = try $tasks->find()->where(QueuedTaskTable::$id in $ids)->where(QueuedTaskTable::$status == SessionStore::status(.cancelled))->where(QueuedTaskTable::$doneAt == $now)->get();
+                $won = mv $kept;
+                $ids = SessionStore::ids($won);
+            }
+            foreach ($won as const &$row) {
+                nexus::work::StoredTask $t = $row->stored();
+                $t->status = .cancelled;
+                $t->doneAt = $now;
+                $out[] = mv $t;
+            }
+            array<string> $next = [];
+            if (!$ids->empty()) {
+                array<TaskEdge> $after = try $edges->find()->where(TaskEdgeTable::$afterId in $ids)->get();
+                foreach ($after as const &$e) {
+                    if (!$seen->has($e->taskId)) {
+                        $seen[$e->taskId] = true;
+                        $next[] = $e->taskId;
+                    }
                 }
             }
+            $frontier = mv $next;
         }
-        return .ok($count);
+        return .ok($out);
     }
 
     public function graph(const string& $id, uint32 $depth) : result<nexus::work::Graph, nexus::Problem>
@@ -189,6 +257,21 @@ internal class SessionStore : nexus::work::Store
             ->where(QueuedTaskTable::$status == SessionStore::status(.waiting) || QueuedTaskTable::$status == SessionStore::status(.running))
             ->count();
         return .ok($n);
+    }
+
+    public function recent(const string& $lane, nexus::work::TaskStatus? $status, uint64 $limit) : result<array<nexus::work::StoredTask>, nexus::Problem>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        $q = $tasks->find();
+        if (!$lane->empty()) {
+            $q = $q->where(QueuedTaskTable::$lane == $lane);
+        }
+        if ($status != null) {
+            nexus::work::TaskStatus $want = guard $status;
+            $q = $q->where(QueuedTaskTable::$status == SessionStore::status($want));
+        }
+        array<QueuedTask> $rows = try $q->order(desc: QueuedTaskTable::$createdAt)->limit($limit)->get();
+        return .ok(SessionStore::stored($rows));
     }
 
     /**
@@ -411,6 +494,33 @@ internal class SessionStore : nexus::work::Store
     }
 
     /**
+     * Sends failed task `$row` back, a `.unique` one taking its key again; answers whether it was
+     * still failed, so this call sent it.
+     */
+    internal function sendBack(const QueuedTask& $row, time::timestamp $now) : result<bool, carbon::Error>
+    {
+        QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
+        $set = SessionStore::requeued($now);
+        if ($row->hold == SessionStore::hold(.unique)) {
+            $set[QueuedTaskTable::$uniqueLive] = $row->holdKey;
+        }
+        uint64 $n = try $tasks->find()->where(QueuedTaskTable::$id == $row->id)->where(QueuedTaskTable::$status == SessionStore::status(.failed))->update(mv $set);
+        return .ok($n == 1);
+    }
+
+    /**
+     * The ids of `$rows`, in order.
+     */
+    internal static function ids(const array<QueuedTask>& $rows) : array<string>
+    {
+        array<string> $out = [];
+        foreach ($rows as const &$r) {
+            $out[] = $r->id;
+        }
+        return $out;
+    }
+
+    /**
      * The tasks waiting for task `$id`.
      */
     internal function after(const string& $id) : result<array<string>, carbon::Error>
@@ -557,6 +667,20 @@ internal class SessionStore : nexus::work::Store
             };
             return .ok;
         }
+    }
+
+    /**
+     * What sending a failed task back sets: due at `$now` with its tries fresh.
+     */
+    internal static function requeued(time::timestamp $now) : hydrahon::Values
+    {
+        $set = hydrahon::Values();
+        $set[QueuedTaskTable::$status] = SessionStore::status(.waiting);
+        $set[QueuedTaskTable::$failedAt] = SessionStore::never();
+        $set[QueuedTaskTable::$expiresAt] = SessionStore::never();
+        $set[QueuedTaskTable::$attempts] = 0;
+        $set[QueuedTaskTable::$availableAt] = $now;
+        return $set;
     }
 
     internal static function stored(const array<QueuedTask>& $rows) : array<nexus::work::StoredTask>

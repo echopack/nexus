@@ -20,4 +20,15 @@ public class UserTransformer : nexus::rest::Transformer<User>, UserMapping
             $item->text('email', $u->email);
         }
     }
+
+    /**
+     * `$u` as the answer to themselves, their email shown, `$meta`'s keys before `data`: what
+     * `/v1/me`, a sign in and the session answer with.
+     */
+    public function own(nexus::Payload& $payload, const User& $u, const nexus::rest::Meta& $meta) : result<nexus::Response, nexus::Problem>
+    {
+        $ctx = nexus::rest::TransformerContext();
+        $ctx->set<UserContext>($user: $u);
+        return $this->createResponse($payload, $u, $meta, $ctx);
+    }
 }

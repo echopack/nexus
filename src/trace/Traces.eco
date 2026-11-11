@@ -1,0 +1,68 @@
+namespace nexus::trace;
+
+use std::thread;
+
+/**
+ * Which trace belongs to the request on the current thread, for the services every request shares
+ * (the cache, the mailer, a database listener) that never see a payload. The kernel binds one in
+ * the root container; the debug console `enter`s a request's trace around it. With none entered,
+ * `here` costs one atomic load.
+ */
+#[atomic]
+public class Traces
+{
+    private thread::mutex<array<Here>> $by = thread::mutex<array<Here>>([]);
+    private atomic<usize> $live = atomic<usize>(0);
+
+    /**
+     * Makes `$t` the trace of the current thread until `leave`.
+     */
+    public function enter(Trace $t) : void
+    {
+        thread::locked<array<Here>> $held = $this->by->lock();
+        $held->value[] = Here(thread::current(), $t);
+        $this->live->store($held->value->count());
+    }
+
+    /**
+     * Forgets the current thread's trace.
+     */
+    public function leave() : void
+    {
+        thread::locked<array<Here>> $held = $this->by->lock();
+        thread::id $me = thread::current();
+        usize $i = $held->value->count();
+        while ($i > 0) {
+            $i = $i - 1;
+            if ($held->value[$i]->thread == $me) {
+                $held->value->pluck($i);
+                break;
+            }
+        }
+        $this->live->store($held->value->count());
+    }
+
+    /**
+     * The current thread's trace, or null.
+     */
+    public const function here() : Trace?
+    {
+        if ($this->live->load() == 0) {
+            return null;
+        }
+        thread::locked<array<Here>> $held = $this->by->lock();
+        thread::id $me = thread::current();
+        foreach ($held->value as const &$h) {
+            if ($h->thread == $me) {
+                return $h->trace;
+            }
+        }
+        return null;
+    }
+}
+
+internal struct Here
+{
+    public thread::id $thread;
+    public Trace $trace;
+}

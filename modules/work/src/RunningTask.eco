@@ -1,0 +1,16 @@
+namespace nexus::work;
+
+/**
+ * A task a worker of a pool runs now.
+ */
+public struct RunningTask
+{
+    public string $id;
+    public string $name;
+    public int64 $attempt;
+
+    /**
+     * Whether a feeder claimed it from a distributed lane.
+     */
+    public bool $fed;
+}

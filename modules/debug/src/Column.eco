@@ -1,0 +1,31 @@
+namespace nexus::debug;
+
+/**
+ * One column of a table view: the row key it shows, its heading and how its values look. Formats:
+ * `text`, `number`, `ms` (a duration in milliseconds), `time` (RFC 3339), `status` (an HTTP status or
+ * a task state, coloured), `level` (a log level), `code` (monospace) and `json`.
+ */
+public struct Column
+{
+    public string $key;
+    public string $title;
+    public string $format = 'text';
+
+    /**
+     * A view of the same panel this column's value opens, given as the query parameter named like
+     * the column: a task id opening the task's graph. Empty for none.
+     */
+    public string $link = '';
+
+    public const function json() : json::Value
+    {
+        $o = json::object();
+        $o['key'] = json::str($this->key);
+        $o['title'] = json::str($this->title);
+        $o['format'] = json::str($this->format);
+        if (!$this->link->empty()) {
+            $o['link'] = json::str($this->link);
+        }
+        return $o;
+    }
+}

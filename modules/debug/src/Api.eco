@@ -1,0 +1,78 @@
+namespace nexus::debug;
+
+/**
+ * What the console's API actions share. Every call but the sign in goes through the gate first, as
+ * the route middleware `Admit`. Topics answer two ways: as JSON with the events after a cursor
+ * (`PollTopic`), and as server-sent events (`StreamTopic`).
+ */
+public struct Api
+{
+    /**
+     * The longest a topic read waits for an event, in seconds.
+     */
+    public const int64 WAIT = 25;
+
+    /**
+     * Seconds between the keep-alive comments of an idle stream.
+     */
+    public const int64 BEAT = 15;
+
+    /**
+     * The panel named `$name`, or the 404 saying there is none.
+     */
+    public static function panel(Debug $debug, const string& $name) : result<Listed, nexus::Problem>
+    {
+        Listed $l = guard $debug->find($name) else {
+            return .error(.notFound("panel {$name}"));
+        };
+        return .ok($l);
+    }
+
+    /**
+     * The topic named `$name`, or the 404 saying there is none.
+     */
+    public static function topic(Debug $debug, const string& $name) : result<Topic, nexus::Problem>
+    {
+        Topic $t = guard $debug->named($name) else {
+            return .error(.notFound("topic {$name}"));
+        };
+        return .ok($t);
+    }
+
+    /**
+     * `$doc` as a JSON answer the browser does not cache.
+     */
+    public static function json(const json::Value& $doc) : nexus::Response
+    {
+        $r = nexus::Response(json: $doc);
+        $r->header('Cache-Control', 'no-store');
+        return $r;
+    }
+
+    /**
+     * `$body`, JSON encoded already, as an answer the browser does not cache.
+     */
+    public static function encoded(string $body) : nexus::Response
+    {
+        $r = nexus::Response(200, mv $body, type: 'application/json');
+        $r->header('Cache-Control', 'no-store');
+        return $r;
+    }
+
+    /**
+     * `$text` as a whole number, `$otherwise` when it is missing or not one.
+     */
+    public static function number(string? $text, int64 $otherwise) : int64
+    {
+        string $t = guard $text else {
+            return $otherwise;
+        };
+        int64 $n = guard str::int(str::trim($t)) else {
+            return $otherwise;
+        };
+        if ($n < 0) {
+            return $otherwise;
+        }
+        return $n;
+    }
+}

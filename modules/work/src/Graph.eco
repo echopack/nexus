@@ -7,4 +7,23 @@ public struct Graph
 {
     public array<StoredTask> $tasks = [];
     public array<Edge> $edges = [];
+
+    /**
+     * Where `$t` stands; a waiting task behind a task that failed for good is `blocked`. `$byId`
+     * holds this graph's tasks by id.
+     */
+    public const function state(const StoredTask& $t, const map<string, StoredTask>& $byId) : string
+    {
+        if ($t->status == TaskStatus::waiting && $t->pending > 0) {
+            foreach ($this->edges as const &$e) {
+                if ($e->task == $t->id && $byId->has($e->after)) {
+                    StoredTask $up = $byId->get($e->after);
+                    if ($up->status == TaskStatus::failed && !$up->allowFailure) {
+                        return 'blocked';
+                    }
+                }
+            }
+        }
+        return $t->status->name();
+    }
 }

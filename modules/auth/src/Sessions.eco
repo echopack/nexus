@@ -8,6 +8,10 @@ use std::time;
  * request, kept nowhere. A request is checked before the store is asked, so a forged one never
  * reaches it.
  *
+ * A client opens a session before anything else, for nobody (`open()`), and signs every request
+ * with it; signing in puts the user on that same session (`attach`), signing out ends it. A session
+ * for nobody lasts `guests` from its last use, one with a user `lifetime`.
+ *
  * A signature binds the method, target, time and body, so nothing in a captured request can be
  * changed; the same request can still be sent again within its window. Writes that must happen once
  * take an idempotency key of their own.
@@ -18,17 +22,23 @@ public class Sessions
     public const time::duration $lifetime;
 
     /**
+     * How long a session for nobody lasts from its last use.
+     */
+    public const time::duration $guests;
+
+    /**
      * How far a request's time may be from the server's, either way.
      */
     public const time::duration $window;
     public calendar::Clock $clock;
     internal const string $key;
 
-    public constructor(SessionStore $store, const string& $key, time::duration $lifetime, time::duration $window, calendar::Clock $clock)
+    public constructor(SessionStore $store, const string& $key, time::duration $lifetime, time::duration $guests, time::duration $window, calendar::Clock $clock)
     {
         $this->store = $store;
         $this->key = $key;
         $this->lifetime = $lifetime;
+        $this->guests = $guests;
         $this->window = $window;
         $this->clock = $clock;
     }
@@ -38,11 +48,64 @@ public class Sessions
      */
     public function open(const string& $subject, const array<string>& $scopes = array<string>()) : result<Opened, nexus::Problem>
     {
+        return $this->start($subject, $scopes);
+    }
+
+    /**
+     * A new session for nobody, the one a client opens before anything else. Signing in puts the
+     * user on it (`attach`).
+     */
+    public function open() : result<Opened, nexus::Problem>
+    {
+        array<string> $none = [];
+        return $this->start(null, $none);
+    }
+
+    /**
+     * A new session for `$subject`, null for nobody.
+     */
+    private function start(string? $subject, const array<string>& $scopes) : result<Opened, nexus::Problem>
+    {
         string $id = Secrets::hex(16);
         time::timestamp $now = $this->clock->now();
-        $s = StoredSession($id: $id, $subject: $subject, $scopes: $scopes, $createdAt: $now, $expiresAt: $now + $this->lifetime);
+        $s = StoredSession($id: $id, $subject: $subject, $scopes: $scopes, $createdAt: $now, $expiresAt: $now + $this->ttl($subject));
         try $this->store->create($s);
         return .ok(Opened($this->secret($id), mv $s));
+    }
+
+    /**
+     * Puts `$subject` on session `$id`, for a sign in: from now on its requests are theirs, and it
+     * lasts `lifetime`. A 409 when the session has somebody already, a 401 when it has ended. One
+     * write when it works; only a refusal reads the session, to say which.
+     */
+    public function attach(const string& $id, const string& $subject) : status<nexus::Problem>
+    {
+        time::timestamp $now = $this->clock->now();
+        bool $claimed = try $this->store->claim($id, $subject, $now, $now + $this->lifetime);
+        if ($claimed) {
+            return .ok;
+        }
+        StoredSession? $found = try $this->store->find($id);
+        if ($found?->subject != null) {
+            return .error(Sessions::taken());
+        }
+        return .error(Sessions::ended());
+    }
+
+    /**
+     * The 409 for signing in on a session somebody signed in on already.
+     */
+    public static function taken() : nexus::Problem
+    {
+        return .conflict('this session is signed in already; sign out first');
+    }
+
+    /**
+     * The 401 for a session that is gone or past its lifetime.
+     */
+    internal static function ended() : nexus::Problem
+    {
+        return .unauthorized('the session has ended', $reason: 'session_ended');
     }
 
     public function close(const string& $id) : status<nexus::Problem>
@@ -50,9 +113,24 @@ public class Sessions
         return $this->store->remove($id);
     }
 
+    /**
+     * Ends every session of `$subject`. Sessions for nobody have no subject, so no `$subject` names
+     * them.
+     */
     public function closeAll(const string& $subject) : status<nexus::Problem>
     {
         return $this->store->removeAll($subject);
+    }
+
+    /**
+     * How long a session of `$subject` lasts from its last use: `guests` for nobody, else `lifetime`.
+     */
+    private const function ttl(const string? $subject) : time::duration
+    {
+        if ($subject == null) {
+            return $this->guests;
+        }
+        return $this->lifetime;
     }
 
     /**
@@ -66,7 +144,7 @@ public class Sessions
     /**
      * Who the signed request `$req` comes from: a 401 when its time is outside the window, the
      * signature does not match, or the session is gone or expired. A session in use has its expiry
-     * moved forward, at most once a minute.
+     * moved forward, at most once a minute. A session for nobody is an `anonymous` identity.
      */
     public function check(const SignedHeader& $h, const nexus::Request& $req) : result<Identity, nexus::Problem>
     {
@@ -76,7 +154,7 @@ public class Sessions
             $drift = 0 - $drift;
         }
         if ($drift > $this->window->as_secs()) {
-            return .error(.unauthorized('the request time is outside the allowed window'));
+            return .error(.unauthorized('the request time is outside the allowed window', $reason: 'signature_stale'));
         }
         string $method = $req->method->verb();
         string $text = Signature::text($method, $req->target, $h->time, $req->body);
@@ -84,19 +162,19 @@ public class Sessions
             $text = Signature::compat($method, $req->target, $h->time);
         }
         if (!Secrets::isHex($h->id) || !crypto::equal(Signature::sign($this->secret($h->id), $text), $h->sig)) {
-            return .error(.unauthorized('the signature does not match'));
+            return .error(.unauthorized('the signature does not match', $reason: 'signature_invalid'));
         }
         StoredSession? $found = try $this->store->find($h->id);
         StoredSession $s = guard $found else {
-            return .error(.unauthorized('the session has ended'));
+            return .error(Sessions::ended());
         };
         if ($now >= $s->expiresAt) {
-            return .error(.unauthorized('the session has ended'));
+            return .error(Sessions::ended());
         }
-        time::timestamp $next = $now + $this->lifetime;
+        time::timestamp $next = $now + $this->ttl($s->subject);
         if ($next - $s->expiresAt >= time::duration::mins(1)) {
             try $this->store->touch($s->id, $next);
         }
-        return .ok(Identity($via: SignedGuard::NAME, $subject: $s->subject, $credential: $s->id, $scopes: $s->scopes));
+        return .ok(Identity($via: SignedGuard::NAME, $subject: $s->subject ?? '', $credential: $s->id, $scopes: $s->scopes, $guest: $s->subject == null));
     }
 }

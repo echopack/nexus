@@ -1,0 +1,37 @@
+namespace Blog::Actions::Auth;
+
+use Blog::DB::Model::UserRepository;
+use Blog::Services::BlogUsers;
+use Blog::Transformers::UserTransformer;
+
+/**
+ * Who the session the request is signed with belongs to: `{"signed_in": true, "data": {...}}` with
+ * the user, `{"signed_in": false, "data": null}` before signing in. A client asks it as it starts,
+ * and to tell a session that ended (a 401) from one nobody signed in on yet.
+ */
+public class ShowSession : nexus::Action
+{
+    private UserRepository $users;
+    private UserTransformer $transformer;
+
+    public constructor(UserRepository $users, UserTransformer $transformer)
+    {
+        $this->users = $users;
+        $this->transformer = $transformer;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        $session = try $payload->state<nexus::auth::Identity>();
+        if ($session->anonymous()) {
+            json::Value $o = json::object();
+            $o['signed_in'] = json::bool(false);
+            $o['data'] = json::nil();
+            return .ok(nexus::Response(json: $o));
+        }
+        $user = try BlogUsers::of($this->users, $session->subject);
+        $meta = nexus::rest::Meta();
+        $meta->with('signed_in', json::bool(true));
+        return $this->transformer->own($payload, $user, $meta);
+    }
+}

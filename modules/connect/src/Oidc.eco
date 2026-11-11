@@ -94,7 +94,7 @@ public class Oidc : Connector
         json::Value $doc = try $answer->json("{$this->named}'s token endpoint");
         if ($answer->status != 200) {
             string $error = IdToken::text($doc, 'error');
-            return .error(.unauthorized("{$this->named} refused the code: {$error}"));
+            return .error(.unauthorized("{$this->named} refused the code: {$error}", $reason: 'sign_in_failed'));
         }
         string $raw = IdToken::text($doc, 'id_token');
         if ($raw->empty()) {

@@ -38,6 +38,17 @@ test response_converts
     expect($r->headers->all('Set-Cookie'))->size(2);
 }
 
+test a_streamed_response_streams
+{
+    $out = nexus::Response(stream: function(nexus::Writer $w) : void {
+        $w->write('data: hi\n\n');
+    }, type: 'text/event-stream', status: 202);
+    $r = Wire::response($out);
+    expect($r->streamed())->yes(says: 'the wire response streams');
+    expect($r->status)->is(202);
+    expect($r->headers->get('Content-Type'))->some('text/event-stream');
+}
+
 internal function forwarded(const string& $peer, const string& $xff) : http::Request
 {
     $h = http::Headers();

@@ -21,4 +21,14 @@ public class Distributed
         $this->lane = $lane;
         $this->store = $store;
     }
+
+    /**
+     * Sends every failed task of the lane back with its tries fresh, at `$now`; answers how many
+     * went back.
+     */
+    public function retryAll(std::time::timestamp $now) : result<uint64, nexus::Problem>
+    {
+        array<StoredTask> $sent = try $this->store->againAll($this->lane, $now);
+        return .ok($sent->count() as uint64);
+    }
 }

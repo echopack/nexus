@@ -1,9 +1,10 @@
 /*
  * blog: the running tour of nexus. Users and posts in MySQL through
  * carbon, a JSON or XML API answered by transformers (nexus-rest),
- * list/show/create/update/delete through nexus-crud, writes by signed in
- * authors (bearer tokens or signed sessions through nexus-auth, kept in the database), config from the
- * environment, a welcome task for new users and a nightly prune on
+ * list/show/create/update/delete through nexus-crud, signed sessions through
+ * nexus-auth, kept in the database (a client opens one before anything under
+ * /v1 answers it, signs every request with it, and signing in puts the user
+ * on it), writes by signed in authors, config from the environment, a welcome task for new users and a nightly prune on
  * nexus-work's workers, queued in the same database. Posts are also
  * reachable from the command line (`posts:show`, `posts:create`) and over
  * MCP (`show_post`, `create_post`), where clients sign in with OAuth.
@@ -12,10 +13,14 @@
  *
  *   NEXUS_DATABASE_URL=mysql://app:secret@127.0.0.1:3306/blog echoc run -- migrate
  *   NEXUS_DATABASE_URL=... echoc run -- user:password --email editor@example.com --password ...
- *   NEXUS_DATABASE_URL=... NEXUS_AUTH_KEY=... echoc run -- serve   (listens on 127.0.0.1:8080, works the queue)
+ *   NEXUS_DATABASE_URL=... NEXUS_AUTH_KEY=... echoc run -- serve   (listens on 127.0.0.1:3246, works the queue)
  *   NEXUS_DATABASE_URL=... echoc run -- work                  (works the queue, no HTTP)
  *   NEXUS_DATABASE_URL=... echoc run -- posts:show 1          (the same service as GET /v1/posts/1)
  *   echoc run -- routes
+ *
+ * `serve` also answers `/` with the blog in a browser: one HTML page (resources/web/index.html,
+ * Tailwind from its CDN) embedded at build time, reading and writing through the same API with a
+ * session it opens first and signs with Web Crypto (so on localhost or https).
  *
  * Tests: tests/unit/ is plain checks, tests/integration/ boots Blog::extensions() on a MySQL
  * database of each test's own (tests/integration/World.eco), seeds it and walks a flow in steps.
@@ -50,6 +55,8 @@
 #[depends: "../../modules/connect"]
 #[depends: "../../modules/connect/carbon"]
 #[depends: "../../modules/app"]
+#[depends: "../../modules/debug"]
+#[depends: "../../modules/debug/work"]
 #[depends: "../../../carbon"]
 #[depends: "../../../carbon/drivers/mysql"]
 #[depends: "../../../RestTransformers"]

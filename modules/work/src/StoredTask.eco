@@ -76,6 +76,18 @@ public struct StoredTask
     public string $error = '';
 
     /**
+     * Sends it back as a failed task is: due at `$now`, its tries fresh.
+     */
+    public function requeue(time::timestamp $now) : void
+    {
+        $this->status = .waiting;
+        $this->failedAt = null;
+        $this->expiresAt = null;
+        $this->attempts = 0;
+        $this->availableAt = $now;
+    }
+
+    /**
      * Whether it waits or runs.
      */
     public const function live() : bool

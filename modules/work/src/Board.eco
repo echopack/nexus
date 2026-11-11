@@ -105,12 +105,12 @@ internal struct Board
 
     /**
      * Settles task `$id` after a run of its own: done (its spawned tasks join in front of the tasks
-     * waiting for it), tried again later, or failed. Answers the names of the tasks a failure took
-     * with it.
+     * waiting for it), tried again later, or failed. Answers the tasks a failure took with it, the
+     * task itself first.
      */
-    public function settle(const string& $id, const Settle& $s, Pipeline $spawned, const array<string>& $names) : array<string>
+    public function settle(const string& $id, const Settle& $s, Pipeline $spawned, const array<string>& $names) : array<Dropped>
     {
-        array<string> $dropped = [];
+        array<Dropped> $dropped = [];
         if (!$this->nodes->has($id)) {
             return $dropped;
         }
@@ -148,9 +148,9 @@ internal struct Board
 
     /**
      * Moves the tasks due by `$now` back to ready, and fails the ones that waited past their expiry.
-     * Answers the names of the tasks that expired or went with them.
+     * Answers the tasks that expired or went with them.
      */
-    public function due(time::timestamp $now) : array<string>
+    public function due(time::timestamp $now) : array<Dropped>
     {
         array<string> $back = [];
         foreach ($this->delayed as $id => const &$at) {
@@ -171,11 +171,11 @@ internal struct Board
                 }
             }
         }
-        array<string> $gone = [];
+        array<Dropped> $gone = [];
         foreach ($expired as const &$id) {
             if ($this->nodes->has($id)) {
-                foreach ($this->fail($id, 'expired before it ran') as const &$name) {
-                    $gone[] = $name;
+                foreach ($this->fail($id, 'expired before it ran') as const &$d) {
+                    $gone[] = $d;
                 }
             }
         }
@@ -183,16 +183,17 @@ internal struct Board
     }
 
     /**
-     * Drops waiting task `$id` and every task waiting for it; answers how many. A running task is
-     * not cancelled.
+     * Drops waiting task `$id` and every task waiting for it; answers them, `$id`'s own first. A
+     * running task is not cancelled.
      */
-    public function cancel(const string& $id) : uint64
+    public function cancel(const string& $id) : array<Dropped>
     {
         if (!$this->nodes->has($id) || $this->running->has($id)) {
-            return 0;
+            array<Dropped> $none = [];
+            return $none;
         }
         array<string> $ids = [$id];
-        return $this->drop($ids)->count() as uint64;
+        return $this->drop($ids);
     }
 
     /**
@@ -205,9 +206,9 @@ internal struct Board
 
     /**
      * Fails `$id`: the tasks waiting for it go ahead when it allows failure, and go with it when it
-     * does not. Answers the names of every task dropped, `$id`'s own first.
+     * does not. Answers every task dropped, `$id`'s own first.
      */
-    internal function fail(const string& $id, const string& $why) : array<string>
+    internal function fail(const string& $id, const string& $why) : array<Dropped>
     {
         Node $n = $this->nodes->get($id);
         if (!$n->item->policy->allowFailure) {
@@ -221,16 +222,16 @@ internal struct Board
         foreach ($n->next as const &$d) {
             $this->release($d, $up);
         }
-        array<string> $names = [$n->name];
-        return $names;
+        array<Dropped> $gone = [Dropped($id, $n->name)];
+        return $gone;
     }
 
     /**
-     * Removes `$ids` and every task waiting for them; answers their names.
+     * Removes `$ids` and every task waiting for them; answers them.
      */
-    internal function drop(array<string> $ids) : array<string>
+    internal function drop(array<string> $ids) : array<Dropped>
     {
-        array<string> $names = [];
+        array<Dropped> $gone = [];
         while (!$ids->empty()) {
             string $id = $ids[$ids->count() - 1];
             $ids->pop();
@@ -241,12 +242,12 @@ internal struct Board
             $this->forget($id);
             $this->nodes->remove($id);
             $this->unlive($n);
-            $names[] = $n->name;
+            $gone[] = Dropped($id, $n->name);
             foreach ($n->next as const &$d) {
                 $ids[] = $d;
             }
         }
-        return $names;
+        return $gone;
     }
 
     /**

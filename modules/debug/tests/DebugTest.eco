@@ -1,0 +1,449 @@
+/**
+ * nexus-debug through its extension: off by default, the gates, the API's description, views and
+ * actions of a panel, the live topics as JSON and as server-sent events, the request feed, and the
+ * embedded web app's fallback.
+ */
+
+use ecotest::expect;
+use ecotest::http::{Api, Reply};
+use nexus::testing::TestApp;
+use nexus::debug::{ActionSpec, Debug, GuardGate, Panel, View};
+
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+internal const TOKEN = 'a-debug-token-of-at-least-thirty-two-chars';
+
+/**
+ * Answers `hi` and logs it.
+ */
+internal class THello : nexus::Action
+{
+    public function handle(nexus::Payload& $payload) : nexus::Response
+    {
+        $payload->log->info('said hi', ['to' => 'tests']);
+        return nexus::Response(text: 'hi');
+    }
+}
+
+/**
+ * A panel of the app's own: a counter it shows and an action that bumps it.
+ */
+#[atomic]
+internal class TPanel : Panel
+{
+    public atomic<int64> $count = atomic<int64>(0);
+
+    public function name() : string
+    {
+        return 'counter';
+    }
+
+    public function title() : string
+    {
+        return 'Counter';
+    }
+
+    public function views() : array<View>
+    {
+        array<View> $v = [
+            View('now', 'Now', .stats)->action(ActionSpec('bump', 'Bump', $confirm: true)),
+        ];
+        return $v;
+    }
+
+    public function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>
+    {
+        $o = json::object();
+        $o['count'] = json::int($this->count->load());
+        $o['asked'] = json::str($payload->request->query->get('q') ?? '');
+        return .ok($o);
+    }
+
+    public function act(nexus::Payload& $payload, const string& $action, const json::Value& $input) : result<json::Value, nexus::Problem>
+    {
+        if ($action != 'bump') {
+            return .error(.notFound("action {$action}"));
+        }
+        int64 $by = $input->get('by')?->asInt() ?? 1;
+        $this->count->add($by);
+        $o = json::object();
+        $o['message'] = json::str("bumped by {$by}");
+        return .ok($o);
+    }
+}
+
+/**
+ * Turns everyone away, like an app's admin check for a caller who is no admin.
+ */
+#[atomic]
+internal class TNoAdmin : nexus::Middleware
+{
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        return $payload->fail(nexus::Problem::forbidden('admins only'));
+    }
+}
+
+/**
+ * Lets everyone through and leaves a mark.
+ */
+#[atomic]
+internal class TAnyone : nexus::Middleware
+{
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        return $next->run($payload);
+    }
+}
+
+internal class TExt : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'test';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<THello>(scope: () => THello());
+        $s->bind<TNoAdmin>(once: () => TNoAdmin());
+        $s->bind<TAnyone>(once: () => TAnyone());
+        array<nexus::Method> $m = [.get];
+        array<nexus::MiddlewareRef> $none = [];
+        $run = function(nexus::Payload& $payload) : nexus::Response {
+            return $payload->get<THello>()->handle($payload);
+        };
+        $bound = function(container::Container $c) : bool {
+            return true;
+        };
+        $s->route(nexus::Route($m, '/hello', 'THello', $run, $bound, $none));
+        // a slow request with a span in it, for the timeline
+        $spanned = function(nexus::Payload& $payload) : nexus::Response {
+            {
+                nexus::log::Span $work = $payload->log->span('work', ['rows' => 3]);
+                $work->log->info('in work');
+                std::thread::sleep(20);
+            }
+            return nexus::Response(text: 'done');
+        };
+        array<nexus::Method> $get = [.get];
+        $s->route(nexus::Route($get, '/spanned', 'TSpanned', $spanned, $bound, $none));
+        return .ok;
+    }
+}
+
+/**
+ * An app with the console on behind the env token.
+ */
+internal function tokenApp(map<string, string> $more = map<string, string>()) : TestApp
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_DEBUG_ENABLED' => 'true', 'NEXUS_DEBUG_TOKEN' => TOKEN];
+    foreach ($more as $k => const &$v) {
+        $vars[$k] = $v;
+    }
+    array<Panel> $panels = [TPanel()];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::debug::Extension(panels: $panels), TExt()];
+    return TestApp($exts, $vars);
+}
+
+test the_console_is_off_until_enabled
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_DEBUG_TOKEN' => TOKEN];
+    array<nexus::Extension> $exts = [nexus::debug::Extension(), TExt()];
+    $app = TestApp($exts, $vars);
+    $app->api()->bearer(TOKEN)->get('/__nexus/api')->status(404);
+    $app->api()->get('/__nexus/')->status(404);
+    expect($app->kernel->services->find<Debug>())->none();
+}
+
+test the_token_gate_wants_the_token
+{
+    $app = tokenApp();
+    $app->api()->get('/__nexus/api')->status(401)->header('WWW-Authenticate', 'Bearer realm="nexus-debug"');
+    $app->api()->get('/__nexus/api/sign-in')->ok()->json('$.kind', 'token');
+    $app->api()->bearer('a-debug-token-that-is-not-the-one-set!!')->get('/__nexus/api')->status(401);
+    $app->api()->bearer(TOKEN)->get('/__nexus/api')->ok()
+        ->json('$.base', '/__nexus')
+        ->json('$.viewer.via', 'token')
+        ->json('$.signIn.kind', 'token')
+        ->json('$.panels[0].name', 'overview')
+        ->json('$.panels[5].name', 'counter')
+        ->json('$.panels[5].views[0].url', '/__nexus/api/panels/counter/now')
+        ->json('$.panels[5].views[0].actions[0].name', 'bump')
+        ->json('$.topics[0].name', 'requests')
+        ->json('$.topics[1].stream', '/__nexus/api/topics/logs/stream');
+}
+
+test a_short_token_stops_the_boot
+{
+    map<string, string> $vars = ['NEXUS_DEBUG_ENABLED' => 'true', 'NEXUS_DEBUG_TOKEN' => 'short'];
+    array<nexus::Extension> $exts = [nexus::debug::Extension(), TExt()];
+    expect(TestApp::attempt($exts, $vars))->fails();
+}
+
+test the_open_gate_is_for_localhost_and_never_for_prod
+{
+    map<string, string> $vars = ['NEXUS_DEBUG_ENABLED' => 'true'];
+    array<nexus::Extension> $exts = [nexus::debug::Extension(), TExt()];
+    $app = TestApp($exts, $vars);
+    $app->api()->get('/__nexus/api')->ok()->json('$.viewer.via', 'open')->json('$.signIn.kind', 'open');
+
+    array<nexus::Extension> $again = [nexus::debug::Extension(), TExt()];
+    expect(TestApp::attempt($again, $vars, mode: .prod))->fails();
+}
+
+test the_app_gate_takes_the_apps_credential_and_middleware
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_DEBUG_ENABLED' => 'true'];
+    array<nexus::Extension> $exts = [
+        nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)),
+        nexus::debug::Extension(gate: GuardGate(login: nexus::debug::Login('/v1/auth/token'))->through<TAnyone>()),
+        TExt(),
+    ];
+    $app = TestApp($exts, $vars);
+    nexus::Payload $payload = $app->kernel->background('issue', 'test');
+    nexus::auth::Issued $issued = guard $payload->get<nexus::auth::Tokens>()->issue('7');
+    nexus::Kernel::finish($payload);
+
+    $app->api()->get('/__nexus/api')->status(401);
+    $app->api()->bearer('test_nope_nope')->get('/__nexus/api')->status(401);
+    $app->api()->bearer($issued->token)->get('/__nexus/api')->ok()
+        ->json('$.viewer.via', 'bearer')
+        ->json('$.viewer.subject', '7')
+        ->json('$.signIn.kind', 'login')
+        ->json('$.signIn.endpoint', '/v1/auth/token')
+        ->json('$.signIn.fields[1].type', 'password');
+}
+
+test the_app_gate_signs_in_on_a_session_and_not_for_nobody
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_DEBUG_ENABLED' => 'true'];
+    array<nexus::Extension> $exts = [
+        nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)),
+        nexus::debug::Extension(gate: GuardGate(login: nexus::debug::Login(session: '/v1/auth/session', endpoint: '/v1/auth/signin'))->through<TAnyone>()),
+        TExt(),
+    ];
+    $app = TestApp($exts, $vars);
+    nexus::Payload $payload = $app->kernel->background('open', 'test');
+    nexus::auth::Opened $guest = guard $payload->get<nexus::auth::Sessions>()->open();
+    nexus::auth::Opened $member = guard $payload->get<nexus::auth::Sessions>()->open();
+    guard $payload->get<nexus::auth::Sessions>()->attach($member->stored->id, '7');
+    nexus::Kernel::finish($payload);
+    int64 $now = std::time::timestamp::now()->unix_secs();
+
+    $app->api()->get('/__nexus/api/sign-in')->ok()
+        ->json('$.kind', 'login')
+        ->json('$.session', '/v1/auth/session')
+        ->json('$.endpoint', '/v1/auth/signin');
+    $app->api()->with('Authorization', $guest->signer()->header('GET', '/__nexus/api', $now, ''))->get('/__nexus/api')->status(401);
+    $app->api()->with('Authorization', $member->signer()->header('GET', '/__nexus/api', $now, ''))->get('/__nexus/api')->ok()
+        ->json('$.viewer.via', 'signed')
+        ->json('$.viewer.subject', '7');
+}
+
+test the_app_gate_turns_away_who_the_middleware_turns_away
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_DEBUG_ENABLED' => 'true'];
+    array<nexus::Extension> $exts = [
+        nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)),
+        nexus::debug::Extension(gate: GuardGate()->through<TAnyone>()->through<TNoAdmin>()),
+        TExt(),
+    ];
+    $app = TestApp($exts, $vars);
+    nexus::Payload $payload = $app->kernel->background('issue', 'test');
+    nexus::auth::Issued $issued = guard $payload->get<nexus::auth::Tokens>()->issue('7');
+    nexus::Kernel::finish($payload);
+    $app->api()->bearer($issued->token)->get('/__nexus/api')->problem(403);
+
+    map<string, string> $scoped = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_DEBUG_ENABLED' => 'true'];
+    array<nexus::Extension> $narrow = [
+        nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)),
+        nexus::debug::Extension(gate: GuardGate(scope: 'debug')),
+        TExt(),
+    ];
+    $other = TestApp($narrow, $scoped);
+    nexus::Payload $p2 = $other->kernel->background('issue', 'test');
+    array<string> $scopes = ['posts'];
+    nexus::auth::Issued $limited = guard $p2->get<nexus::auth::Tokens>()->issue('7', 'limited', $scopes);
+    nexus::Kernel::finish($p2);
+    $other->api()->bearer($limited->token)->get('/__nexus/api')->problem(403);
+}
+
+test the_app_gate_needs_auth_listed_first
+{
+    map<string, string> $vars = ['NEXUS_DEBUG_ENABLED' => 'true'];
+    array<nexus::Extension> $exts = [nexus::debug::Extension(gate: GuardGate()), TExt()];
+    expect(TestApp::attempt($exts, $vars))->fails();
+}
+
+test a_panel_answers_its_views_and_runs_its_actions
+{
+    $app = tokenApp();
+    $api = $app->api()->bearer(TOKEN);
+    $api->get('/__nexus/api/panels/counter/now?q=x')->ok()->json('$.count', 0)->json('$.asked', 'x');
+    $api->post('/__nexus/api/panels/counter/actions/bump', json: '{"by":3}')->ok()->json('$.message', 'bumped by 3');
+    $api->post('/__nexus/api/panels/counter/actions/bump', json: '')->ok();
+    $api->get('/__nexus/api/panels/counter/now')->json('$.count', 4);
+    $api->post('/__nexus/api/panels/counter/actions/explode', json: '{}')->problem(404);
+    $api->post('/__nexus/api/panels/counter/actions/bump', body: 'nope', type: 'application/json')->problem(400);
+    $api->get('/__nexus/api/panels/counter/later')->problem(404);
+    $api->get('/__nexus/api/panels/nope/now')->problem(404);
+    $app->expectLogged(.info, 'debug action');
+    $api->get('/__nexus/api/topics/logs?limit=1000')->ok()->has('debug action');
+}
+
+test the_built_in_panels_read
+{
+    $app = tokenApp();
+    $api = $app->api()->bearer(TOKEN);
+    $app->api()->get('/hello')->ok();
+    $api->get('/__nexus/api/panels/overview/stats')->ok()->json('$.stats[0].label', 'Uptime')->json('$.stats[1].value', 1);
+    $api->get('/__nexus/api/panels/overview/stats')->ok()->json('$.stats[1].value', 1);
+    $api->get('/__nexus/api/panels/overview/app')->ok()->json('$.fields[0].value', 'test');
+    $api->get('/__nexus/api/panels/routes/routes')->ok()->has('/hello')->has('nexus::debug::Admit')->has('nexus::debug::ShowManifest');
+    $api->get('/__nexus/api/panels/env/vars')->ok()->has('NEXUS_DEBUG_TOKEN')->has('*** (secret)')->lacks(TOKEN);
+}
+
+test the_request_feed_records_the_app_and_not_itself
+{
+    $app = tokenApp();
+    $app->api()->bearer('a-secret-of-the-app')->get('/hello?x=1')->ok()->body('hi');
+    $api = $app->api()->bearer(TOKEN);
+    $api->get('/__nexus/api/panels/requests/recent')->ok()
+        ->count('$.rows', 1)
+        ->json('$.rows[0].method', 'GET')
+        ->json('$.rows[0].target', '/hello?x=1')
+        ->json('$.rows[0].status', 200)
+        ->json('$.rows[0].action', 'THello')
+        ->json('$.rows[0].headers.Authorization', '***')
+        ->json('$.rows[0].logs[0].message', 'said hi')
+        ->lacks('a-secret-of-the-app');
+}
+
+test a_requests_timeline_shows_its_action_and_the_spans_inside_it
+{
+    $app = tokenApp();
+    $app->api()->with('X-Request-Id', 'req-timeline-1')->get('/spanned')->ok();
+    $api = $app->api()->bearer(TOKEN);
+    $api->get('/__nexus/api/panels/requests/recent')->ok()
+        ->json('$.rows[0].id', 'req-timeline-1')
+        ->json('$.rows[0].queries', 0)
+        ->lacks('"timeline"');
+    $api->get('/__nexus/api/panels/requests/timeline?id=req-timeline-1')->ok()
+        ->json('$.request.target', '/spanned')
+        ->json('$.request.status', 200)
+        ->json('$.timeline.dropped', 0)
+        ->json('$.timeline.marks[0].kind', 'action')
+        ->json('$.timeline.marks[0].name', 'TSpanned')
+        ->json('$.timeline.marks[1].kind', 'span')
+        ->json('$.timeline.marks[1].name', 'work')
+        ->json('$.timeline.marks[1].detail', 'rows=3')
+        ->json('$.timeline.marks[1].parent', 1)
+        ->json('$.logs[0].message', 'in work');
+    $api->get('/__nexus/api/panels/requests/timeline?id=nope')->problem(404);
+    $api->get('/__nexus/api/panels/requests/timeline')->problem(400);
+}
+
+test the_slowest_requests_come_first_and_rows_open_their_timeline
+{
+    $app = tokenApp();
+    $app->api()->get('/hello')->ok();
+    $app->api()->get('/spanned')->ok();
+    $app->api()->get('/hello')->ok();
+    $api = $app->api()->bearer(TOKEN);
+    $api->get('/__nexus/api/panels/requests/slow')->ok()
+        ->count('$.rows', 3)
+        ->json('$.rows[0].target', '/spanned');
+    $api->get('/__nexus/api')->ok()
+        ->json('$.panels[1].views[0].detail', 'timeline')
+        ->json('$.panels[1].views[1].name', 'slow')
+        ->json('$.panels[1].views[2].kind', 'timeline')
+        ->json('$.panels[1].views[2].filters[0]', 'id');
+}
+
+test a_topic_answers_what_came_after_a_cursor
+{
+    $app = tokenApp();
+    $app->api()->get('/hello')->ok();
+    $app->api()->get('/hello')->ok();
+    $api = $app->api()->bearer(TOKEN);
+    $api->get('/__nexus/api/topics/requests')->ok()->json('$.topic', 'requests')->json('$.last', 2)->count('$.events', 2)->json('$.events[0].seq', 1);
+    $api->get('/__nexus/api/topics/requests?after=1')->ok()->count('$.events', 1)->json('$.events[0].data.path', '/hello');
+    $api->get('/__nexus/api/topics/requests?after=2')->ok()->count('$.events', 0);
+    $api->get('/__nexus/api/topics/requests?limit=1')->ok()->count('$.events', 1)->json('$.events[0].seq', 2);
+    $api->get('/__nexus/api/topics/nope')->problem(404);
+    // the log has the app's lines and none of the console's own
+    $api->get('/__nexus/api/topics/logs?limit=1000')->ok()->has('said hi')->has('GET /hello 200')->lacks('GET /__nexus');
+}
+
+test a_topic_streams_as_server_sent_events
+{
+    $app = tokenApp();
+    $app->api()->get('/hello')->ok();
+    $api = $app->api()->bearer(TOKEN);
+    $api->get('/__nexus/api/topics/requests/stream')->ok()
+        ->header('Content-Type', 'text/event-stream')
+        ->has('retry: 2000')
+        ->has('id: 1')
+        ->has('event: requests')
+        ->has('"path":"/hello"');
+    $api->with('Last-Event-ID', '1')->get('/__nexus/api/topics/requests/stream?after=0')->ok()->has('id: 1');
+}
+
+test the_ring_keeps_the_newest
+{
+    $ring = nexus::debug::Ring(3);
+    foreach ([1, 2, 3, 4, 5] as $n) {
+        $ring->publish("\{\"n\":{$n}}");
+    }
+    expect($ring->last())->is(5 as uint64);
+    $all = $ring->since(0, 10);
+    expect($all)->size(3);
+    expect($all[0]->seq)->is(3 as uint64);
+    expect($all[2]->data)->is('{"n":5}');
+    expect($ring->since(4, 10))->size(1);
+    expect($ring->since(5, 10))->size(0);
+    expect($ring->since(0, 2)[0]->seq)->is(4 as uint64);
+}
+
+test the_web_app_falls_back_to_its_index
+{
+    $app = tokenApp(['NEXUS_DEBUG_PATH' => '/debug/']);
+    $app->api()->get('/debug/')->ok()
+        ->header('Content-Type', 'text/html; charset=utf-8')
+        ->header('X-Frame-Options', 'DENY')
+        ->has('/debug');
+    $app->api()->get('/debug/panels/logs')->ok()->header('Cache-Control', 'no-cache');
+    $app->api()->get('/debug/missing.js')->status(404);
+    $app->api()->get('/debug/api/nope')->status(404);
+    $app->api()->bearer(TOKEN)->get('/debug/api')->ok()->json('$.base', '/debug');
+}
+
+/**
+ * The path of the script the built index loads, `assets/index-<hash>.js`.
+ */
+internal function script(const string& $index) : string
+{
+    usize $at = $index->find('./assets/');
+    usize $end = $index->find('.js', $at);
+    expect($at < $index->size())->yes(says: 'the index loads a script');
+    return string($index->sub($at + 2, $end + 3 - $at - 2));
+}
+
+test the_built_web_app_is_served_with_its_base_and_cached_by_hash
+{
+    $app = tokenApp();
+    Reply $page = $app->api()->get('/__nexus/')->ok()
+        ->header('Cache-Control', 'no-cache')
+        ->has('<base href="/__nexus/" />')
+        ->has('<meta name="nexus-base" content="/__nexus" />')
+        ->lacks('__NEXUS_BASE__');
+    result<ecotest::http::Response, ecotest::http::TransportError> $got = $page->response;
+    ecotest::http::Response $res = guard $got;
+    string $js = script($res->body);
+    $app->api()->get("/__nexus/{$js}")->ok()
+        ->header('Content-Type', 'text/javascript; charset=utf-8')
+        ->header('Cache-Control', 'public, max-age=31536000, immutable');
+    $app->api()->with('Accept-Encoding', 'gzip, br')->get("/__nexus/{$js}")->ok()->header('Content-Encoding', 'gzip');
+    nexus::debug::Asset $a = expect(nexus::debug::Assets::find($js))->some();
+    $app->api()->with('If-None-Match', $a->etag)->get("/__nexus/{$js}")->status(304);
+}

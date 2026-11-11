@@ -1,0 +1,22 @@
+namespace nexus::work;
+
+/**
+ * A task the board let go without running it: cancelled, expired, or taken along by a failure.
+ */
+public struct Dropped
+{
+    public string $id;
+    public string $name;
+
+    /**
+     * The names of `$all`, in order, for a log line.
+     */
+    public static function names(const array<Dropped>& $all) : string
+    {
+        array<string> $names = [];
+        foreach ($all as const &$d) {
+            $names[] = $d->name;
+        }
+        return str::join($names, ', ');
+    }
+}

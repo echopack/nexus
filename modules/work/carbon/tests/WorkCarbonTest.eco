@@ -3,7 +3,7 @@
  * reads back what was sent.
  */
 
-use nexus::work::{StoredTask, Batch, Edge, Pushed, Requeued, TaskStatus, Hold, Lane, Queues, Distributed};
+use nexus::work::{StoredTask, Batch, Edge, Pushed, TaskStatus, Hold, Lane, Queues, Distributed};
 use nexus::work::carbon::{QueuedTask, QueuedTaskTable, TaskEdge, TaskEdgeTable, Store};
 use nexus::testing::TestApp;
 use container::Container;
@@ -217,12 +217,70 @@ test retries_failures_again_and_prune
     StoredTask $failed = $r->task('a');
     $failed->status = .failed;
     $r->fake->rows([$r->row($failed)])->written(1);
-    Requeued $sent = guard $r->store()->again('a', $r->clock->now());
-    expect($sent == Requeued::sent)->yes(says: 'the failed task was sent back');
+    StoredTask? $sent = guard $r->store()->again('a', $r->clock->now());
+    StoredTask $back = expect($sent)->some();
+    expect($back->status == TaskStatus::waiting)->yes(says: 'the failed task was sent back');
 
     $r->fake->rows([])->rows([])->written(0);
     uint64 $gone = guard $r->store()->prune($r->clock->now(), $r->clock->now());
     expect($gone)->is(0);
+}
+
+test every_failed_task_of_a_lane_goes_back_in_one_update
+{
+    $r = Rig(true);
+    StoredTask $a = $r->task('a');
+    $a->status = .failed;
+    StoredTask $b = $r->task('b');
+    $b->status = .failed;
+    $r->fake->rows([$r->row($a), $r->row($b)])->written(2);
+    array<StoredTask> $sent = guard $r->store()->againAll('jobs', $r->clock->now());
+    expect($sent)->size(2);
+    expect($sent[1]->status == TaskStatus::waiting)->yes(says: 'each task sent back waits');
+    expect($r->fake->last())->starts('UPDATE `nexus_tasks` SET `status` = ?');
+    expect($r->fake->last())->has('`nexus_tasks`.`id` IN (?, ?)');
+}
+
+test a_unique_failed_task_goes_back_without_a_second_read
+{
+    $r = Rig(true);
+    StoredTask $u = $r->task('u');
+    $u->status = .failed;
+    $u->hold = .unique;
+    $u->holdKey = 'report';
+    $r->fake->rows([$r->row($u)])->written(1);
+    usize $before = $r->fake->count();
+    array<StoredTask> $sent = guard $r->store()->againAll('jobs', $r->clock->now());
+    expect($sent)->size(1);
+    expect($r->fake->count())->is($before + 2);
+    expect($r->fake->last())->has('`unique_live` = ?');
+}
+
+test cancelling_reads_a_level_of_the_graph_at_a_time
+{
+    $r = Rig(true);
+    $r->fake->rows([$r->row($r->task('a'))])->written(1)
+        ->rows([TaskEdgeTable()->row(TaskEdge::of(Edge('b', 'a'))), TaskEdgeTable()->row(TaskEdge::of(Edge('c', 'a')))])
+        ->rows([$r->row($r->task('b')), $r->row($r->task('c'))])->written(2)->rows([]);
+    usize $before = $r->fake->count();
+    array<StoredTask> $gone = guard $r->store()->cancel('a', $r->clock->now());
+    expect($gone)->size(3);
+    expect($gone[0]->id)->is('a');
+    expect($gone[2]->status == TaskStatus::cancelled)->yes(says: 'what waited for it is cancelled too');
+    // a read, an update and the edges for each of the two levels
+    expect($r->fake->count())->is($before + 6);
+    expect($r->fake->texts()[$before + 4])->starts('UPDATE `nexus_tasks` SET `status` = ?');
+    expect($r->fake->texts()[$before + 4])->has('`nexus_tasks`.`id` IN (?, ?)');
+}
+
+test a_cancel_another_server_won_answers_nothing
+{
+    $r = Rig(true);
+    $r->fake->rows([$r->row($r->task('a'))])->written(0)->rows([]);
+    usize $before = $r->fake->count();
+    array<StoredTask> $gone = guard $r->store()->cancel('a', $r->clock->now());
+    expect($gone)->size(0);
+    expect($r->fake->count())->is($before + 3);
 }
 
 test boot_wants_the_tables_wired
@@ -233,4 +291,22 @@ test boot_wants_the_tables_wired
     });
     array<nexus::Extension> $exts = [$db, nexus::work::Extension(), nexus::work::carbon::Extension()];
     expect(bootWhy($exts))->is('nexus-work-carbon: wire the task tables on the database: nexus::work::carbon::Tables::wire($db)');
+}
+
+test the_store_lists_recent_tasks
+{
+    $r = Rig(true);
+    StoredTask $failed = $r->task('a');
+    $failed->status = .failed;
+    $r->fake->rows([$r->row($failed)]);
+    array<StoredTask> $listed = guard $r->store()->recent('jobs', TaskStatus::failed, 20);
+    expect($listed)->size(1);
+    expect($listed[0]->id)->is('a');
+    expect($r->fake->last())->has('WHERE `nexus_tasks`.`lane` = ? AND `nexus_tasks`.`status` = ?');
+    expect($r->fake->last())->has('ORDER BY `nexus_tasks`.`created_at` DESC LIMIT 20');
+
+    $r->fake->rows([]);
+    array<StoredTask> $none = guard $r->store()->recent('', null, 5);
+    expect($none)->size(0);
+    expect($r->fake->last())->lacks('WHERE');
 }

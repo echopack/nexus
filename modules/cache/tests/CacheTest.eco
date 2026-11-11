@@ -131,3 +131,25 @@ test a_store_that_is_down_is_a_miss_and_a_warning
     $app->expectLogged(.warn, 'cache write failed');
     expect($cache->get('a'))->fails();
 }
+
+test each_call_is_marked_on_the_watched_requests_timeline
+{
+    $traces = nexus::trace::Traces();
+    $cache = Cache(MemoryStore(), .expires(.mins(10)), nexus::Logger::silent(), traces: $traces);
+    expect($cache->get('a', () => 'made'))->is('made');
+    $t = nexus::trace::Trace();
+    $traces->enter($t);
+    expect($cache->get('b', () => 'made'))->is('made');
+    expect($cache->get('b', () => 'made'))->is('made');
+    $traces->leave();
+    expect($cache->get('c', () => 'made'))->is('made');
+    array<nexus::trace::Mark> $marks = $t->marks();
+    // a miss and the write it makes, then a hit; nothing from before or after
+    expect($marks)->size(3);
+    expect($marks[0]->name)->is('cache get');
+    expect($marks[0]->detail)->is('b');
+    expect($marks[0]->note)->is('miss');
+    expect($marks[1]->name)->is('cache put');
+    expect($marks[2]->note)->is('hit');
+    expect($t->sum(.cache)->count)->is(3 as usize);
+}

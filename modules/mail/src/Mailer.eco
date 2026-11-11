@@ -21,12 +21,18 @@ public class Mailer
     private nexus::Logger $log;
     private calendar::Clock $clock;
 
-    public constructor(Transport $transport, Address? $from, nexus::Logger $log, clock: calendar::Clock $clock = calendar::SystemClock())
+    /**
+     * Where a watched request's timeline is found, to mark each delivery on it.
+     */
+    private nexus::trace::Traces $traces;
+
+    public constructor(Transport $transport, Address? $from, nexus::Logger $log, clock: calendar::Clock $clock = calendar::SystemClock(), traces: nexus::trace::Traces $traces = nexus::trace::Traces())
     {
         $this->transport = $transport;
         $this->from = $from;
         $this->log = $log;
         $this->clock = $clock;
+        $this->traces = $traces;
     }
 
     /**
@@ -70,7 +76,10 @@ public class Mailer
         Delivery $d = Delivery($from, $m->envelope->recipients(), $id, mv $mime, $m);
         array<string> $emails = $d->emails();
         string $to = str::join($emails, ', ');
+        nexus::trace::Timed $timed = nexus::trace::Timed($this->traces->here(), .mail, 'mail send', $to);
+        $timed->note($m->subject);
         guard $this->transport->deliver($d) else ($e) {
+            $timed->fail();
             $this->log->warn('mail not sent', ['to' => $to, 'subject' => $m->subject, 'error' => $e->message()]);
             return .error($e);
         };

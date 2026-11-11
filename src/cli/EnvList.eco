@@ -17,7 +17,7 @@ public struct EnvList
      * The defaults of the core's variables, shared with the code that reads them.
      */
     public const string MODE = 'dev';
-    public const string LISTEN = '127.0.0.1:8080';
+    public const string LISTEN = '127.0.0.1:3246';
     public const string LOG = 'info';
     public const string LOG_ROTATE = 'never';
     public const string LOG_KEEP = '5';

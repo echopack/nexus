@@ -30,14 +30,10 @@ public class ScheduleCommand : nexus::Command
         }
         foreach ($w->scheduler->plans as $p) {
             string $next = 'never';
-            Schedule? $schedule = $p->schedule;
-            if ($schedule != null) {
-                Schedule $s = guard $schedule;
-                std::time::timestamp? $at = $s->next($w->clock->now(), $w->zone);
-                if ($at != null) {
-                    std::time::timestamp $due = guard $at;
-                    $next = Stamp::text($due);
-                }
+            std::time::timestamp? $at = $p->next($w->clock->now(), $w->zone);
+            if ($at != null) {
+                std::time::timestamp $due = guard $at;
+                $next = Stamp::text($due);
             }
             io::println("{$p->name}  {$p->text()}  into {$p->into}  next {$next}");
         }

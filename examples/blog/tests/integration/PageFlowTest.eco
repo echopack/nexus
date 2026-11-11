@@ -1,0 +1,16 @@
+/**
+ * The blog in a browser: the one page at `/`, embedded in the binary.
+ */
+
+#[group: "integration"]
+test the_page_is_served_at_the_root
+{
+    $world = World();
+
+    ecotest::step('anyone gets the page');
+    $world->api->get('/')
+        ->status(200)
+        ->type('text/html')
+        ->has('cdn.tailwindcss.com')
+        ->has('/v1/posts');
+}

@@ -18,6 +18,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::http::Proxies>('nexus::http::Proxies');
     $g->name<nexus::http::SecureHeaders>('nexus::http::SecureHeaders');
     $g->name<nexus::http::Wire>('nexus::http::Wire');
+    $g->name<nexus::http::WireWriter>('nexus::http::WireWriter');
 }
 
 /**

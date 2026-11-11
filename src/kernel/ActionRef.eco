@@ -33,6 +33,19 @@ public class ActionRef<A>
     }
 
     /**
+     * Wraps this route in the middleware `$refs` name, in order: middleware chosen while wiring
+     * rather than named by type here, as a list an extension was handed. It runs where
+     * `middleware<M>()` would.
+     */
+    public function through(const array<MiddlewareRef>& $refs) : ActionRef<A>
+    {
+        foreach ($refs as const &$ref) {
+            $this->wiring->route->middleware[] = $ref;
+        }
+        return $this;
+    }
+
+    /**
      * The action's qualified name.
      */
     public const function action() : string

@@ -37,15 +37,15 @@ public class CancelCommand : nexus::Command
             return 1;
         };
         Work $w = $kernel->services->get<Work>();
-        uint64 $n = guard $d->store->cancel($id, $w->clock->now()) else ($p) {
+        array<StoredTask> $gone = guard $d->store->cancel($id, $w->clock->now()) else ($p) {
             io::eprintln("work:cancel: {$p->detail(.dev)}");
             return 1;
         };
-        if ($n == 0) {
+        if ($gone->empty()) {
             io::eprintln("work:cancel: no waiting task {$id}");
             return 1;
         }
-        io::println("cancelled  {$n} tasks");
+        io::println("cancelled  {$gone->count()} tasks");
         return 0;
     }
 }

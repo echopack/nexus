@@ -16,6 +16,7 @@ internal class KEcho : nexus::Action
         $o['target'] = json::str($payload->request->target);
         $o['body'] = json::str($payload->request->body);
         $o['who'] = json::str($payload->request->header('X-Who') ?? '');
+        $o['auth'] = json::str($payload->request->header('Authorization') ?? '');
         $o['host'] = json::str($payload->request->header('Host') ?? '');
         $o['accept'] = json::str($payload->request->header('Accept') ?? '');
         $o['length'] = json::str($payload->request->header('Content-Length') ?? '');
@@ -53,6 +54,22 @@ internal class KApp : nexus::Extension
             return $services->has<KEcho>();
         };
         $s->route(nexus::Route($m, '/echo', 'KEcho', $d, $b, $w));
+
+        array<nexus::Method> $g = [.get];
+        $stream = function(nexus::Payload& $payload) : nexus::Response {
+            return nexus::Response(stream: function(nexus::Writer $out) : void {
+                int32 $n = 0;
+                while ($out->open()) {
+                    $n++;
+                    $out->write("tick {$n}\n");
+                    $out->flush();
+                }
+            }, type: 'text/plain');
+        };
+        $any = function(Container $services) : bool {
+            return true;
+        };
+        $s->route(nexus::Route($g, '/ticks', 'KTicks', $stream, $any, $w));
         return .ok;
     }
 }
@@ -148,6 +165,14 @@ test an_app_answers_through_its_api_from_loopback
     $app->expectLogged(.info, 'GET /echo 200')->expectNotLogged('GET /echo 500');
 }
 
+test a_streamed_body_reads_up_to_its_first_flush
+{
+    $api = kernelApi('');
+
+    $api->get('/ticks')->ok()->header('Content-Type', 'text/plain')->body("tick 1\n");
+    $api->head('/ticks')->ok()->body('');
+}
+
 test a_test_replaces_what_the_app_bound
 {
     array<nexus::Extension> $exts = [KApp()];
@@ -175,4 +200,14 @@ test log_checks_fail_at_the_callers_line_and_list_the_log
     expect($failures[1]->summary)->is("expected 'GET /echo 200' not to be logged");
     string $file = "{$failures[0]->at->file}";
     expect($file)->ends('TestAppTest.eco');
+}
+
+test a_signed_api_signs_each_request_on_its_own
+{
+    TestApp $app = kernelApp();
+    $api = $app->api(signed: function(string $method, string $target, string $body) : string {
+        return "{$method} {$target} {$body}";
+    });
+    $api->get('/echo?x=1')->ok()->json('$.auth', 'GET /echo?x=1 ');
+    $api->post('/echo', json: '{"a":1}')->ok()->json('$.auth', 'POST /echo {"a":1}');
 }

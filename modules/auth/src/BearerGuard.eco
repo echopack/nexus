@@ -14,15 +14,25 @@ public class BearerGuard : Guard
         return BearerGuard::NAME;
     }
 
-    public function identify(nexus::Payload& $payload) : result<Identity?, nexus::Problem>
+    /**
+     * The token of `Authorization: Bearer <token>`, or null when `$request` carries none.
+     */
+    public static function token(const nexus::Request& $request) : string?
     {
-        string $header = guard $payload->request->header('Authorization') else {
-            return .ok(null);
+        string $header = guard $request->header('Authorization') else {
+            return null;
         };
         if ($header->size() < 7 || str::lower($header->sub(0, 7)->clone()) != 'bearer ') {
-            return .ok(null);
+            return null;
         }
-        string $text = str::trim($header->sub(7, $header->size() - 7)->clone());
+        return str::trim($header->sub(7, $header->size() - 7)->clone());
+    }
+
+    public function identify(nexus::Payload& $payload) : result<Identity?, nexus::Problem>
+    {
+        string $text = guard BearerGuard::token($payload->request) else {
+            return .ok(null);
+        };
         Tokens $tokens = $payload->get<Tokens>();
         if (Token::parse($tokens->prefix, $text) == null) {
             return .ok(null);

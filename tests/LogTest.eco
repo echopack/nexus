@@ -404,3 +404,27 @@ test the_cap_compiles_the_levels_below_it_away
     expect(Level::cap() == Level::info)->yes(says: 'the cap is info');
 }
 #[end]
+
+test a_tap_reaches_every_logger_of_the_root_taken_before_or_after
+{
+    $mem = Memory();
+    $root = memoryLog($mem, .info);
+    $req = $root->with(['req' => 'abc']);
+    $tapped = Memory();
+    $root->tap($tapped);
+    $req->info('from a child taken before');
+    $root->only([])->info('from one with no sinks of its own');
+    expect($tapped->entries())->size(2);
+    expect($tapped->entries()[0]->all()->get('req')?->text())->some('abc');
+    expect($mem->entries())->size(1);
+}
+
+test a_root_without_sinks_writes_once_tapped
+{
+    array<Sink> $none = [];
+    $log = Logger(mv $none, .info);
+    expect($log->enabled(.info))->no(says: 'nowhere to write yet');
+    $tapped = Memory();
+    $log->tap($tapped);
+    expect($log->enabled(.info))->yes(says: 'the tap is somewhere to write');
+}

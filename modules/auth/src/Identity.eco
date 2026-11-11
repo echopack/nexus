@@ -13,7 +13,7 @@ namespace nexus::auth;
  *         return $payload->fail($p);
  *     };
  *     nexus::auth::Identity $id = guard $found else {
- *         return $payload->fail(.unauthorized('this needs a signed in caller'));
+ *         return $payload->fail(.unauthorized('this needs a signed in caller', $reason: 'signed_in_required'));
  *     };
  *     int64 $key = guard $id->number() else { ... };
  *     User? $user = guard $this->users->find()->get($key) else { ... };
@@ -26,6 +26,10 @@ namespace nexus::auth;
 public struct Identity
 {
     public string $via;
+
+    /**
+     * Who the credential names; empty for a guest.
+     */
     public string $subject;
     public string $credential;
     public array<string> $scopes = [];
@@ -40,6 +44,19 @@ public struct Identity
      * The OAuth client that holds the credential; empty for the app's own.
      */
     public string $client = '';
+
+    /**
+     * Whether the credential is a session nobody signed in on yet.
+     */
+    public bool $guest = false;
+
+    /**
+     * Whether the credential names nobody: a session the client opened before signing in.
+     */
+    public const function anonymous() : bool
+    {
+        return $this->guest;
+    }
 
     /**
      * The subject as a number, for apps that key users by an integer id.
@@ -60,10 +77,14 @@ public struct Identity
 
     /**
      * Whether the credential carries `$scope`. One the app issued without scopes carries every
-     * one; a token an OAuth client holds carries what it was granted.
+     * one; a token an OAuth client holds carries what it was granted; a session for nobody carries
+     * none.
      */
     public const function has(const string& $scope) : bool
     {
+        if ($this->anonymous()) {
+            return false;
+        }
         if ($this->scopes->empty() && $this->firstParty()) {
             return true;
         }

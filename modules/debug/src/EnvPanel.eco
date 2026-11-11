@@ -1,0 +1,72 @@
+namespace nexus::debug;
+
+/**
+ * Every environment variable the app reads: who reads it, its type and default, whether it is set,
+ * and its value unless it is a secret.
+ */
+#[atomic]
+public class EnvPanel : Panel
+{
+    private Debug $debug;
+
+    public constructor(Debug $debug)
+    {
+        $this->debug = $debug;
+    }
+
+    public function name() : string
+    {
+        return 'env';
+    }
+
+    public function title() : string
+    {
+        return 'Environment';
+    }
+
+    public function views() : array<View>
+    {
+        array<View> $v = [
+            View('vars', 'Variables', .table)
+                ->column('name', 'Name', 'code')
+                ->column('owner', 'Read by')
+                ->column('type', 'Type', 'code')
+                ->column('value', 'Value', 'code')
+                ->column('fallback', 'Default', 'code')
+                ->column('doc', 'What for'),
+        ];
+        return $v;
+    }
+
+    public function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>
+    {
+        nexus::Kernel $k = try $this->debug->booted();
+        $rows = json::arr();
+        foreach (nexus::EnvList::all(nexus::Tables::generated()->envs) as const &$v) {
+            string? $set = $k->env->get($v->name);
+            $r = json::object();
+            $r['name'] = json::str($v->name);
+            $r['owner'] = json::str($v->owner);
+            $r['type'] = json::str($v->type);
+            $r['set'] = json::bool($set != null);
+            if ($set == null) {
+                if ($v->required) {
+                    $r['value'] = json::str('(required, unset)');
+                } else {
+                    $r['value'] = json::str('(unset)');
+                }
+            } else if ($v->secret) {
+                $r['value'] = json::str('*** (secret)');
+            } else {
+                string $value = guard $set;
+                $r['value'] = json::str($value);
+            }
+            $r['fallback'] = json::str($v->fallback);
+            $r['required'] = json::bool($v->required);
+            $r['secret'] = json::bool($v->secret);
+            $r['doc'] = json::str($v->doc);
+            $rows[] = mv $r;
+        }
+        return .ok(View::rows(mv $rows));
+    }
+}

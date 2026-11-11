@@ -12,6 +12,11 @@ public class Lanes
     internal array<Feeder> $feeders = [];
 
     /**
+     * Who hears what happens to the tasks of every lane.
+     */
+    public Watchers $watchers = Watchers();
+
+    /**
      * Adds async lane `$p`; a lane name taken already is refused.
      */
     public function async(Pool $p) : status<string>
@@ -19,18 +24,21 @@ public class Lanes
         if ($this->taken($p->lane)) {
             return .error("{$p->lane}: a lane of that name is bound already");
         }
+        $p->watchers = $this->watchers;
         $this->pools[$p->lane] = $p;
         return .ok;
     }
 
     /**
-     * Adds distributed lane `$d`; a lane name taken already is refused.
+     * Adds distributed lane `$d`, its store wrapped so the lanes' observers hear what changes in
+     * it; a lane name taken already is refused.
      */
     public function distributed(Distributed $d) : status<string>
     {
         if ($this->taken($d->lane)) {
             return .error("{$d->lane}: a lane of that name is bound already");
         }
+        $d->store = Observed($d->store, $this->watchers);
         $this->stores[$d->lane] = $d;
         return .ok;
     }
@@ -67,6 +75,33 @@ public class Lanes
             $out[] = $d;
         }
         return $out;
+    }
+
+    /**
+     * The tasks claimed from distributed lane `$name` that run now in this process.
+     */
+    public const function inflight(const string& $name) : array<StoredTask>
+    {
+        foreach ($this->feeders as $f) {
+            if ($f->lane->lane == $name) {
+                return $f->running();
+            }
+        }
+        array<StoredTask> $none = [];
+        return $none;
+    }
+
+    /**
+     * How many tasks claimed from distributed lane `$name` run now in this process.
+     */
+    public const function busy(const string& $name) : uint64
+    {
+        foreach ($this->feeders as $f) {
+            if ($f->lane->lane == $name) {
+                return $f->busy();
+            }
+        }
+        return 0;
     }
 
     /**

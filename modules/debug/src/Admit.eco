@@ -1,0 +1,26 @@
+namespace nexus::debug;
+
+/**
+ * Lets a call to the console's API through when the gate admits it, and puts who it let in on the
+ * payload as a `Viewer`. Every API route but the sign in goes through it, then through the gate's
+ * own middleware.
+ */
+#[atomic]
+public class Admit : nexus::Middleware
+{
+    private Gate $gate;
+
+    public constructor(Gate $gate)
+    {
+        $this->gate = $gate;
+    }
+
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        Viewer $viewer = guard $this->gate->admit($payload) else ($no) {
+            return $no;
+        };
+        $payload->put<Viewer>($viewer);
+        return $next->run($payload);
+    }
+}

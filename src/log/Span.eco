@@ -22,14 +22,18 @@ public struct Span
     public const string $id;
     private time::instant $start;
     private Level $close;
+    private nexus::trace::Trace? $trace = null;
+    private uint32 $mark = 0;
 
-    internal constructor(nexus::Logger $log, string $name, string $id, Level $close)
+    internal constructor(nexus::Logger $log, string $name, string $id, Level $close, traced: nexus::trace::Trace? $trace, mark: uint32 $mark)
     {
         $this->log = $log;
         $this->name = mv $name;
         $this->id = mv $id;
         $this->start = .now();
         $this->close = $close;
+        $this->trace = $trace;
+        $this->mark = $mark;
     }
 
     /**
@@ -42,6 +46,10 @@ public struct Span
 
     destructor()
     {
+        if ($this->trace != null) {
+            nexus::trace::Trace $t = guard $this->trace;
+            $t->close($this->mark);
+        }
         if (!$this->log->enabled($this->close)) {
             return;
         }

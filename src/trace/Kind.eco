@@ -1,0 +1,49 @@
+namespace nexus::trace;
+
+/**
+ * What a mark on a request's timeline timed.
+ */
+public enum Kind : uint8
+{
+    /**
+     * One middleware, the rest of the chain inside it.
+     */
+    case middleware = 1;
+
+    /**
+     * The action, from resolving it to its answer.
+     */
+    case action = 2;
+
+    /**
+     * A span the app opened with `$log->span(...)`.
+     */
+    case span = 3;
+
+    /**
+     * A statement sent to the database.
+     */
+    case query = 4;
+
+    /**
+     * A read or write of the cache.
+     */
+    case cache = 5;
+
+    /**
+     * A mail handed to its transport.
+     */
+    case mail = 6;
+
+    public const function name() : string
+    {
+        return match ($this) {
+            Kind::middleware => 'middleware',
+            Kind::action => 'action',
+            Kind::span => 'span',
+            Kind::query => 'query',
+            Kind::cache => 'cache',
+            Kind::mail => 'mail',
+        };
+    }
+}

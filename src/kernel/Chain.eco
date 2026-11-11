@@ -9,9 +9,32 @@ public class Chain
     public array<Middleware> $links;
     public function<Response(Payload&)> $last;
 
+    /**
+     * The name of each link, as the request's timeline shows it; may be shorter than `links`.
+     */
+    public array<string> $names = [];
+
     public constructor(array<Middleware> $links, function<Response(Payload&)> $last)
     {
         $this->links = mv $links;
         $this->last = $last;
+    }
+
+    public constructor(array<Middleware> $links, names: array<string> $names, function<Response(Payload&)> $last)
+    {
+        $this->links = mv $links;
+        $this->names = mv $names;
+        $this->last = $last;
+    }
+
+    /**
+     * The name of link `$at`, `middleware #<n>` when it was given none.
+     */
+    public const function name(usize $at) : string
+    {
+        if ($at < $this->names->count() && !$this->names[$at]->empty()) {
+            return $this->names[$at];
+        }
+        return "middleware #{$at + 1}";
     }
 }

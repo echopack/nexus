@@ -2,6 +2,7 @@ namespace nexus;
 
 use std::time;
 use nexus::log;
+use nexus::trace;
 
 /**
  * The structured logger. Shared by every thread. `with` gives a child that stamps extra fields on
@@ -12,7 +13,8 @@ use nexus::log;
  *
  * The kernel binds the root logger in the container and the request's logger in each request's, so
  * a service takes a `Logger` like any other dependency. Code that has neither reaches
- * `Logger::process()`.
+ * `Logger::process()`. A sink `tap`ped in later reaches every logger made from the same root,
+ * whenever it was taken.
  *
  * A build with `--define NEXUS_LOG_MAX_INFO` (or `_DEBUG`, `_WARN`, `_ERROR`) compiles the levels
  * below the cap to nothing. Their arguments are still built, so guard expensive fields with
@@ -35,18 +37,31 @@ public class Logger
      */
     public const log::Context? $context;
 
+    /**
+     * The sinks tapped in after the root was built, shared with every logger made from it.
+     */
+    private log::Taps $taps;
+
+    /**
+     * The request timeline its spans are marked on, null when no one watches.
+     */
+    private trace::Trace? $trace = null;
+
     public constructor(array<log::Sink> $sinks, log::Level $min)
     {
         $this->sinks = mv $sinks;
         $this->level = $min;
         $this->context = null;
+        $this->taps = log::Taps();
     }
 
-    internal constructor(array<log::Sink> $sinks, log::Level $min, context: log::Context $context)
+    internal constructor(array<log::Sink> $sinks, log::Level $min, log::Context? $context, taps: log::Taps $taps, traced: trace::Trace? $trace = null)
     {
         $this->sinks = mv $sinks;
         $this->level = $min;
         $this->context = $context;
+        $this->taps = $taps;
+        $this->trace = $trace;
     }
 
     /**
@@ -87,7 +102,7 @@ public class Logger
     {
         return $level->value() >= $this->level->value()
             && $level->value() >= log::Level::cap()->value()
-            && !$this->sinks->empty();
+            && (!$this->sinks->empty() || $this->taps->any());
     }
 
     /**
@@ -96,7 +111,7 @@ public class Logger
     public const function with(log::Fields $fields) : Logger
     {
         $c = log::Context($this->context, mv $fields);
-        return Logger($this->sinks, $this->level, context: $c);
+        return Logger($this->sinks, $this->level, $c, taps: $this->taps, traced: $this->trace);
     }
 
     /**
@@ -111,28 +126,68 @@ public class Logger
     }
 
     /**
-     * A child with this logger's fields and level that writes to `$sinks` only.
+     * A child with this logger's fields and level that writes to `$sinks` only, and to what is
+     * tapped into its root.
      */
     public const function only(array<log::Sink> $sinks) : Logger
     {
-        log::Context? $at = $this->context;
-        if ($at == null) {
-            return Logger(mv $sinks, $this->level);
-        }
-        log::Context $c = guard $at;
-        return Logger(mv $sinks, $this->level, context: $c);
+        return Logger(mv $sinks, $this->level, $this->context, taps: $this->taps, traced: $this->trace);
+    }
+
+    /**
+     * A child that also marks its spans on `$t`, the timeline of the request it logs for.
+     */
+    public const function traced(trace::Trace $t) : Logger
+    {
+        return Logger($this->sinks, $this->level, $this->context, taps: $this->taps, traced: $t);
+    }
+
+    /**
+     * A child with this logger's fields and level that writes to its own sinks only, never to what
+     * is tapped into its root.
+     */
+    public const function untapped() : Logger
+    {
+        return Logger($this->sinks, $this->level, $this->context, taps: log::Taps(), traced: $this->trace);
+    }
+
+    /**
+     * Adds `$sink` to this logger, its root and every logger made from that root, before or after.
+     */
+    public function tap(log::Sink $sink) : void
+    {
+        $this->taps->add($sink);
     }
 
     /**
      * Opens span `$name`. Its logger stamps the span and `$fields` on every entry; when the span
-     * goes out of scope it logs `<name> closed` with the time it was open, at `$close`.
+     * goes out of scope it logs `<name> closed` with the time it was open, at `$close`. On a traced
+     * logger the span is also a mark on the request's timeline, whatever the level lets through.
      */
     public const function span(const string& $name, log::Fields $fields = [], log::Level $close = .info) : log::Span
     {
         string $id = Kernel::id();
+        uint32 $mark = 0;
+        if ($this->trace != null) {
+            trace::Trace $t = guard $this->trace;
+            $mark = $t->open(.span, $name, Logger::inline($fields));
+        }
         $c = log::Context($this->context, mv $fields, span: $name, id: $id);
-        $inner = Logger($this->sinks, $this->level, context: $c);
-        return log::Span($inner, $name, mv $id, $close);
+        $inner = Logger($this->sinks, $this->level, $c, taps: $this->taps, traced: $this->trace);
+        return log::Span($inner, $name, mv $id, $close, traced: $this->trace, mark: $mark);
+    }
+
+    // `a=1 b=x`, a span's fields as its timeline mark shows them
+    private static function inline(const log::Fields& $fields) : string
+    {
+        string $out = '';
+        foreach ($fields->items as const &$f) {
+            if (!$out->empty()) {
+                $out->push(32);
+            }
+            $out->append("{$f->key}={$f->value->text()}");
+        }
+        return $out;
     }
 
     public function write(log::Level $level, const string& $message, log::Fields $fields = []) : void
@@ -144,6 +199,7 @@ public class Logger
         foreach ($this->sinks as &$s) {
             $s->write($e);
         }
+        $this->taps->write($e);
     }
 
     public function trace(const string& $message, log::Fields $fields = []) : void
@@ -209,5 +265,6 @@ public class Logger
         foreach ($this->sinks as &$s) {
             $s->flush();
         }
+        $this->taps->flush();
     }
 }

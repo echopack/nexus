@@ -24,7 +24,7 @@ public struct IdToken
     public static function check(const string& $raw, const array<string>& $issuers, const string& $client, const string& $nonce, time::timestamp $now) : result<json::Value, nexus::Problem>
     {
         json::Value $claims = guard IdToken::claims($raw) else {
-            return .error(.unauthorized('the ID token is malformed'));
+            return .error(.unauthorized('the ID token is malformed', $reason: 'id_token_invalid'));
         };
         string $iss = IdToken::text($claims, 'iss');
         bool $known = false;
@@ -34,7 +34,7 @@ public struct IdToken
             }
         }
         if (!$known) {
-            return .error(.unauthorized("the ID token comes from {$iss}, not the provider"));
+            return .error(.unauthorized("the ID token comes from {$iss}, not the provider", $reason: 'id_token_invalid'));
         }
         array<string> $audience = IdToken::texts($claims, 'aud');
         bool $ours = false;
@@ -44,28 +44,28 @@ public struct IdToken
             }
         }
         if (!$ours) {
-            return .error(.unauthorized('the ID token was issued to another client'));
+            return .error(.unauthorized('the ID token was issued to another client', $reason: 'id_token_invalid'));
         }
         string $azp = IdToken::text($claims, 'azp');
         if (($audience->count() > 1 || !$azp->empty()) && $azp != $client) {
-            return .error(.unauthorized('the ID token was issued to another client'));
+            return .error(.unauthorized('the ID token was issued to another client', $reason: 'id_token_invalid'));
         }
         int64 $at = $now->unix_secs();
         int64 $exp = guard IdToken::number($claims, 'exp') else {
-            return .error(.unauthorized('the ID token has no expiry'));
+            return .error(.unauthorized('the ID token has no expiry', $reason: 'id_token_invalid'));
         };
         if ($exp + LEEWAY < $at) {
-            return .error(.unauthorized('the ID token expired'));
+            return .error(.unauthorized('the ID token expired', $reason: 'id_token_invalid'));
         }
         int64 $iat = IdToken::number($claims, 'iat') ?? 0;
         if ($iat > $at + LEEWAY) {
-            return .error(.unauthorized('the ID token was issued in the future'));
+            return .error(.unauthorized('the ID token was issued in the future', $reason: 'id_token_invalid'));
         }
         if (!crypto::equal(IdToken::text($claims, 'nonce'), $nonce)) {
-            return .error(.unauthorized('the ID token belongs to another sign in'));
+            return .error(.unauthorized('the ID token belongs to another sign in', $reason: 'id_token_invalid'));
         }
         if (IdToken::text($claims, 'sub')->empty()) {
-            return .error(.unauthorized('the ID token names nobody'));
+            return .error(.unauthorized('the ID token names nobody', $reason: 'id_token_invalid'));
         }
         return .ok($claims);
     }

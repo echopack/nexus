@@ -1,0 +1,38 @@
+namespace nexus::debug;
+
+/**
+ * The app's log, live: what the console's sinks write, at the level `NEXUS_LOG` lets through.
+ */
+#[atomic]
+public class LogsPanel : Panel
+{
+    private Topic $topic;
+
+    public constructor(Topic $topic)
+    {
+        $this->topic = $topic;
+    }
+
+    public function name() : string
+    {
+        return 'logs';
+    }
+
+    public function title() : string
+    {
+        return 'Logs';
+    }
+
+    public function views() : array<View>
+    {
+        array<View> $v = [
+            View('tail', 'Log', .log)->live($this->topic->name),
+        ];
+        return $v;
+    }
+
+    public function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>
+    {
+        return .ok(View::rows(Topics::rows($this->topic, 500)));
+    }
+}

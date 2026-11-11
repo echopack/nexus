@@ -1,0 +1,24 @@
+namespace nexus;
+
+/**
+ * Where a streamed response writes its body while it runs: the transport's connection for real
+ * traffic, a buffer in a test. `write` may buffer; `flush` sends what is buffered now.
+ */
+public interface Writer
+{
+    /**
+     * Queues `$bytes`. False once nobody reads anymore.
+     */
+    function write(const string& $bytes) : bool;
+
+    /**
+     * Sends what `write` queued. False once nobody reads anymore.
+     */
+    function flush() : bool;
+
+    /**
+     * Whether writing still reaches anyone: the client is there and the server is not stopping. A
+     * stream that runs until it is told to stop checks this between writes.
+     */
+    function open() : bool;
+}

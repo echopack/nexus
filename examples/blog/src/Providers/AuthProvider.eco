@@ -1,20 +1,20 @@
 namespace Blog::Providers;
 
 use container::Container;
-use Blog::Actions::Auth::{Login, Logout, Me, OpenSession, SignInWith};
+use Blog::Actions::Auth::{Login, Logout, Me, OpenSession, ShowSession, SignInWith};
 use Blog::Actions::Users::{ListUsers, Register};
 use Blog::Middleware::{RequireAdmin, RequireUser};
 use Blog::DB::Model::{User, UserRepository};
 use Blog::Queues::{JobLane, JobQueue};
 use Blog::Rules::UniqueEmail;
-use Blog::Services::{Accounts, SignIn};
+use Blog::Services::SignIn;
 use Blog::Signals::{UserRegistered, WelcomeNewUser};
 use Blog::Tasks::PruneAuth;
 use Blog::Transformers::{UserAdminTransformer, UserTransformer};
 
 /**
- * Users and signing in: registering, passwords, Google, tokens and sessions, who is asking and
- * whether they may.
+ * Users and signing in: registering, passwords, Google, signed sessions, who is asking and whether
+ * they may.
  */
 public class AuthProvider : nexus::Provider
 {
@@ -32,12 +32,16 @@ public class AuthProvider : nexus::Provider
         $app->bind<RequireUser>(scoped: (Container $c) => RequireUser($c->get<nexus::auth::Guards>(), $c->get<UserRepository>()));
         $app->bind<RequireAdmin>(shared: () => RequireAdmin());
 
-        $app->bindAction<Login>((Container $c) => Login($c->get<SignIn>(), $c->get<nexus::auth::Tokens>()))
-            ->route([.post], '/v1/auth/token');
-        $app->bindAction<OpenSession>((Container $c) => OpenSession($c->get<SignIn>(), $c->get<nexus::auth::Sessions>()))
+        // a client opens a session first and signs every request with it; signing in puts the user
+        // on that session, signing out ends it
+        $app->bindAction<OpenSession>((Container $c) => OpenSession($c->get<nexus::auth::Sessions>()))
             ->route([.post], '/v1/auth/session');
-        $app->bind<Accounts>(scoped: (Container $c) => Accounts($c->get<UserRepository>(), $c->get<nexus::connect::LinkStore>(), $c->get<nexus::SignalDispatcher>()));
-        $app->bindAction<SignInWith>((Container $c) => SignInWith($c->get<nexus::connect::Connect>(), $c->get<Accounts>(), $c->get<nexus::auth::Tokens>()))
+        $app->bindAction<ShowSession>((Container $c) => ShowSession($c->get<UserRepository>(), $c->get<UserTransformer>()))
+            ->route([.get], '/v1/auth/session');
+        $app->bindAction<Login>((Container $c) => Login($c->get<SignIn>(), $c->get<nexus::auth::Sessions>(), $c->get<UserTransformer>()))
+            ->route([.post], '/v1/auth/signin');
+        $app->bindAction<SignInWith>((Container $c) => SignInWith($c->get<nexus::connect::Connect>(), $c->get<nexus::connect::Accounts>(),
+                $c->get<UserRepository>(), $c->get<nexus::SignalDispatcher>(), $c->get<nexus::auth::Sessions>(), $c->get<UserTransformer>()))
             ->route([.post], '/v1/auth/connect');
         $app->bindAction<Logout>((Container $c) => Logout($c->get<nexus::auth::Guards>()))
             ->route([.delete], '/v1/auth');
@@ -48,7 +52,7 @@ public class AuthProvider : nexus::Provider
         $app->bindAction<ListUsers>((Container $c) => ListUsers($c->get<UserRepository>(), $c->get<UserAdminTransformer>()))
             ->route([.get], '/v1/users');
 
-        // a sign up is welcomed on a worker; expired tokens go every night at three
+        // a sign up is welcomed on a worker; expired sessions go every night at three
         $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobQueue>());
         
         $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobLane>();

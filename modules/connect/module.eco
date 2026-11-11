@@ -8,8 +8,9 @@
  * trades the code (PKCE and the client secret), checks the ID token and
  * sends the browser on to the app's page with `?attempt=<id>`. The page
  * posts the attempt and its binding to the app's own action, which claims
- * the outside identity once with `Connect::claim`, links it to a user
- * (`LinkStore`) and signs them in the way it always does.
+ * the outside identity once with `Connect::claim`, finds or makes the user
+ * it is (`Accounts`, on the app's `Users`) and signs them in the way it
+ * always does.
  *
  * Attempts and links are kept in memory here; nexus-connect-carbon keeps
  * them in the app's database.

@@ -50,6 +50,53 @@ public struct HealthDispatch
     }
 }
 
+/**
+ * Runs Blog::Actions::Home.
+ */
+public struct HomeDispatch
+{
+    /**
+     * Reads what Blog::Actions::Home::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        $action = $payload->get<Blog::Actions::Home>();
+        $result = $action->handle();
+        return $result;
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Home unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'The blog in a browser: one page, embedded at build time, that reads and writes through the API.';
+    }
+
+    /**
+     * What Blog::Actions::Home offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::HomeDispatch::call($payload, $args);
+        };
+        return nexus::mcp::Offer('Blog::Actions::Home', nexus::mcp::Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), Blog::Actions::HomeDispatch::about(), mv $call);
+    }
+
+    /**
+     * Reads what Blog::Actions::Home::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        $target = $payload->get<Blog::Actions::Home>();
+        $result = $target->handle();
+        return $result;
+    }
+}
+
 
 namespace Blog::Actions::Auth;
 
@@ -81,7 +128,7 @@ public struct LoginDispatch
      */
     public static function about() : string
     {
-        return 'Signs in with an email and a password and answers with a bearer token, shown this once.';
+        return 'Signs in with an email and a password on the session the request is signed with: from now on that session\'s requests are the user\'s. Answers the user, as `/v1/me` does; a session somebody signed in on already is a 409.';
     }
 
     /**
@@ -132,7 +179,7 @@ public struct LogoutDispatch
      */
     public static function about() : string
     {
-        return 'Ends the token or session the request came with.';
+        return 'Ends the session the request is signed with, signed in or not; the client opens a new one.';
     }
 
     /**
@@ -143,9 +190,7 @@ public struct LogoutDispatch
         $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
             return Blog::Actions::Auth::LogoutDispatch::call($payload, $args);
         };
-        $offer = nexus::mcp::Offer('Blog::Actions::Auth::Logout', nexus::mcp::Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), Blog::Actions::Auth::LogoutDispatch::about(), mv $call);
-        $offer->through = [nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')];
-        return $offer;
+        return nexus::mcp::Offer('Blog::Actions::Auth::Logout', nexus::mcp::Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), Blog::Actions::Auth::LogoutDispatch::about(), mv $call);
     }
 
     /**
@@ -220,15 +265,8 @@ public struct OpenSessionDispatch
      */
     internal static function dispatch(nexus::Payload& $payload) : nexus::Response
     {
-        $fieldsIn = guard nexus::Fields::body($payload) else ($p) {
-            return nexus::Reply::problem($payload, $p);
-        };
-        $valueIn = guard Blog::Inputs::CredentialsDecoder::decode($payload, $fieldsIn) else ($p) {
-            return nexus::Reply::problem($payload, $p);
-        };
-        $argIn = nexus::Body<Blog::Inputs::Credentials>(mv $valueIn);
         $action = $payload->get<Blog::Actions::Auth::OpenSession>();
-        $result = $action->handle($payload, mv $argIn);
+        $result = $action->handle($payload);
         return nexus::Reply::of($payload, $result);
     }
 
@@ -237,7 +275,7 @@ public struct OpenSessionDispatch
      */
     public static function about() : string
     {
-        return 'Signs in with an email and a password and opens a signed session: the answer carries its id and secret, shown this once, and every request after signs itself with them.';
+        return 'Opens a signed session for nobody, the first thing a client does: the answer carries its id and secret, shown this once, and every request after signs itself with them. Signing in (`POST /v1/auth/signin`) puts the user on this session.';
     }
 
     /**
@@ -248,7 +286,7 @@ public struct OpenSessionDispatch
         $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
             return Blog::Actions::Auth::OpenSessionDispatch::call($payload, $args);
         };
-        return nexus::mcp::Offer('Blog::Actions::Auth::OpenSession', nexus::mcp::Schema::of('{"type":"object","properties":{"email":{"type":"string","format":"email","maxLength":190},"password":{"type":"string","minLength":1,"maxLength":200}},"required":["email","password"],"additionalProperties":false}'), Blog::Actions::Auth::OpenSessionDispatch::about(), mv $call);
+        return nexus::mcp::Offer('Blog::Actions::Auth::OpenSession', nexus::mcp::Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), Blog::Actions::Auth::OpenSessionDispatch::about(), mv $call);
     }
 
     /**
@@ -257,12 +295,55 @@ public struct OpenSessionDispatch
      */
     public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
     {
-        $valueIn = guard Blog::Inputs::CredentialsDecoder::decode($payload, $args) else ($p) {
-            return nexus::Reply::problem($payload, $p);
-        };
-        $argIn = nexus::Body<Blog::Inputs::Credentials>(mv $valueIn);
         $target = $payload->get<Blog::Actions::Auth::OpenSession>();
-        $result = $target->handle($payload, mv $argIn);
+        $result = $target->handle($payload);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+/**
+ * Runs Blog::Actions::Auth::ShowSession.
+ */
+public struct ShowSessionDispatch
+{
+    /**
+     * Reads what Blog::Actions::Auth::ShowSession::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        $action = $payload->get<Blog::Actions::Auth::ShowSession>();
+        $result = $action->handle($payload);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Auth::ShowSession unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'Who the session the request is signed with belongs to: `{"signed_in": true, "data": {...}}` with the user, `{"signed_in": false, "data": null}` before signing in. A client asks it as it starts, and to tell a session that ended (a 401) from one nobody signed in on yet.';
+    }
+
+    /**
+     * What Blog::Actions::Auth::ShowSession offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Auth::ShowSessionDispatch::call($payload, $args);
+        };
+        return nexus::mcp::Offer('Blog::Actions::Auth::ShowSession', nexus::mcp::Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), Blog::Actions::Auth::ShowSessionDispatch::about(), mv $call);
+    }
+
+    /**
+     * Reads what Blog::Actions::Auth::ShowSession::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        $target = $payload->get<Blog::Actions::Auth::ShowSession>();
+        $result = $target->handle($payload);
         return nexus::Reply::of($payload, $result);
     }
 }
@@ -295,7 +376,7 @@ public struct SignInWithDispatch
      */
     public static function about() : string
     {
-        return 'Finishes a sign in with an outside provider (Google): claims the attempt the page `/signed-in` got back, with the binding it kept, finds or makes the user, and answers with a bearer token, shown this once, as `POST /v1/auth/token` does.';
+        return 'Finishes a sign in with an outside provider (Google) on the session the request is signed with: claims the attempt the page `/signed-in` got back, with the binding it kept, finds, links or makes the user (`nexus::connect::Accounts`), puts them on the session and answers them, as `POST /v1/auth/signin` does.';
     }
 
     /**
@@ -1773,7 +1854,6 @@ public function generated(nexus::Generated $g) : void
     $g->action<Blog::Actions::Auth::Logout>('Blog::Actions::Auth::Logout', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Auth::LogoutDispatch::dispatch($payload);
     });
-    $g->through<Blog::Actions::Auth::Logout>([nexus::MiddlewareRef::of<nexus::auth::Authenticate>('nexus::auth::Authenticate')]);
     $g->action<Blog::Actions::Auth::Me>('Blog::Actions::Auth::Me', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Auth::MeDispatch::dispatch($payload);
     });
@@ -1781,11 +1861,17 @@ public function generated(nexus::Generated $g) : void
     $g->action<Blog::Actions::Auth::OpenSession>('Blog::Actions::Auth::OpenSession', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Auth::OpenSessionDispatch::dispatch($payload);
     });
+    $g->action<Blog::Actions::Auth::ShowSession>('Blog::Actions::Auth::ShowSession', [], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Auth::ShowSessionDispatch::dispatch($payload);
+    });
     $g->action<Blog::Actions::Auth::SignInWith>('Blog::Actions::Auth::SignInWith', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Auth::SignInWithDispatch::dispatch($payload);
     });
     $g->action<Blog::Actions::Health>('Blog::Actions::Health', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::HealthDispatch::dispatch($payload);
+    });
+    $g->action<Blog::Actions::Home>('Blog::Actions::Home', [], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::HomeDispatch::dispatch($payload);
     });
     $g->action<Blog::Actions::Posts::CreatePost>('Blog::Actions::Posts::CreatePost', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Posts::CreatePostDispatch::dispatch($payload);
@@ -1852,7 +1938,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Queues::JobLane>('Blog::Queues::JobLane');
     $g->name<Blog::Queues::WorkerLane>('Blog::Queues::WorkerLane');
     $g->name<Blog::Rules::UniqueEmail>('Blog::Rules::UniqueEmail');
-    $g->name<Blog::Services::Accounts>('Blog::Services::Accounts');
+    $g->name<Blog::Services::BlogUsers>('Blog::Services::BlogUsers');
     $g->name<Blog::Services::PostService>('Blog::Services::PostService');
     $g->name<Blog::Services::SignIn>('Blog::Services::SignIn');
     $g->name<Blog::Signals::UserRegistered>('Blog::Signals::UserRegistered');
@@ -1934,8 +2020,10 @@ public function tools(nexus::mcp::Offers $o) : void
     $o->add<Blog::Actions::Auth::Logout>(Blog::Actions::Auth::LogoutDispatch::offer());
     $o->add<Blog::Actions::Auth::Me>(Blog::Actions::Auth::MeDispatch::offer());
     $o->add<Blog::Actions::Auth::OpenSession>(Blog::Actions::Auth::OpenSessionDispatch::offer());
+    $o->add<Blog::Actions::Auth::ShowSession>(Blog::Actions::Auth::ShowSessionDispatch::offer());
     $o->add<Blog::Actions::Auth::SignInWith>(Blog::Actions::Auth::SignInWithDispatch::offer());
     $o->add<Blog::Actions::Health>(Blog::Actions::HealthDispatch::offer());
+    $o->add<Blog::Actions::Home>(Blog::Actions::HomeDispatch::offer());
     $o->add<Blog::Actions::Posts::CreatePost>(Blog::Actions::Posts::CreatePostDispatch::offer());
     $o->add<Blog::Actions::Posts::DeletePost>(Blog::Actions::Posts::DeletePostDispatch::offer());
     $o->add<Blog::Actions::Posts::ListPosts>(Blog::Actions::Posts::ListPostsDispatch::offer());

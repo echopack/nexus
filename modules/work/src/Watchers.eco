@@ -1,0 +1,31 @@
+namespace nexus::work;
+
+/**
+ * The observers of a process's lanes. Added to while the app wires and boots, only read once
+ * queues run.
+ */
+#[atomic]
+public class Watchers
+{
+    internal array<Observer> $all = [];
+
+    public function add(Observer $o) : void
+    {
+        $this->all[] = $o;
+    }
+
+    /**
+     * Whether anyone listens, so a caller skips building what nobody hears.
+     */
+    public const function any() : bool
+    {
+        return !$this->all->empty();
+    }
+
+    public function tell(const Seen& $s) : void
+    {
+        foreach ($this->all as $o) {
+            $o->saw($s);
+        }
+    }
+}

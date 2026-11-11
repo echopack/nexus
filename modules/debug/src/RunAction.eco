@@ -1,0 +1,32 @@
+namespace nexus::debug;
+
+/**
+ * `POST <base>/api/panels/{panel}/actions/{action}`: runs a panel's action with the body as its
+ * input, `{}` when there is none.
+ */
+public class RunAction : nexus::Action
+{
+    private Debug $debug;
+
+    public constructor(Debug $debug)
+    {
+        $this->debug = $debug;
+    }
+
+    public function handle(nexus::Payload& $payload, string $panel, string $action) : result<nexus::Response, nexus::Problem>
+    {
+        Listed $l = try Api::panel($this->debug, $panel);
+        string $body = $payload->request->body;
+        if (str::trim($body)->empty()) {
+            $body = '{}';
+        }
+        json::Value $input = guard json::parse($body) else ($e) {
+            return .error(.badRequest("the body is no JSON: {$e}"));
+        };
+        json::Value $out = try $l->panel->act($payload, $action, $input);
+        // what the console changed belongs in the log it shows, unlike its reads
+        nexus::Logger $log = $this->debug->kernel?->log ?? $payload->log;
+        $log->info('debug action', ['panel' => $panel, 'action' => $action, 'req' => $payload->request->id]);
+        return .ok(Api::json($out));
+    }
+}

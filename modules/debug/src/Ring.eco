@@ -1,0 +1,102 @@
+namespace nexus::debug;
+
+use std::thread;
+use std::time;
+
+/**
+ * The last events of a topic, in a fixed number of slots: a new event past the size takes the
+ * oldest one's place. Shared by every thread; writers lock briefly, readers copy out what they ask
+ * for. A reader keeps the number of the last event it saw and asks for what came after it.
+ */
+#[atomic]
+public class Ring
+{
+    public const usize $size;
+    private thread::mutex<array<Event>> $slots;
+    private atomic<uint64> $last = atomic<uint64>(0);
+
+    public constructor(usize $size)
+    {
+        usize $n = $size;
+        if ($n == 0) {
+            $n = 1;
+        }
+        $this->size = $n;
+        $this->slots = thread::mutex<array<Event>>(arr::room<Event>($n));
+    }
+
+    /**
+     * Adds an event with `$data`, a JSON object, and answers its number.
+     */
+    public function publish(const string& $data) : uint64
+    {
+        thread::locked<array<Event>> $held = $this->slots->lock();
+        uint64 $seq = $this->last->load() + 1;
+        $e = Event($seq, time::timestamp::now(), $data);
+        if ($held->value->count() < $this->size) {
+            $held->value[] = mv $e;
+        } else {
+            $held->value[(($seq - 1) % ($this->size as uint64)) as usize] = mv $e;
+        }
+        $this->last->store($seq);
+        return $seq;
+    }
+
+    /**
+     * The number of the newest event, 0 before the first.
+     */
+    public const function last() : uint64
+    {
+        return $this->last->load();
+    }
+
+    /**
+     * Up to `$limit` events after number `$after`, oldest first. Events the ring dropped already
+     * are skipped; the first one answered says where the reader picks up.
+     */
+    public const function since(uint64 $after, usize $limit) : array<Event>
+    {
+        thread::locked<array<Event>> $held = $this->slots->lock();
+        uint64 $newest = $this->last->load();
+        array<Event> $out = [];
+        if ($newest <= $after || $limit == 0) {
+            return $out;
+        }
+        uint64 $kept = $held->value->count() as uint64;
+        uint64 $from = $after + 1;
+        if ($newest - $kept + 1 > $from) {
+            $from = $newest - $kept + 1;
+        }
+        // the newest `$limit` of them when there are more, so a reader that starts late sees now
+        if ($newest - $from + 1 > ($limit as uint64)) {
+            $from = $newest - ($limit as uint64) + 1;
+        }
+        uint64 $seq = $from;
+        while ($seq <= $newest) {
+            $out[] = $held->value[(($seq - 1) % ($this->size as uint64)) as usize];
+            $seq++;
+        }
+        return $out;
+    }
+
+    /**
+     * Waits up to `$d` for an event after number `$after`, waking early when `$stop` answers true.
+     * Answers whether one came.
+     */
+    public const function wait(uint64 $after, time::duration $d, function<bool()> $stop) : bool
+    {
+        int64 $left = $d->as_millis();
+        while ($this->last->load() <= $after) {
+            if ($left <= 0 || $stop()) {
+                return false;
+            }
+            int64 $slice = 25;
+            if ($left < $slice) {
+                $slice = $left;
+            }
+            thread::sleep($slice as int32);
+            $left = $left - $slice;
+        }
+        return true;
+    }
+}

@@ -21,7 +21,7 @@ internal class FakeRig
     public TestApp $app;
 
     /**
-     * Requests from nobody in particular.
+     * Requests from a visitor, signed with a session nobody signed in on.
      */
     public Api $api;
 
@@ -35,13 +35,14 @@ internal class FakeRig
             return .ok($made);
         });
         $clock = calendar::FixedClock(time::timestamp::from_unix_secs(1700000000));
-        $auth = nexus::auth::Extension('blog', clock: $clock, cost: crypto::PasswordCost(8, 1));
+        $auth = nexus::auth::Extension('blog', clock: $clock, cost: crypto::PasswordCost(8, 1), guards: [nexus::auth::BuiltinGuard::signed]);
         array<nexus::connect::Connector> $providers = [nexus::connect::Google()];
-        array<nexus::Extension> $exts = [$db, $auth, nexus::oauth::Extension(clock: $clock), nexus::connect::Extension(connectors: $providers, clock: $clock, fetch: nexus::connect::ScriptedFetch()),
+        array<nexus::Extension> $exts = [$db, $auth, nexus::oauth::Extension(clock: $clock), nexus::connect::Extension(connectors: $providers, clock: $clock),
             nexus::mcp::Extension(), nexus::work::Extension(), Blog::App()];
         map<string, string> $vars = ['NEXUS_AUTH_KEY' => 'a-test-key-of-at-least-thirty-two-chars'];
-        $this->app = TestApp($exts, mv $vars);
-        $this->api = $this->app->api();
+        // nothing here signs in with Google, so its token endpoint answers nothing
+        $this->app = TestApp($exts, mv $vars, replace: nexus::connect::ScriptedFetch()->replacing());
+        $this->api = $this->session('');
     }
 
     /**
@@ -50,10 +51,23 @@ internal class FakeRig
      */
     public function editor() : Api
     {
-        $t = guard $this->app->kernel->services->child()->get<nexus::auth::Tokens>()->issue('1') else ($p) {
-            die("the test could not issue the editor a token: {$p->detail(nexus::Mode::testing)}");
+        return $this->session('1');
+    }
+
+    /**
+     * Requests signed with a new session for `$subject` (nobody when empty), kept in memory, at the
+     * rig's fixed time.
+     */
+    private function session(const string& $subject) : Api
+    {
+        nexus::auth::Sessions $sessions = $this->app->kernel->services->child()->get<nexus::auth::Sessions>();
+        $opened = guard $sessions->open($subject) else ($p) {
+            die("the test could not open a session: {$p->detail(nexus::Mode::testing)}");
         };
-        return $this->api->bearer($t->token);
+        nexus::auth::Signer $s = $opened->signer();
+        return $this->app->api(signed: function[$s](string $method, string $target, string $body) : string {
+            return $s->header($method, $target, 1700000000, $body);
+        });
     }
 }
 

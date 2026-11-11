@@ -118,10 +118,10 @@ test writing_needs_a_signed_in_author_and_a_valid_post
     $world = World();
     $admin = $world->admin();
 
-    ecotest::step('nobody signed in, or a token that is not one, is refused');
+    ecotest::step('nobody signed in, or a credential that is not one, is refused');
     $world->api->post('/v1/posts', json: newPost('A new post'))->problem(401);
-    $world->api->bearer('blog_000000000000_0000000000000000000000000000000000000000000000000000000000000000')->delete('/v1/posts/1')->problem(401);
-    $world->api->bearer('nonsense')->delete('/v1/posts/1')->problem(401);
+    $world->bare->bearer('blog_000000000000_0000000000000000000000000000000000000000000000000000000000000000')->delete('/v1/posts/1')->problem(401);
+    $world->bare->with('Authorization', 'Nexus-Sig nonsense')->delete('/v1/posts/1')->problem(401);
     // nobody signed in hears so before the body is looked at
     $world->api->post('/v1/posts', body: 'not json', type: 'application/json')->problem(401);
 

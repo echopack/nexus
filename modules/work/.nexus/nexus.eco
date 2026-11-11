@@ -18,6 +18,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::work::Codecs>('nexus::work::Codecs');
     $g->name<nexus::work::Cron>('nexus::work::Cron');
     $g->name<nexus::work::Distributed>('nexus::work::Distributed');
+    $g->name<nexus::work::Dropped>('nexus::work::Dropped');
     $g->name<nexus::work::Edge>('nexus::work::Edge');
     $g->name<nexus::work::Extension>('nexus::work::Extension');
     $g->name<nexus::work::FailedCommand>('nexus::work::FailedCommand');
@@ -31,17 +32,21 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::work::Lanes>('nexus::work::Lanes');
     $g->name<nexus::work::MemoryStore>('nexus::work::MemoryStore');
     $g->name<nexus::work::Node>('nexus::work::Node');
+    $g->name<nexus::work::Observed>('nexus::work::Observed');
     $g->name<nexus::work::Outcome>('nexus::work::Outcome');
     $g->name<nexus::work::Picked>('nexus::work::Picked');
     $g->name<nexus::work::Pipeline>('nexus::work::Pipeline');
     $g->name<nexus::work::Planned>('nexus::work::Planned');
     $g->name<nexus::work::Policy>('nexus::work::Policy');
     $g->name<nexus::work::Pool>('nexus::work::Pool');
+    $g->name<nexus::work::PoolState>('nexus::work::PoolState');
     $g->name<nexus::work::Queues>('nexus::work::Queues');
     $g->name<nexus::work::RetryCommand>('nexus::work::RetryCommand');
     $g->name<nexus::work::Run>('nexus::work::Run');
+    $g->name<nexus::work::RunningTask>('nexus::work::RunningTask');
     $g->name<nexus::work::Schedule>('nexus::work::Schedule');
     $g->name<nexus::work::ScheduleCommand>('nexus::work::ScheduleCommand');
+    $g->name<nexus::work::Seen>('nexus::work::Seen');
     $g->name<nexus::work::Stamp>('nexus::work::Stamp');
     $g->name<nexus::work::Step>('nexus::work::Step');
     $g->name<nexus::work::StoredTask>('nexus::work::StoredTask');
@@ -49,6 +54,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::work::TaskScheduler>('nexus::work::TaskScheduler');
     $g->name<nexus::work::TaskTable>('nexus::work::TaskTable');
     $g->name<nexus::work::Upstream>('nexus::work::Upstream');
+    $g->name<nexus::work::Watchers>('nexus::work::Watchers');
     $g->name<nexus::work::Work>('nexus::work::Work');
     $g->name<nexus::work::WorkCommand>('nexus::work::WorkCommand');
     $g->name<nexus::work::WorkConfig>('nexus::work::WorkConfig');

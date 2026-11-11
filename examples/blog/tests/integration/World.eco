@@ -1,7 +1,10 @@
 /**
  * The blog as it runs in production, booted for one integration test: every extension from
  * `Blog::extensions()`, a MySQL database of the test's own (migrated, so the seed's admin is
- * there), real clocks and real password hashing. Requests go through `TestApp::api()`, in process.
+ * there), real clocks and real password hashing. Requests go through `TestApp::api()`, in process,
+ * each signed with a session as the browser signs them (`api` a visitor's, `admin` and `author`
+ * one signed in); `bare` has none.
+ * Google, the one outside service, is configured and answers what the test scripts (`google`).
  * The database is dropped when the test ends, even when a check stops it.
  *
  * ```echo
@@ -36,36 +39,63 @@ internal class World
     public TestApp $app;
 
     /**
-     * Requests from nobody in particular.
+     * Google as the blog reaches it: its token endpoint answers what a test scripts, for client
+     * `blog-google`.
+     */
+    public nexus::connect::ScriptedFetch $google;
+
+    /**
+     * Requests from a visitor: signed with a session they opened through `POST /v1/auth/session`,
+     * nobody signed in on it.
      */
     public Api $api;
+
+    /**
+     * Requests without any session.
+     */
+    public Api $bare;
 
     /**
      * `PASSWORD`, hashed once for every user the world seeds.
      */
     private string $hashed = '';
 
-    public constructor()
+    /**
+     * The world, with `$more` added to the app's environment, like `NEXUS_DEBUG_ENABLED`.
+     */
+    public constructor(map<string, string> $more = map<string, string>())
     {
         $server = Database::server(env: ['BLOG_TEST_DATABASE_URL', 'ECOTEST_MYSQL_URL']);
         $this->db = Database(server: $server, migrations: Blog::DB::migrations(), prefix: 'blog_test');
-        $this->app = TestApp(Blog::extensions(), World::vars($this->db));
-        $this->api = $this->app->api();
+        $google = nexus::connect::ScriptedFetch();
+        $this->google = $google;
+        map<string, string> $vars = World::vars($this->db);
+        foreach ($more as $k => const &$v) {
+            $vars[$k] = $v;
+        }
+        $this->app = TestApp(Blog::extensions(), mv $vars, replace: $google->replacing());
+        $this->bare = $this->app->api();
+        $this->api = $this->visitor();
     }
 
     /**
-     * The world with sign in with Google configured (client `blog-google`), and `$google`
-     * answering for Google's token endpoint: the one outside service a test cannot reach.
+     * A new visitor: a session opened through `POST /v1/auth/session`, as the page opens one,
+     * signing every request after.
      */
-    public constructor(google: nexus::connect::ScriptedFetch $google)
+    public function visitor() : Api
     {
-        $server = Database::server(env: ['BLOG_TEST_DATABASE_URL', 'ECOTEST_MYSQL_URL']);
-        $this->db = Database(server: $server, migrations: Blog::DB::migrations(), prefix: 'blog_test');
-        map<string, string> $vars = World::vars($this->db);
-        $vars['NEXUS_CONNECT_GOOGLE_CLIENT_ID'] = 'blog-google';
-        $vars['NEXUS_CONNECT_GOOGLE_CLIENT_SECRET'] = 'a-google-secret';
-        $this->app = TestApp(Blog::extensions(fetch: $google), mv $vars);
-        $this->api = $this->app->api();
+        $opened = $this->bare->post('/v1/auth/session', json: '{}')->status(201);
+        return $this->session(nexus::auth::Signer($opened->capture('$.id'), $opened->capture('$.secret')));
+    }
+
+    /**
+     * Requests signed with `$s`, at the time each is sent.
+     */
+    public function session(nexus::auth::Signer $s) : Api
+    {
+        return $this->app->api(signed: function[$s](string $method, string $target, string $body) : string {
+            return $s->header($method, $target, std::time::timestamp::now()->unix_secs(), $body);
+        });
     }
 
     internal static function vars(const Database& $db) : map<string, string>
@@ -75,6 +105,8 @@ internal class World
             'NEXUS_AUTH_KEY' => 'an-integration-key-of-at-least-32-chars',
             'NEXUS_MAIL_URL' => 'memory:',
             'NEXUS_MAIL_FROM' => 'hello@blog.test',
+            'NEXUS_CONNECT_GOOGLE_CLIENT_ID' => 'blog-google',
+            'NEXUS_CONNECT_GOOGLE_CLIENT_SECRET' => 'a-google-secret',
         ];
         return $vars;
     }
@@ -111,17 +143,17 @@ internal class World
     }
 
     /**
-     * Requests signed in as `$user`, with a bearer token of their own.
+     * Requests signed in as `$user`, on a session of their own.
      */
     private function signIn(const User& $user) : Api
     {
         nexus::Payload $payload = $this->app->kernel->background('test', nexus::Kernel::id());
         string $subject = "{$user->id}";
-        $issued = guard $payload->get<nexus::auth::Tokens>()->issue($subject) else ($p) {
-            die("the world could not issue a token: {$p->detail(nexus::Mode::testing)}");
+        $opened = guard $payload->get<nexus::auth::Sessions>()->open($subject) else ($p) {
+            die("the world could not open a session: {$p->detail(nexus::Mode::testing)}");
         };
         nexus::Kernel::finish($payload);
-        return $this->api->bearer($issued->token);
+        return $this->session($opened->signer());
     }
 
     /**
@@ -181,7 +213,7 @@ internal class World
 }
 
 /**
- * What `POST /v1/auth/token` and `POST /v1/auth/session` take.
+ * What `POST /v1/auth/signin` takes.
  */
 internal function credentials(const string& $email, const string& $password) : json::Value
 {

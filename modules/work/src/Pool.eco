@@ -34,6 +34,7 @@ public class Pool
     internal nexus::Flag $halt = nexus::Flag();
     internal atomic<int32> $alive = atomic<int32>(0);
     internal thread::mutex<array<thread::handle>> $handles = thread::mutex<array<thread::handle>>(array<thread::handle>());
+    internal Watchers $watchers = Watchers();
 
     public constructor(const string& $lane, uint32 $threads, Codecs $codecs, calendar::Clock $clock)
     {
@@ -73,6 +74,7 @@ public class Pool
             }
         }
         $this->wake->notify_all();
+        $this->toldPushed($p, $names, $now);
         return .ok(.queued($p->ids[0]));
     }
 
@@ -97,8 +99,13 @@ public class Pool
      */
     public function cancel(const string& $id) : uint64
     {
-        thread::locked<Board> $b = $this->board->lock();
-        return $b->value->cancel($id);
+        array<Dropped> $gone = [];
+        {
+            thread::locked<Board> $b = $this->board->lock();
+            $gone = $b->value->cancel($id);
+        }
+        $this->toldDropped($gone, .cancelled);
+        return $gone->count() as uint64;
     }
 
     /**
@@ -179,6 +186,28 @@ public class Pool
     }
 
     /**
+     * The pool now: its workers, what they run and what waits.
+     */
+    public function state() : PoolState
+    {
+        PoolState $out = PoolState($this->lane, $this->threads, $this->alive->load());
+        thread::locked<Board> $b = $this->board->lock();
+        foreach ($b->value->running as $id => const &$yes) {
+            if ($b->value->nodes->has($id)) {
+                const Node& $n = $b->value->nodes->at($id);
+                $out->running[] = RunningTask($id, $n->name, $n->attempt, $n->fed != null);
+            }
+        }
+        $out->ready = $b->value->ready->count() as uint64;
+        $out->delayed = $b->value->delayed->count() as uint64;
+        uint64 $waiting = $b->value->waiting();
+        if ($waiting > $out->ready + $out->delayed) {
+            $out->blocked = $waiting - $out->ready - $out->delayed;
+        }
+        return $out;
+    }
+
+    /**
      * How many workers are running.
      */
     public const function running() : int32
@@ -204,6 +233,9 @@ public class Pool
         RunLog $chosen = Pool::chosen($n->item->log, $run, $this->log);
         nexus::Logger $log = $chosen->logger($payload->log);
         $payload->useLog($log);
+        if ($this->watchers->any()) {
+            $this->watchers->tell(Seen($run->lane, $n->name, $n->id, .started, $this->clock->now(), $run->attempt));
+        }
         time::instant $start = time::instant::now();
         function<status<Failure>(nexus::Payload&)> $handle = $n->item->handle;
         status<Failure> $status = $handle($payload);
@@ -234,6 +266,9 @@ public class Pool
         time::timestamp $now = $this->clock->now();
         Settle $s = Settle::of($o->status, $n->attempt, $n->tries(), $now);
         $s->tell($log, $n->attempt, $o->ms, $now);
+        if ($this->watchers->any()) {
+            $this->watchers->tell(Seen::settled($this->lane, $n->name, $n->id, $s, $n->attempt, $o->ms, $now));
+        }
         array<string> $names = guard $this->codecs->spawned($o->spawned, $log) else {
             array<string> $none = [];
             $this->settled($n, $s, nexus::work::Pipeline(), $none, $log);
@@ -242,16 +277,61 @@ public class Pool
         $this->settled($n, $s, $o->spawned, $names, $log);
     }
 
+    /**
+     * Settles `$n` on the board as `$s`, with what it spawned when done, and tells the observers
+     * about the tasks that joined or went with it.
+     */
     internal function settled(const Node& $n, const Settle& $s, Pipeline $spawned, const array<string>& $names, nexus::Logger $log) : void
     {
-        array<string> $dropped = [];
+        array<Dropped> $dropped = [];
+        bool $known = false;
         {
             thread::locked<Board> $b = $this->board->lock();
+            $known = $b->value->nodes->has($n->id);
             $dropped = $b->value->settle($n->id, $s, $spawned, $names);
         }
-        if ($dropped->count() > 1) {
+        // the first is the task itself, the rest waited for it
+        if (!$dropped->empty()) {
             $dropped->remove(0);
-            $log->warn('tasks waiting for it were dropped', ['tasks' => str::join($dropped, ', ')]);
+        }
+        if (!$dropped->empty()) {
+            $log->warn('tasks waiting for it were dropped', ['tasks' => Dropped::names($dropped)]);
+        }
+        if (!$known) {
+            return;
+        }
+        bool $done = match ($s) {
+            Settle::done => true,
+            else => false,
+        };
+        if ($done) {
+            $this->toldPushed($spawned, $names, $this->clock->now());
+        }
+        $this->toldDropped($dropped, .cancelled, why: "{$n->name} failed for good");
+    }
+
+    // tells the observers that the tasks of `$p` joined the lane
+    internal function toldPushed(const Pipeline& $p, const array<string>& $names, time::timestamp $at) : void
+    {
+        if (!$this->watchers->any()) {
+            return;
+        }
+        foreach ($p->items as $i => const &$item) {
+            $this->watchers->tell(Seen($this->lane, $names[$i], $p->ids[$i], .pushed, $at));
+        }
+    }
+
+    // tells the observers that `$gone` left the lane as `$kind`
+    internal function toldDropped(const array<Dropped>& $gone, SeenKind $kind, why: string $why = '') : void
+    {
+        if ($gone->empty() || !$this->watchers->any()) {
+            return;
+        }
+        time::timestamp $at = $this->clock->now();
+        foreach ($gone as const &$d) {
+            Seen $seen = Seen($this->lane, $d->name, $d->id, $kind, $at);
+            $seen->why = $why;
+            $this->watchers->tell($seen);
         }
     }
 
@@ -285,7 +365,7 @@ public class Pool
     internal function tick() : void
     {
         while (!$this->halt->raised()) {
-            array<string> $gone = [];
+            array<Dropped> $gone = [];
             bool $readied = false;
             {
                 thread::locked<Board> $b = $this->board->lock();
@@ -297,11 +377,12 @@ public class Pool
             if ($readied || !$gone->empty()) {
                 $this->wake->notify_all();
             }
+            $this->toldDropped($gone, .expired);
             if (!$gone->empty()) {
                 nexus::Kernel? $k = $this->kernel;
                 if ($k != null) {
                     nexus::Kernel $kernel = guard $k;
-                    $kernel->log->warn('tasks expired before they ran', ['lane' => $this->lane, 'tasks' => str::join($gone, ', ')]);
+                    $kernel->log->warn('tasks expired before they ran', ['lane' => $this->lane, 'tasks' => Dropped::names($gone)]);
                 }
             }
             Pool::nap($this->halt, time::duration::millis(20));

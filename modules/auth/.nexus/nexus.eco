@@ -50,6 +50,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::auth::Pruned>('nexus::auth::Pruned');
     $g->name<nexus::auth::Pruner>('nexus::auth::Pruner');
     $g->name<nexus::auth::Pruning>('nexus::auth::Pruning');
+    $g->name<nexus::auth::RequireSession>('nexus::auth::RequireSession');
     $g->name<nexus::auth::Resolved>('nexus::auth::Resolved');
     $g->name<nexus::auth::Resource>('nexus::auth::Resource');
     $g->name<nexus::auth::Resources>('nexus::auth::Resources');
@@ -92,8 +93,14 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
         $xC0Sessions = guard $vC0Sessions;
         $okC0Sessions = mv $xC0Sessions;
     }
+    std::time::duration $okC0Guests = std::time::duration::hours(1);
+    $vC0Guests = $s->duration('NEXUS_AUTH_GUESTS', required: false);
+    if ($vC0Guests != null) {
+        $xC0Guests = guard $vC0Guests;
+        $okC0Guests = mv $xC0Guests;
+    }
     try $s->done();
-    $b->param<nexus::auth::AuthConfig>(nexus::auth::AuthConfig($key: mv $okC0Key, $tokens: mv $okC0Tokens, $sessions: mv $okC0Sessions));
+    $b->param<nexus::auth::AuthConfig>(nexus::auth::AuthConfig($key: mv $okC0Key, $tokens: mv $okC0Tokens, $sessions: mv $okC0Sessions, $guests: mv $okC0Guests));
     return .ok;
 }
 
@@ -110,5 +117,7 @@ public function envs() : array<nexus::EnvVar>
     $all[] = nexus::EnvVar($name: 'NEXUS_AUTH_TOKENS', $type: 'duration', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How long a token lives, like `30d`.', $owner: 'nexus::auth::AuthConfig');
     std::time::duration $d2 = std::time::duration::hours(720);
     $all[] = nexus::EnvVar($name: 'NEXUS_AUTH_SESSIONS', $type: 'duration', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'How long a session lives, like `12h`. It slides: every request starts it again.', $owner: 'nexus::auth::AuthConfig');
+    std::time::duration $d3 = std::time::duration::hours(1);
+    $all[] = nexus::EnvVar($name: 'NEXUS_AUTH_GUESTS', $type: 'duration', $fallback: nexus::EnvVar::text($d3), $required: false, $secret: false, $doc: 'How long a session for nobody lives, like `1h`. It slides too; signing in gives it the lifetime of `sessions`.', $owner: 'nexus::auth::AuthConfig');
     return $all;
 }

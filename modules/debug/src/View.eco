@@ -1,0 +1,155 @@
+namespace nexus::debug;
+
+/**
+ * One thing a panel shows: what it is called, how it is drawn, the topic that keeps it live, the
+ * columns of a table, the actions it offers and how often the console reads it again. The data
+ * comes from the panel's `read` with the view's name.
+ *
+ * ```echo
+ * View('failed', 'Failed tasks', .table)
+ *     ->column('id', 'Id', 'code')
+ *     ->column('error', 'Error')
+ *     ->action(ActionSpec('retry', 'Retry', $row: true, $confirm: true));
+ * ```
+ */
+public struct View
+{
+    public string $name;
+    public string $title;
+    public ViewKind $kind;
+
+    /**
+     * The topic whose events update the view while it is open, empty for none.
+     */
+    public string $topic = '';
+    public array<Column> $columns = [];
+    public array<ActionSpec> $actions = [];
+
+    /**
+     * Seconds between reads while the view is open, 0 to read it once.
+     */
+    public uint32 $refresh = 0;
+
+    /**
+     * Query parameters the view understands, like `lane` or `status`, offered as filters.
+     */
+    public array<string> $filters = [];
+
+    /**
+     * A view of the same panel a row of this one opens in its sheet, next to the row's fields, with
+     * that view's filters taken from the row; empty for none. The view named is shown only there.
+     */
+    public string $detail = '';
+
+    /**
+     * Adds a column.
+     */
+    public function column(const string& $key, const string& $title, const string& $format = 'text') : View
+    {
+        $this->columns[] = Column($key, $title, $format);
+        return $this;
+    }
+
+    /**
+     * Makes the values of column `$key` open view `$view` of the same panel, with `?<key>=<value>`.
+     */
+    public function link(const string& $key, const string& $view) : View
+    {
+        foreach ($this->columns as &$c) {
+            if ($c->key == $key) {
+                $c->link = $view;
+            }
+        }
+        return $this;
+    }
+
+    /**
+     * Adds an action.
+     */
+    public function action(ActionSpec $a) : View
+    {
+        $this->actions[] = mv $a;
+        return $this;
+    }
+
+    /**
+     * Keeps the view live on `$topic`.
+     */
+    public function live(const string& $topic) : View
+    {
+        $this->topic = $topic;
+        return $this;
+    }
+
+    /**
+     * Reads the view again every `$seconds` while it is open.
+     */
+    public function every(uint32 $seconds) : View
+    {
+        $this->refresh = $seconds;
+        return $this;
+    }
+
+    /**
+     * Offers `$name` as a filter, passed to `read` in the query.
+     */
+    public function filter(const string& $name) : View
+    {
+        $this->filters[] = $name;
+        return $this;
+    }
+
+    /**
+     * Opens view `$view` of the same panel in a row's sheet, filled from the row.
+     */
+    public function detail(const string& $view) : View
+    {
+        $this->detail = $view;
+        return $this;
+    }
+
+    public const function json() : json::Value
+    {
+        $o = json::object();
+        $o['name'] = json::str($this->name);
+        $o['title'] = json::str($this->title);
+        $o['kind'] = json::str($this->kind->name());
+        if (!$this->topic->empty()) {
+            $o['topic'] = json::str($this->topic);
+        }
+        if (!$this->columns->empty()) {
+            $cols = json::arr();
+            foreach ($this->columns as const &$c) {
+                $cols[] = $c->json();
+            }
+            $o['columns'] = mv $cols;
+        }
+        if (!$this->actions->empty()) {
+            $acts = json::arr();
+            foreach ($this->actions as const &$a) {
+                $acts[] = $a->json();
+            }
+            $o['actions'] = mv $acts;
+        }
+        if ($this->refresh > 0) {
+            $o['refresh'] = json::int($this->refresh as int64);
+        }
+        if (!$this->filters->empty()) {
+            $o['filters'] = json::Value::from($this->filters);
+        }
+        if (!$this->detail->empty()) {
+            $o['detail'] = json::str($this->detail);
+        }
+        return $o;
+    }
+
+    /**
+     * `{"rows": [...]}`: a table view's data.
+     */
+    public static function rows(json::Value $rows) : json::Value
+    {
+        $o = json::object();
+        $o['rows'] = mv $rows;
+        return $o;
+    }
+}

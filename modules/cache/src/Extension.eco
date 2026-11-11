@@ -36,12 +36,12 @@ public class Extension : nexus::Extension
         nexus::Logger $log = $s->get<nexus::Logger>();
         if ($this->store != null) {
             Store $given = guard $this->store;
-            $s->bind<Cache>(put: Cache($given, $life, $log));
+            $s->bind<Cache>(put: Cache($given, $life, $log, traces: $s->get<nexus::trace::Traces>()));
             return .ok;
         }
         string $kind = scheme($config->url);
         if ($kind == 'memory') {
-            $s->bind<Cache>(put: Cache(MemoryStore(max: $config->maxEntries as usize, clock: $this->clock), $life, $log));
+            $s->bind<Cache>(put: Cache(MemoryStore(max: $config->maxEntries as usize, clock: $this->clock), $life, $log, traces: $s->get<nexus::trace::Traces>()));
             return .ok;
         }
         if ($kind == 'redis' || $kind == 'rediss') {

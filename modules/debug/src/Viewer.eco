@@ -1,0 +1,18 @@
+namespace nexus::debug;
+
+/**
+ * Who the gate let in: how (`token`, `open`, or the auth guard that read the credential) and as whom.
+ */
+public struct Viewer
+{
+    public string $via;
+    public string $subject;
+
+    public const function json() : json::Value
+    {
+        $o = json::object();
+        $o['via'] = json::str($this->via);
+        $o['subject'] = json::str($this->subject);
+        return $o;
+    }
+}

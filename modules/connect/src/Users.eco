@@ -1,0 +1,25 @@
+namespace nexus::connect;
+
+/**
+ * The app's users, as `Accounts` finds and makes them. A subject is a user's id as text, the way
+ * tokens name it.
+ */
+public interface Users
+{
+    /**
+     * Whether user `$subject` is still there.
+     */
+    function exists(const string& $subject) : result<bool, nexus::Problem>;
+
+    /**
+     * The subject of the user with email `$email`, or null.
+     */
+    function withEmail(const string& $email) : result<string?, nexus::Problem>;
+
+    /**
+     * A new user for `$who`, who signs in with the provider (no password), and whatever else a
+     * new user gets (a welcome mail): its subject. A 409 (`Accounts::taken()`) when a user got the
+     * email in the meantime.
+     */
+    function create(const ExternalIdentity& $who) : result<string, nexus::Problem>;
+}

@@ -58,15 +58,32 @@ public interface Store
 
     /**
      * Makes failed task `$id` due at `$now` with its tries fresh; the tasks held back behind it run
-     * once it is done.
+     * once it is done. Answers the task sent back, null when no failed task has that id.
      */
-    function again(const string& $id, time::timestamp $now) : result<Requeued, nexus::Problem>;
+    function again(const string& $id, time::timestamp $now) : result<StoredTask?, nexus::Problem>;
 
     /**
-     * Cancels waiting task `$id` and every waiting task after it; answers how many. A running task
-     * is not cancelled.
+     * `again` for every failed task of `$lane`; answers the tasks sent back.
      */
-    function cancel(const string& $id, time::timestamp $now) : result<uint64, nexus::Problem>;
+    function againAll(const string& $lane, time::timestamp $now) : result<array<StoredTask>, nexus::Problem>
+    {
+        array<StoredTask> $failed = try $this->failed($lane, 10000);
+        array<StoredTask> $out = [];
+        foreach ($failed as const &$t) {
+            StoredTask? $sent = try $this->again($t->id, $now);
+            StoredTask $back = guard $sent else {
+                continue;
+            };
+            $out[] = $back;
+        }
+        return .ok($out);
+    }
+
+    /**
+     * Cancels waiting task `$id` and every waiting task after it; answers the tasks cancelled. A
+     * running task is not cancelled.
+     */
+    function cancel(const string& $id, time::timestamp $now) : result<array<StoredTask>, nexus::Problem>;
 
     /**
      * Every task connected to task `$id`, before and after it, at most `$depth` steps away.
@@ -83,4 +100,14 @@ public interface Store
      * How many tasks of `$lane` wait or run.
      */
     function waiting(const string& $lane) : result<uint64, nexus::Problem>;
+
+    /**
+     * The tasks of `$lane` (of every lane when it is empty) in `$status` (in any when null), the
+     * newest first, at most `$limit`: what a console lists. Done and cancelled tasks stay for
+     * `NEXUS_WORK_KEEP`.
+     */
+    function recent(const string& $lane, TaskStatus? $status, uint64 $limit) : result<array<StoredTask>, nexus::Problem>
+    {
+        return .error(.unavailable('this store lists no tasks'));
+    }
 }

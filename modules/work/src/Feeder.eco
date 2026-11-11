@@ -190,6 +190,7 @@ internal class Feeder
     {
         Settle $s = .fail($why);
         $s->tell($log, $task->attempts, 0.0, $this->work->clock->now());
+        $this->told($task, $s, 0.0);
         $this->settle($task, $s, Batch(), $log);
     }
 
@@ -211,6 +212,7 @@ internal class Feeder
         time::timestamp $now = $this->work->clock->now();
         Settle $s = Settle::of($o->status, $task->attempts, $task->tries, $now);
         $s->tell($o->log, $task->attempts, $o->ms, $now);
+        $this->told($task, $s, $o->ms);
         Batch $spawned = Batch();
         if (!$o->spawned->empty()) {
             $spawned = $this->spawned($o, $now);
@@ -221,6 +223,39 @@ internal class Feeder
             $held->value->remove($task->id);
         }
         $this->poked->store(1);
+    }
+
+    /**
+     * Tells the lanes' observers how claimed `$task` settled.
+     */
+    internal function told(const StoredTask& $task, const Settle& $s, float64 $ms) : void
+    {
+        Watchers $w = $this->work->lanes->watchers;
+        if ($w->any()) {
+            $w->tell(Seen::settled($this->lane->lane, $task->name, $task->id, $s, $task->attempts, $ms, $this->work->clock->now()));
+        }
+    }
+
+    /**
+     * The tasks claimed here that run now.
+     */
+    public function running() : array<StoredTask>
+    {
+        array<StoredTask> $out = [];
+        thread::locked<map<string, StoredTask>> $held = $this->inflight->lock();
+        foreach ($held->value as $id => const &$t) {
+            $out[] = $t;
+        }
+        return $out;
+    }
+
+    /**
+     * How many tasks claimed here run now.
+     */
+    public function busy() : uint64
+    {
+        thread::locked<map<string, StoredTask>> $held = $this->inflight->lock();
+        return $held->value->count() as uint64;
     }
 
     /**

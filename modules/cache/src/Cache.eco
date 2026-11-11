@@ -27,11 +27,17 @@ public class Cache
     private Store $store;
     private nexus::Logger $log;
 
-    public constructor(Store $store, Lifetime $lifetime, nexus::Logger $log)
+    /**
+     * Where a watched request's timeline is found, to mark each call on it.
+     */
+    private nexus::trace::Traces $traces;
+
+    public constructor(Store $store, Lifetime $lifetime, nexus::Logger $log, traces: nexus::trace::Traces $traces = nexus::trace::Traces())
     {
         $this->store = $store;
         $this->lifetime = $lifetime;
         $this->log = $log;
+        $this->traces = $traces;
     }
 
     /**
@@ -47,7 +53,13 @@ public class Cache
      */
     public function get(const string& $key) : result<string?, CacheError>
     {
-        return $this->store->get($key);
+        nexus::trace::Timed $m = $this->mark('cache get', $key);
+        string? $hit = guard $this->store->get($key) else ($e) {
+            $m->fail();
+            return .error($e);
+        };
+        $m->note(Cache::seen($hit != null));
+        return .ok($hit);
     }
 
     /**
@@ -106,6 +118,7 @@ public class Cache
      */
     public function put(const string& $key, const Lifetime& $life, const string& $value) : status<CacheError>
     {
+        nexus::trace::Timed $m = $this->mark('cache put', $key);
         if ($life->lapsed()) {
             return $this->store->forget($key);
         }
@@ -114,6 +127,7 @@ public class Cache
 
     public function forget(const string& $key) : status<CacheError>
     {
+        nexus::trace::Timed $m = $this->mark('cache forget', $key);
         return $this->store->forget($key);
     }
 
@@ -122,16 +136,20 @@ public class Cache
      */
     public function flush() : status<CacheError>
     {
+        nexus::trace::Timed $m = $this->mark('cache flush', '');
         return $this->store->flush();
     }
 
     // a failed read is a miss
     private function read(const string& $key) : string?
     {
+        nexus::trace::Timed $m = $this->mark('cache get', $key);
         string? $hit = guard $this->store->get($key) else ($e) {
+            $m->fail();
             $this->log->warn('cache read failed', ['key' => $key, 'error' => $e->message()]);
             return null;
         };
+        $m->note(Cache::seen($hit != null));
         return $hit;
     }
 
@@ -142,5 +160,19 @@ public class Cache
             $this->log->warn('cache write failed', ['key' => $key, 'error' => $e->message()]);
             return;
         };
+    }
+
+    // a mark on the watched request's timeline, open until it goes out of scope
+    private const function mark(const string& $name, const string& $key) : nexus::trace::Timed
+    {
+        return nexus::trace::Timed($this->traces->here(), .cache, $name, $key);
+    }
+
+    private static function seen(bool $hit) : string
+    {
+        if ($hit) {
+            return 'hit';
+        }
+        return 'miss';
     }
 }

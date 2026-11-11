@@ -1,0 +1,10 @@
+namespace nexus::trace;
+
+/**
+ * How many marks of one kind a trace holds and how long they took together.
+ */
+public struct Tally
+{
+    public usize $count = 0;
+    public float64 $ms = 0.0;
+}

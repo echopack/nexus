@@ -1,7 +1,7 @@
 namespace Blog;
 
 use container::Container;
-use Blog::Actions::Health;
+use Blog::Actions::{Health, Home};
 use Blog::Commands::SetPassword;
 use Blog::Config::BlogConfig;
 use Blog::Middleware::ServerTiming;
@@ -40,8 +40,16 @@ public class App : nexus::Extension
         $app->bind<ServerTiming>(scoped: () => ServerTiming());
         $app->middleware<ServerTiming>();
 
+        // nothing under /v1 answers without a signed session, but opening one
+        $app->bind<nexus::auth::RequireSession>(shared: (Container $c) => nexus::auth::RequireSession(
+            $c->get<nexus::auth::Guards>(), under: '/v1', except: [type_id<Blog::Actions::Auth::OpenSession>()]));
+        $app->middleware<nexus::auth::RequireSession>();
+
         $app->bindAction<Health>((Container $c) => Health($c->get<BlogConfig>()))
             ->route([.get], '/health');
+        // the blog in a browser, a single page over the API
+        $app->bindAction<Home>(() => Home())
+            ->route([.get], '/');
 
         // tasks wait in the database and run on the worker threads of whichever server claims them
         $app->bindAsyncQueue<WorkerLane>();

@@ -1,0 +1,39 @@
+/*
+ * nexus-debug: a debug console on the running app, at `/__nexus/` unless told otherwise.
+ *
+ * Off until `NEXUS_DEBUG_ENABLED=true`. On, it serves a small embedded web
+ * app and the JSON API behind it: the app at a glance, its routes and
+ * environment, the requests it answered (each with a timeline of where its
+ * time went: middleware, action, spans, queries, cache, mail) and what it
+ * logged, live, plus every panel another extension adds (nexus-debug-work
+ * adds the queues).
+ * The API describes itself at `/__nexus/api`, so an agent finds its way
+ * with one GET. A gate decides who gets in: a token from the environment,
+ * the app's own sign in, or nobody but localhost in dev.
+ *
+ * The web app is built from ui/ with `npm run build`, which writes
+ * ui/dist and src/Assets.eco; both are committed, so an app needs no node.
+ */
+
+#[module: "nexus-debug"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "A debug console for nexus apps"]
+
+#[depends: "../.."]
+#[depends: "../auth"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../libcrypto"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+}

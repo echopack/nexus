@@ -30,7 +30,7 @@ public class SignedGuard : Guard
             if ($value->starts(SignedHeader::SCHEME)) {
                 $h = .parse($value);
                 if ($h == null) {
-                    return .error(.unauthorized('the signature header is malformed'));
+                    return .error(.unauthorized('the signature header is malformed', $reason: 'signature_malformed'));
                 }
             }
         }
@@ -40,7 +40,7 @@ public class SignedGuard : Guard
                 string $value = guard $access;
                 $h = .parse(accessToken: $value);
                 if ($h == null) {
-                    return .error(.unauthorized('the access token is malformed'));
+                    return .error(.unauthorized('the access token is malformed', $reason: 'token_malformed'));
                 }
             }
         }

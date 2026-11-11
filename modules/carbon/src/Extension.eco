@@ -56,6 +56,8 @@ public class Extension : nexus::Extension
         $db = guard $open($config) else ($e) {
             return .error(.extension('nexus-carbon', "the database did not open: {$e}"));
         };
+        // every statement onto the timeline of the request that ran it, when one is watched
+        $db->listen(QueryTrace($s->get<nexus::trace::Traces>()));
         // from here on threads share it
         $db->seal();
         $s->bind<carbon::DB>(put: $db);

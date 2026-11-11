@@ -1,0 +1,35 @@
+namespace nexus::debug;
+
+/**
+ * The debug console's settings, read from `NEXUS_DEBUG_ENABLED`, `NEXUS_DEBUG_PATH`,
+ * `NEXUS_DEBUG_TOKEN` and `NEXUS_DEBUG_KEEP`.
+ */
+#[nexus::config: 'NEXUS_DEBUG']
+public struct DebugConfig
+{
+    /**
+     * Whether the console is mounted at all. Off, the extension binds nothing and costs nothing.
+     */
+    #[nexus::env: 'ENABLED']
+    public bool $enabled = false;
+
+    /**
+     * Where the console lives, like `/__nexus`. The API is under `<path>/api`.
+     */
+    #[nexus::env: 'PATH']
+    public string $path = '/__nexus';
+
+    /**
+     * A token that opens the console as `Authorization: Bearer <token>`. At least 32 characters;
+     * used when the app passes no gate of its own.
+     */
+    #[nexus::env: 'TOKEN']
+    #[nexus::secret]
+    public string $token = '';
+
+    /**
+     * How many events each live topic (logs, requests, jobs) keeps for late readers.
+     */
+    #[nexus::env: 'KEEP']
+    public uint32 $keep = 1000;
+}

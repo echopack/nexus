@@ -46,6 +46,21 @@ public class MemorySessions : SessionStore
         return .ok;
     }
 
+    public function claim(const string& $id, const string& $subject, time::timestamp $now, time::timestamp $expiresAt) : result<bool, nexus::Problem>
+    {
+        thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
+        if (!$held->value->has($id)) {
+            return .ok(false);
+        }
+        StoredSession& $s = $held->value->at($id);
+        if ($s->subject != null || $s->expiresAt <= $now) {
+            return .ok(false);
+        }
+        $s->subject = $subject;
+        $s->expiresAt = $expiresAt;
+        return .ok(true);
+    }
+
     public function remove(const string& $id) : status<nexus::Problem>
     {
         thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
@@ -58,7 +73,10 @@ public class MemorySessions : SessionStore
         thread::locked<map<string, StoredSession>> $held = $this->sessions->lock();
         array<string> $gone = [];
         foreach ($held->value as $id => const &$s) {
-            if ($s->subject == $subject) {
+            string $who = guard $s->subject else {
+                continue;
+            };
+            if ($who == $subject) {
                 $gone[] = $id;
             }
         }

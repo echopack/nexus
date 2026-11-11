@@ -1,0 +1,76 @@
+namespace nexus::connect;
+
+/**
+ * Which of the app's users a sign in with an outside provider is, per request on the link store:
+ * the user the outside identity is linked to; else the user with the email the provider verified,
+ * linked now; else a new user, linked. An email the provider did not verify never opens an account
+ * that has it (some providers let anybody put any address on theirs): that is a 409, and the
+ * person signs in with their password first.
+ *
+ * ```echo
+ * nexus::connect::ExternalIdentity $who = try $this->connect->claim($in->value->attempt, $in->value->binding);
+ * string $subject = try $this->accounts->of($who, BlogUsers($this->users, $this->signals, $payload->locale()));
+ * ```
+ *
+ * The app's `Users` find and make its users; the policy is here, the same for every app.
+ */
+public class Accounts
+{
+    public LinkStore $links;
+    public calendar::Clock $clock;
+
+    public constructor(LinkStore $links, calendar::Clock $clock)
+    {
+        $this->links = $links;
+        $this->clock = $clock;
+    }
+
+    /**
+     * The subject of the user `$who` signs in as, among `$users`. A 403 when the provider shared no
+     * email for an identity that is not linked yet, a 409 when a user has the email but the
+     * provider did not verify it.
+     */
+    public function of(const ExternalIdentity& $who, Users $users) : result<string, nexus::Problem>
+    {
+        Link? $known = try $this->links->find($who->provider, $who->subject);
+        if ($known != null) {
+            Link $l = guard $known;
+            bool $there = try $users->exists($l->subject);
+            if ($there) {
+                return .ok($l->subject);
+            }
+            // the user is gone; the link is stale
+            try $this->links->unlink($who->provider, $who->subject);
+        }
+        if ($who->email->empty()) {
+            return .error(.forbidden("{$who->provider} shared no email; allow it and try again"));
+        }
+        string? $same = try $users->withEmail($who->email);
+        if ($same != null) {
+            string $subject = guard $same;
+            if (!$who->emailVerified) {
+                return .error(Accounts::taken());
+            }
+            try $this->link($who, $subject);
+            return .ok($subject);
+        }
+        string $made = try $users->create($who);
+        try $this->link($who, $made);
+        return .ok($made);
+    }
+
+    /**
+     * The 409 for an email an account has already.
+     */
+    public static function taken() : nexus::Problem
+    {
+        return .conflict('an account has this email; sign in with its password first');
+    }
+
+    internal function link(const ExternalIdentity& $who, const string& $subject) : status<nexus::Problem>
+    {
+        $l = Link($provider: $who->provider, $external: $who->subject, $subject: $subject, $email: $who->email,
+            $createdAt: $this->clock->now());
+        return $this->links->link($l);
+    }
+}

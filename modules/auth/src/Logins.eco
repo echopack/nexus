@@ -75,6 +75,6 @@ public class Logins
 
     internal static function refused() : nexus::Problem
     {
-        return .unauthorized('the email or the password is wrong');
+        return .unauthorized('the email or the password is wrong', $reason: 'wrong_credentials');
     }
 }

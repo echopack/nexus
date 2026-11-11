@@ -7,7 +7,7 @@
 use std::thread;
 use std::time;
 use ecotest::expect;
-use nexus::work::{Batch, Edge, StoredTask, TaskStatus, Hold, MemoryStore, Pushed, Requeued, Graph, Upstream, Pipeline, Step, GraphCommand};
+use nexus::work::{Batch, Edge, StoredTask, TaskStatus, Hold, MemoryStore, Pushed, Graph, Upstream, Pipeline, Step, GraphCommand};
 
 internal function task(const string& $id, time::timestamp $at) : StoredTask
 {
@@ -160,7 +160,11 @@ test a_stored_pipeline_runs_in_order_and_a_hard_failure_holds_it_back
     expect($g->tasks)->size(4);
     expect(str::join(GraphCommand::lines($g), '|'))->is('TSay  done  a|├ TSay  done  b|│ └ TSay  blocked  d|└ TSay  failed  c');
     got($s->failed('jobs', 10));
-    got($s->again('c', $now));
+    StoredTask? $sent = got($s->again('c', $now));
+    StoredTask $back = expect($sent)->some();
+    expect($back->status == TaskStatus::waiting)->yes(says: 'the task sent back waits');
+    StoredTask? $twice = got($s->again('c', $now));
+    expect($twice)->none();
     array<StoredTask> $c = claim($s, $now, 10);
     expect(ids($c))->is('c');
     guard $s->done($c[0], $now, Batch());
@@ -193,6 +197,29 @@ test a_soft_failure_lets_the_tasks_after_it_go
     expect(find($s, 'then')->pending)->is(0);
 }
 
+test every_failed_task_of_a_lane_is_sent_back_at_once
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    StoredTask $other = task('other', $now);
+    $other->lane = 'mail';
+    Batch $b = Batch();
+    $b->tasks[] = task('a', $now);
+    $b->tasks[] = task('b', $now);
+    $b->tasks[] = $other;
+    store($s, $b);
+    foreach (claim($s, $now, 10) as const &$t) {
+        guard $s->fail($t, $now, 'broken');
+    }
+    array<StoredTask> $mail = guard $s->claim('mail', $now, $now + time::duration::mins(1), 10);
+    guard $s->fail($mail[0], $now, 'broken');
+    array<StoredTask> $sent = got($s->againAll('jobs', $now));
+    expect(ids($sent))->is('a,b');
+    expect(find($s, 'a')->status == TaskStatus::waiting)->yes(says: 'a failed task of the lane waits again');
+    expect(find($s, 'a')->attempts)->is(0);
+    expect(find($s, 'other')->status == TaskStatus::failed)->yes(says: 'another lane is left alone');
+}
+
 test spawned_tasks_run_before_the_tasks_waiting_for_their_parent
 {
     $s = MemoryStore();
@@ -223,7 +250,8 @@ test cancel_prune_and_expiry
     $s = MemoryStore();
     time::timestamp $now = .from_unix_secs(START);
     store($s, chain($now));
-    got($s->cancel('b', $now));
+    array<StoredTask> $cancelled = got($s->cancel('b', $now));
+    expect(ids($cancelled))->is('b,d');
     expect(find($s, 'd')->status == TaskStatus::cancelled)->yes(says: 'cancel reaches the tasks after it');
     expect(find($s, 'c')->status == TaskStatus::waiting)->yes(says: 'cancel leaves the others');
 

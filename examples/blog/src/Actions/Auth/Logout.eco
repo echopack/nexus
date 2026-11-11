@@ -1,9 +1,8 @@
 namespace Blog::Actions::Auth;
 
 /**
- * Ends the token or session the request came with.
+ * Ends the session the request is signed with, signed in or not; the client opens a new one.
  */
-#[nexus::through: ["nexus::auth::Authenticate"]]
 public class Logout : nexus::Action
 {
     private nexus::auth::Guards $guards;
@@ -15,7 +14,7 @@ public class Logout : nexus::Action
 
     public function handle(nexus::Payload& $payload) : status<nexus::Problem>
     {
-        $me = try $payload->state<nexus::auth::Identity>();
-        return $this->guards->revoke($payload, $me);
+        $session = try $payload->state<nexus::auth::Identity>();
+        return $this->guards->revoke($payload, $session);
     }
 }

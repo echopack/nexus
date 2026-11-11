@@ -17,6 +17,13 @@ public interface SessionStore
      */
     function touch(const string& $id, time::timestamp $expiresAt) : status<nexus::Problem>;
 
+    /**
+     * Puts `$subject` on session `$id` and moves its expiry to `$expiresAt`, for a sign in, but only
+     * while nobody is on it and it has not expired by `$now`, in one step so two sign ins cannot
+     * both win. Answers whether it did.
+     */
+    function claim(const string& $id, const string& $subject, time::timestamp $now, time::timestamp $expiresAt) : result<bool, nexus::Problem>;
+
     function remove(const string& $id) : status<nexus::Problem>;
 
     function removeAll(const string& $subject) : status<nexus::Problem>;

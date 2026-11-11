@@ -136,3 +136,24 @@ test html_escape_covers_the_five
 {
     expect(nexus::mail::Html::escape('<a href="x">Tom & Jerry\'s</a>'))->is('&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&#39;s&lt;/a&gt;');
 }
+
+test a_delivery_is_marked_on_the_watched_requests_timeline
+{
+    Outbox $box = Outbox();
+    $box->refuse(.connect('down'));
+    $traces = nexus::trace::Traces();
+    $mailer = Mailer($box, Address('shop@example.com'), nexus::Logger::silent(), traces: $traces);
+    $t = nexus::trace::Trace();
+    $traces->enter($t);
+    Message $m = $mailer->compose(Receipt('Ann', 1))->to(Address('ann@example.com'));
+    expect($mailer->send($m))->fails();
+    expect($mailer->send($m))->ok();
+    $traces->leave();
+    array<nexus::trace::Mark> $marks = $t->marks();
+    expect($marks)->size(2);
+    expect($marks[0]->kind == nexus::trace::Kind::mail)->yes();
+    expect($marks[0]->detail)->is('ann@example.com');
+    expect($marks[0]->note)->is('Your receipt, Ann');
+    expect($marks[0]->failed)->yes();
+    expect($marks[1]->failed)->no();
+}

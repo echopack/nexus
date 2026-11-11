@@ -1,0 +1,60 @@
+namespace nexus::debug;
+
+/**
+ * How the console draws a view's data. Each kind expects its own shape from `Panel::read`.
+ */
+public enum ViewKind : uint8
+{
+    /**
+     * Big numbers: `{"stats": [{"label": "Served", "value": 120, "hint": "requests"}]}`.
+     */
+    case stats = 1;
+
+    /**
+     * Rows under the view's columns: `{"rows": [{...}, ...]}`. Live when the view names a topic:
+     * each event of it is a row too, newest first.
+     */
+    case table = 2;
+
+    /**
+     * Label and value pairs: `{"fields": [{"label": "Mode", "value": "dev"}]}`.
+     */
+    case fields = 3;
+
+    /**
+     * A log: entries of the view's topic, with level, message and fields.
+     */
+    case log = 4;
+
+    /**
+     * Any JSON document, shown as a tree.
+     */
+    case json = 5;
+
+    /**
+     * Nodes and the edges between them: `{"nodes": [{"id": "a", "label": "...", "state": "done"}],
+     * "edges": [{"from": "a", "to": "b"}]}`.
+     */
+    case graph = 6;
+
+    /**
+     * Where one request spent its time, drawn as a waterfall: `{"request": {...}, "timeline":
+     * {"began": "...", "total": 41.2, "dropped": 0, "marks": [{"id": 1, "parent": 0, "kind":
+     * "query", "name": "query", "detail": "select ...", "note": "", "start": 3.1, "ms": 0.8,
+     * "failed": false}]}, "logs": [...]}`, times in milliseconds from the start of the request.
+     */
+    case timeline = 7;
+
+    public const function name() : string
+    {
+        return match ($this) {
+            ViewKind::stats => 'stats',
+            ViewKind::table => 'table',
+            ViewKind::fields => 'fields',
+            ViewKind::log => 'log',
+            ViewKind::json => 'json',
+            ViewKind::graph => 'graph',
+            ViewKind::timeline => 'timeline',
+        };
+    }
+}

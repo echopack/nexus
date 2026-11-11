@@ -1,5 +1,7 @@
 namespace nexus;
 
+use nexus::trace;
+
 /**
  * Everything one request carries through middleware and the action: the request, its own child
  * container, the mode and a log stamped with the request id. The container holds the services bound
@@ -27,9 +29,27 @@ public struct Payload
     public string $action = '';
 
     /**
+     * The route the request matched, found before any middleware runs, so a global middleware can
+     * tell which action it guards. Null when nothing answers the path and method; routing then
+     * answers 404 or 405 once the middleware let the request through.
+     */
+    public Route? $route = null;
+
+    /**
+     * The methods that would have answered when `route` is null, empty when the path is unknown.
+     */
+    public array<Method> $allow = [];
+
+    /**
      * How the work came in: `.http` for a request, `.cli`, `.mcp` or `.work` for the other doors.
      */
     public Door $door = .http;
+
+    /**
+     * The timeline this request is recorded on, null unless someone watches (the debug console).
+     * Middleware and the action mark themselves on it.
+     */
+    public trace::Trace? $trace = null;
 
     /**
      * The service of type `T` for this request.

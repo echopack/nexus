@@ -152,14 +152,14 @@ public class Grants
     public function identify(const string& $text) : result<nexus::auth::Identity, nexus::Problem>
     {
         nexus::auth::Token $t = guard nexus::auth::Token::parse(Grants::ACCESS, $text) else {
-            return .error(.unauthorized('the token is not valid'));
+            return .error(.unauthorized('the token is not valid', $reason: 'token_invalid'));
         };
         Grant? $found = try $this->store->grant($t->id);
         Grant $g = guard $found else {
-            return .error(.unauthorized('the token is not valid'));
+            return .error(.unauthorized('the token is not valid', $reason: 'token_invalid'));
         };
         if (!$t->matches($g->accessHash) || $g->accessExpiresAt <= $this->clock->now()) {
-            return .error(.unauthorized('the token is not valid'));
+            return .error(.unauthorized('the token is not valid', $reason: 'token_invalid'));
         }
         return .ok(nexus::auth::Identity($via: OAuthGuard::NAME, $subject: $g->subject, $credential: $g->id, $scopes: Scopes::split($g->scope),
             $audience: $g->resource, $client: $g->client));

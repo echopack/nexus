@@ -1,0 +1,119 @@
+namespace nexus::debug;
+
+/**
+ * Serves the embedded web app: its files by path, `index.html` for every other path it routes
+ * itself, the console's base written into the index so the app finds its API wherever it is mounted.
+ * Hashed files are cached for a year; the index is asked for every time.
+ */
+public struct Static
+{
+    /**
+     * Who may frame, script and connect: the console itself only.
+     */
+    public const string POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+
+    /**
+     * The answer for `$rest`, the path below the console's base without its leading slash.
+     */
+    public static function serve(nexus::Payload& $payload, const string& $base, const string& $rest) : nexus::Response
+    {
+        string $path = $rest;
+        if ($path->empty() || $path->ends('/')) {
+            return Static::index($payload, $base);
+        }
+        if ($path->contains('..')) {
+            return $payload->fail(.notFound($payload->request->path));
+        }
+        Asset? $found = Assets::find($path);
+        if ($found == null) {
+            // a path the web app routes itself, unless it names a file
+            if (Static::named($path)) {
+                return $payload->fail(.notFound($payload->request->path));
+            }
+            return Static::index($payload, $base);
+        }
+        Asset $a = guard $found;
+        if ($a->path == 'index.html') {
+            return Static::index($payload, $base);
+        }
+        if (($payload->request->header('If-None-Match') ?? '') == $a->etag) {
+            $r = nexus::Response(304);
+            $r->header('ETag', $a->etag);
+            return $r;
+        }
+        nexus::Response $r = Static::body($payload, $a);
+        $r->header('ETag', $a->etag);
+        if ($a->path->starts('assets/')) {
+            $r->header('Cache-Control', 'public, max-age=31536000, immutable');
+        } else {
+            $r->header('Cache-Control', 'no-cache');
+        }
+        return $r;
+    }
+
+    /**
+     * The index with the base filled in, or a short page saying the web app was not built.
+     */
+    public static function index(nexus::Payload& $payload, const string& $base) : nexus::Response
+    {
+        Asset? $found = Assets::find('index.html');
+        string $html = '';
+        if ($found == null) {
+            $html = "<!doctype html><meta charset=\"utf-8\"><title>nexus</title><p>The debug console's web app is not built; its API is at <a href=\"{$base}/api\">{$base}/api</a>.</p>";
+        } else {
+            Asset $a = guard $found;
+            $html = str::replace(string($a->body), '__NEXUS_BASE__', $base);
+        }
+        $r = nexus::Response(html: $html);
+        $r->header('Cache-Control', 'no-cache');
+        Static::secure($r);
+        return $r;
+    }
+
+    /**
+     * The headers every page of the console carries.
+     */
+    public static function secure(nexus::Response& $r) : void
+    {
+        $r->header('Content-Security-Policy', Static::POLICY);
+        $r->header('X-Frame-Options', 'DENY');
+        $r->header('X-Content-Type-Options', 'nosniff');
+        $r->header('Referrer-Policy', 'no-referrer');
+    }
+
+    /**
+     * `$a`'s bytes, gzipped when the client takes that and it saves something.
+     */
+    private static function body(nexus::Payload& $payload, const Asset& $a) : nexus::Response
+    {
+        string $accepts = $payload->request->header('Accept-Encoding') ?? '';
+        bool $gzip = !$a->gzip->empty() && $accepts->contains('gzip');
+        string $bytes;
+        if ($gzip) {
+            $bytes = string($a->gzip);
+        } else {
+            $bytes = string($a->body);
+        }
+        $r = nexus::Response(200, mv $bytes, type: $a->type);
+        if ($gzip) {
+            $r->header('Content-Encoding', 'gzip');
+        }
+        $r->header('Vary', 'Accept-Encoding');
+        Static::secure($r);
+        return $r;
+    }
+
+    /**
+     * Whether the last segment of `$path` has an extension, so it names a file.
+     */
+    private static function named(const string& $path) : bool
+    {
+        usize $slash = 0;
+        usize $at = $path->find('/');
+        while ($at < $path->size()) {
+            $slash = $at + 1;
+            $at = $path->find('/', $slash);
+        }
+        return $path->find('.', $slash) < $path->size();
+    }
+}

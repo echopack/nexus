@@ -1,6 +1,7 @@
 namespace Blog::Middleware;
 
 use Blog::DB::Model::UserRepository;
+use Blog::Services::BlogUsers;
 use Blog::Types::Caller;
 
 /**
@@ -20,20 +21,11 @@ public class RequireUser : nexus::Middleware
 
     public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
     {
-        $found = guard $this->guards->identify($payload) else ($p) {
+        $id = guard $this->guards->demand($payload) else ($r) {
+            return $r;
+        };
+        $user = guard BlogUsers::of($this->users, $id->subject) else ($p) {
             return $payload->fail($p);
-        };
-        $id = guard $found else {
-            return $payload->fail(nexus::Problem::unauthorized('this needs a signed in caller'));
-        };
-        int64 $key = guard $id->number() else {
-            return $payload->fail(nexus::Problem::unauthorized('the credential names nobody'));
-        };
-        $loaded = guard $this->users->find()->get($key) else ($e) {
-            return $payload->fail(nexus::carbon::Problems::of($e));
-        };
-        $user = guard $loaded else {
-            return $payload->fail(nexus::Problem::unauthorized('the account is gone'));
         };
         $payload->put<Caller>(Caller($id, $user));
         return $next->run($payload);

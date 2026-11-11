@@ -1,0 +1,98 @@
+namespace nexus::debug;
+
+/**
+ * Opens the console with the app's own sign in: the credential nexus-auth's guards accept (a token
+ * from the app's login, a signed session), optionally only with scope `scope`, and only for who the
+ * app's own middleware lets through, the way it guards its admin pages:
+ *
+ * ```echo
+ * nexus::debug::Extension(gate: nexus::debug::GuardGate(login: nexus::debug::Login(session: '/v1/auth/session', endpoint: '/v1/auth/signin'))
+ *     ->through<Blog::Middleware::RequireUser>()
+ *     ->through<Blog::Middleware::RequireAdmin>()),
+ * ```
+ *
+ * With `login`, the console shows the app's sign in form; without, it asks for a token. A token an
+ * OAuth client holds for another resource does not open it. List nexus-auth before the console.
+ */
+#[atomic]
+public class GuardGate : Gate
+{
+    private string? $scope;
+    private Login? $login;
+    private array<function<nexus::MiddlewareRef(nexus::Generated)>> $wanted = [];
+    private array<nexus::MiddlewareRef> $through = [];
+    private nexus::auth::Guards? $guards = null;
+
+    public constructor(scope: string? $scope = null, login: Login? $login = null)
+    {
+        $this->scope = $scope;
+        $this->login = $login;
+    }
+
+    /**
+     * Lets in only who middleware `M` lets through, after the ones named before it. `M` is resolved
+     * from the request's container like an action's `#[nexus::through]`, so the app binds it; the
+     * boot stops when it does not.
+     */
+    public function through<M>() : GuardGate
+    {
+        $this->wanted[] = function(nexus::Generated $g) : nexus::MiddlewareRef {
+            return nexus::MiddlewareRef::of<M>($g->nameOf<M>('a middleware of the debug gate'));
+        };
+        return $this;
+    }
+
+    public function name() : string
+    {
+        return 'app';
+    }
+
+    public function wire(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::auth::Guards $g = guard $s->find<nexus::auth::Guards>() else {
+            return .error(.extension('nexus-debug', 'the app sign in gate reads nexus-auth; list nexus::auth::Extension() before nexus::debug::Extension()'));
+        };
+        $this->guards = $g;
+        foreach ($this->wanted as const &$make) {
+            $this->through[] = $make($s->generated);
+        }
+        return .ok;
+    }
+
+    public function middleware() : array<nexus::MiddlewareRef>
+    {
+        return $this->through;
+    }
+
+    public function admit(nexus::Payload& $payload) : result<Viewer, nexus::Response>
+    {
+        nexus::auth::Guards $g = guard $this->guards else {
+            return .error($payload->fail(.server('the debug gate was not wired')));
+        };
+        nexus::auth::Identity? $found = guard $g->identify($payload) else ($p) {
+            return .error($payload->fail($p));
+        };
+        nexus::auth::Identity $id = guard $found else {
+            return .error(Gates::challenge($payload, 'the debug console needs a signed in caller'));
+        };
+        if ($this->scope != null) {
+            string $scope = guard $this->scope;
+            guard $id->require($scope) else ($p) {
+                return .error($payload->fail($p));
+            };
+        }
+        return .ok(Viewer($id->via, $id->subject));
+    }
+
+    public function signIn() : json::Value
+    {
+        if ($this->login != null) {
+            Login $l = guard $this->login;
+            return $l->json();
+        }
+        $o = json::object();
+        $o['kind'] = json::str('token');
+        $o['hint'] = json::str("a bearer token of the app's own sign in");
+        return $o;
+    }
+}

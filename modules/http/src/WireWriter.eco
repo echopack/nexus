@@ -1,0 +1,29 @@
+namespace nexus::http;
+
+/**
+ * A nexus writer over libhttp's, for a streamed response on a real connection.
+ */
+public class WireWriter : nexus::Writer
+{
+    private http::Writer $out;
+
+    public constructor(http::Writer $out)
+    {
+        $this->out = $out;
+    }
+
+    public function write(const string& $bytes) : bool
+    {
+        return $this->out->write($bytes);
+    }
+
+    public function flush() : bool
+    {
+        return $this->out->flush();
+    }
+
+    public function open() : bool
+    {
+        return $this->out->open();
+    }
+}

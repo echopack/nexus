@@ -1,0 +1,125 @@
+namespace nexus::debug;
+
+use std::time;
+
+/**
+ * The app at a glance: how long it runs, what it answered, how it is put together.
+ */
+#[atomic]
+public class OverviewPanel : Panel
+{
+    private Debug $debug;
+    private Topic $requests;
+
+    public constructor(Debug $debug, Topic $requests)
+    {
+        $this->debug = $debug;
+        $this->requests = $requests;
+    }
+
+    public function name() : string
+    {
+        return 'overview';
+    }
+
+    public function title() : string
+    {
+        return 'Overview';
+    }
+
+    public function views() : array<View>
+    {
+        array<View> $v = [
+            View('stats', 'Now', .stats)->every(5),
+            View('app', 'App', .fields),
+            View('topics', 'Live topics', .table)
+                ->column('name', 'Topic', 'code')
+                ->column('title', 'Title')
+                ->column('last', 'Events', 'number')
+                ->every(5),
+        ];
+        return $v;
+    }
+
+    public function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>
+    {
+        nexus::Kernel $k = try $this->debug->booted();
+        if ($view == 'stats') {
+            $stats = json::arr();
+            int64 $up = time::timestamp::now()->unix_secs() - $this->debug->started->unix_secs();
+            $stats[] = OverviewPanel::stat('Uptime', json::str(OverviewPanel::span($up)), 'since boot');
+            // the console's own reads aside, as the request feed counts them
+            $stats[] = OverviewPanel::stat('Requests', json::int($this->requests->ring->last() as int64), 'answered since boot');
+            $stats[] = OverviewPanel::stat('Routes', json::int($k->router->count() as int64), 'routed');
+            $stats[] = OverviewPanel::stat('Mode', json::str($k->mode->name()), 'NEXUS_MODE');
+            $o = json::object();
+            $o['stats'] = mv $stats;
+            return .ok($o);
+        }
+        if ($view == 'app') {
+            $fields = json::arr();
+            $fields[] = OverviewPanel::field('Mode', json::str($k->mode->name()));
+            $fields[] = OverviewPanel::field('Started', json::str(nexus::log::Stamp::rfc3339($this->debug->started)));
+            $fields[] = OverviewPanel::field('Extensions', json::Value::from($k->extensionNames()));
+            $fields[] = OverviewPanel::field('Console', json::str($this->debug->base));
+            $fields[] = OverviewPanel::field('Gate', json::str($this->debug->gate->name()));
+            $fields[] = OverviewPanel::field('Public origin', json::str($k->env->get('NEXUS_APP_URL') ?? '(where the client reached it)'));
+            $o = json::object();
+            $o['fields'] = mv $fields;
+            return .ok($o);
+        }
+        $rows = json::arr();
+        foreach ($this->debug->topics as $t) {
+            $r = json::object();
+            $r['name'] = json::str($t->name);
+            $r['title'] = json::str($t->title);
+            $r['last'] = json::int($t->ring->last() as int64);
+            $rows[] = mv $r;
+        }
+        return .ok(View::rows(mv $rows));
+    }
+
+    /**
+     * One entry of a stats view.
+     */
+    public static function stat(const string& $label, json::Value $value, const string& $hint) : json::Value
+    {
+        $o = json::object();
+        $o['label'] = json::str($label);
+        $o['value'] = mv $value;
+        $o['hint'] = json::str($hint);
+        return $o;
+    }
+
+    /**
+     * One entry of a fields view.
+     */
+    public static function field(const string& $label, json::Value $value) : json::Value
+    {
+        $o = json::object();
+        $o['label'] = json::str($label);
+        $o['value'] = mv $value;
+        return $o;
+    }
+
+    /**
+     * `$seconds` as `3d 4h`, `2h 5m`, `4m 10s` or `12s`.
+     */
+    public static function span(int64 $seconds) : string
+    {
+        int64 $d = $seconds / 86400;
+        int64 $h = ($seconds % 86400) / 3600;
+        int64 $m = ($seconds % 3600) / 60;
+        int64 $s = $seconds % 60;
+        if ($d > 0) {
+            return "{$d}d {$h}h";
+        }
+        if ($h > 0) {
+            return "{$h}h {$m}m";
+        }
+        if ($m > 0) {
+            return "{$m}m {$s}s";
+        }
+        return "{$s}s";
+    }
+}

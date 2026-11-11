@@ -1,0 +1,61 @@
+namespace nexus::debug::work;
+
+use std::thread;
+
+/**
+ * The counts of every lane, kept as the observer hears about tasks.
+ */
+#[atomic]
+public class Counts
+{
+    private thread::mutex<map<string, Count>> $lanes = thread::mutex<map<string, Count>>(map<string, Count>());
+
+    public function add(const nexus::work::Seen& $s) : void
+    {
+        thread::locked<map<string, Count>> $held = $this->lanes->lock();
+        if (!$held->value->has($s->lane)) {
+            $held->value[$s->lane] = Count();
+        }
+        Count& $c = $held->value->at($s->lane);
+        // only a settle carries a run's ms, the rest add nothing
+        $c->ms = $c->ms + $s->ms;
+        match ($s->kind) {
+            nexus::work::SeenKind::pushed => {
+                $c->pushed = $c->pushed + 1;
+            },
+            nexus::work::SeenKind::started => {
+                $c->started = $c->started + 1;
+            },
+            nexus::work::SeenKind::done => {
+                $c->done = $c->done + 1;
+            },
+            nexus::work::SeenKind::retry => {
+                $c->retried = $c->retried + 1;
+            },
+            nexus::work::SeenKind::failed => {
+                $c->failed = $c->failed + 1;
+            },
+            nexus::work::SeenKind::expired => {
+                $c->expired = $c->expired + 1;
+            },
+            nexus::work::SeenKind::requeued => {
+                $c->requeued = $c->requeued + 1;
+            },
+            nexus::work::SeenKind::cancelled => {
+                $c->cancelled = $c->cancelled + 1;
+            },
+        };
+    }
+
+    /**
+     * The count of lane `$lane`, zero for one nothing went through.
+     */
+    public const function of(const string& $lane) : Count
+    {
+        thread::locked<map<string, Count>> $held = $this->lanes->lock();
+        if (!$held->value->has($lane)) {
+            return Count();
+        }
+        return $held->value->get($lane);
+    }
+}

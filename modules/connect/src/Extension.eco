@@ -6,8 +6,9 @@ use std::time;
 /**
  * Sign in with outside providers. Binds `Connect` per request on the attempt store, `Accounts` on
  * `LinkStore`, `Connectors` (the ones that are configured) and `Fetch`, how the providers are
- * reached (libcurl unless `fetch` says otherwise; a test replaces it with a `ScriptedFetch`); routes `POST /auth/connect/{provider}` and its callback; adds the attempts to
- * `nexus::auth::Pruning`. List it after nexus-auth.
+ * reached (libcurl; a test swaps in a `ScriptedFetch` with `TestApp(..., replace:)`); routes
+ * `POST /auth/connect/{provider}` and its callback; adds the attempts to `nexus::auth::Pruning`.
+ * List it after nexus-auth.
  *
  * ```echo
  * nexus::connect::Extension(page: '/signed-in', connectors: [nexus::connect::Google()], stores: .provided),
@@ -23,22 +24,19 @@ public class Extension : nexus::Extension
     public array<Connector> $connectors;
     public const Stores $stores;
     public calendar::Clock $clock;
-    public Fetch $fetch;
     internal nexus::auth::Throttle $starts;
 
     public constructor(
         page: const string& $page = '/',
         connectors: array<Connector> $connectors = array<Connector>(),
         stores: Stores $stores = .memory,
-        clock: calendar::Clock $clock = calendar::SystemClock(),
-        fetch: Fetch $fetch = CurlFetch()
+        clock: calendar::Clock $clock = calendar::SystemClock()
     )
     {
         $this->page = $page;
         $this->connectors = mv $connectors;
         $this->stores = $stores;
         $this->clock = $clock;
-        $this->fetch = $fetch;
         $this->starts = nexus::auth::Throttle(30, .mins(15));
     }
 
@@ -69,9 +67,8 @@ public class Extension : nexus::Extension
             }
         }
         $s->bind<Connectors>(put: $connectors);
-        Fetch $outbound = $this->fetch;
-        $s->bind<Fetch>(once: function[$outbound]() : Fetch {
-            return $outbound;
+        $s->bind<Fetch>(once: function() : Fetch {
+            return CurlFetch();
         });
         if ($this->stores == Stores::memory) {
             $s->bind<MemoryAttempts>(put: MemoryAttempts());

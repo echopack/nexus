@@ -56,11 +56,18 @@ public struct Wire
     }
 
     /**
-     * The wire response for a nexus response.
+     * The wire response for a nexus response; a streamed one streams, chunked.
      */
     public static function response(const nexus::Response& $out) : http::Response
     {
         $r = http::Response($out->status, $out->body);
+        if ($out->stream != null) {
+            function<void(nexus::Writer)> $fn = guard $out->stream;
+            $r = http::Response(stream: function[$fn](http::Writer $w) : void {
+                $fn(WireWriter($w));
+            });
+            $r->status = $out->status;
+        }
         foreach ($out->headers->items as const &$h) {
             $r->headers->add($h->name, $h->value);
         }

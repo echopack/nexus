@@ -115,7 +115,7 @@ public class Extension : nexus::Extension
             return Tokens($c->get<TokenStore>(), $prefix, $config->tokens, $clock);
         });
         $s->bind<Sessions>(scope: function[$config, $clock, $window](Container $c) : Sessions {
-            return Sessions($c->get<SessionStore>(), $config->key, $config->sessions, $window, $clock);
+            return Sessions($c->get<SessionStore>(), $config->key, $config->sessions, $config->guests, $window, $clock);
         });
         return .ok;
     }

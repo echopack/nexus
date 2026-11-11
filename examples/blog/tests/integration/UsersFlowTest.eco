@@ -50,7 +50,7 @@ test signing_up_queues_a_welcome_that_a_worker_sends
         ->matches('$.data[1].welcomed_at', (const json::Value& $v) : bool => !$v->isNull(), says: 'set');
 
     ecotest::step('the reader signs in with the password they chose');
-    $world->api->post('/v1/auth/token', json: credentials('reader@example.com', 'a long password'))->status(201);
+    $world->api->post('/v1/auth/signin', json: credentials('reader@example.com', 'a long password'))->status(200);
 }
 
 #[group: "integration"]

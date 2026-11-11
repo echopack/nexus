@@ -1,0 +1,79 @@
+namespace Blog::Services;
+
+use Blog::DB::Model::{User, UserRepository, UserTable};
+use Blog::Signals::UserRegistered;
+
+/**
+ * The blog's users as nexus-connect's `Accounts` finds and makes them, for one request: a new one
+ * has no password, the provider's name (else the part of the email before the `@`), and is
+ * welcomed in the request's language like any sign up.
+ */
+public class BlogUsers : nexus::connect::Users
+{
+    private UserRepository $users;
+    private nexus::SignalDispatcher $signals;
+    private string $locale;
+
+    public constructor(UserRepository $users, nexus::SignalDispatcher $signals, const string& $locale)
+    {
+        $this->users = $users;
+        $this->signals = $signals;
+        $this->locale = $locale;
+    }
+
+    /**
+     * The user `$subject` names, for a request signed in as them: a 401 when it names nobody or the
+     * account is gone.
+     */
+    public static function of(UserRepository $users, const string& $subject) : result<User, nexus::Problem>
+    {
+        int64 $key = guard str::int($subject) else {
+            return .error(.unauthorized('the credential names nobody', $reason: 'account_unknown'));
+        };
+        User? $loaded = guard $users->find()->get($key) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        User $user = guard $loaded else {
+            return .error(.unauthorized('the account is gone', $reason: 'account_gone'));
+        };
+        return .ok($user);
+    }
+
+    public function exists(const string& $subject) : result<bool, nexus::Problem>
+    {
+        int64 $id = guard str::int($subject) else {
+            return .ok(false);
+        };
+        User? $found = guard $this->users->find()->get($id) else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        return .ok($found != null);
+    }
+
+    public function withEmail(const string& $email) : result<string?, nexus::Problem>
+    {
+        User? $found = guard $this->users->find()->where(UserTable::$email == $email)->first() else ($e) {
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        User $u = guard $found else {
+            return .ok(null);
+        };
+        return .ok("{$u->id}");
+    }
+
+    public function create(const nexus::connect::ExternalIdentity& $who) : result<string, nexus::Problem>
+    {
+        string $name = $who->name;
+        if ($name->empty()) {
+            $name = $who->email->sub(0, $who->email->find('@'))->clone();
+        }
+        User $made = guard $this->users->create(User($email: $who->email, $name: $name)) else ($e) {
+            if ($e->duplicate()) {
+                return .error(nexus::connect::Accounts::taken());
+            }
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        try $this->signals->send(UserRegistered($user: $made->id, $locale: $this->locale));
+        return .ok("{$made->id}");
+    }
+}

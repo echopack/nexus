@@ -1,5 +1,7 @@
 namespace nexus::work;
 
+use std::time;
+
 /**
  * A task value the scheduler pushes on a schedule into a lane: `every` (a duration like `15m`) or
  * `cron` (five fields), set where it is wired and checked at boot.
@@ -30,6 +32,26 @@ public class Planned
     public constructor(Item $item)
     {
         $this->item = $item;
+    }
+
+    /**
+     * The task type it pushes, known once the app booted.
+     */
+    public const function task() : string
+    {
+        return $this->name;
+    }
+
+    /**
+     * When it pushes next after `$after`, read in `$zone`; null before boot or when the schedule
+     * never comes round again.
+     */
+    public const function next(time::timestamp $after, const calendar::Zone& $zone) : time::timestamp?
+    {
+        Schedule $s = guard $this->schedule else {
+            return null;
+        };
+        return $s->next($after, $zone);
     }
 
     /**

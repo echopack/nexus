@@ -13,4 +13,13 @@ public class Work
     public Codecs $codecs;
     public Lanes $lanes = Lanes();
     public TaskScheduler $scheduler = TaskScheduler();
+
+    /**
+     * Has `$o` hear what happens to every task on every lane. For an extension's `services` or
+     * `boot`, before the queues start.
+     */
+    public function observe(Observer $o) : void
+    {
+        $this->lanes->watchers->add($o);
+    }
 }

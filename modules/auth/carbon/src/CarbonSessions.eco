@@ -41,6 +41,20 @@ public class CarbonSessions : nexus::auth::SessionStore
         return .ok;
     }
 
+    public function claim(const string& $id, const string& $subject, time::timestamp $now, time::timestamp $expiresAt) : result<bool, nexus::Problem>
+    {
+        AuthSessionRepository $repo = try $this->repo();
+        $set = hydrahon::Values();
+        $set[AuthSessionTable::$subject] = $subject;
+        $set[AuthSessionTable::$expiresAt] = $expiresAt;
+        uint64 $n = try $repo->find()
+            ->where(AuthSessionTable::$id == $id)
+            ->where(AuthSessionTable::$subject->isNull())
+            ->where(AuthSessionTable::$expiresAt > $now)
+            ->update($set);
+        return .ok($n == 1);
+    }
+
     public function remove(const string& $id) : status<nexus::Problem>
     {
         AuthSessionRepository $repo = try $this->repo();

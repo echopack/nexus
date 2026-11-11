@@ -9,7 +9,7 @@ namespace nexus::auth::carbon;
 public class AuthSessionTable : hydrahon::Source, carbon::Schema<nexus::auth::carbon::AuthSession, string>
 {
     public static hydrahon::Term<string> $id = carbon::select::column<string>('auth_sessions', 'id');
-    public static hydrahon::Term<string> $subject = carbon::select::column<string>('auth_sessions', 'subject');
+    public static hydrahon::Term<string?> $subject = carbon::select::column<string?>('auth_sessions', 'subject');
     public static hydrahon::Term<string> $scopes = carbon::select::column<string>('auth_sessions', 'scopes');
     public static hydrahon::Term<hydrahon::DateTime> $createdAt = carbon::select::column<hydrahon::DateTime>('auth_sessions', 'created_at');
     public static hydrahon::Term<hydrahon::DateTime> $expiresAt = carbon::select::column<hydrahon::DateTime>('auth_sessions', 'expires_at');
@@ -79,7 +79,11 @@ public class AuthSessionTable : hydrahon::Source, carbon::Schema<nexus::auth::ca
     public const function read(const carbon::Cursor& $row, const carbon::select::Selected& $extra) : result<nexus::auth::carbon::AuthSession, carbon::Error>
     {
         string $c0 = guard $row->text(0) else { return .error(.column('id', carbon::Problem::of($row, 0))); }
-        string $c1 = guard $row->text(1) else { return .error(.column('subject', carbon::Problem::of($row, 1))); }
+        string? $c1 = null;
+        if (!$row->isNull(1)) {
+            string $v1 = guard $row->text(1) else { return .error(.column('subject', carbon::Problem::of($row, 1))); }
+            $c1 = $v1;
+        }
         string $r2 = guard $row->text(2) else { return .error(.column('scopes', carbon::Problem::of($row, 2))); }
         array<string> $c2 = guard carbon::codec::Csv()->decode($r2) else ($p) { return .error(.column('scopes', $p)); }
         hydrahon::DateTime $r3 = guard $row->datetime(3) else { return .error(.column('created_at', carbon::Problem::of($row, 3))); }
@@ -94,7 +98,7 @@ public class AuthSessionTable : hydrahon::Source, carbon::Schema<nexus::auth::ca
         carbon::change::Snapshot $out = carbon::change::Snapshot();
         string $s0 = $m->id;
         $out->values[] = hydrahon::Value::from($s0);
-        string $s1 = $m->subject;
+        string? $s1 = $m->subject;
         $out->values[] = hydrahon::Value::from($s1);
         string $s2 = carbon::codec::Csv()->encode($m->scopes);
         $out->values[] = hydrahon::Value::from($s2);
@@ -112,7 +116,7 @@ public class AuthSessionTable : hydrahon::Source, carbon::Schema<nexus::auth::ca
             $into[AuthSessionTable::$id] = $s0;
         }
         if ($only->has(1)) {
-            string $s1 = $m->subject;
+            string? $s1 = $m->subject;
             $into[AuthSessionTable::$subject] = $s1;
         }
         if ($only->has(2)) {
@@ -165,7 +169,7 @@ public class AuthSessionTable : hydrahon::Source, carbon::Schema<nexus::auth::ca
 public class AuthSessionTableAlias : hydrahon::Source
 {
     public const hydrahon::Term<string> $id;
-    public const hydrahon::Term<string> $subject;
+    public const hydrahon::Term<string?> $subject;
     public const hydrahon::Term<string> $scopes;
     public const hydrahon::Term<hydrahon::DateTime> $createdAt;
     public const hydrahon::Term<hydrahon::DateTime> $expiresAt;
@@ -179,7 +183,7 @@ public class AuthSessionTableAlias : hydrahon::Source
     init
     {
         $this->id = $this->carbonTable->column<string>('id');
-        $this->subject = $this->carbonTable->column<string>('subject');
+        $this->subject = $this->carbonTable->column<string?>('subject');
         $this->scopes = $this->carbonTable->column<string>('scopes');
         $this->createdAt = $this->carbonTable->column<hydrahon::DateTime>('created_at');
         $this->expiresAt = $this->carbonTable->column<hydrahon::DateTime>('expires_at');

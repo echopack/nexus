@@ -1,5 +1,7 @@
 namespace nexus;
 
+use nexus::trace;
+
 /**
  * The rest of the chain, as a middleware sees it.
  */
@@ -30,6 +32,10 @@ public struct Next
             return $last($payload);
         }
         Middleware $m = $this->chain->links[$this->at];
+        if ($payload->trace == null) {
+            return $m->handle($payload, Next($this->chain, $this->at + 1));
+        }
+        trace::Timed $t = trace::Timed($payload->trace, .middleware, $this->chain->name($this->at), '');
         return $m->handle($payload, Next($this->chain, $this->at + 1));
     }
 }

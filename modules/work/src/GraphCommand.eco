@@ -89,7 +89,7 @@ public class GraphCommand : nexus::Command
     internal static function walk(array<string>& $out, const map<string, StoredTask>& $byId, const map<string, array<string>>& $below, const Graph& $g, const string& $id, const string& $lead, const string& $indent) : void
     {
         StoredTask $t = $byId->get($id);
-        string $state = GraphCommand::state($t, $g, $byId);
+        string $state = $g->state($t, $byId);
         $out[] = "{$lead}{$t->name}  {$state}  {$t->id}";
         if (!$below->has($id)) {
             return;
@@ -105,29 +105,5 @@ public class GraphCommand : nexus::Command
             }
             GraphCommand::walk($out, $byId, $below, $g, $k, "{$indent}{$mark}", "{$indent}{$more}");
         }
-    }
-
-    /**
-     * Where `$t` stands; a waiting task behind a task that failed for good is `blocked`.
-     */
-    internal static function state(const StoredTask& $t, const Graph& $g, const map<string, StoredTask>& $byId) : string
-    {
-        if ($t->status == TaskStatus::waiting && $t->pending > 0) {
-            foreach ($g->edges as const &$e) {
-                if ($e->task == $t->id && $byId->has($e->after)) {
-                    StoredTask $up = $byId->get($e->after);
-                    if ($up->status == TaskStatus::failed && !$up->allowFailure) {
-                        return 'blocked';
-                    }
-                }
-            }
-        }
-        return match ($t->status) {
-            TaskStatus::waiting => 'waiting',
-            TaskStatus::running => 'running',
-            TaskStatus::done => 'done',
-            TaskStatus::failed => 'failed',
-            TaskStatus::cancelled => 'cancelled',
-        };
     }
 }

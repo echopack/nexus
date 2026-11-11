@@ -1,0 +1,110 @@
+namespace nexus::debug;
+
+/**
+ * The requests the app answered, newest first and live: each with its headers, what it logged and,
+ * in its sheet, the timeline of where its time went. The slowest of them apart, to start from.
+ */
+#[atomic]
+public class RequestsPanel : Panel
+{
+    private Topic $topic;
+    private Timelines $timelines;
+
+    public constructor(Topic $topic, Timelines $timelines)
+    {
+        $this->topic = $topic;
+        $this->timelines = $timelines;
+    }
+
+    public function name() : string
+    {
+        return 'requests';
+    }
+
+    public function title() : string
+    {
+        return 'Requests';
+    }
+
+    public function views() : array<View>
+    {
+        array<View> $v = [
+            RequestsPanel::table(View('recent', 'Recent requests', .table)->live($this->topic->name)),
+            RequestsPanel::table(View('slow', 'Slowest requests', .table)->every(5)),
+            View('timeline', 'Timeline', .timeline)->filter('id'),
+        ];
+        return $v;
+    }
+
+    public function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>
+    {
+        if ($view == 'recent') {
+            return .ok(View::rows(Topics::rows($this->topic, 200)));
+        }
+        if ($view == 'slow') {
+            return .ok(View::rows($this->slowest(50)));
+        }
+        string $id = $payload->request->query->get('id') ?? '';
+        if ($id->empty()) {
+            return .error(.badRequest('name the request: ?id=<request id>'));
+        }
+        string $kept = guard $this->timelines->find($id) else {
+            return .error(.notFound("the timeline of request {$id}"));
+        };
+        json::Value $doc = guard json::parse($kept) else {
+            return .error(.server("the timeline of request {$id} is no JSON"));
+        };
+        return .ok($doc);
+    }
+
+    /**
+     * The `$limit` slowest requests the topic still holds, slowest first.
+     */
+    internal function slowest(usize $limit) : json::Value
+    {
+        json::Value $rows = Topics::rows($this->topic, $this->topic->ring->size);
+        array<Ranked> $ranked = [];
+        usize $i = 0;
+        while ($i < $rows->count()) {
+            float64 $ms = $rows->at($i)?->get('ms')?->asFloat() ?? 0.0;
+            $ranked[] = Ranked($ms, $i);
+            $i++;
+        }
+        $ranked->sort(by: function(const Ranked& $a, const Ranked& $b) : ordering {
+            return $b->ms <=> $a->ms;
+        });
+        $out = json::arr();
+        foreach ($ranked as const &$r) {
+            if ($out->count() >= $limit) {
+                break;
+            }
+            json::Value? $found = $rows->at($r->at);
+            if ($found != null) {
+                json::Value $row = guard $found;
+                $out[] = mv $row;
+            }
+        }
+        return $out;
+    }
+
+    // the columns both request tables show; a row opens its timeline
+    private static function table(View $v) : View
+    {
+        return $v->column('at', 'At', 'time')
+            ->column('method', 'Method', 'code')
+            ->column('target', 'Target', 'code')
+            ->column('status', 'Status', 'status')
+            ->column('ms', 'Took', 'ms')
+            ->column('queries', 'Queries', 'number')
+            ->column('dbMs', 'DB', 'ms')
+            ->column('action', 'Action')
+            ->detail('timeline');
+    }
+}
+
+// a row's place in the topic and how long it took
+internal struct Ranked
+{
+    public float64 $ms;
+    public usize $at;
+}

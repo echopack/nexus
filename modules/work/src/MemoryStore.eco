@@ -187,27 +187,37 @@ public class MemoryStore : Store
         return .ok($out);
     }
 
-    public function again(const string& $id, time::timestamp $now) : result<Requeued, nexus::Problem>
+    public function again(const string& $id, time::timestamp $now) : result<StoredTask?, nexus::Problem>
     {
         thread::locked<Batch> $held = $this->all->lock();
         foreach ($held->value->tasks as &$t) {
             if ($t->id == $id && $t->status == TaskStatus::failed) {
-                $t->status = .waiting;
-                $t->failedAt = null;
-                $t->expiresAt = null;
-                $t->attempts = 0;
-                $t->availableAt = $now;
-                return .ok(.sent);
+                $t->requeue($now);
+                StoredTask $back = $t;
+                return .ok($back);
             }
         }
-        return .ok(.missing);
+        return .ok(null);
     }
 
-    public function cancel(const string& $id, time::timestamp $now) : result<uint64, nexus::Problem>
+    public function againAll(const string& $lane, time::timestamp $now) : result<array<StoredTask>, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        array<StoredTask> $out = [];
+        foreach ($held->value->tasks as &$t) {
+            if ($t->lane == $lane && $t->status == TaskStatus::failed) {
+                $t->requeue($now);
+                $out[] = $t;
+            }
+        }
+        return .ok($out);
+    }
+
+    public function cancel(const string& $id, time::timestamp $now) : result<array<StoredTask>, nexus::Problem>
     {
         thread::locked<Batch> $held = $this->all->lock();
         array<string> $ids = [$id];
-        uint64 $n = 0;
+        array<StoredTask> $out = [];
         while (!$ids->empty()) {
             string $at = $ids[$ids->count() - 1];
             $ids->pop();
@@ -215,15 +225,16 @@ public class MemoryStore : Store
                 if ($t->id == $at && $t->status == TaskStatus::waiting) {
                     $t->status = .cancelled;
                     $t->doneAt = $now;
-                    $n = $n + 1;
+                    $out[] = $t;
                     foreach (MemoryStore::waitingFor($held->value->edges, $at) as const &$next) {
                         $ids[] = $next;
                     }
                 }
             }
         }
-        return .ok($n);
+        return .ok($out);
     }
+
 
     public function graph(const string& $id, uint32 $depth) : result<Graph, nexus::Problem>
     {
@@ -308,6 +319,31 @@ public class MemoryStore : Store
             }
         }
         return .ok($n);
+    }
+
+    public function recent(const string& $lane, TaskStatus? $status, uint64 $limit) : result<array<StoredTask>, nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        array<StoredTask> $out = [];
+        foreach ($held->value->tasks as const &$t) {
+            if (!$lane->empty() && $t->lane != $lane) {
+                continue;
+            }
+            if ($status != null) {
+                TaskStatus $want = guard $status;
+                if ($t->status != $want) {
+                    continue;
+                }
+            }
+            $out[] = $t;
+        }
+        $out->sort(by: function(const StoredTask& $a, const StoredTask& $b) : ordering {
+            return $b->createdAt->unix_nanos() <=> $a->createdAt->unix_nanos();
+        });
+        while (($out->count() as uint64) > $limit) {
+            $out->pop();
+        }
+        return .ok($out);
     }
 
     /**

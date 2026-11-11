@@ -3,7 +3,7 @@
  * login throttles, on memory stores and a clock the tests move.
  */
 
-use nexus::auth::{Identity, Guards, Authenticate, Tokens, Sessions, Issued, Opened, Signer, Logins, Passwords, MemoryTokens, TokenStore, Resource, Resources, Pruning, Pruned};
+use nexus::auth::{Identity, Guards, Authenticate, RequireSession, Tokens, Sessions, Issued, Opened, Signer, Logins, Passwords, MemoryTokens, TokenStore, Resource, Resources, Pruning, Pruned};
 use nexus::testing::TestApp;
 use std::time;
 use ecotest::expect;
@@ -39,10 +39,10 @@ internal class TRequireUser : nexus::Middleware
             return $payload->fail($p);
         };
         Identity $id = guard $found else {
-            return $payload->fail(.unauthorized('this needs a signed in caller'));
+            return $payload->fail(.unauthorized('this needs a signed in caller', $reason: 'signed_in_required'));
         };
         int64 $n = guard $id->number() else {
-            return $payload->fail(.unauthorized('the account is gone'));
+            return $payload->fail(.unauthorized('the account is gone', $reason: 'account_gone'));
         };
         $payload->put<TCaller>(TCaller($id, $n));
         return $next->run($payload);
@@ -124,6 +124,50 @@ internal class TResources : nexus::Extension
     }
 }
 
+// the actions RequireSession is told to leave open
+internal class TOpenSession {}
+internal class TOpenPage {}
+
+/**
+ * Routes for the paths the RequireSession tests visit, each answering 200; two of them typed as
+ * the actions it leaves open.
+ */
+internal class TRoutes : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'test-routes';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        TRoutes::add($s, .get, '/', type_id<nexus::Route>());
+        TRoutes::add($s, .get, '/health', type_id<nexus::Route>());
+        TRoutes::add($s, .get, '/v1', type_id<nexus::Route>());
+        TRoutes::add($s, .get, '/v10', type_id<nexus::Route>());
+        TRoutes::add($s, .get, '/v1/posts', type_id<nexus::Route>());
+        TRoutes::add($s, .get, '/v1/auth/session', type_id<nexus::Route>());
+        TRoutes::add($s, .post, '/v1/auth/session', type_id<TOpenSession>());
+        TRoutes::add($s, .get, '/v1/open', type_id<TOpenPage>());
+        return .ok;
+    }
+
+    internal static function add(nexus::Services& $s, nexus::Method $method, const string& $path, type_id $type) : void
+    {
+        array<nexus::Method> $m = [$method];
+        array<nexus::MiddlewareRef> $none = [];
+        $run = function(nexus::Payload& $payload) : nexus::Response {
+            return nexus::Response(200);
+        };
+        $bound = function(container::Container $c) : bool {
+            return true;
+        };
+        $r = nexus::Route($m, $path, "{$method->verb()} {$path}", $run, $bound, $none);
+        $r->type = $type;
+        $s->route(mv $r);
+    }
+}
+
 internal class Rig
 {
     public TestApp $app;
@@ -132,8 +176,8 @@ internal class Rig
     public constructor(bool $compat, array<nexus::auth::Guard> $extra)
     {
         $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
-        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_AUTH_TOKENS' => '1h', 'NEXUS_AUTH_SESSIONS' => '2h'];
-        array<nexus::Extension> $exts = [nexus::auth::Extension('test', compat: $compat, clock: $this->clock, cost: crypto::PasswordCost(8, 1), extra: $extra)];
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_AUTH_TOKENS' => '1h', 'NEXUS_AUTH_SESSIONS' => '2h', 'NEXUS_AUTH_GUESTS' => '30m'];
+        array<nexus::Extension> $exts = [nexus::auth::Extension('test', compat: $compat, clock: $this->clock, cost: crypto::PasswordCost(8, 1), extra: $extra), TRoutes()];
         $this->app = TestApp($exts, $vars);
     }
 
@@ -170,7 +214,11 @@ internal class Rig
     public function payload(nexus::Request $req) : nexus::Payload
     {
         $req->peer = '10.0.0.1';
-        return nexus::Payload($request: mv $req, $services: $this->app->kernel->services->child(), $mode: .testing, $log: nexus::Logger([], .info));
+        $payload = nexus::Payload($request: mv $req, $services: $this->app->kernel->services->child(), $mode: .testing, $log: nexus::Logger([], .info));
+        // routed as the kernel does before any middleware
+        map<string, string> $params = [];
+        $payload->route = $this->app->kernel->router->find($payload->request->method, $payload->request->path, $params, $payload->allow);
+        return $payload;
     }
 
     public function get(const string& $target) : nexus::Payload
@@ -206,6 +254,24 @@ internal class Rig
         return $o;
     }
 
+    /**
+     * A session for nobody, as a client opens it before anything else.
+     */
+    public function guest() : Opened
+    {
+        nexus::Payload $payload = $this->get('/');
+        Opened $o = guard $payload->get<Sessions>()->open();
+        return $o;
+    }
+
+    /**
+     * A GET of `$target` signed now with `$o`.
+     */
+    public function visit(const Opened& $o, const string& $target) : nexus::Payload
+    {
+        return $this->signed(.get, $target, '', $o->signer()->header('GET', $target, $this->now(), ''));
+    }
+
     public function now() : int64
     {
         return $this->clock->now()->unix_secs();
@@ -228,6 +294,21 @@ internal function through(nexus::Payload& $payload, nexus::Middleware $m) : int3
         return nexus::Response(200);
     }));
     return $next->run($payload)->status;
+}
+
+/**
+ * The `reason` of the 401 `$m` answers `$payload` with; empty when it lets it through or says none.
+ */
+internal function reason(nexus::Payload& $payload, nexus::Middleware $m) : string
+{
+    array<nexus::Middleware> $links = [$m];
+    $next = nexus::Next(nexus::Chain($links, function(nexus::Payload& $p) : nexus::Response {
+        return nexus::Response(200);
+    }));
+    json::Value $doc = guard json::parse($next->run($payload)->body) else {
+        return '';
+    };
+    return $doc['reason']->asStr() ?? '';
 }
 
 internal function status(nexus::Payload& $payload) : int32
@@ -355,6 +436,24 @@ test a_signature_covers_method_target_time_and_body
     $forged = Signer($o->stored->id, 'not-the-secret');
     expect(status($r->signed(.post, '/v1/posts', 'one', $forged->header('POST', '/v1/posts', $now, 'one'))))->is(401);
     expect(status($r->signed(.post, '/v1/posts', 'one', 'Nexus-Sig id=abc')))->is(401);
+}
+
+test every_401_says_why_in_a_stable_reason
+{
+    Rig $r = rig();
+    $m = RequireSession($r->get('/')->get<Guards>(), under: '/v1');
+    Authenticate $auth = $r->get('/')->get<Authenticate>();
+    expect(reason($r->get('/v1/posts'), $m))->is('session_required');
+    expect(reason($r->get('/'), $auth))->is('signed_in_required');
+    expect(reason($r->bearer('/', 'test_000000000000_0000000000000000000000000000000000000000000000000000000000000000'), $auth))->is('token_invalid');
+    expect(reason($r->signed(.get, '/v1/posts', '', 'Nexus-Sig id=abc'), $m))->is('signature_malformed');
+    Opened $o = $r->open('7');
+    $forged = Signer($o->stored->id, 'not-the-secret');
+    expect(reason($r->signed(.get, '/v1/posts', '', $forged->header('GET', '/v1/posts', $r->now(), '')), $m))->is('signature_invalid');
+    string $old = $o->signer()->header('GET', '/v1/posts', $r->now() - 3600, '');
+    expect(reason($r->signed(.get, '/v1/posts', '', $old), $m))->is('signature_stale');
+    guard $r->get('/')->get<Sessions>()->close($o->stored->id);
+    expect(reason($r->visit($o, '/v1/posts'), $m))->is('session_ended');
 }
 
 test a_signed_request_holds_five_minutes_either_way
@@ -570,17 +669,17 @@ test a_resource_has_metadata_and_a_401_points_at_it
     $r->app->api()->get('/.well-known/oauth-protected-resource/other')->status(404);
 
     nexus::Payload $payload = $r->get('/mcp');
-    nexus::Response $res = $r->app->kernel->services->get<Resources>()->challenge($payload, .unauthorized('who are you'));
+    nexus::Response $res = $r->app->kernel->services->get<Resources>()->challenge($payload, .unauthorized('who are you', $reason: 'signed_in_required'));
     expect($res->header('WWW-Authenticate'))->some('Bearer resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"');
     nexus::Payload $outside = $r->get('/v1/me');
-    nexus::Response $plain = $r->app->kernel->services->get<Resources>()->challenge($outside, .unauthorized('who are you'));
+    nexus::Response $plain = $r->app->kernel->services->get<Resources>()->challenge($outside, .unauthorized('who are you', $reason: 'signed_in_required'));
     expect($plain->header('WWW-Authenticate'))->none();
 
     // without an issuer the metadata names no server, and the 401 only says Bearer
     $alone = Rig(resources: false);
     $alone->app->api()->get('/.well-known/oauth-protected-resource/mcp')->count('$.authorization_servers', 0);
     nexus::Payload $bare = $alone->get('/mcp');
-    nexus::Response $res2 = $alone->app->kernel->services->get<Resources>()->challenge($bare, .unauthorized('who are you'));
+    nexus::Response $res2 = $alone->app->kernel->services->get<Resources>()->challenge($bare, .unauthorized('who are you', $reason: 'signed_in_required'));
     expect($res2->header('WWW-Authenticate'))->some('Bearer');
 }
 
@@ -622,4 +721,78 @@ test the_built_in_guards_are_chosen
     TestApp $app = TestApp($exts, $vars);
     expect($app->kernel->services->get<Guards>()->guards->count())->is(1 as usize);
     expect($app->kernel->services->get<Guards>()->guards[0]->name())->is('bearer');
+}
+
+test a_session_for_nobody_signs_requests_but_signs_nobody_in
+{
+    Rig $r = rig();
+    Opened $o = $r->guest();
+    expect($o->stored->subject)->none();
+    nexus::Payload $payload = $r->visit($o, '/v1/posts');
+    Identity? $who = guard $payload->get<Guards>()->identify($payload);
+    expect($who)->none();
+    Identity? $held = guard $payload->get<Guards>()->credential($payload);
+    Identity $id = guard $held;
+    expect($id->via)->is('signed');
+    expect($id->credential)->is($o->stored->id);
+    expect($id->anonymous())->yes(says: 'a session for nobody is anonymous');
+    expect($id->has('anything'))->no(says: 'a session for nobody carries no scope');
+    expect(status($r->visit($o, '/v1/me')))->is(401);
+}
+
+test signing_in_puts_the_user_on_the_session_once
+{
+    Rig $r = rig();
+    Opened $o = $r->guest();
+    nexus::Payload $payload = $r->get('/');
+    guard $payload->get<Sessions>()->attach($o->stored->id, '7');
+    expect(subject($r->visit($o, '/v1/me')))->is('signed:7');
+    status<nexus::Problem> $again = $payload->get<Sessions>()->attach($o->stored->id, '8');
+    expect(refused($again)->status())->is(409);
+    expect(subject($r->visit($o, '/v1/me')))->is('signed:7');
+    status<nexus::Problem> $gone = $payload->get<Sessions>()->attach('00000000000000000000000000000000', '7');
+    expect(refused($gone)->status())->is(401);
+}
+
+test a_session_for_nobody_lasts_guests_and_a_signed_in_one_lifetime
+{
+    Rig $r = rig();
+    $m = RequireSession($r->get('/')->get<Guards>());
+    Opened $short = $r->guest();
+    $r->clock->advance(.mins(29));
+    expect(through($r->visit($short, '/v1/posts'), $m))->is(200);
+    // used at 29 minutes, so it lasts until 59
+    $r->clock->advance(.mins(30));
+    expect(through($r->visit($short, '/v1/posts'), $m))->is(401);
+    // ended but not pruned yet: no signing in on it either
+    expect(refused($r->get('/')->get<Sessions>()->attach($short->stored->id, '7'))->reason())->is('session_ended');
+    Opened $long = $r->guest();
+    guard $r->get('/')->get<Sessions>()->attach($long->stored->id, '7');
+    $r->clock->advance(.mins(119));
+    expect(subject($r->visit($long, '/v1/me')))->is('signed:7');
+    guard $r->get('/')->get<Sessions>()->closeAll('');
+    expect(subject($r->visit($long, '/v1/me')))->is('signed:7');
+}
+
+test require_session_covers_its_prefix_but_where_sessions_open
+{
+    Rig $r = rig();
+    array<type_id> $open = [type_id<TOpenSession>(), type_id<TOpenPage>()];
+    $m = RequireSession($r->get('/')->get<Guards>(), under: '/v1', except: $open);
+    expect(through($r->get('/v1/posts'), $m))->is(401);
+    expect(through($r->get('/v1'), $m))->is(401);
+    expect(through($r->payload(nexus::Request(.post, '/v1/auth/session')), $m))->is(200);
+    expect(through($r->get('/v1/auth/session'), $m))->is(401);
+    expect(through($r->get('/v1/open'), $m))->is(200);
+    expect(through($r->payload(nexus::Request(.options, '/v1/posts')), $m))->is(200);
+    expect(through($r->get('/'), $m))->is(200);
+    expect(through($r->get('/health'), $m))->is(200);
+    expect(through($r->get('/v10'), $m))->is(200);
+    expect(through($r->get('/v1/nothing-here'), $m))->is(200);
+    Opened $o = $r->guest();
+    nexus::Payload $payload = $r->visit($o, '/v1/posts');
+    expect(through($payload, $m))->is(200);
+    Identity $id = guard $payload->state<Identity>();
+    expect($id->anonymous())->yes(says: 'the session it left names nobody');
+    expect(through($r->signed(.get, '/v1/posts', '', 'Nexus-Sig id=abc'), $m))->is(401);
 }

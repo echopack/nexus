@@ -1,0 +1,133 @@
+namespace nexus::work;
+
+use std::time;
+
+/**
+ * A distributed lane's store that tells the lanes' observers what it changed: the tasks pushed (a
+ * pipeline, or what a done task spawned), sent back and cancelled. A lane wraps its store in one
+ * when it is bound, so whatever reaches the store through the lane is heard once, whoever called.
+ * How a run settled is told by the feeder, which knows how long it ran.
+ */
+#[atomic]
+public class Observed : Store
+{
+    private Store $inner;
+    private Watchers $watchers;
+
+    public constructor(Store $inner, Watchers $watchers)
+    {
+        $this->inner = $inner;
+        $this->watchers = $watchers;
+    }
+
+    public function push(const Batch& $batch) : result<Pushed, nexus::Problem>
+    {
+        Pushed $out = try $this->inner->push($batch);
+        if ($out->queued() && $this->watchers->any()) {
+            foreach ($batch->tasks as const &$t) {
+                $this->tell($t, .pushed, $t->createdAt);
+            }
+        }
+        return .ok($out);
+    }
+
+    public function claim(const string& $lane, time::timestamp $now, time::timestamp $until, uint32 $max) : result<array<StoredTask>, nexus::Problem>
+    {
+        return $this->inner->claim($lane, $now, $until, $max);
+    }
+
+    public function extend(const StoredTask& $task, time::timestamp $until) : status<nexus::Problem>
+    {
+        return $this->inner->extend($task, $until);
+    }
+
+    public function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : status<nexus::Problem>
+    {
+        try $this->inner->done($task, $now, $spawned);
+        if ($this->watchers->any()) {
+            foreach ($spawned->tasks as const &$t) {
+                $this->tell($t, .pushed, $now);
+            }
+        }
+        return .ok;
+    }
+
+    public function retry(const StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
+    {
+        return $this->inner->retry($task, $at, $error);
+    }
+
+    public function fail(const StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>
+    {
+        return $this->inner->fail($task, $now, $error);
+    }
+
+    public function upstream(const string& $id) : result<array<Upstream>, nexus::Problem>
+    {
+        return $this->inner->upstream($id);
+    }
+
+    public function failed(const string& $lane, uint64 $limit) : result<array<StoredTask>, nexus::Problem>
+    {
+        return $this->inner->failed($lane, $limit);
+    }
+
+    public function again(const string& $id, time::timestamp $now) : result<StoredTask?, nexus::Problem>
+    {
+        StoredTask? $sent = try $this->inner->again($id, $now);
+        if ($sent != null && $this->watchers->any()) {
+            StoredTask $t = guard $sent;
+            $this->tell($t, .requeued, $now);
+        }
+        return .ok($sent);
+    }
+
+    public function againAll(const string& $lane, time::timestamp $now) : result<array<StoredTask>, nexus::Problem>
+    {
+        array<StoredTask> $sent = try $this->inner->againAll($lane, $now);
+        $this->told($sent, .requeued, $now);
+        return .ok($sent);
+    }
+
+    public function cancel(const string& $id, time::timestamp $now) : result<array<StoredTask>, nexus::Problem>
+    {
+        array<StoredTask> $gone = try $this->inner->cancel($id, $now);
+        $this->told($gone, .cancelled, $now);
+        return .ok($gone);
+    }
+
+    public function graph(const string& $id, uint32 $depth) : result<Graph, nexus::Problem>
+    {
+        return $this->inner->graph($id, $depth);
+    }
+
+    public function prune(time::timestamp $now, time::timestamp $before) : result<uint64, nexus::Problem>
+    {
+        return $this->inner->prune($now, $before);
+    }
+
+    public function waiting(const string& $lane) : result<uint64, nexus::Problem>
+    {
+        return $this->inner->waiting($lane);
+    }
+
+    public function recent(const string& $lane, TaskStatus? $status, uint64 $limit) : result<array<StoredTask>, nexus::Problem>
+    {
+        return $this->inner->recent($lane, $status, $limit);
+    }
+
+    internal function told(const array<StoredTask>& $tasks, SeenKind $kind, time::timestamp $at) : void
+    {
+        if (!$this->watchers->any()) {
+            return;
+        }
+        foreach ($tasks as const &$t) {
+            $this->tell($t, $kind, $at);
+        }
+    }
+
+    internal function tell(const StoredTask& $t, SeenKind $kind, time::timestamp $at) : void
+    {
+        $this->watchers->tell(Seen($t->lane, $t->name, $t->id, $kind, $at));
+    }
+}

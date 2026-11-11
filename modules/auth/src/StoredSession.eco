@@ -9,7 +9,12 @@ use std::time;
 public struct StoredSession
 {
     public string $id;
-    public string $subject;
+
+    /**
+     * Who signed in on the session; null while nobody has.
+     */
+    public string? $subject = null;
+
     public array<string> $scopes = array<string>();
     public time::timestamp $createdAt;
 

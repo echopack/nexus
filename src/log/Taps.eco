@@ -1,0 +1,55 @@
+namespace nexus::log;
+
+use std::thread;
+
+/**
+ * Sinks tapped into a root logger after it was built, shared by every logger made from it: a child
+ * taken before the tap writes to it too. Empty, a write costs one atomic load. A tapped sink must
+ * not log through the logger it is tapped into.
+ */
+#[atomic]
+public class Taps
+{
+    private thread::mutex<array<Sink>> $sinks = thread::mutex<array<Sink>>([]);
+    private atomic<usize> $count = atomic<usize>(0);
+
+    /**
+     * Adds `$sink`; every logger sharing these taps writes to it from then on.
+     */
+    public function add(Sink $sink) : void
+    {
+        thread::locked<array<Sink>> $held = $this->sinks->lock();
+        $held->value[] = $sink;
+        $this->count->store($held->value->count());
+    }
+
+    /**
+     * Whether a sink was tapped.
+     */
+    public const function any() : bool
+    {
+        return $this->count->load() > 0;
+    }
+
+    public function write(const Entry& $e) : void
+    {
+        if (!$this->any()) {
+            return;
+        }
+        thread::locked<array<Sink>> $held = $this->sinks->lock();
+        foreach ($held->value as &$s) {
+            $s->write($e);
+        }
+    }
+
+    public function flush() : void
+    {
+        if (!$this->any()) {
+            return;
+        }
+        thread::locked<array<Sink>> $held = $this->sinks->lock();
+        foreach ($held->value as &$s) {
+            $s->flush();
+        }
+    }
+}

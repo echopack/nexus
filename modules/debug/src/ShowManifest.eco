@@ -1,0 +1,71 @@
+namespace nexus::debug;
+
+use std::time;
+
+/**
+ * `GET <base>/api`: everything a client needs to find its way, in one document.
+ */
+public class ShowManifest : nexus::Action
+{
+    private Debug $debug;
+
+    public constructor(Debug $debug)
+    {
+        $this->debug = $debug;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        Viewer $viewer = try $payload->state<Viewer>();
+        Debug $debug = $this->debug;
+        string $base = $debug->base;
+        $o = json::object();
+        $o['name'] = json::str('nexus-debug');
+        $o['base'] = json::str($base);
+        $o['api'] = json::str("{$base}/api");
+        $o['viewer'] = $viewer->json();
+        $o['signIn'] = $debug->gate->signIn();
+        $app = json::object();
+        $app['mode'] = json::str($payload->mode->name());
+        $app['started'] = json::str(nexus::log::Stamp::rfc3339($debug->started));
+        $app['uptime'] = json::int(time::timestamp::now()->unix_secs() - $debug->started->unix_secs());
+        $o['app'] = mv $app;
+        $panels = json::arr();
+        foreach ($debug->panels as $l) {
+            string $name = $l->panel->name();
+            $po = json::object();
+            $po['name'] = json::str($name);
+            $po['title'] = json::str($l->panel->title());
+            $views = json::arr();
+            foreach ($l->views as const &$v) {
+                $vo = $v->json();
+                $vo['url'] = json::str("{$base}/api/panels/{$name}/{$v->name}");
+                $views[] = mv $vo;
+            }
+            $po['views'] = mv $views;
+            $panels[] = mv $po;
+        }
+        $o['panels'] = mv $panels;
+        $topics = json::arr();
+        foreach ($debug->topics as $t) {
+            $to = json::object();
+            $to['name'] = json::str($t->name);
+            $to['title'] = json::str($t->title);
+            $to['last'] = json::int($t->ring->last() as int64);
+            $to['poll'] = json::str("{$base}/api/topics/{$t->name}?after=0&wait=10");
+            $to['stream'] = json::str("{$base}/api/topics/{$t->name}/stream");
+            $topics[] = mv $to;
+        }
+        $o['topics'] = mv $topics;
+        $how = json::object();
+        $how['manifest'] = json::str("GET {$base}/api");
+        $how['signIn'] = json::str("GET {$base}/api/sign-in: how to sign in, without a credential");
+        $how['view'] = json::str("GET {$base}/api/panels/\{panel}/\{view}?<filters>: the view's data, shaped by its kind");
+        $how['action'] = json::str("POST {$base}/api/panels/\{panel}/actions/\{action} with a JSON body: runs a view's action");
+        $how['poll'] = json::str("GET {$base}/api/topics/\{topic}?after=<seq>&limit=<n>&wait=<seconds>: the events after seq, waiting up to 25s for one");
+        $how['stream'] = json::str("GET {$base}/api/topics/\{topic}/stream?after=<seq>: the same as server-sent events");
+        $how['auth'] = json::str('Authorization: Bearer <token> on every call');
+        $o['endpoints'] = mv $how;
+        return .ok(Api::json($o));
+    }
+}

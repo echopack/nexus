@@ -1,0 +1,37 @@
+namespace nexus::trace;
+
+/**
+ * One timed stretch of a request: what it was, inside which other mark, when it started and how
+ * long it took, in microseconds from the start of the trace.
+ */
+public struct Mark
+{
+    /**
+     * Its number in the trace, from 1.
+     */
+    public uint32 $id;
+
+    /**
+     * The mark it ran inside, 0 for none.
+     */
+    public uint32 $parent;
+    public Kind $kind;
+    public string $name;
+
+    /**
+     * What it worked on: the statement, the cache key, the recipients.
+     */
+    public string $detail;
+    public int64 $startUs;
+
+    /**
+     * A word on how it went: `hit`, `miss`, a mail's subject.
+     */
+    public string $note = '';
+
+    /**
+     * How long it took, -1 while it is open.
+     */
+    public int64 $durUs = -1;
+    public bool $failed = false;
+}

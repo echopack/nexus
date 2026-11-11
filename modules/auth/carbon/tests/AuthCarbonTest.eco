@@ -120,6 +120,29 @@ test a_signed_session_is_stored_and_slides
     expect($r->fake->count())->is($before);
 }
 
+test signing_in_on_a_session_for_nobody_writes_the_subject
+{
+    $r = Rig(true);
+    $r->fake->written();
+    Opened $o = guard $r->get()->get<Sessions>()->open();
+    expect($o->stored->subject)->none();
+    $r->fake->written(1);
+    usize $before = $r->fake->count();
+    guard $r->get()->get<Sessions>()->attach($o->stored->id, '7');
+    expect($r->fake->count())->is($before + 1);
+    expect($r->fake->last())->is('UPDATE `auth_sessions` SET `subject` = ?, `expires_at` = ? WHERE `auth_sessions`.`id` = ? AND `auth_sessions`.`subject` IS NULL AND `auth_sessions`.`expires_at` > ?');
+    // nothing changed: one read says why
+    nexus::auth::StoredSession $taken = $o->stored;
+    $taken->subject = '8';
+    $r->fake->written(0)->rows([AuthSessionTable()->row(.of($taken))]);
+    status<nexus::Problem> $again = $r->get()->get<Sessions>()->attach($o->stored->id, '7');
+    guard $again else ($p) {
+        expect($p->status())->is(409);
+        return;
+    };
+    die('signing in on a taken session worked');
+}
+
 test prune_deletes_what_expired
 {
     $r = Rig(true);

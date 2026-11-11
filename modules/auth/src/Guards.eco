@@ -30,9 +30,26 @@ public class Guards
     }
 
     /**
-     * Who this request's credential names, null when it carries none.
+     * Who this request's credential names: null when it carries none, and for a session that names
+     * nobody yet. Everything that needs a signed in caller asks this.
      */
     public function identify(nexus::Payload& $payload) : result<Identity?, nexus::Problem>
+    {
+        Identity? $found = try $this->credential($payload);
+        Identity $id = guard $found else {
+            return .ok(null);
+        };
+        if ($id->anonymous()) {
+            return .ok(null);
+        }
+        return .ok($id);
+    }
+
+    /**
+     * The credential this request carries, a session for nobody included; null when it carries
+     * none. `RequireSession` asks this.
+     */
+    public function credential(nexus::Payload& $payload) : result<Identity?, nexus::Problem>
     {
         Resolved? $known = $payload->find<Resolved>();
         if ($known != null) {
@@ -63,7 +80,7 @@ public class Guards
             return .error($this->resources->challenge($payload, $p));
         };
         Identity $id = guard $found else {
-            return .error($this->resources->challenge($payload, .unauthorized('this needs a signed in caller')));
+            return .error($this->resources->challenge($payload, .unauthorized('this needs a signed in caller', $reason: 'signed_in_required')));
         };
         return .ok($id);
     }
@@ -88,9 +105,9 @@ public class Guards
         Resource? $named = $this->resources->named($audience);
         if ($named != null) {
             Resource $for = guard $named;
-            return .error(.unauthorized("this token opens {$for->path} only"));
+            return .error(.unauthorized("this token opens {$for->path} only", $reason: 'wrong_resource'));
         }
-        return .error(.unauthorized('this token opens another resource only'));
+        return .error(.unauthorized('this token opens another resource only', $reason: 'wrong_resource'));
     }
 
     /**

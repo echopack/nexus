@@ -1,0 +1,36 @@
+namespace nexus::debug::work;
+
+/**
+ * Adds the queues to the debug console: the Queues panel and the live `jobs` topic. List it after
+ * nexus-work and nexus-debug:
+ *
+ * ```echo
+ * nexus::work::Extension(),
+ * nexus::debug::Extension(),
+ * nexus::debug::work::Extension(),
+ * ```
+ *
+ * With the console off it binds nothing and hears nothing.
+ */
+public class Extension : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'nexus-debug-work';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::debug::Debug $debug = guard $s->find<nexus::debug::Debug>() else {
+            return .ok;
+        };
+        nexus::work::Work $work = guard $s->find<nexus::work::Work>() else {
+            return .error(.extension('nexus-debug-work', 'the queues panel reads nexus-work; list nexus::work::Extension() before nexus::debug::work::Extension()'));
+        };
+        nexus::debug::Topic $jobs = $debug->topic('jobs', 'Jobs');
+        $counts = Counts();
+        $work->observe(Listener($jobs, $counts));
+        $debug->panel(QueuesPanel($work, $counts, $jobs));
+        return .ok;
+    }
+}

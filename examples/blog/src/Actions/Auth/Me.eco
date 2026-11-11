@@ -1,7 +1,7 @@
 namespace Blog::Actions::Auth;
 
 use Blog::Transformers::UserTransformer;
-use Blog::Types::{Caller, UserContext};
+use Blog::Types::Caller;
 
 /**
  * Who is signed in.
@@ -19,8 +19,6 @@ public class Me : nexus::Action
     public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
     {
         $me = try $payload->state<Caller>();
-        $ctx = nexus::rest::TransformerContext();
-        $ctx->set<UserContext>($user: $me->user);
-        return $this->transformer->createResponse($payload, $me->user, $ctx);
+        return $this->transformer->own($payload, $me->user, nexus::rest::Meta());
     }
 }

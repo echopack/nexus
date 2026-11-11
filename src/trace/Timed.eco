@@ -1,0 +1,57 @@
+namespace nexus::trace;
+
+/**
+ * A mark open for as long as this value lives, closed when it goes out of scope. Without a trace it
+ * does nothing, so it costs a null check when no one is watching:
+ *
+ * ```echo
+ * {
+ *     trace::Timed $t = trace::Timed($traces->here(), .mail, 'mail', $to);
+ *     guard $transport->deliver($d) else ($e) {
+ *         $t->fail();
+ *         return .error($e);
+ *     };
+ * }   // closed here
+ * ```
+ */
+public struct Timed
+{
+    private Trace? $trace;
+    private uint32 $id = 0;
+    private bool $failed = false;
+    private string $note = '';
+
+    public constructor(Trace? $trace, Kind $kind, const string& $name, const string& $detail)
+    {
+        $this->trace = $trace;
+        if ($trace != null) {
+            Trace $t = guard $trace;
+            $this->id = $t->open($kind, $name, $detail);
+        }
+    }
+
+    /**
+     * Marks the stretch as failed.
+     */
+    public function fail() : void
+    {
+        $this->failed = true;
+    }
+
+    /**
+     * Sets the word on how it went.
+     */
+    public function note(const string& $note) : void
+    {
+        $this->note = $note;
+    }
+
+    destructor()
+    {
+        if ($this->trace == null || $this->id == 0) {
+            return;
+        }
+        Trace $t = guard $this->trace;
+        $t->close($this->id, $this->failed, $this->note);
+    }
+}

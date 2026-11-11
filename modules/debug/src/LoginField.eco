@@ -1,0 +1,21 @@
+namespace nexus::debug;
+
+/**
+ * One input of the app's sign in form: the JSON key it is sent as, its label and its input type
+ * (`email`, `password`, `text`).
+ */
+public struct LoginField
+{
+    public string $name;
+    public string $label;
+    public string $type = 'text';
+
+    public const function json() : json::Value
+    {
+        $o = json::object();
+        $o['name'] = json::str($this->name);
+        $o['label'] = json::str($this->label);
+        $o['type'] = json::str($this->type);
+        return $o;
+    }
+}
