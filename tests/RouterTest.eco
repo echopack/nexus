@@ -9,6 +9,7 @@ internal struct LinkShow {}
 internal struct LinkFiles {}
 internal struct LinkArchive {}
 internal struct LinkHome {}
+internal struct LinkSlugs {}
 
 internal function routerNoop() : function<Response(Payload&)>
 {
@@ -139,12 +140,20 @@ test router_builds_links_by_action_type
     expect($r->url<LinkShow>(['page' => '2', 'id' => '5', 'include' => 'a b'])->text())->is('/v1/posts/5?include=a%20b&page=2');
     expect($r->url<LinkFiles>(['path' => 'a b/c'])->text())->is('/files/a%20b/c');
     expect($r->url<LinkFiles>()->text())->is('/files');
+    expect($r->url<LinkFiles>(['path' => ''])->text())->is('/files');
     expect($r->url<LinkArchive>(['year' => '2026'])->text())->is('/archive/2026');
     expect($r->url<LinkArchive>(['year' => '2026', 'month' => '11'])->text())->is('/archive/2026/11');
     expect($r->url<LinkHome>()->text())->is('/');
     expect($r->url<LinkHome>()->with('q', 'x')->text())->is('/?q=x');
     expect($r->routed<LinkShow>())->yes(says: 'LinkShow is routed');
     expect($r->routed<Route>())->no(says: 'no route was added for the Route type');
+}
+
+test a_constrained_rest_links_what_it_matches
+{
+    $r = Router();
+    guard $r->add(linkRoute<LinkSlugs>('/docs/{path:slug*}'));
+    expect($r->url<LinkSlugs>(['path' => 'a-b/c-d'])->text())->is('/docs/a-b/c-d');
 }
 
 test router_builds_absolute_links_on_the_origin

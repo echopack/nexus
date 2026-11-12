@@ -51,8 +51,10 @@ public struct Wire
             $r->headers->add($h->name, $h->value);
         }
         $r->body = $in->body;
-        $r->peer = $proxies->client($in->peer, $r->header('X-Forwarded-For') ?? '');
-        $r->scheme = $proxies->scheme($in->peer, $r->header('X-Forwarded-Proto') ?? '');
+        string $address = Proxies::address($in->peer);
+        bool $trusted = $proxies->trusts($address);
+        $r->peer = $proxies->client(address: $address, trusted: $trusted, $r->header('X-Forwarded-For') ?? '');
+        $r->scheme = Proxies::scheme(trusted: $trusted, $r->header('X-Forwarded-Proto') ?? '');
         return $r;
     }
 

@@ -1,12 +1,13 @@
 /**
- * A digest of everything the generated file depends on: every `.eco` file of the module (outside
- * build, vendor and hidden directories), every mail template under `resources/emails/`, and the
- * compiler used. Equal stamps mean the decls pass can be skipped.
+ * A digest of everything the generated file depends on: every `.eco` file of the module and of the
+ * path dependencies its `module.eco` names, in turn (outside build, vendor and hidden
+ * directories), every mail template under `resources/emails/`, the lock file and the compiler
+ * used. Equal stamps mean the decls pass can be skipped.
  */
 
 namespace nexusgen::stamp;
 
-use nexusgen::mails;
+use nexusgen::{mails, Generator};
 
 /**
  * The digest of the `.eco` files under `$root` and of the compiler `$echoc`.
@@ -15,9 +16,11 @@ public function digest(const std::fs::path& $root, const string& $echoc) : strin
 {
     $h = crypto::Sha256();
     $h->update($echoc);
-    $h->update('nexus-gen 4');
+    $h->update('nexus-gen 5');
     array<string> $files = [];
     walk($root, '.eco', $files);
+    array<string> $seen = [];
+    follow($root, $files, $seen);
     walk($root / mails::FOLDER, '', $files);
     $files[] = ($root / 'epm.lock.json')->string();
     $files->sort();
@@ -26,6 +29,32 @@ public function digest(const std::fs::path& $root, const string& $echoc) : strin
         $h->update(std::fs::readfile($path)->or(''));
     }
     return crypto::hex($h->finish());
+}
+
+/**
+ * Adds the `.eco` files of every path dependency `$dir`'s `module.eco` names, and of theirs: the
+ * decls pass reads their enums and inputs, so a change there makes the stamp stale. `$seen` holds
+ * the cleaned paths already walked, so a cycle ends.
+ */
+internal function follow(const std::fs::path& $dir, array<string>& $out, array<string>& $seen) : void
+{
+    string $manifest = std::fs::readfile($dir / 'module.eco')->or('');
+    foreach (Generator::depends($manifest) as const &$dep) {
+        std::fs::path $at = ($dir / $dep)->clean();
+        string $key = $at->string();
+        bool $known = false;
+        foreach ($seen as const &$s) {
+            if ($s == $key) {
+                $known = true;
+            }
+        }
+        if ($known) {
+            continue;
+        }
+        $seen[] = $key;
+        walk($at, '.eco', $out);
+        follow($at, $out, $seen);
+    }
 }
 
 /**

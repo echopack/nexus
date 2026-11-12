@@ -108,13 +108,10 @@ public struct Pattern
                     string $piece = guard Percent::decode($parts[$i]) else {
                         return false;
                     };
-                    if ($seg->constraint != Constraint::any && !$seg->constraint->admits($piece)) {
-                        return false;
-                    }
                     $rest->append($piece);
                     $i = $i + 1;
                 }
-                if ($rest->empty() && $seg->constraint != Constraint::any) {
+                if (!$seg->admits($rest)) {
                     return false;
                 }
                 $out[$seg->text] = $rest;
@@ -134,7 +131,7 @@ public struct Pattern
                     return false;
                 }
             } else {
-                if (!$seg->constraint->admits($value)) {
+                if (!$seg->admits($value)) {
                     return false;
                 }
                 $out[$seg->text] = $value;

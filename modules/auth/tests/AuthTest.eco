@@ -676,6 +676,9 @@ test boot_needs_a_key_and_a_good_prefix
     map<string, string> $ok = ['NEXUS_AUTH_KEY' => KEY];
     array<nexus::Extension> $bad = [nexus::auth::Extension('Has_Under')];
     expect(TestApp::attempt($bad, $ok))->fails();
+    array<nexus::Extension> $taken = [nexus::auth::Extension(nexus::auth::Secrets::OAUTH_ACCESS)];
+    nexus::BootError $e = expect(TestApp::attempt($taken, $ok))->fails();
+    expect($e->lines()[0])->has('reserved for OAuth');
     array<nexus::Extension> $good = [nexus::auth::Extension('ok1', cost: crypto::PasswordCost(8, 1))];
     expect(TestApp::attempt($good, $ok)->failed())->no(says: 'a good key and prefix boot');
 }

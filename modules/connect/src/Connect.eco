@@ -137,9 +137,13 @@ public class Connect
 
     internal function settle(nexus::Payload& $payload, const Attempt& $a) : nexus::Response
     {
-        guard $this->attempts->settle($a) else ($p) {
+        bool $mine = guard $this->attempts->settle($a) else ($p) {
             return $payload->fail($p);
         };
+        // another callback settled it first: what it stored is the answer, not this one's result
+        if (!$mine) {
+            return $this->back($payload, '', 'expired');
+        }
         return $this->back($payload, $a->id, $a->error);
     }
 

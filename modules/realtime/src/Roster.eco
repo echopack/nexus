@@ -9,7 +9,11 @@ public interface Roster
 {
     function join(const string& $channel, const Present& $member) : status<RealtimeError>;
 
-    function leave(const string& $channel, const string& $id) : status<RealtimeError>;
+    /**
+     * Forgets `$id` in `$channel`: true when it was a member, so its `left` is owed to anyone who
+     * may have seen it listed.
+     */
+    function leave(const string& $channel, const string& $id) : result<bool, RealtimeError>;
 
     /**
      * Everyone in `$channel`, the caller included.

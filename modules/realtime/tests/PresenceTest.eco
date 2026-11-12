@@ -72,7 +72,10 @@ test a_presence_join_does_not_land_after_the_socket_is_gone
     expect($left)->size(1);
     expect($left[0]->id)->is($r->idOf($ann));
     expect($ann->where('op', 'joined'))->size(0);
-    expect($ann->where('op', 'left'))->size(0);
+    // it was listed for a moment, so whoever saw it hears it go
+    array<json::Value> $gone = $ann->where('op', 'left');
+    expect($gone)->size(1);
+    expect($gone[0]->get('member')?->get('id')?->asStr())->some($r->hub()->idOf($ghost->id()));
 }
 
 test whispers_go_to_the_others_through_the_channel_class
@@ -247,7 +250,7 @@ internal class TFlakyRoster : Roster
         return $this->inner->join($channel, $member);
     }
 
-    public function leave(const string& $channel, const string& $id) : status<RealtimeError>
+    public function leave(const string& $channel, const string& $id) : result<bool, RealtimeError>
     {
         return $this->inner->leave($channel, $id);
     }

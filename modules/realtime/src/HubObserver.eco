@@ -32,14 +32,6 @@ public interface HubObserver
     {
     }
 
-    /**
-     * `$id` left `$channel`'s roster without a `left` frame: a subscribe that seated then did not
-     * deliver.
-     */
-    function vanish(const string& $channel, const string& $id) : void
-    {
-    }
-
     function left(const string& $id, const string& $channel) : void
     {
     }

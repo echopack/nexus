@@ -8,4 +8,27 @@ public struct Segment
     public SegmentKind $kind;
     public string $text;
     public Constraint $constraint = .any;
+
+    /**
+     * Whether `$value` may stand in this segment, for a match and for a link alike. A rest value
+     * is checked piece by piece between its slashes; unconstrained, it may be empty.
+     */
+    public const function admits(const string& $value) : bool
+    {
+        if ($this->kind != SegmentKind::rest) {
+            return $this->constraint->admits($value);
+        }
+        if ($this->constraint == Constraint::any) {
+            return true;
+        }
+        if ($value->empty()) {
+            return false;
+        }
+        foreach (str::split($value, '/') as const &$piece) {
+            if (!$this->constraint->admits(string($piece))) {
+                return false;
+            }
+        }
+        return true;
+    }
 }

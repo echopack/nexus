@@ -89,10 +89,14 @@ test listen_parses_ipv6_and_host_port
     expect($s->listen('127.0.0.1:8080')->has_value())->yes(says: 'host:port parses');
     expect($s->host)->is('127.0.0.1');
     expect($s->port)->is(8080);
+    expect($s->address())->is('127.0.0.1:8080');
     expect($s->listen('[::1]:3246')->has_value())->yes(says: 'bracketed ipv6 parses');
-    expect($s->host)->is('[::1]');
+    expect($s->host)->is('::1');
     expect($s->port)->is(3246);
+    expect($s->address())->is('[::1]:3246');
     expect($s->listen(':9000')->has_value())->yes(says: 'bare :port keeps the default host');
     expect($s->port)->is(9000);
     expect($s->listen('[::1]')->has_value())->no(says: 'ipv6 without a port is refused');
+    expect($s->listen('::1')->has_value())->no(says: 'ipv6 without brackets is refused');
+    expect($s->listen('1::2:3')->has_value())->no(says: 'an unbracketed address is not split at its last colon');
 }

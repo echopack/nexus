@@ -44,9 +44,6 @@ internal struct Attached
     // the channels it is a presence member of
     public array<string> $present = [];
 
-    // presence channels whose `subscribed` frame went out; drop publishes `left` only for these
-    public array<string> $heard = [];
-
     // still counted against the socket limit; end and close clear it before the transport drops
     public bool $counted = true;
 
@@ -588,32 +585,19 @@ internal class HubState
             $ok = $ok && $s->send($frame);
         }
         if (!$ok) {
-            if ($roll != null) {
-                Roll $had = guard $roll;
-                $this->tellVanish($channel, $had->me->id);
-            }
+            // gone tells `dropped` with this channel still present, so the roster forgets it
             $this->gone($id);
             return;
         }
-        if ($roll != null) {
+        if ($roll != null && $fresh) {
             Roll $had = guard $roll;
-            $this->confirm($id, $channel);
-            if ($fresh) {
-                foreach ($this->watchers() as $o) {
-                    $o->appeared($channel, $had->me);
-                }
+            foreach ($this->watchers() as $o) {
+                $o->appeared($channel, $had->me);
             }
         }
         string $gid = $this->idOf($id);
         foreach ($this->watchers() as $o) {
             $o->joined($gid, $channel);
-        }
-    }
-
-    private function tellVanish(const string& $channel, const string& $id) : void
-    {
-        foreach ($this->watchers() as $o) {
-            $o->vanish($channel, $id);
         }
     }
 
@@ -715,35 +699,11 @@ internal class HubState
         return $held->value->drop($id);
     }
 
-    private function confirm(int64 $id, const string& $channel) : void
-    {
-        thread::locked<HubData> $held = $this->data->lock();
-        if (!$held->value->members->has($id)) {
-            return;
-        }
-        Attached& $m = $held->value->members->at($id);
-        if (!has($m->heard, $channel)) {
-            $m->heard->push($channel);
-        }
-    }
-
     private function tellGone(int64 $id, const Attached& $was) : void
     {
         string $gid = $this->idOf($id);
-        array<string> $heard = [];
-        array<string> $unheard = [];
-        foreach ($was->present as const &$channel) {
-            if (has($was->heard, $channel)) {
-                $heard[] = $channel;
-            } else {
-                $unheard[] = $channel;
-            }
-        }
         foreach ($this->watchers() as $o) {
-            $o->dropped($gid, $heard);
-            foreach ($unheard as const &$channel) {
-                $o->vanish($channel, $gid);
-            }
+            $o->dropped($gid, $was->present);
             $o->closed($gid);
         }
     }

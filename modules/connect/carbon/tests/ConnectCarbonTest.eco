@@ -77,8 +77,12 @@ test an_attempt_keeps_who_signed_in
     $claims['picture'] = json::str('https://pics.test/ann');
     $a->identity = ExternalIdentity($provider: 'acme', $subject: 'p1', $email: 'ann@example.com', $emailVerified: true, $name: 'Ann', $claims: $claims);
     $r->fake->written();
-    guard $r->attempts()->settle($a);
+    bool $mine = guard $r->attempts()->settle($a);
+    expect($mine)->yes(says: 'the first settle writes the row');
     expect($r->fake->last())->starts('UPDATE `connect_attempts` SET `error` = ?, `external_subject` = ?');
+    $r->fake->written(0);
+    bool $again = guard $r->attempts()->settle($a);
+    expect($again)->no(says: 'a settled row is not written again');
 
     $r->fake->rows([AttemptRowTable()->row(.of($a))]);
     Attempt? $found = guard $r->attempts()->find('a1');

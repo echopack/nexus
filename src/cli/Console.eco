@@ -189,7 +189,7 @@ public struct Console
                 }
             }
         });
-        $log->info("listening on {$options->host}:{$options->port}");
+        $log->info("listening on {$options->address()}");
         if (Build::checked()) {
             $log->warn('serving a debug build: asserts and runtime checks are on, so it answers several times slower than a release build');
         }

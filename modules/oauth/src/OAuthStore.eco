@@ -62,6 +62,11 @@ public interface OAuthStore
     function drop(const string& $id) : status<nexus::Problem>;
 
     /**
+     * Removes every grant of `$subject` at once, and says how many.
+     */
+    function dropAll(const string& $subject) : result<uint64, nexus::Problem>;
+
+    /**
      * Every grant of `$subject`.
      */
     function grants(const string& $subject) : result<array<Grant>, nexus::Problem>;

@@ -5,7 +5,7 @@
  * clock the tests move, requests as host `app`.
  */
 
-use nexus::connect::{Accounts, Connect, ExternalIdentity, ScriptedFetch, Sent, Oidc, Google, IdToken, Link, LinkStore, Users};
+use nexus::connect::{Accounts, Attempt, MemoryAttempts, Connect, ExternalIdentity, ScriptedFetch, Sent, Oidc, Google, IdToken, Link, LinkStore, Users};
 use nexus::testing::TestApp;
 use ecotest::http::Reply;
 use std::time;
@@ -294,6 +294,43 @@ test a_provider_without_endpoints_is_discovered_once
     $wrong = Rig(mv $again, Oidc('acme', issuer: ISSUER, client: 'cid', secret: 'shh'));
     $wrong->acme->answer('https://id.acme.test/.well-known/openid-configuration', 200, '{"issuer":"https://evil.test"}');
     $wrong->start()->status(503);
+}
+
+test an_attempt_is_settled_by_the_first_callback_only
+{
+    MemoryAttempts $m = MemoryAttempts();
+    Attempt $a = Attempt($id: 'a1', $provider: 'acme', $stateHash: 's1', $bindingHash: 'b1', $nonce: 'n1', $verifier: 'v1',
+        $expiresAt: time::timestamp::now() + time::duration::mins(10));
+    guard $m->start($a);
+    Attempt $won = $a;
+    $won->identity = ExternalIdentity($provider: 'acme', $subject: 'p1', $email: 'ann@example.com', $emailVerified: true, $name: 'Ann', $claims: json::object());
+    Attempt $lost = $a;
+    $lost->error = 'failed';
+    bool $first = guard $m->settle($won);
+    expect($first)->yes(says: 'the first callback settles it');
+    bool $second = guard $m->settle($lost);
+    expect($second)->no(says: 'the second finds it settled');
+    Attempt? $kept = guard $m->find('a1');
+    expect(expect($kept)->some()->error)->is('');
+}
+
+test a_provider_off_https_stops_the_boot
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
+    array<nexus::connect::Connector> $plain = [Oidc('acme', issuer: 'http://id.acme.test', client: 'cid', secret: 'shh')];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::connect::Extension(connectors: $plain)];
+    nexus::BootError $e = expect(TestApp::attempt($exts, $vars))->fails();
+    expect($e->lines()[0])->has('issuer must be an https URL');
+
+    array<nexus::connect::Connector> $token = [Oidc('acme', issuer: ISSUER, client: 'cid', secret: 'shh', authorize: 'https://id.acme.test/auth', token: 'http://id.acme.test/token')];
+    array<nexus::Extension> $again = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::connect::Extension(connectors: $token)];
+    nexus::BootError $t = expect(TestApp::attempt($again, $vars))->fails();
+    expect($t->lines()[0])->has('endpoints must be https URLs');
+
+    array<nexus::connect::Connector> $local = [Oidc('acme', issuer: 'http://localhost:9000', client: 'cid', secret: 'shh')];
+    array<nexus::Extension> $dev = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::connect::Extension(connectors: $local)];
+    // http on this machine boots, for a provider run locally
+    guard TestApp::attempt($dev, $vars);
 }
 
 test links_tie_an_outside_identity_to_one_user

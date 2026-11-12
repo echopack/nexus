@@ -36,13 +36,13 @@ public class RedisRoster : nexus::realtime::Roster
         return .ok;
     }
 
-    public function leave(const string& $channel, const string& $id) : status<nexus::realtime::RealtimeError>
+    public function leave(const string& $channel, const string& $id) : result<bool, nexus::realtime::RealtimeError>
     {
         array<string> $ids = [$id];
-        guard $this->pool->hDel($this->key($channel), $ids) else ($e) {
+        int64 $removed = guard $this->pool->hDel($this->key($channel), $ids) else ($e) {
             return .error(.relay("{$e}"));
         };
-        return .ok;
+        return .ok($removed > 0);
     }
 
     public function members(const string& $channel) : result<array<nexus::realtime::Present>, nexus::realtime::RealtimeError>

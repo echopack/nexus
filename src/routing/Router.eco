@@ -229,7 +229,10 @@ public class Router
                 die("nexus: a link to {$at->route->action} needs {$seg->text} for {$at->pattern->source}");
             }
             string $value = $params->get($seg->text);
-            if (!$seg->constraint->admits($value)) {
+            if ($seg->kind == SegmentKind::rest && $value->empty()) {
+                break;
+            }
+            if (!$seg->admits($value)) {
                 die("nexus: a link to {$at->route->action} gives {$seg->text} '{$value}', which {$at->pattern->source} does not match");
             }
             $path->push(47);

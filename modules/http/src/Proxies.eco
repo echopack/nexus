@@ -48,7 +48,16 @@ public struct Proxies
     public const function client(const string& $peer, const string& $forwarded) : string
     {
         $address = Proxies::address($peer);
-        if (!$this->trusts($address) || $forwarded->empty()) {
+        return $this->client(address: $address, trusted: $this->trusts($address), $forwarded);
+    }
+
+    /**
+     * `client` for a peer already stripped to `$address` and checked against the trusted list, so
+     * the transport asks `trusts` once for the address and the scheme.
+     */
+    public const function client(address: const string& $address, trusted: bool $trusted, const string& $forwarded) : string
+    {
+        if (!$trusted || $forwarded->empty()) {
             return $address;
         }
         array<string> $hops = [];
@@ -66,30 +75,40 @@ public struct Proxies
     }
 
     /**
-     * `https` when `$peer` is a trusted proxy and `$forwarded` (X-Forwarded-Proto) starts with it,
-     * else `http`. A client cannot flip the scheme on its own.
+     * `https` when the peer is a `$trusted` proxy and the last entry of `$forwarded`
+     * (X-Forwarded-Proto) says so, else `http`. The last entry is the one the app's own proxy
+     * wrote; one that appends instead of replacing leaves the client's own guess before it.
      */
-    public const function scheme(const string& $peer, const string& $forwarded) : string
+    public static function scheme(trusted: bool $trusted, const string& $forwarded) : string
     {
-        if (!$this->trusts(Proxies::address($peer))) {
+        if (!$trusted) {
             return 'http';
         }
-        string $raw = str::lower(str::trim($forwarded));
-        usize $comma = $raw->find(',');
-        if ($comma < $raw->size()) {
-            $raw = str::trim($raw->sub(0, $comma))->clone();
+        string $last = '';
+        foreach (str::split($forwarded, ',') as const &$part) {
+            $entry = str::trim($part);
+            if (!$entry->empty()) {
+                $last = string($entry);
+            }
         }
-        if ($raw == 'https') {
+        if (str::iequals($last, 'https')) {
             return 'https';
         }
         return 'http';
     }
 
     /**
-     * `$peer` without its port.
+     * `$peer` without its port, and an IPv6 one without its brackets (`[::1]:5000` is `::1`), the
+     * way `X-Forwarded-For` and the trusted list spell it.
      */
     public static function address(const string& $peer) : string
     {
+        if ($peer->starts('[')) {
+            usize $close = $peer->find(']');
+            if ($close < $peer->size()) {
+                return $peer->sub(1, $close - 1)->clone();
+            }
+        }
         usize $i = $peer->size();
         while ($i > 0) {
             $i = $i - 1;

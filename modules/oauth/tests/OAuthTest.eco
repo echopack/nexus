@@ -614,6 +614,30 @@ test an_ended_grant_is_told_and_no_longer_holds
     expect(holds($r, $third, $grant))->no(says: 'the access token lapsed');
 }
 
+test signing_out_everywhere_ends_every_grant_once
+{
+    $r = Rig();
+    THeard $heard = THeard();
+    $r->app->kernel->services->get<nexus::auth::Endings>()->listen(function[$heard](nexus::auth::Ending $e) : void {
+        match ($e) {
+            nexus::auth::Ending::subject($via, $subject) => {
+                $heard->add("{$via} {$subject}");
+            },
+            else => {},
+        }
+    });
+    $r->connect();
+    $r->connect();
+    $r->signedIn->get('/oauth/grants')->count('$.items', 2);
+    nexus::Payload $payload = $r->app->kernel->background('sign out', 'test');
+    guard $payload->get<nexus::auth::Tokens>()->revokeAll('7');
+    guard $payload->get<nexus::auth::Tokens>()->revokeAll('7');
+    nexus::Kernel::finish($payload);
+    // oauth listens from boot, so its ending lands first; the second sign out finds nothing to drop
+    expect($heard->all())->is(['oauth 7', 'bearer 7', 'bearer 7']);
+    $r->app->api()->bearer(Rig::signIn($r->app))->get('/oauth/grants')->count('$.items', 0);
+}
+
 test pruning_drops_expired_requests_codes_and_grants
 {
     $r = Rig();

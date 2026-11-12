@@ -35,7 +35,7 @@ public class HttpTransport : nexus::Transport
         });
         int32 $port = $options->port as int32;
         guard $this->server->listen($options->host, $port) else ($e) {
-            return .error(.transport("cannot listen on {$options->host}:{$port}: {$e}"));
+            return .error(.transport("cannot listen on {$options->address()}: {$e}"));
         };
         return .ok;
     }

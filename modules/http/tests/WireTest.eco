@@ -117,4 +117,18 @@ test a_trusted_proxy_may_set_the_scheme
     expect($https->origin())->is('https://localhost');
     $spoof = expect(Wire::request(forwarded('198.51.100.7:5000', '', 'https'), $p))->some();
     expect($spoof->scheme)->is('http');
+    // a proxy that appends: the client's own guess comes first, the proxy's word last
+    $appended = expect(Wire::request(forwarded('10.0.0.2:40000', '', 'https, http'), $p))->some();
+    expect($appended->scheme)->is('http');
+    $upper = expect(Wire::request(forwarded('10.0.0.2:40000', '', 'HTTPS'), $p))->some();
+    expect($upper->scheme)->is('https');
+}
+
+test an_ipv6_peer_compares_without_its_brackets
+{
+    expect(nexus::http::Proxies::address('[::1]:5000'))->is('::1');
+    expect(nexus::http::Proxies::address('10.0.0.2:40000'))->is('10.0.0.2');
+    $p = nexus::http::Proxies(parse: '::1');
+    $r = expect(Wire::request(forwarded('[::1]:5000', '203.0.113.9'), $p))->some();
+    expect($r->peer)->is('203.0.113.9');
 }

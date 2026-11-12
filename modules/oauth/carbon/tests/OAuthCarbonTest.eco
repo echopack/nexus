@@ -162,6 +162,15 @@ test prune_drops_expired_requests_codes_and_grants
     expect($sent[$sent->count() - 1])->is('DELETE FROM `oauth_grants` WHERE `oauth_grants`.`refresh_expires_at` < ?');
 }
 
+test drop_all_ends_every_grant_of_a_subject_in_one_delete
+{
+    $r = Rig(true);
+    $r->fake->written(2);
+    uint64 $count = guard $r->store()->dropAll('7');
+    expect($count)->is(2);
+    expect($r->fake->last())->is('DELETE FROM `oauth_grants` WHERE `oauth_grants`.`subject` = ?');
+}
+
 test boot_refuses_a_database_without_the_tables
 {
     $driver = fake::Driver<Mysql>();

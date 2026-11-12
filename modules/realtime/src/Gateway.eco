@@ -187,11 +187,11 @@ public class Gateway : HubObserver
         array<Present> $members = guard $this->appearing($k, $channel, $me) else ($e) {
             $s->send(Frames::refused($channel, .unavailable($e->message()), $k->mode));
             $this->hub->unseat($s->id(), $channel);
-            $this->vanish($channel, $me->id);
+            $this->depart($me->id, $channel);
             return;
         };
         if (!$this->hub->follows($s->id(), $channel)) {
-            $this->vanish($channel, $me->id);
+            $this->depart($me->id, $channel);
             return;
         }
         $this->hub->join($s, $channel, $after, Roll($me, $members), $seat->fresh);
@@ -212,17 +212,6 @@ public class Gateway : HubObserver
     public function appeared(const string& $channel, const Present& $me) : void
     {
         $this->publish(Note::joined($channel, $me));
-    }
-
-    public function vanish(const string& $channel, const string& $id) : void
-    {
-        nexus::Kernel $k = guard $this->kernel else {
-            return;
-        };
-        status<RealtimeError> $gone = $k->services->get<Roster>()->leave($channel, $id);
-        if ($gone->failed()) {
-            $k->log->warn('realtime presence could not forget a member', ['channel' => $channel]);
-        }
     }
 
     /**
@@ -288,20 +277,22 @@ public class Gateway : HubObserver
     }
 
     /**
-     * The socket `$id` left presence channel `$channel`: the roster forgets it and the others hear.
+     * The socket `$id` left presence channel `$channel`: the roster forgets it and, when it was
+     * listed there, the others hear. A subscribe that joined the roster and then never delivered
+     * owes its `left` too, since another subscriber may have seen it listed meanwhile.
      */
     internal function depart(const string& $id, const string& $channel) : void
     {
         nexus::Kernel $k = guard $this->kernel else {
             return;
         };
-        Roster $roster = $k->services->get<Roster>();
-        status<RealtimeError> $gone = $roster->leave($channel, $id);
-        if ($gone->failed()) {
+        bool $was = guard $k->services->get<Roster>()->leave($channel, $id) else {
             $k->log->warn('realtime presence could not forget a member', ['channel' => $channel]);
             return;
+        };
+        if ($was) {
+            $this->publish(Note::left($channel, $id));
         }
-        $this->publish(Note::left($channel, $id));
     }
 
     /**

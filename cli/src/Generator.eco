@@ -240,28 +240,54 @@ public struct Generator
     {
         foreach (str::split($manifest, "\n") as const &$raw) {
             string $line = string::from(str::trim($raw));
-            if (!$line->starts('#[module:')) {
-                continue;
+            if ($line->starts('#[module:')) {
+                return Generator::quoted($line);
             }
-            // either quote: the manifest is Echo
-            string $quote = '"';
-            usize $open = $line->find($quote);
-            usize $single = $line->find("'");
-            if ($single < $open) {
-                $open = $single;
-                $quote = "'";
-            }
-            if ($open == $line->size()) {
-                return null;
-            }
-            string $tail = $line->sub($open + 1, $line->size() - $open - 1);
-            usize $close = $tail->find($quote);
-            if ($close == $tail->size()) {
-                return null;
-            }
-            return $tail->sub(0, $close);
         }
         return null;
+    }
+
+    /**
+     * The paths every `#[depends: "..."]` in `$manifest` names, in any target.
+     */
+    public static function depends(const string& $manifest) : array<string>
+    {
+        array<string> $out = [];
+        foreach (str::split($manifest, "\n") as const &$raw) {
+            string $line = string::from(str::trim($raw));
+            if (!$line->starts('#[depends:')) {
+                continue;
+            }
+            string? $found = Generator::quoted($line);
+            if ($found != null) {
+                $out[] = $found ?? '';
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * The text between the first pair of quotes on `$line`, null when there is none.
+     */
+    internal static function quoted(const string& $line) : string?
+    {
+        // either quote: the manifest is Echo
+        string $quote = '"';
+        usize $open = $line->find($quote);
+        usize $single = $line->find("'");
+        if ($single < $open) {
+            $open = $single;
+            $quote = "'";
+        }
+        if ($open == $line->size()) {
+            return null;
+        }
+        string $tail = $line->sub($open + 1, $line->size() - $open - 1);
+        usize $close = $tail->find($quote);
+        if ($close == $tail->size()) {
+            return null;
+        }
+        return $tail->sub(0, $close);
     }
 
     /**

@@ -23,8 +23,9 @@ public struct Serve
     public bool $schedule = true;
 
     /**
-     * Parses `host:port`, `[ipv6]:port`, `:port` or a bare port into `$host` and `$port`. Refuses a
-     * port that is not a number from 1 to 65535.
+     * Parses `host:port`, `[ipv6]:port`, `:port` or a bare port into `$host` and `$port`; an IPv6
+     * host is kept without its brackets. Refuses a port that is not a number from 1 to 65535, and
+     * an IPv6 address without brackets: `1::2:3` is an address of its own, not `[1::2]:3`.
      */
     public function listen(const string& $address) : status<ConfigError>
     {
@@ -35,11 +36,14 @@ public struct Serve
             if ($close + 1 >= $a->size() || $a->byte($close + 1) != 58) {
                 return .error(.invalid('listen', "'{$address}' has no port from 1 to 65535"));
             }
-            $this->host = $a->sub(0, $close + 1)->clone();
+            $this->host = $a->sub(1, $close - 1)->clone();
             $portText = $a->sub($close + 2, $a->size() - $close - 2);
         } else {
-            usize $colon = Serve::lastColon($a);
+            usize $colon = $a->find(':');
             if ($colon < $a->size()) {
+                if ($a->find(':', $colon + 1) < $a->size()) {
+                    return .error(.invalid('listen', "'{$address}': an IPv6 address goes in brackets, [host]:port"));
+                }
                 string $host = $a->sub(0, $colon)->clone();
                 if (!$host->empty()) {
                     $this->host = $host;
@@ -57,15 +61,14 @@ public struct Serve
         return .ok;
     }
 
-    internal static function lastColon(const string& $a) : usize
+    /**
+     * `host:port` as `listen` reads it back, an IPv6 host in brackets.
+     */
+    public const function address() : string
     {
-        usize $i = $a->size();
-        while ($i > 0) {
-            $i = $i - 1;
-            if ($a->byte($i) == 58) {
-                return $i;
-            }
+        if ($this->host->contains(':')) {
+            return "[{$this->host}]:{$this->port}";
         }
-        return $a->size();
+        return "{$this->host}:{$this->port}";
     }
 }

@@ -10,8 +10,8 @@ use std::time;
  */
 public class Grants
 {
-    public const string ACCESS = 'nxo';
-    public const string REFRESH = 'nxr';
+    public const string ACCESS = nexus::auth::Secrets::OAUTH_ACCESS;
+    public const string REFRESH = nexus::auth::Secrets::OAUTH_REFRESH;
 
     public OAuthStore $store;
     public Clients $clients;
@@ -198,11 +198,8 @@ public class Grants
      */
     public function dropAll(const string& $subject) : status<nexus::Problem>
     {
-        array<Grant> $all = try $this->store->grants($subject);
-        foreach ($all as const &$g) {
-            try $this->store->drop($g->id);
-        }
-        if (!$all->empty()) {
+        uint64 $n = try $this->store->dropAll($subject);
+        if ($n > 0) {
             $this->endings->ended(nexus::auth::Ending::subject(OAuthGuard::NAME, $subject));
         }
         return .ok;

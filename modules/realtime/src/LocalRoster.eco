@@ -31,17 +31,19 @@ public class LocalRoster : Roster
         return .ok;
     }
 
-    public function leave(const string& $channel, const string& $id) : status<RealtimeError>
+    public function leave(const string& $channel, const string& $id) : result<bool, RealtimeError>
     {
         thread::locked<map<string, array<Present>>> $held = $this->channels->lock();
         if (!$held->value->has($channel)) {
-            return .ok;
+            return .ok(false);
         }
         array<Present>& $all = $held->value->at($channel);
+        bool $removed = false;
         usize $i = 0;
         while ($i < $all->count()) {
             if ($all[$i]->id == $id) {
                 $all->remove($i);
+                $removed = true;
             } else {
                 $i = $i + 1;
             }
@@ -49,7 +51,7 @@ public class LocalRoster : Roster
         if ($all->empty()) {
             $held->value->remove($channel);
         }
-        return .ok;
+        return .ok($removed);
     }
 
     public function members(const string& $channel) : result<array<Present>, RealtimeError>

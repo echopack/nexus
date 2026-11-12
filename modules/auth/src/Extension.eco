@@ -68,7 +68,7 @@ public class Extension : nexus::Extension
         if (!Secrets::isPrefix($this->prefix)) {
             return .error(.extension('nexus-auth', "the token prefix '{$this->prefix}' must be 1 to 16 lowercase letters and digits"));
         }
-        if ($this->prefix == 'nxo' || $this->prefix == 'nxr') {
+        if (Secrets::reserved($this->prefix)) {
             return .error(.extension('nexus-auth', "the token prefix '{$this->prefix}' is reserved for OAuth access and refresh tokens"));
         }
         if ($config->key->size() < 32) {

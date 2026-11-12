@@ -2,7 +2,7 @@
  * The generator on hand-written decls: what it accepts, what it refuses, and the code it writes.
  */
 
-use nexusgen::{Program, ParamKind, emitter, names, types};
+use nexusgen::{Program, ParamKind, emitter, names, stamp, types};
 use ecotest::expect;
 
 internal function genDecls(const string& $declarations) : json::Value
@@ -563,4 +563,21 @@ test nested_inputs_cannot_be_command_options
     $p = genProblems("{$line},{$order},{$cmd}");
     expect($p)->size(1);
     expect($p[0])->has('option $line of shop::Order is a nested input, which a command line cannot give');
+}
+
+test a_change_in_a_path_dependency_makes_the_stamp_stale
+{
+    std::fs::path $root = std::env::tmp() / 'nexus-stamptest';
+    std::fs::remove_all($root);
+    std::fs::mkdir($root / 'app', recursive: true);
+    std::fs::mkdir($root / 'lib', recursive: true);
+    // the two depend on each other, so following them must stop
+    std::fs::writefile($root / 'app' / 'module.eco', "#[module: \"app\"]\n#[target: test] \{\n    #[depends: \"../lib\"]\n}\n");
+    std::fs::writefile($root / 'lib' / 'module.eco', "#[module: 'lib']\n#[depends: '../app']\n");
+    std::fs::writefile($root / 'lib' / 'Kinds.eco', 'enum Kind { case a; }');
+    string $before = stamp::digest($root / 'app', 'echoc');
+    expect(stamp::digest($root / 'app', 'echoc'))->is($before);
+    std::fs::writefile($root / 'lib' / 'Kinds.eco', 'enum Kind { case a; case b; }');
+    expect(stamp::digest($root / 'app', 'echoc') == $before)->no(says: 'an enum changed in ../lib');
+    std::fs::remove_all($root);
 }

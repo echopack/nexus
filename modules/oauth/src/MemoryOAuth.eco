@@ -152,6 +152,21 @@ public class MemoryOAuth : OAuthStore
         return .ok;
     }
 
+    public function dropAll(const string& $subject) : result<uint64, nexus::Problem>
+    {
+        thread::locked<map<string, Grant>> $held = $this->grantsById->lock();
+        array<string> $ended = [];
+        foreach ($held->value as $id => const &$g) {
+            if ($g->subject == $subject) {
+                $ended[] = $id;
+            }
+        }
+        foreach ($ended as const &$id) {
+            $held->value->remove($id);
+        }
+        return .ok($ended->count() as uint64);
+    }
+
     public function grants(const string& $subject) : result<array<Grant>, nexus::Problem>
     {
         thread::locked<map<string, Grant>> $held = $this->grantsById->lock();

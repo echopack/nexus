@@ -18,9 +18,10 @@ public interface AttemptStore
     function byState(const string& $hash) : result<Attempt?, nexus::Problem>;
 
     /**
-     * Saves what the callback learned: the identity or the error of `$a`.
+     * Saves what the callback learned, the identity or the error of `$a`, once: true for the one
+     * caller whose call saved it, false when another callback settled it first.
      */
-    function settle(const Attempt& $a) : status<nexus::Problem>;
+    function settle(const Attempt& $a) : result<bool, nexus::Problem>;
 
     /**
      * Removes attempt `$id`: true for the one caller whose call removed it.

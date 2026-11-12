@@ -60,6 +60,17 @@ public class Oidc : Connector
         if ($this->client->empty() || $this->secret->empty()) {
             return .error(.extension('nexus-connect', "{$this->named}: give the client id and secret"));
         }
+        // the discovery document and the token answer are trusted for who signed in
+        if (!Oidc::httpsEndpoint($this->issuer)) {
+            return .error(.extension('nexus-connect', "{$this->named}: the issuer must be an https URL"));
+        }
+        Endpoints? $given = $this->known();
+        if ($given != null) {
+            Endpoints $at = guard $given;
+            if (!Oidc::httpsEndpoint($at->authorize) || !Oidc::httpsEndpoint($at->token)) {
+                return .error(.extension('nexus-connect', "{$this->named}: the authorization and token endpoints must be https URLs"));
+            }
+        }
         return .ok(true);
     }
 
@@ -154,11 +165,17 @@ public class Oidc : Connector
         $held->value = $found;
     }
 
+    /**
+     * Whether `$raw` is an https URL, or plain http on this machine for a provider run locally.
+     */
     internal static function httpsEndpoint(const string& $raw) : bool
     {
         nexus::Url $url = guard nexus::Url::parse($raw) else {
             return false;
         };
-        return $url->scheme == 'https' && !$url->host->empty();
+        if ($url->scheme == 'https') {
+            return true;
+        }
+        return $url->scheme == 'http' && ($url->host == 'localhost' || $url->host == '127.0.0.1' || $url->host == '::1' || $url->host == '[::1]');
     }
 }

@@ -43,13 +43,14 @@ public class MemoryAttempts : AttemptStore
         return .ok(null);
     }
 
-    public function settle(const Attempt& $a) : status<nexus::Problem>
+    public function settle(const Attempt& $a) : result<bool, nexus::Problem>
     {
         thread::locked<map<string, Attempt>> $held = $this->attempts->lock();
-        if ($held->value->has($a->id) && !$held->value->at($a->id)->settled()) {
-            $held->value[$a->id] = $a;
+        if (!$held->value->has($a->id) || $held->value->at($a->id)->settled()) {
+            return .ok(false);
         }
-        return .ok;
+        $held->value[$a->id] = $a;
+        return .ok(true);
     }
 
     public function spend(const string& $id) : result<bool, nexus::Problem>

@@ -162,6 +162,13 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
         return .ok;
     }
 
+    public function dropAll(const string& $subject) : result<uint64, nexus::Problem>
+    {
+        GrantRowRepository $repo = try $this->grantRepo();
+        uint64 $n = try $repo->find()->where(GrantRowTable::$subject == $subject)->purge();
+        return .ok($n);
+    }
+
     public function grants(const string& $subject) : result<array<nexus::oauth::Grant>, nexus::Problem>
     {
         GrantRowRepository $repo = try $this->grantRepo();
