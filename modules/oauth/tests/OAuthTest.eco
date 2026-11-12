@@ -540,6 +540,80 @@ test revoking_and_disconnecting_end_the_grant
     $r->who($again)->status(401);
 }
 
+/**
+ * The credentials `Endings` said ended, as `via id`.
+ */
+#[atomic]
+internal class THeard
+{
+    private std::thread::mutex<array<string>> $ids = std::thread::mutex<array<string>>(array<string>());
+
+    public constructor()
+    {
+    }
+
+    public function add(const string& $id) : void
+    {
+        std::thread::locked<array<string>> $held = $this->ids->lock();
+        $held->value->push($id);
+    }
+
+    public function all() : array<string>
+    {
+        std::thread::locked<array<string>> $held = $this->ids->lock();
+        return $held->value->clone();
+    }
+}
+
+/**
+ * Whether the grant behind access token `$token` still holds, as nexus-auth asks it of a socket
+ * opened with the token.
+ */
+internal function holds(Rig $r, const string& $token, const string& $grant) : bool
+{
+    nexus::Payload $payload = $r->payload('/mcp', $token);
+    nexus::auth::Identity $id = nexus::auth::Identity($via: 'oauth', $subject: '7', $credential: $grant);
+    bool $still = guard $payload->get<nexus::auth::Guards>()->holds($payload, $id) else {
+        return false;
+    };
+    return $still;
+}
+
+test an_ended_grant_is_told_and_no_longer_holds
+{
+    $r = Rig();
+    THeard $heard = THeard();
+    $r->app->kernel->services->get<nexus::auth::Endings>()->listen(function[$heard](nexus::auth::Ending $e) : void {
+        match ($e) {
+            nexus::auth::Ending::credential($via, $id) => {
+                $heard->add("{$via} {$id}");
+            },
+            else => {},
+        }
+    });
+
+    // revoked at the endpoint
+    string $access = $r->connect()->capture('$.access_token');
+    string $first = $r->signedIn->get('/oauth/grants')->capture('$.items[0].id');
+    expect(holds($r, $access, $first))->yes(says: 'a fresh grant holds');
+    $r->app->api()->post('/oauth/revoke', form: ['token' => $access])->status(200);
+    expect($heard->all())->is(["oauth {$first}"]);
+    expect(holds($r, $access, $first))->no(says: 'a revoked grant');
+
+    // disconnected by its user
+    string $again = $r->connect()->capture('$.access_token');
+    string $second = $r->signedIn->get('/oauth/grants')->capture('$.items[0].id');
+    $r->signedIn->delete("/oauth/grants/{$second}")->status(204);
+    expect($heard->all())->is(["oauth {$first}", "oauth {$second}"]);
+
+    // its access token lapses without a refresh
+    string $third = $r->connect()->capture('$.access_token');
+    string $grant = $r->signedIn->get('/oauth/grants')->capture('$.items[0].id');
+    expect(holds($r, $third, $grant))->yes(says: 'within the hour');
+    $r->clock->advance(.mins(61));
+    expect(holds($r, $third, $grant))->no(says: 'the access token lapsed');
+}
+
 test pruning_drops_expired_requests_codes_and_grants
 {
     $r = Rig();

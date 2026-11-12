@@ -27,29 +27,29 @@ public class Ring
     }
 
     /**
-     * Adds an event with `$data`, a JSON object already encoded, and answers its number.
+     * Adds an event with `$data`, a JSON object already encoded, and answers it.
      */
-    public function publish(const string& $data) : uint64
+    public function publish(const string& $data) : Event
     {
         return $this->publish(Encoded($data));
     }
 
     /**
-     * Adds an event saying `$record`, encoded when a reader asks, and answers its number.
+     * Adds an event saying `$record`, encoded when a reader asks, and answers it.
      */
-    public function publish(Record $record) : uint64
+    public function publish(Record $record) : Event
     {
         time::timestamp $now = time::timestamp::now();
         thread::locked<array<Event>> $held = $this->slots->lock();
         uint64 $seq = $this->last->load() + 1;
         $e = Event($seq, $now, $record);
         if ($held->value->count() < $this->size) {
-            $held->value[] = mv $e;
+            $held->value[] = $e;
         } else {
-            $held->value[(($seq - 1) % ($this->size as uint64)) as usize] = mv $e;
+            $held->value[(($seq - 1) % ($this->size as uint64)) as usize] = $e;
         }
         $this->last->store($seq);
-        return $seq;
+        return $e;
     }
 
     /**

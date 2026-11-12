@@ -1,0 +1,52 @@
+namespace Blog::Signals;
+
+use Blog::Transformers::CommentTransformer;
+
+/**
+ * Tells everyone reading a post when a comment comes or goes (channel `posts.<id>`), but the socket
+ * whose request made the change, and the post's author when somebody else comments
+ * (`users.<id>`). A broadcast that does not go out is logged, never the comment's failure: it is
+ * saved already.
+ */
+public class BroadcastComment : nexus::SignalHandler<CommentPosted>, nexus::SignalHandler<CommentDeleted>
+{
+    private nexus::realtime::Broadcaster $broadcaster;
+    private CommentTransformer $transformer;
+    private nexus::rest::TransformerNetwork $network;
+    private nexus::Logger $log;
+
+    public constructor(nexus::realtime::Broadcaster $broadcaster, CommentTransformer $transformer, nexus::rest::TransformerNetwork $network, nexus::Logger $log)
+    {
+        $this->broadcaster = $broadcaster;
+        $this->transformer = $transformer;
+        $this->network = $network;
+        $this->log = $log;
+    }
+
+    public function handle(const CommentPosted& $signal) : status<nexus::Problem>
+    {
+        json::Value $comment = $this->transformer->json($signal->comment, $this->network, EchoPack::Rest::Includes::of(['author']));
+        $this->send("posts.{$signal->comment->postId}", 'comment.posted', $comment, $signal->except);
+        if ($signal->postAuthor != $signal->comment->authorId) {
+            $this->send("users.{$signal->postAuthor}", 'comment.received', $comment, nexus::realtime::SocketId());
+        }
+        return .ok;
+    }
+
+    public function handle(const CommentDeleted& $signal) : status<nexus::Problem>
+    {
+        json::Value $doc = json::object();
+        $doc['id'] = json::int($signal->comment);
+        $doc['post_id'] = json::int($signal->post);
+        $this->send("posts.{$signal->post}", 'comment.deleted', $doc, $signal->except);
+        return .ok;
+    }
+
+    private function send(const string& $channel, const string& $event, const json::Value& $data, const nexus::realtime::SocketId& $except) : void
+    {
+        guard $this->broadcaster->send($channel, $event, $data, except: $except) else ($e) {
+            $this->log->warn('comment broadcast failed', ['channel' => $channel, 'event' => $event, 'error' => $e->message()]);
+            return;
+        };
+    }
+}

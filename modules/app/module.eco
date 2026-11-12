@@ -16,6 +16,7 @@
  *   $app->bindAsyncQueue<WorkerLane>();   // NEXUS_WORK_THREADS threads, or threads: 4
  *   $app->bindDistributedQueue<JobLane>(store: nexus::work::carbon::Store($app->get<carbon::DB>()))->into<WorkerLane>();
  *   $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobLane>();
+ *   $app->bindChannel<PostChannel>(...)->on('posts.{id:integer}');
  *   $app->instance(nexus::SignalDispatcher());
  *   $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobQueue>());
  *
@@ -29,7 +30,7 @@
 #[module: "nexus-app"]
 #[version: "0.1.0"]
 #[epm::license: "MIT"]
-#[epm::description: "nexus::App and providers for wiring a nexus app: services, routes, transformers, repositories, MCP tools, task queues"]
+#[epm::description: "nexus::App and providers for wiring a nexus app: services, routes, transformers, repositories, MCP tools, task queues, realtime channels"]
 
 #[depends: "../.."]
 #[depends: "../rest"]
@@ -37,6 +38,7 @@
 #[depends: "../mcp"]
 #[depends: "../auth"]
 #[depends: "../work"]
+#[depends: "../realtime"]
 #[depends: "../../../container"]
 #[depends: "../../../libjson"]
 

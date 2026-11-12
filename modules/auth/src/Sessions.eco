@@ -32,10 +32,12 @@ public class Sessions
     public const time::duration $window;
     public calendar::Clock $clock;
     internal const string $key;
+    private Endings $endings;
 
-    public constructor(SessionStore $store, const string& $key, time::duration $lifetime, time::duration $guests, time::duration $window, calendar::Clock $clock)
+    public constructor(SessionStore $store, const string& $key, time::duration $lifetime, time::duration $guests, time::duration $window, calendar::Clock $clock, Endings $endings)
     {
         $this->store = $store;
+        $this->endings = $endings;
         $this->key = $key;
         $this->lifetime = $lifetime;
         $this->guests = $guests;
@@ -108,18 +110,37 @@ public class Sessions
         return .unauthorized('the session has ended', $reason: 'session_ended');
     }
 
-    public function close(const string& $id) : status<nexus::Problem>
+    /**
+     * Whether session `$id` is still open and still names `$subject` (empty for nobody).
+     */
+    public function holds(const string& $id, const string& $subject) : result<bool, nexus::Problem>
     {
-        return $this->store->remove($id);
+        StoredSession? $found = try $this->store->find($id);
+        StoredSession $s = guard $found else {
+            return .ok(false);
+        };
+        return .ok($this->clock->now() < $s->expiresAt && ($s->subject ?? '') == $subject);
     }
 
     /**
-     * Ends every session of `$subject`. Sessions for nobody have no subject, so no `$subject` names
-     * them.
+     * Ends session `$id`, and tells `Endings`.
+     */
+    public function close(const string& $id) : status<nexus::Problem>
+    {
+        try $this->store->remove($id);
+        $this->endings->ended(Ending::credential(SignedGuard::NAME, $id));
+        return .ok;
+    }
+
+    /**
+     * Ends every session of `$subject`, and tells `Endings`. Sessions for nobody have no subject, so
+     * no `$subject` names them.
      */
     public function closeAll(const string& $subject) : status<nexus::Problem>
     {
-        return $this->store->removeAll($subject);
+        try $this->store->removeAll($subject);
+        $this->endings->ended(Ending::subject(SignedGuard::NAME, $subject));
+        return .ok;
     }
 
     /**

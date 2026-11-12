@@ -1,0 +1,87 @@
+namespace nexus::realtime;
+
+use std::thread;
+use std::time;
+
+/**
+ * One realtime socket's side of the protocol: who opened it, and how fast it may talk. The
+ * channels it follows live on the hub.
+ */
+#[atomic]
+public class Connection
+{
+    public const nexus::auth::Identity $who;
+    private thread::mutex<Pace> $pace;
+
+    public constructor(const nexus::auth::Identity& $who, uint32 $rate = 0)
+    {
+        $this->who = $who;
+        $this->pace = thread::mutex<Pace>(Pace($rate));
+    }
+
+    /**
+     * Counts one message against the rate.
+     */
+    public function spend() : Spent
+    {
+        thread::locked<Pace> $held = $this->pace->lock();
+        return $held->value->spend();
+    }
+}
+
+/**
+ * Whether a message was within the rate: `slow` drops it, `flood` closes the socket.
+ */
+public enum Spent
+{
+    case ok;
+    case slow;
+    case flood;
+}
+
+/**
+ * A token bucket: `rate` a second, up to twice that at once. Dropped messages are counted per
+ * second; more than three times the rate is a flood.
+ */
+internal struct Pace
+{
+    public float64 $rate;
+    public float64 $tokens;
+    public time::instant $last;
+    public uint32 $dropped = 0;
+    public time::instant $since;
+
+    public constructor(uint32 $rate)
+    {
+        $this->rate = $rate as float64;
+        $this->tokens = ($rate as float64) * 2.0;
+        $this->last = time::instant::now();
+        $this->since = time::instant::now();
+    }
+
+    public function spend() : Spent
+    {
+        if ($this->rate <= 0.0) {
+            return .ok;
+        }
+        float64 $gained = $this->last->elapsed()->as_float_secs() * $this->rate;
+        $this->last = time::instant::now();
+        $this->tokens = $this->tokens + $gained;
+        if ($this->tokens > $this->rate * 2.0) {
+            $this->tokens = $this->rate * 2.0;
+        }
+        if ($this->tokens >= 1.0) {
+            $this->tokens = $this->tokens - 1.0;
+            return .ok;
+        }
+        if ($this->since->elapsed() > time::duration::secs(1)) {
+            $this->dropped = 0;
+            $this->since = time::instant::now();
+        }
+        $this->dropped = $this->dropped + 1;
+        if (($this->dropped as float64) > $this->rate * 3.0) {
+            return .flood;
+        }
+        return .slow;
+    }
+}

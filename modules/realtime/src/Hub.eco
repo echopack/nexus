@@ -1,0 +1,227 @@
+namespace nexus::realtime;
+
+/**
+ * This process's open realtime sockets and what each is subscribed to, plus the last broadcasts
+ * for sockets that catch up. One thread of its own sends: a subscribe's catch up and every note
+ * go out in the order they were handed over, and a slow socket never holds up the one that handed
+ * them over. A socket a send fails on is forgotten.
+ *
+ * Each process's hub has a `node`, eight random hex characters; a socket's global id is
+ * `<node>.<id>`, what `ready` tells it, `X-Socket-Id` sends back and presence names it by.
+ *
+ * Membership lives here: Gateway asks `follows` / `subscriptions` on the socket's thread, the
+ * sender thread delivers. Catch-up `after` is this process's ring; a reconnect that lands on
+ * another worker `reset`s.
+ */
+#[atomic]
+public class Hub
+{
+    public const string $node;
+    private nexus::Mailbox<HubJob> $mail;
+    private HubState $state;
+
+    public constructor(usize $backlog)
+    {
+        $node = nexus::auth::Secrets::hex(4);
+        $state = HubState($node, $backlog);
+        $this->node = $node;
+        $this->state = $state;
+        $this->mail = nexus::Mailbox<HubJob>(function[$state](HubJob $job) : void {
+            $state->run($job);
+        });
+    }
+
+    /**
+     * The global id of this process's socket `$id`.
+     */
+    public const function idOf(int64 $id) : string
+    {
+        return SocketId::global($this->node, $id);
+    }
+
+    /**
+     * What the socket limit counts `$who` from `$peer` by: the subject when signed in, else the
+     * address.
+     */
+    public static function keyOf(const nexus::auth::Identity& $who, const string& $peer) : string
+    {
+        if ($who->anonymous() || $who->subject->empty()) {
+            return "peer {$peer}";
+        }
+        return "subject {$who->subject}";
+    }
+
+    /**
+     * Tells `$o` what this hub does from now on.
+     */
+    public function observe(HubObserver $o) : void
+    {
+        $this->state->observe($o);
+    }
+
+    /**
+     * Counts `$s`, opened by `$who` from `$peer`, as open, subscribed to nothing yet; false, and
+     * not counted, when `$most` sockets (0 for no limit) are open for that caller already.
+     */
+    public function attach(nexus::Socket $s, const nexus::auth::Identity& $who, const string& $peer, usize $most = 0) : bool
+    {
+        return $this->state->attach($s, $who, $peer, $most);
+    }
+
+    /**
+     * Forgets the socket `$id` and its subscriptions; the presence channels it was in.
+     */
+    public function drop(int64 $id) : array<string>
+    {
+        return $this->state->gone($id);
+    }
+
+    /**
+     * Forgets the socket `$id` and its subscriptions.
+     */
+    public function detach(int64 $id) : void
+    {
+        $this->mail->put(HubJob::detach($id));
+    }
+
+    /**
+     * Subscribes `$id` to `$channel` at once, so whispers and the channel cap can ask without
+     * waiting on the sender.
+     */
+    public function seat(int64 $id, const string& $channel, bool $present) : Seat
+    {
+        return $this->state->seat($id, $channel, $present);
+    }
+
+    public function follows(int64 $id, const string& $channel) : bool
+    {
+        return $this->state->follows($id, $channel);
+    }
+
+    public function subscriptions(int64 $id) : usize
+    {
+        return $this->state->subscriptions($id);
+    }
+
+    /**
+     * Sends `subscribed` for `$channel` on the sender thread, then the broadcasts missed after
+     * `$after` (or `reset` when that one is no longer kept). Membership is `seat` already; this
+     * is a no-op unless the socket is still seated. `$me` is a presence member: the roster join
+     * and `joined` run here, only if still seated, `$fresh` when they were not a member yet.
+     */
+    public function join(nexus::Socket $s, const string& $channel, string? $after, Present? $me = null, bool $fresh = false) : void
+    {
+        $this->mail->put(HubJob::join($s->id(), $channel, $after, $me, $fresh));
+    }
+
+    /**
+     * Unsubscribes the socket `$id` from `$channel` at once, then `unsubscribed` on the sender
+     * thread; whether it was a presence member there.
+     */
+    public function leave(int64 $id, const string& $channel) : Unseat
+    {
+        Unseat $u = $this->unseat($id, $channel);
+        if ($u->followed) {
+            $this->mail->put(HubJob::leave($id, $channel));
+        }
+        return $u;
+    }
+
+    /**
+     * Unsubscribes without a frame: a subscribe that seated then failed, so the socket never heard
+     * `subscribed`.
+     */
+    public function unseat(int64 $id, const string& $channel) : Unseat
+    {
+        return $this->state->stop($id, $channel);
+    }
+
+    /**
+     * Acts on a note from the relay: a broadcast or whisper goes to the channel's sockets, an ended
+     * credential closes the sockets opened with it, a presence change goes to the channel's other
+     * sockets. An ended credential frees the socket limit before the close runs.
+     */
+    public function hear(const Note& $n) : void
+    {
+        match ($n) {
+            Note::ended($e) => {
+                $this->state->release($e);
+            },
+            else => {},
+        }
+        $this->mail->put(HubJob::hear($n));
+    }
+
+    /**
+     * How many sockets are open here.
+     */
+    public function connections() : usize
+    {
+        return $this->state->count();
+    }
+
+    /**
+     * How many sockets here are subscribed to `$channel`.
+     */
+    public function subscribers(const string& $channel) : usize
+    {
+        return $this->state->subscribers($channel);
+    }
+
+    /**
+     * How many sockets here the limit counts by `$key` (`keyOf`).
+     */
+    public function holding(const string& $key) : usize
+    {
+        return $this->state->holding($key);
+    }
+
+    /**
+     * Every open socket here.
+     */
+    public function sockets() : array<SocketInfo>
+    {
+        return $this->state->sockets();
+    }
+
+    /**
+     * Every channel with subscribers here, by name.
+     */
+    public function channels() : array<ChannelInfo>
+    {
+        return $this->state->channels();
+    }
+
+    /**
+     * The broadcasts kept for catching up, oldest first.
+     */
+    public function kept() : array<Envelope>
+    {
+        return $this->state->kept();
+    }
+
+    /**
+     * Closes the socket with global id `$id` with `$code`; false when no socket here has it.
+     */
+    public function close(const string& $id, int32 $code, const string& $reason) : bool
+    {
+        return $this->state->close($id, $code, $reason);
+    }
+
+    /**
+     * Closes every socket with `$code`, for a server that stops.
+     */
+    public function closeAll(int32 $code, const string& $reason) : void
+    {
+        $this->settle();
+        $this->state->closeAll($code, $reason);
+    }
+
+    /**
+     * Waits until everything handed over before the call went out.
+     */
+    public function settle() : void
+    {
+        $this->mail->settle();
+    }
+}

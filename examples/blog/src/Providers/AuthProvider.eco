@@ -54,7 +54,6 @@ public class AuthProvider : nexus::Provider
 
         // a sign up is welcomed on a worker; expired sessions go every night at three
         $app->get<nexus::SignalDispatcher>()->bind<UserRegistered, WelcomeNewUser>($app->get<JobQueue>());
-        
         $app->schedule(PruneAuth())->cron('0 3 * * *')->into<JobLane>();
     }
 }

@@ -6,23 +6,23 @@ namespace nexus::oauth;
 #[nexus::through: ["nexus::auth::Authenticate"]]
 public class DropGrant : nexus::Action
 {
-    private OAuthStore $store;
+    private Grants $grants;
 
-    public constructor(OAuthStore $store)
+    public constructor(Grants $grants)
     {
-        $this->store = $store;
+        $this->grants = $grants;
     }
 
     public function handle(nexus::Payload& $payload, string $id) : status<nexus::Problem>
     {
         $me = try $payload->state<nexus::auth::Identity>();
-        Grant? $found = try $this->store->grant($id);
+        Grant? $found = try $this->grants->store->grant($id);
         Grant $g = guard $found else {
             return .error(.notFound('the grant'));
         };
         if ($g->subject != $me->subject) {
             return .error(.notFound('the grant'));
         }
-        return $this->store->drop($g->id);
+        return $this->grants->drop($g->id);
     }
 }

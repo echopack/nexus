@@ -1,0 +1,69 @@
+namespace nexus::realtime;
+
+/**
+ * Hears what a hub does, for a console or metrics: `Hub::observe`. Every method has an empty
+ * default; it runs on the hub's sender thread or the socket's, so it keeps its work short.
+ */
+public interface HubObserver
+{
+    function opened(const SocketInfo& $s) : void
+    {
+    }
+
+    function closed(const string& $id) : void
+    {
+    }
+
+    /**
+     * Socket `$id` was forgotten; `$present` are the presence channels it was in, for the roster.
+     */
+    function dropped(const string& $id, const array<string>& $present) : void
+    {
+    }
+
+    function joined(const string& $id, const string& $channel) : void
+    {
+    }
+
+    /**
+     * Join `$me` to the presence roster of `$channel` and return everyone there, `$me` included.
+     * Null means this observer does not own the roster. A failure refuses the subscribe.
+     */
+    function appearing(const string& $channel, const Present& $me) : result<array<Present>, RealtimeError>?
+    {
+        return null;
+    }
+
+    /**
+     * `$me` is in `$channel` and the others should hear `joined`.
+     */
+    function appeared(const string& $channel, const Present& $me) : void
+    {
+    }
+
+    /**
+     * `$id` left `$channel`'s roster without a `left` frame: a subscribe that seated then did not
+     * deliver.
+     */
+    function vanish(const string& $channel, const string& $id) : void
+    {
+    }
+
+    function left(const string& $id, const string& $channel) : void
+    {
+    }
+
+    /**
+     * A broadcast went out to `$reached` sockets here.
+     */
+    function delivered(const Envelope& $e, usize $reached) : void
+    {
+    }
+
+    /**
+     * A credential ended and `$closed` sockets here were opened with it.
+     */
+    function ended(const nexus::auth::Ending& $e, usize $closed) : void
+    {
+    }
+}

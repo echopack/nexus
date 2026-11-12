@@ -18,6 +18,9 @@ public class TestApp
     public nexus::Kernel $kernel;
     public nexus::log::Memory $log;
 
+    // where opened streams and sockets take their ids from
+    private atomic<int64> $opened = atomic<int64>(0);
+
     /**
      * Boots `$extensions` with nothing but `$vars` as config. A failed boot stops the test with
      * every reason; `attempt` hands the reasons back.
@@ -97,6 +100,72 @@ public class TestApp
     public const function api(signed: function<string(string, string, string)> $sign) : Api
     {
         return Api(transport: SignedTransport(KernelTransport($this->kernel), $sign), base: 'http://app');
+    }
+
+    /**
+     * Opens the event stream a GET of `$target` answers with, in process: the app's open hook runs
+     * with a stream that keeps every event sent to it. An answer that is no event stream (a 401, a
+     * 404) comes back as a stream that never opened, with its status and body.
+     */
+    public function events(const string& $target, map<string, string> $headers = []) : TestEventStream
+    {
+        nexus::Response $got = $this->kernel->handle($this->opening($target, $headers));
+        $s = TestEventStream($got, $this->opened->add(1) + 1);
+        $s->start();
+        return $s;
+    }
+
+    /**
+     * `events`, the request signed by `$sign` as `api(signed:)` signs.
+     */
+    public function events(const string& $target, signed: function<string(string, string, string)> $sign, map<string, string> $headers = []) : TestEventStream
+    {
+        map<string, string> $all = $headers;
+        $all['Authorization'] = $sign('GET', $target, '');
+        return $this->events($target, $all);
+    }
+
+    /**
+     * Opens the websocket a GET of `$target` upgrades to, in process: the app's open hook runs,
+     * `say` hands it messages and every message it sends is kept. An answer that is no upgrade
+     * comes back as a socket that never opened, with its status and body.
+     */
+    public function socket(const string& $target, map<string, string> $headers = []) : TestSocket
+    {
+        map<string, string> $all = $headers;
+        $all['Upgrade'] = 'websocket';
+        $all['Connection'] = 'Upgrade';
+        $all['Sec-WebSocket-Version'] = '13';
+        $all['Sec-WebSocket-Key'] = 'dGhlIHNhbXBsZSBub25jZQ==';
+        nexus::Response $got = $this->kernel->handle($this->opening($target, $all));
+        $s = TestSocket($got, $this->opened->add(1) + 1);
+        $s->start();
+        return $s;
+    }
+
+    /**
+     * `socket`, the request signed by `$sign` as `api(signed:)` signs.
+     */
+    public function socket(const string& $target, signed: function<string(string, string, string)> $sign, map<string, string> $headers = []) : TestSocket
+    {
+        map<string, string> $all = $headers;
+        $all['Authorization'] = $sign('GET', $target, '');
+        return $this->socket($target, $all);
+    }
+
+    /**
+     * A GET of `$target` from a loopback client, as a socket client sends it.
+     */
+    private function opening(const string& $target, const map<string, string>& $headers) : nexus::Request
+    {
+        $in = nexus::Request(.get, KernelTransport::target($target));
+        $in->peer = '127.0.0.1';
+        $in->headers->add('Host', 'app');
+        $in->headers->add('Accept', '*/*');
+        foreach ($headers as $name => const &$value) {
+            $in->headers->set($name, $value);
+        }
+        return $in;
     }
 
     /**

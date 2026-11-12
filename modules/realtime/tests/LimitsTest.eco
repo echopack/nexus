@@ -1,0 +1,164 @@
+/**
+ * What one caller and one socket may do: sockets per caller, messages a second, and the socket a
+ * broadcast skips.
+ */
+
+use nexus::realtime::{Broadcaster, SocketId};
+use nexus::testing::TestSocket;
+use ecotest::expect;
+
+test a_caller_opens_so_many_sockets_at_most
+{
+    map<string, string> $more = ['NEXUS_REALTIME_MAX_SOCKETS' => '2'];
+    $r = Rig($more);
+    TestSocket $a = $r->app->socket('/realtime');
+    TestSocket $b = $r->app->socket('/realtime');
+    TestSocket $c = $r->app->socket('/realtime');
+    expect($a->opened() && $b->opened())->yes(says: 'two from one address');
+    expect($c->status)->is(429);
+    expect($c->body)->has('too_many_sockets');
+    string $token = $r->token('7');
+    TestSocket $mine = $r->bearer($token);
+    TestSocket $again = $r->bearer($token);
+    expect($mine->opened() && $again->opened())->yes(says: 'a signed in caller counts by subject');
+    expect($r->bearer($r->token('7'))->status)->is(429);
+    $a->leave();
+    $r->hub()->settle();
+    expect($r->app->socket('/realtime')->opened())->yes(says: 'closing one frees a place');
+}
+
+test a_socket_that_talks_too_fast_is_slowed_then_closed
+{
+    map<string, string> $more = ['NEXUS_REALTIME_RATE' => '5'];
+    $r = Rig($more);
+    TestSocket $ws = $r->app->socket('/realtime');
+    int32 $i = 0;
+    while ($i < 12) {
+        $ws->say('{"op":"ping"}');
+        $i = $i + 1;
+    }
+    expect($ws->where('op', 'pong'))->size(10);
+    expect($ws->where('op', 'error'))->size(2);
+    expect(str(last($ws), 'message'))->has('slow down');
+    while ($i < 40) {
+        $ws->say('{"op":"ping"}');
+        $i = $i + 1;
+    }
+    expect($ws->closedWith->load())->is(1008);
+}
+
+test a_broadcast_skips_the_socket_that_caused_it
+{
+    $r = Rig();
+    TestSocket $mine = $r->app->socket('/realtime');
+    TestSocket $other = $r->app->socket('/realtime');
+    $r->say($mine, 'subscribe', 'posts.5');
+    $r->say($other, 'subscribe', 'posts.5');
+    string $me = $r->idOf($mine);
+    expect(SocketId::valid($me))->yes(says: 'ready names a socket id');
+    expect($me->starts($r->hub()->node))->yes(says: 'of this node');
+    guard $r->app->kernel->services->get<Broadcaster>()->send('posts.5', 'comment.posted', json::object(), except: $me);
+    $r->hub()->settle();
+    expect($mine->where('op', 'event'))->size(0);
+    expect($other->where('op', 'event'))->size(1);
+    expect(SocketId::valid('0123abcd.42'))->yes(says: 'hex, a dot, digits');
+    expect(SocketId::valid('0123abcd'))->no(says: 'no number');
+    expect(SocketId::valid('0123ABCD.42'))->no(says: 'lower case hex only');
+    expect(SocketId::valid('0123abcd.4x'))->no(says: 'digits only after the dot');
+}
+
+test x_socket_id_names_the_socket_of_a_request
+{
+    $r = Rig();
+    nexus::Request $req = nexus::Request(.post, '/v1/posts');
+    $req->headers->set('X-Socket-Id', '0123abcd.42');
+    nexus::Payload $p = $r->app->kernel->background('test', 'header');
+    $p->request = $req;
+    expect(SocketId::of($p)->id)->is('');
+    $p->put<nexus::auth::Resolved>(nexus::auth::Resolved(nexus::auth::Identity($via: 'bearer', $subject: '7', $credential: 'tok')));
+    expect(SocketId::of($p)->id)->is('0123abcd.42');
+    expect(SocketId::of($p)->via)->is('bearer');
+    $p->request->headers->set('X-Socket-Id', 'nope');
+    expect(SocketId::of($p)->id)->is('');
+    nexus::Kernel::finish($p);
+}
+
+test an_unsigned_x_socket_id_does_not_skip_a_socket
+{
+    $r = Rig();
+    TestSocket $mine = $r->app->socket('/realtime');
+    TestSocket $other = $r->app->socket('/realtime');
+    $r->say($mine, 'subscribe', 'posts.5');
+    $r->say($other, 'subscribe', 'posts.5');
+    nexus::Request $req = nexus::Request(.post, '/v1/posts');
+    $req->headers->set('X-Socket-Id', $r->idOf($other));
+    nexus::Payload $p = $r->app->kernel->background('test', 'spoof');
+    $p->request = $req;
+    guard $r->app->kernel->services->get<Broadcaster>()->send('posts.5', 'comment.posted', json::object(), except: SocketId::of($p));
+    nexus::Kernel::finish($p);
+    $r->hub()->settle();
+    expect($mine->where('op', 'event'))->size(1);
+    expect($other->where('op', 'event'))->size(1);
+}
+
+test upgrades_that_race_past_the_limit_are_closed_as_they_open
+{
+    map<string, string> $more = ['NEXUS_REALTIME_MAX_SOCKETS' => '1'];
+    $r = Rig($more);
+    nexus::realtime::Gateway $g = $r->app->kernel->services->get<nexus::realtime::Gateway>();
+    nexus::auth::Identity $who = nexus::realtime::Gateway::nobody();
+    // both upgrades pass the 429 before either socket opens
+    expect($g->admit($who, '10.0.0.9')->failed())->no(says: 'nothing open yet');
+    expect($g->admit($who, '10.0.0.9')->failed())->no(says: 'still nothing open');
+    nexus::SocketHooks $first = $g->hooks($who, '10.0.0.9');
+    nexus::SocketHooks $second = $g->hooks($who, '10.0.0.9');
+    TestSocket $a = TestSocket(nexus::Response(websocket: $first), 9001);
+    TestSocket $b = TestSocket(nexus::Response(websocket: $second), 9002);
+    $first->opened($a);
+    $second->opened($b);
+    $r->hub()->settle();
+    expect(ops($a))->is(['ready']);
+    expect($b->received())->size(0);
+    expect($b->closedWith->load())->is(4029);
+    expect($r->hub()->holding(nexus::realtime::Hub::keyOf($who, '10.0.0.9')))->is(1 as usize);
+}
+
+test a_429_does_not_burn_the_ticket
+{
+    map<string, string> $more = ['NEXUS_REALTIME_MAX_SOCKETS' => '1'];
+    $r = Rig($more);
+    string $token = $r->token('7');
+    TestSocket $open = $r->bearer($token);
+    expect($open->opened())->yes(says: 'the first socket');
+    string $ticket = $r->ticket($token);
+    TestSocket $denied = $r->app->socket("/realtime?ticket={$ticket}");
+    expect($denied->status)->is(429);
+    $open->leave();
+    $r->hub()->settle();
+    expect($r->app->socket("/realtime?ticket={$ticket}")->opened())->yes(says: 'the ticket still opens');
+}
+
+test a_broadcast_does_not_skip_someone_else_s_socket
+{
+    $r = Rig();
+    string $token = $r->token('7');
+    TestSocket $mine = $r->bearer($token);
+    TestSocket $other = $r->app->socket('/realtime');
+    $r->say($mine, 'subscribe', 'posts.5');
+    $r->say($other, 'subscribe', 'posts.5');
+    nexus::auth::Identity $who = nexus::auth::Identity($via: 'bearer', $subject: '7', $credential: 'not-the-other', $scopes: array<string>());
+    nexus::realtime::SocketId $skip = nexus::realtime::SocketId();
+    $skip->id = $r->idOf($other);
+    $skip->via = $who->via;
+    $skip->credential = $who->credential;
+    $skip->subject = $who->subject;
+    guard $r->app->kernel->services->get<Broadcaster>()->send('posts.5', 'comment.posted', json::object(), except: $skip);
+    $r->hub()->settle();
+    expect($other->where('op', 'event'))->size(1);
+    expect($mine->where('op', 'event'))->size(1);
+    $skip->id = $r->idOf($mine);
+    guard $r->app->kernel->services->get<Broadcaster>()->send('posts.5', 'comment.posted', json::object(), except: $skip);
+    $r->hub()->settle();
+    expect($mine->where('op', 'event'))->size(1);
+    expect($other->where('op', 'event'))->size(2);
+}

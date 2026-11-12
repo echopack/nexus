@@ -13,12 +13,10 @@ public struct WelcomeNewUser : nexus::SignalHandler<UserRegistered>
 
     public function handle(const UserRegistered& $signal) : status<nexus::Problem>
     {
-        nexus::work::Pipeline $p = nexus::work::Pipeline();
-        nexus::work::Step $welcome = $p->add(SendWelcome($user: $signal->user, $locale: $signal->locale));
+        $p = nexus::work::Pipeline();
+        $welcome = $p->add(SendWelcome($user: $signal->user, $locale: $signal->locale));
         $p->add(CountUsers(), after: [$welcome]);
-        guard $this->jobs->push($p) else ($problem) {
-            return .error($problem);
-        };
+        try $this->jobs->push($p);
         return .ok;
     }
 }

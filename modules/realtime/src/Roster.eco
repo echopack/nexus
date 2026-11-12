@@ -1,0 +1,36 @@
+namespace nexus::realtime;
+
+/**
+ * Who is in each presence channel, across every server: `LocalRoster` in memory for one process,
+ * nexus-realtime-redis's in Redis for several. A member's id starts with its server's node, so a
+ * roster that hears a node's `beat` no longer can `prune` the members of a server that died.
+ */
+public interface Roster
+{
+    function join(const string& $channel, const Present& $member) : status<RealtimeError>;
+
+    function leave(const string& $channel, const string& $id) : status<RealtimeError>;
+
+    /**
+     * Everyone in `$channel`, the caller included.
+     */
+    function members(const string& $channel) : result<array<Present>, RealtimeError>;
+
+    /**
+     * Says the server `$node` is alive.
+     */
+    function beat(const string& $node) : status<RealtimeError>
+    {
+        return .ok;
+    }
+
+    /**
+     * Forgets the members of `$channel` whose server stopped beating: their ids, for the hub to tell
+     * the others they left.
+     */
+    function prune(const string& $channel) : result<array<string>, RealtimeError>
+    {
+        array<string> $none = [];
+        return .ok($none);
+    }
+}

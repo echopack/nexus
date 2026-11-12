@@ -92,8 +92,8 @@ test a_signature_fits_one_request_and_only_for_a_while
 
     ecotest::step('a session is opened for nobody, its secret shown once and stored nowhere');
     $opened = $world->bare->post('/v1/auth/session', json: '{}')->status(201);
-    string $id = $opened->capture('$.id');
-    string $secret = $opened->capture('$.secret');
+    $id = $opened->capture('$.id');
+    $secret = $opened->capture('$.secret');
     $s = nexus::auth::Signer($id, $secret);
     expect($world->db->count('auth_sessions'))->is(3);
     int64 $now = time::timestamp::now()->unix_secs();

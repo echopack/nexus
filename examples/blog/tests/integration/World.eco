@@ -69,7 +69,7 @@ internal class World
         $this->db = Database(server: $server, migrations: Blog::DB::migrations(), prefix: 'blog_test');
         $google = nexus::connect::ScriptedFetch();
         $this->google = $google;
-        map<string, string> $vars = World::vars($this->db);
+        $vars = World::vars($this->db);
         foreach ($more as $k => const &$v) {
             $vars[$k] = $v;
         }
@@ -93,14 +93,12 @@ internal class World
      */
     public function session(nexus::auth::Signer $s) : Api
     {
-        return $this->app->api(signed: function[$s](string $method, string $target, string $body) : string {
-            return $s->header($method, $target, std::time::timestamp::now()->unix_secs(), $body);
-        });
+        return $this->app->api(signed: World::sign($s));
     }
 
     internal static function vars(const Database& $db) : map<string, string>
     {
-        map<string, string> $vars = [
+        return [
             'NEXUS_DATABASE_URL' => $db->url,
             'NEXUS_AUTH_KEY' => 'an-integration-key-of-at-least-32-chars',
             'NEXUS_MAIL_URL' => 'memory:',
@@ -108,7 +106,6 @@ internal class World
             'NEXUS_CONNECT_GOOGLE_CLIENT_ID' => 'blog-google',
             'NEXUS_CONNECT_GOOGLE_CLIENT_SECRET' => 'a-google-secret',
         ];
-        return $vars;
     }
 
     /**
@@ -117,7 +114,16 @@ internal class World
      */
     public function admin() : Api
     {
-        UserRepository $users = $this->users();
+        return $this->session($this->adminSigner());
+    }
+
+    /**
+     * The seeded admin's session as its signer, for what is opened rather than requested: an event
+     * stream (`app->events(..., signed: World::sign($s))`).
+     */
+    public function adminSigner() : nexus::auth::Signer
+    {
+        $users = $this->users();
         $found = guard $users->find()->where(UserTable::$email == 'editor@example.com')->first() else ($e) {
             die("the world could not load the seeded admin: {$e}");
         };
@@ -128,7 +134,7 @@ internal class World
         guard $users->save($admin) else ($e) {
             die("the world could not give the admin a password: {$e}");
         };
-        return $this->signIn($admin);
+        return $this->signedIn($admin);
     }
 
     /**
@@ -137,23 +143,67 @@ internal class World
      */
     public function author(const string& $name) : Api
     {
-        string $local = str::lower($name);
-        string $email = "{$local}@example.com";
-        return $this->signIn($this->seed(User($email: $email, $name: $name, $passwordHash: $this->password())));
+        return $this->session($this->authorSigner($name));
     }
 
     /**
-     * Requests signed in as `$user`, on a session of their own.
+     * `author`, as the signer of their session.
      */
-    private function signIn(const User& $user) : Api
+    public function authorSigner(const string& $name) : nexus::auth::Signer
     {
-        nexus::Payload $payload = $this->app->kernel->background('test', nexus::Kernel::id());
-        string $subject = "{$user->id}";
+        $local = str::lower($name);
+        $email = "{$local}@example.com";
+        return $this->signedIn($this->seed(User($email: $email, $name: $name, $passwordHash: $this->password())));
+    }
+
+    /**
+     * What signs a request with `$s` at the time it is sent, for `TestApp::events` and `socket`.
+     */
+    public static function sign(nexus::auth::Signer $s) : function<string(string, string, string)>
+    {
+        return function[$s](string $method, string $target, string $body) : string {
+            return $s->header($method, $target, std::time::timestamp::now()->unix_secs(), $body);
+        };
+    }
+
+    /**
+     * Waits until every broadcast so far reached the sockets.
+     */
+    public function settle() : void
+    {
+        $this->app->kernel->services->get<nexus::realtime::Hub>()->settle();
+    }
+
+    /**
+     * A session of `$user`'s own, signed in, as its signer.
+     */
+    /**
+     * Gives the user at `$email` the role `$role`.
+     */
+    public function role(const string& $email, Role $role) : void
+    {
+        $users = $this->users();
+        $found = guard $users->find()->where(UserTable::$email == $email)->first() else ($e) {
+            die("the world could not load {$email}: {$e}");
+        };
+        $user = guard $found else {
+            die("the world has no {$email}");
+        };
+        $user->role = $role;
+        guard $users->save($user) else ($e) {
+            die("the world could not change the role of {$email}: {$e}");
+        };
+    }
+
+    private function signedIn(const User& $user) : nexus::auth::Signer
+    {
+        $payload = $this->app->kernel->background('test', nexus::Kernel::id());
+        $subject = "{$user->id}";
         $opened = guard $payload->get<nexus::auth::Sessions>()->open($subject) else ($p) {
             die("the world could not open a session: {$p->detail(nexus::Mode::testing)}");
         };
         nexus::Kernel::finish($payload);
-        return $this->session($opened->signer());
+        return $opened->signer();
     }
 
     /**
@@ -170,16 +220,16 @@ internal class World
      */
     public function run(Blog::Tasks::SendWelcome $task) : status<nexus::work::Failure>
     {
-        nexus::Payload $payload = $this->app->kernel->background('test', nexus::Kernel::id());
-        status<nexus::work::Failure> $out = nexus::work::Inline::run($payload, $task);
+        $payload = $this->app->kernel->background('test', nexus::Kernel::id());
+        $out = nexus::work::Inline::run($payload, $task);
         nexus::Kernel::finish($payload);
         return $out;
     }
 
     public function run(Blog::Tasks::PruneAuth $task) : status<nexus::work::Failure>
     {
-        nexus::Payload $payload = $this->app->kernel->background('test', nexus::Kernel::id());
-        status<nexus::work::Failure> $out = nexus::work::Inline::run($payload, $task);
+        $payload = $this->app->kernel->background('test', nexus::Kernel::id());
+        $out = nexus::work::Inline::run($payload, $task);
         nexus::Kernel::finish($payload);
         return $out;
     }
@@ -228,4 +278,12 @@ internal function newPost(const string& $title, const array<string>& $tags = [])
     $post = json::object(['title' => $title, 'body' => 'Body text']);
     $post['tags'] = $tags;
     return $post;
+}
+
+/**
+ * A comment as `POST /v1/posts/{id}/comments` takes it.
+ */
+internal function newComment(const string& $body) : json::Value
+{
+    return json::object(['body' => $body]);
 }

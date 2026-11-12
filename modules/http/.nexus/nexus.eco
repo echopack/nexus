@@ -18,6 +18,8 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::http::Proxies>('nexus::http::Proxies');
     $g->name<nexus::http::SecureHeaders>('nexus::http::SecureHeaders');
     $g->name<nexus::http::Wire>('nexus::http::Wire');
+    $g->name<nexus::http::WireEventStream>('nexus::http::WireEventStream');
+    $g->name<nexus::http::WireSocket>('nexus::http::WireSocket');
     $g->name<nexus::http::WireWriter>('nexus::http::WireWriter');
 }
 
@@ -34,8 +36,26 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
         $xC0TrustedProxies = guard $vC0TrustedProxies;
         $okC0TrustedProxies = mv $xC0TrustedProxies;
     }
+    std::time::duration $okC0WsPing = .secs(30);
+    $vC0WsPing = $s->duration('NEXUS_HTTP_WS_PING', required: false);
+    if ($vC0WsPing != null) {
+        $xC0WsPing = guard $vC0WsPing;
+        $okC0WsPing = mv $xC0WsPing;
+    }
+    uint64 $okC0WsMaxMessage = 65536;
+    uint64? $vC0WsMaxMessage = $s->uint64('NEXUS_HTTP_WS_MAX_MESSAGE', required: false);
+    if ($vC0WsMaxMessage != null) {
+        uint64 $xC0WsMaxMessage = guard $vC0WsMaxMessage;
+        $okC0WsMaxMessage = $xC0WsMaxMessage;
+    }
+    std::time::duration $okC0SseBeat = .secs(15);
+    $vC0SseBeat = $s->duration('NEXUS_HTTP_SSE_BEAT', required: false);
+    if ($vC0SseBeat != null) {
+        $xC0SseBeat = guard $vC0SseBeat;
+        $okC0SseBeat = mv $xC0SseBeat;
+    }
     try $s->done();
-    $b->param<nexus::http::HttpConfig>(nexus::http::HttpConfig($trustedProxies: mv $okC0TrustedProxies));
+    $b->param<nexus::http::HttpConfig>(nexus::http::HttpConfig($trustedProxies: mv $okC0TrustedProxies, $wsPing: mv $okC0WsPing, $wsMaxMessage: $okC0WsMaxMessage, $sseBeat: mv $okC0SseBeat));
     return .ok;
 }
 
@@ -48,5 +68,11 @@ public function envs() : array<nexus::EnvVar>
     array<nexus::EnvVar> $all = [];
     string $d0 = '';
     $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_TRUSTED_PROXIES', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'The addresses of the reverse proxies in front of the app, comma separated. A request from one of them comes from the client its `X-Forwarded-For` names; from anywhere else the header is ignored.', $owner: 'nexus::http::HttpConfig');
+    std::time::duration $d1 = .secs(30);
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_WS_PING', $type: 'duration', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How long an open websocket may stay quiet before it is pinged; another interval of silence closes it. Zero never pings.', $owner: 'nexus::http::HttpConfig');
+    uint64 $d2 = 65536;
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_WS_MAX_MESSAGE', $type: 'uint64', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'The largest websocket message a client may send, in bytes; a bigger one closes the socket with 1009.', $owner: 'nexus::http::HttpConfig');
+    std::time::duration $d3 = .secs(15);
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_SSE_BEAT', $type: 'duration', $fallback: nexus::EnvVar::text($d3), $required: false, $secret: false, $doc: 'How often an open event stream gets a heartbeat comment, which keeps proxies from timing a quiet one out. Zero sends none.', $owner: 'nexus::http::HttpConfig');
     return $all;
 }

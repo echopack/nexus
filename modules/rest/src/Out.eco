@@ -325,6 +325,16 @@ public struct Out
         return nexus::Response(200, $body, type: $this->format->contentType());
     }
 
+    /**
+     * Closes the envelope and answers with it as a JSON document, never encoded: what `json`
+     * outside a request takes. Only for an out in JSON.
+     */
+    public function document() : json::Value
+    {
+        $this->close();
+        return $this->json->take();
+    }
+
     // the driver, by format --------------------------------------------------
 
     private function driverAttribute(const string& $key) : void

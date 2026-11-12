@@ -1,0 +1,125 @@
+namespace nexus::realtime::redis;
+
+use std::time;
+
+/**
+ * The presence channels of every server, in Redis: one hash per channel,
+ * `<prefix>presence:<channel>`, member id to what others see about it, and one key per server,
+ * `<prefix>node:<node>`, that lives three beats. A server that stops beating stops counting:
+ * `members` leaves its members out, `prune` takes them out for good.
+ */
+#[atomic]
+public class RedisRoster : nexus::realtime::Roster
+{
+    private redis::Pool $pool;
+    private string $prefix;
+
+    // how long a server counts as alive after it last beat
+    public const time::duration $life;
+
+    public constructor(redis::Pool $pool, const string& $prefix, time::duration $beat)
+    {
+        $this->pool = $pool;
+        $this->prefix = $prefix;
+        $this->life = $beat * 3;
+    }
+
+    public function join(const string& $channel, const nexus::realtime::Present& $member) : status<nexus::realtime::RealtimeError>
+    {
+        // the joining server beats too, so its member counts before the sweeper's first beat
+        try $this->beat(nexus::realtime::SocketId::node($member->id));
+        ordered_map<string, string> $fields = ordered_map<string, string>();
+        $fields[$member->id] = json::dump($member->info);
+        guard $this->pool->hSet($this->key($channel), $fields) else ($e) {
+            return .error(.relay("{$e}"));
+        };
+        return .ok;
+    }
+
+    public function leave(const string& $channel, const string& $id) : status<nexus::realtime::RealtimeError>
+    {
+        array<string> $ids = [$id];
+        guard $this->pool->hDel($this->key($channel), $ids) else ($e) {
+            return .error(.relay("{$e}"));
+        };
+        return .ok;
+    }
+
+    public function members(const string& $channel) : result<array<nexus::realtime::Present>, nexus::realtime::RealtimeError>
+    {
+        Split $split = try $this->split($channel);
+        return .ok($split->live);
+    }
+
+    public function beat(const string& $node) : status<nexus::realtime::RealtimeError>
+    {
+        guard $this->pool->set("{$this->prefix}node:{$node}", '1', ttl: $this->life) else ($e) {
+            return .error(.relay("{$e}"));
+        };
+        return .ok;
+    }
+
+    public function prune(const string& $channel) : result<array<string>, nexus::realtime::RealtimeError>
+    {
+        Split $split = try $this->split($channel);
+        if ($split->stale->empty()) {
+            return .ok($split->stale);
+        }
+        guard $this->pool->hDel($this->key($channel), $split->stale) else ($e) {
+            return .error(.relay("{$e}"));
+        };
+        return .ok($split->stale);
+    }
+
+    /**
+     * The members of `$channel` whose server still beats, and the ids of those whose server stopped.
+     */
+    private function split(const string& $channel) : result<Split, nexus::realtime::RealtimeError>
+    {
+        ordered_map<string, string> $all = guard $this->pool->hGetAll($this->key($channel)) else ($e) {
+            return .error(.relay("{$e}"));
+        };
+        map<string, bool> $alive = try $this->alive($all);
+        Split $out = Split();
+        foreach ($all as $id => const &$text) {
+            string $node = nexus::realtime::SocketId::node($id);
+            if ($alive->at($node)) {
+                $out->live[] = nexus::realtime::Present($id, json::parse($text)->or(json::nil()));
+            } else {
+                $out->stale[] = $id;
+            }
+        }
+        return .ok($out);
+    }
+
+    /**
+     * Each node among the members of `$all`, and whether it still beats.
+     */
+    private function alive(const ordered_map<string, string>& $all) : result<map<string, bool>, nexus::realtime::RealtimeError>
+    {
+        map<string, bool> $out = [];
+        foreach ($all as $id => const &$text) {
+            string $node = nexus::realtime::SocketId::node($id);
+            if ($out->has($node)) {
+                continue;
+            }
+            array<string> $keys = ["{$this->prefix}node:{$node}"];
+            int64 $n = guard $this->pool->exists($keys) else ($e) {
+                return .error(.relay("{$e}"));
+            };
+            $out[$node] = $n > 0;
+        }
+        return .ok($out);
+    }
+
+    private const function key(const string& $channel) : string
+    {
+        return "{$this->prefix}presence:{$channel}";
+    }
+}
+
+internal struct Split
+{
+    public array<nexus::realtime::Present> $live = [];
+    public array<string> $stale = [];
+}

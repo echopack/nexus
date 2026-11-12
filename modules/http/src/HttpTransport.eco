@@ -20,8 +20,12 @@ public class HttpTransport : nexus::Transport
             $this->server->workers($options->workers as int32);
         }
         $this->server->maxBody($options->maxBody);
+        HttpConfig $config = $kernel->services->get<HttpConfig>();
+        $this->server->pingInterval($config->wsPing);
+        $this->server->maxMessage($config->wsMaxMessage as usize);
+        $this->server->beatInterval($config->sseBeat);
         $mode = $kernel->mode;
-        $proxies = Proxies(parse: $kernel->services->get<HttpConfig>()->trustedProxies);
+        $proxies = Proxies(parse: $config->trustedProxies);
         $this->server->wrap(function[$kernel, $mode, $proxies](http::Request $req, http::Next $next) : http::Response {
             $request = guard Wire::request($req, $proxies) else {
                 $refused = nexus::Problem::custom(nexus::ProblemDetail('about:blank', 501, 'Not Implemented', $detail: 'this method is not routed'))->response($mode, '');

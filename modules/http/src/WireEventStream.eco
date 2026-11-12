@@ -1,0 +1,42 @@
+namespace nexus::http;
+
+/**
+ * A nexus event stream over libhttp's outlet, which waits on the reactor and holds no worker.
+ */
+#[atomic]
+public class WireEventStream : nexus::EventStream
+{
+    private http::Outlet $out;
+
+    public constructor(http::Outlet $out)
+    {
+        $this->out = $out;
+    }
+
+    public function id() : int64
+    {
+        return $this->out->id();
+    }
+
+    public function send(const nexus::ServerEvent& $e) : bool
+    {
+        $wire = http::Event($e->data, $event: $e->event, $id: $e->id);
+        $wire->retry = $e->retry;
+        return $this->out->send($wire);
+    }
+
+    public function comment(const string& $text) : bool
+    {
+        return $this->out->comment($text);
+    }
+
+    public function close() : void
+    {
+        $this->out->close();
+    }
+
+    public function open() : bool
+    {
+        return $this->out->open();
+    }
+}

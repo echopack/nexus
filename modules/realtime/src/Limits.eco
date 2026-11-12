@@ -1,0 +1,14 @@
+namespace nexus::realtime;
+
+/**
+ * How much one socket and one caller may do: channels per socket, sockets per caller (per
+ * process), messages a second per socket, and the largest whisper in bytes. Zero leaves a limit
+ * off.
+ */
+public struct Limits
+{
+    public usize $channels;
+    public usize $sockets;
+    public uint32 $rate;
+    public usize $whisper;
+}

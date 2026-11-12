@@ -15,16 +15,16 @@ use ecotest::http::{Api, Reply};
  */
 internal function google(World& $world, const Api& $browser, const string& $sub, const string& $email, bool $verified) : Reply
 {
-    Reply $started = $browser->post('/auth/connect/google', json: '{}')->status(201);
-    string $url = $started->capture('$.url');
-    string $attempt = $started->capture('$.attempt');
-    json::Value $claims = json::object(['iss' => 'https://accounts.google.com', 'sub' => $sub, 'email' => $email, 'name' => 'Grace Hopper']);
+    $started = $browser->post('/auth/connect/google', json: '{}')->status(201);
+    $url = $started->capture('$.url');
+    $attempt = $started->capture('$.attempt');
+    $claims = json::object(['iss' => 'https://accounts.google.com', 'sub' => $sub, 'email' => $email, 'name' => 'Grace Hopper']);
     $claims['email_verified'] = json::bool($verified);
     $world->google->signedIn(nexus::connect::Google::TOKEN, $url, $claims);
     $browser->get('/auth/connect/google/callback', query: ['state' => nexus::connect::ScriptedFetch::param($url, 'state'), 'code' => 'from-google'])
         ->status(302)
         ->header('Location', "http://app/signed-in?attempt={$attempt}");
-    json::Value $claim = json::object(['attempt' => $attempt, 'binding' => $started->capture('$.binding')]);
+    $claim = json::object(['attempt' => $attempt, 'binding' => $started->capture('$.binding')]);
     return $browser->post('/v1/auth/connect', json: $claim);
 }
 
@@ -65,8 +65,8 @@ test signing_in_with_google_makes_finds_and_links_users
 test a_claim_without_its_binding_signs_nobody_in
 {
     $world = World();
-    Reply $started = $world->api->post('/auth/connect/google', json: '{}');
-    json::Value $claim = json::object(['attempt' => $started->capture('$.attempt'), 'binding' => 'guessed']);
+    $started = $world->api->post('/auth/connect/google', json: '{}');
+    $claim = json::object(['attempt' => $started->capture('$.attempt'), 'binding' => 'guessed']);
     $world->api->post('/v1/auth/connect', json: $claim)->problem(401);
     $world->api->post('/auth/connect/apple', json: '{}')->problem(404);
 }

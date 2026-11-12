@@ -1,0 +1,30 @@
+namespace nexus::realtime;
+
+/**
+ * `POST /realtime/ticket`: a ticket for opening a websocket as the signed in caller of this
+ * request, `{ticket, expires_at}`; a 401 for nobody.
+ */
+public class IssueTicket : nexus::Action
+{
+    private Tickets $tickets;
+    private nexus::auth::Guards $guards;
+
+    public constructor(Tickets $tickets, nexus::auth::Guards $guards)
+    {
+        $this->tickets = $tickets;
+        $this->guards = $guards;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        nexus::auth::Identity? $found = try $this->guards->identify($payload);
+        nexus::auth::Identity $who = guard $found else {
+            return .error(.unauthorized('sign in to open a realtime socket as yourself', $reason: 'signed_in_required'));
+        };
+        Ticket $t = $this->tickets->issue($who);
+        json::Value $doc = json::object();
+        $doc['ticket'] = json::str($t->text);
+        $doc['expires_at'] = json::str(nexus::log::Stamp::rfc3339($t->expiresAt));
+        return .ok(nexus::Response(json: $doc, status: 201));
+    }
+}

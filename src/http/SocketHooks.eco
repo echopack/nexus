@@ -1,0 +1,71 @@
+namespace nexus;
+
+/**
+ * What a `Response(websocket:)` runs for its socket: `onOpen` once the upgrade is done, `onMessage`
+ * for each whole message, `onClose` once at the end. The transport calls them on its own threads,
+ * one at a time per socket; keep each short, since a hook holds a transport thread while it runs.
+ * Hooks run after the request is answered and its container dropped: capture only what outlives
+ * the request.
+ */
+#[atomic]
+public class SocketHooks
+{
+    private function<void(Socket)>? $openHook = null;
+    private function<void(Socket, SocketMessage)>? $messageHook = null;
+    private function<void(Socket, SocketClose)>? $closeHook = null;
+
+    public constructor()
+    {
+    }
+
+    public function onOpen(function<void(Socket)> $fn) : SocketHooks
+    {
+        $this->openHook = $fn;
+        return $this;
+    }
+
+    public function onMessage(function<void(Socket, SocketMessage)> $fn) : SocketHooks
+    {
+        $this->messageHook = $fn;
+        return $this;
+    }
+
+    public function onClose(function<void(Socket, SocketClose)> $fn) : SocketHooks
+    {
+        $this->closeHook = $fn;
+        return $this;
+    }
+
+    /**
+     * For transports: the socket is open.
+     */
+    public function opened(Socket $s) : void
+    {
+        function<void(Socket)> $fn = guard $this->openHook else {
+            return;
+        };
+        $fn($s);
+    }
+
+    /**
+     * For transports: a whole message arrived.
+     */
+    public function received(Socket $s, const SocketMessage& $m) : void
+    {
+        function<void(Socket, SocketMessage)> $fn = guard $this->messageHook else {
+            return;
+        };
+        $fn($s, $m);
+    }
+
+    /**
+     * For transports: the socket ended. Runs once per opened socket.
+     */
+    public function closed(Socket $s, const SocketClose& $c) : void
+    {
+        function<void(Socket, SocketClose)> $fn = guard $this->closeHook else {
+            return;
+        };
+        $fn($s, $c);
+    }
+}

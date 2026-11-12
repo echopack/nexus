@@ -2,7 +2,7 @@ namespace Blog;
 
 /**
  * Everything the blog is made of, in boot order: the HTTP server, the database, signed sessions,
- * Google and OAuth kept in that database, the debug console, MCP, workers on a
+ * Google and OAuth kept in that database, realtime channels, the debug console, MCP, workers on a
  * queue in that database, and the blog itself. `main.eco` runs it; the integration tests boot the same list.
  */
 public function extensions() : array<nexus::Extension>
@@ -37,11 +37,19 @@ public function extensions() : array<nexus::Extension>
         // keeps sign-in attempts and the Google accounts linked to users in the database
         nexus::connect::carbon::Extension(),
 
+        // live comments: a websocket at /realtime that follows channels (posts.5, users.7); with
+        // NEXUS_REALTIME_URL=redis://... a broadcast from any process reaches every server
+        nexus::realtime::Extension(),
+        nexus::realtime::redis::Extension(),
+
         // the debug console at /__nexus/ once NEXUS_DEBUG_ENABLED=true: the requests, the log and
         // the routes live, for the blog's admins only, signed in with the blog's own session login
         nexus::debug::Extension(gate: nexus::debug::GuardGate(login: nexus::debug::Login(session: '/v1/auth/session', endpoint: '/v1/auth/signin'))
             ->through<Blog::Middleware::RequireUser>()
             ->through<Blog::Middleware::RequireAdmin>()),
+
+        // the realtime sockets in that console: who is open, the channels they follow, close one
+        nexus::debug::realtime::Extension(),
 
         // the `/mcp` endpoint that offers the blog's tools to models
         nexus::mcp::Extension(),

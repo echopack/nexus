@@ -1,0 +1,145 @@
+namespace nexus::realtime;
+
+use std::thread;
+
+/**
+ * The channel patterns of the app and the class that guards each. An extension or provider adds
+ * them while the app is wired (`add<C>('posts.{id:integer}')`, or nexus-app's
+ * `bindChannel<C>()->on(...)`); the boot checks every class is bound.
+ */
+#[atomic]
+public class Channels
+{
+    private thread::mutex<array<ChannelEntry>> $entries = thread::mutex<array<ChannelEntry>>(array<ChannelEntry>());
+    private thread::mutex<array<string>> $refused = thread::mutex<array<string>>(array<string>());
+
+    public constructor()
+    {
+    }
+
+    /**
+     * Guards the channels `$pattern` answers for with `C`, resolved from the payload of each
+     * subscribe. A bad or repeated pattern fails the boot.
+     */
+    public function add<C : Channel>(const string& $pattern, const string& $owner) : void
+    {
+        ChannelPattern $p = guard ChannelPattern::parse($pattern) else ($why) {
+            $this->refuse($why);
+            return;
+        };
+        thread::locked<array<ChannelEntry>> $held = $this->entries->lock();
+        foreach ($held->value as const &$e) {
+            if ($e->pattern->text == $pattern) {
+                $this->refuse("channel {$pattern} is guarded twice, by {$e->owner} and {$owner}");
+                return;
+            }
+        }
+        $held->value->push(ChannelEntry($p, $owner, function(nexus::Payload& $payload) : Channel {
+            return $payload->get<C>();
+        }, function(container::Container $c) : bool {
+            return $c->has<C>();
+        }));
+    }
+
+    /**
+     * Guards the channels `$pattern` answers for with `C` on the `Channels` nexus-realtime bound:
+     * what an extension or provider calls while it wires the app, `C` bound like any service.
+     *
+     * ```echo
+     * $s->bind<PostChannel>(scope: (Container $c) => PostChannel($c->get<PostRepository>()));
+     * nexus::realtime::Channels::on<PostChannel>($s, 'posts.{id:integer}');
+     * ```
+     */
+    public static function on<C : Channel>(nexus::Services& $s, const string& $pattern) : void
+    {
+        Channels $all = guard $s->find<Channels>() else {
+            $s->fail(.extension('nexus-realtime', "channel {$pattern}: list nexus::realtime::Extension() before the extension that guards it"));
+            return;
+        };
+        $all->add<C>($pattern, $s->generated->nameOf<C>('a channel class'));
+    }
+
+    /**
+     * The entry whose pattern answers for `$name`, with the topic it read; the first added wins.
+     */
+    public function find(const string& $name) : ChannelMatch?
+    {
+        if (!ChannelPattern::named($name)) {
+            return null;
+        }
+        array<string> $segs = str::split($name, '.')->owned();
+        thread::locked<array<ChannelEntry>> $held = $this->entries->lock();
+        foreach ($held->value as const &$e) {
+            Topic? $t = $e->pattern->topic($name, $segs);
+            if ($t != null) {
+                Topic $topic = guard $t;
+                return ChannelMatch($e, $topic);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Every pattern with the class that guards it, in the order they were added.
+     */
+    public function all() : array<ChannelEntry>
+    {
+        thread::locked<array<ChannelEntry>> $held = $this->entries->lock();
+        return $held->value->clone();
+    }
+
+    /**
+     * A boot error for a bad pattern or a class nothing binds, or ok.
+     */
+    public function check(container::Container $services) : status<nexus::BootError>
+    {
+        {
+            thread::locked<array<string>> $why = $this->refused->lock();
+            if (!$why->value->empty()) {
+                return .error(.extension('nexus-realtime', $why->value[0]));
+            }
+        }
+        foreach ($this->all() as const &$e) {
+            function<bool(container::Container)> $has = $e->bound;
+            if (!$has($services)) {
+                return .error(.extension('nexus-realtime', "channel {$e->pattern->text} is guarded by {$e->owner}, which is not bound; bind it in the app's services"));
+            }
+        }
+        return .ok;
+    }
+
+    private function refuse(const string& $why) : void
+    {
+        thread::locked<array<string>> $held = $this->refused->lock();
+        $held->value->push($why);
+    }
+}
+
+/**
+ * One pattern and the class that guards it.
+ */
+public struct ChannelEntry
+{
+    public ChannelPattern $pattern;
+    public string $owner;
+    public function<Channel(nexus::Payload&)> $make;
+    public function<bool(container::Container)> $bound;
+
+    /**
+     * The guarding class, resolved from `$payload`'s container.
+     */
+    public const function open(nexus::Payload& $payload) : Channel
+    {
+        function<Channel(nexus::Payload&)> $make = $this->make;
+        return $make($payload);
+    }
+}
+
+/**
+ * A channel name matched to the entry that guards it.
+ */
+public struct ChannelMatch
+{
+    public ChannelEntry $entry;
+    public Topic $topic;
+}

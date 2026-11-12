@@ -1,0 +1,27 @@
+namespace Blog::DB::Migration;
+
+/**
+ * Comments on posts, gone with their post. Dated before the seed: undoing the seed stops while posts
+ * are left, and a reset that stops there must not have dropped the comments already.
+ */
+#[carbon::migration: '20261102100150_create_comments']
+public class CreateComments : carbon::Migration
+{
+    public function up(carbon::Migrating $m) : status<carbon::Error>
+    {
+        return $m->create(carbon::ddl::Table('comments')
+            ->id()
+            ->bigint('post_id')
+            ->bigint('author_id')
+            ->text('body')
+            ->timestamps()
+            ->index(['post_id'])
+            ->foreign('post_id', 'posts', $onDelete: .cascade)
+            ->foreign('author_id', 'users'));
+    }
+
+    public function down(carbon::Migrating $m) : status<carbon::Error>
+    {
+        return $m->drop('comments');
+    }
+}

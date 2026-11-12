@@ -1,0 +1,74 @@
+/**
+ * Comments end to end on a real database: writing, listing and deleting them, and who may do
+ * which.
+ */
+
+use ecotest::expect;
+
+#[group: "integration"]
+test a_signed_in_user_comments_and_everyone_reads
+{
+    $world = World();
+    $admin = $world->admin();
+    $ada = $world->author('Ada');
+    $post = $admin->post('/v1/posts', json: newPost('Talk to me'))->status(201)->capture('$.data.id');
+
+    ecotest::step('Ada comments, her name comes along');
+    $id = $ada->post("/v1/posts/{$post}/comments", json: newComment('  First!  '))
+        ->status(201)
+        ->json('$.data.body', 'First!')
+        ->json('$.data.post_id', str::int($post) ?? 0)
+        ->json('$.data.author.name', 'Ada')
+        ->capture('$.data.id');
+    expect($world->db->count('comments'))->is(1);
+
+    ecotest::step('a visitor reads the comments, oldest first');
+    $ada->post("/v1/posts/{$post}/comments", json: newComment('Second'))->status(201);
+    $world->api->get("/v1/posts/{$post}/comments")
+        ->status(200)
+        ->count('$.data', 2)
+        ->json('$.data[0].id', str::int($id) ?? 0)
+        ->json('$.data[1].body', 'Second')
+        ->lacks('ada@example.com');
+
+    ecotest::step('a visitor may not comment, nor may anyone without a session');
+    $world->api->post("/v1/posts/{$post}/comments", json: newComment('me too'))->problem(401);
+    $world->bare->post("/v1/posts/{$post}/comments", json: newComment('me too'))->problem(401);
+
+    ecotest::step('a blank comment and a missing post are refused');
+    $ada->post("/v1/posts/{$post}/comments", json: newComment('   '))->invalid('body', 'notBlank');
+    $ada->post('/v1/posts/999999/comments', json: newComment('hello'))->problem(404);
+    $world->api->get('/v1/posts/999999/comments')->problem(404);
+    expect($world->db->count('comments'))->is(2);
+}
+
+#[group: "integration"]
+test a_comment_is_deleted_by_its_author_the_posts_author_or_an_admin
+{
+    $world = World();
+    $ada = $world->author('Ada');
+    $bob = $world->author('Bob');
+    $cy = $world->author('Cy');
+    $post = $ada->post('/v1/posts', json: newPost('Ada writes'))->status(201)->capture('$.data.id');
+    $first = $bob->post("/v1/posts/{$post}/comments", json: newComment('one'))->status(201)->capture('$.data.id');
+    $second = $bob->post("/v1/posts/{$post}/comments", json: newComment('two'))->status(201)->capture('$.data.id');
+    $third = $bob->post("/v1/posts/{$post}/comments", json: newComment('three'))->status(201)->capture('$.data.id');
+
+    ecotest::step('someone else is refused');
+    $cy->delete("/v1/posts/{$post}/comments/{$first}")->problem(403);
+
+    ecotest::step('its author, the post\'s author and an admin may');
+    $bob->delete("/v1/posts/{$post}/comments/{$first}")->status(204);
+    $ada->delete("/v1/posts/{$post}/comments/{$second}")->status(204);
+    $world->admin()->delete("/v1/posts/{$post}/comments/{$third}")->status(204);
+    expect($world->db->count('comments'))->is(0);
+
+    ecotest::step('a comment of another post is not found under this one');
+    $other = $bob->post('/v1/posts', json: newPost('Bob writes'))->status(201)->capture('$.data.id');
+    $there = $bob->post("/v1/posts/{$other}/comments", json: newComment('here'))->status(201)->capture('$.data.id');
+    $bob->delete("/v1/posts/{$post}/comments/{$there}")->problem(404);
+
+    ecotest::step('deleting a post takes its comments along');
+    $bob->delete("/v1/posts/{$other}")->status(204);
+    expect($world->db->count('comments'))->is(0);
+}

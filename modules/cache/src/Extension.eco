@@ -39,7 +39,7 @@ public class Extension : nexus::Extension
             $s->bind<Cache>(put: Cache($given, $life, $log, traces: $s->get<nexus::trace::Traces>()));
             return .ok;
         }
-        string $kind = scheme($config->url);
+        string $kind = nexus::scheme($config->url);
         if ($kind == 'memory') {
             $s->bind<Cache>(put: Cache(MemoryStore(max: $config->maxEntries as usize, clock: $this->clock), $life, $log, traces: $s->get<nexus::trace::Traces>()));
             return .ok;

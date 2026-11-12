@@ -392,3 +392,16 @@ test a_sensitive_key_without_reveal_stops_the_program
     $item->protect(['email']);
     $item->text('email', 'ann@example.com');
 }
+
+test a_model_maps_to_json_outside_a_request
+{
+    $app = tApp();
+    $one = TItem($id: 1, $name: 'one', $tags: ['a', 'b']);
+    $one->owner = TOwner(7, 'Ann');
+    $t = $app->kernel->services->get<TItemTransformer>();
+    nexus::rest::TransformerNetwork $net = $app->kernel->services->get<nexus::rest::TransformerNetwork>();
+    json::Value $plain = $t->json($one, $net, EchoPack::Rest::Includes());
+    expect(json::dump($plain))->is('{"id":1,"name":"one","tags":["a","b"]}');
+    json::Value $nested = $t->json($one, $net, EchoPack::Rest::Includes::of(['owner']));
+    expect($nested->get('owner')?->get('name')?->asStr())->some('Ann');
+}

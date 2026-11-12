@@ -12,7 +12,7 @@ test an_admin_publishes_and_everyone_reads
     $admin = $world->admin();
 
     ecotest::step('an admin publishes a post');
-    string $id = $admin->post('/v1/posts', json: newPost('  Hello world ', ['Echo', 'nexus']))
+    $id = $admin->post('/v1/posts', json: newPost('  Hello world ', ['Echo', 'nexus']))
         ->status(201)
         ->json('$.data.title', 'Hello world')
         ->json('$.data.tags[0]', 'echo')
@@ -60,7 +60,7 @@ test authors_change_only_their_own_posts
     $bob = $world->author('Bob');
 
     ecotest::step('an author publishes a post');
-    string $id = $ada->post('/v1/posts', json: newPost('By Ada'))->status(201)->capture('$.data.id');
+    $id = $ada->post('/v1/posts', json: newPost('By Ada'))->status(201)->capture('$.data.id');
 
     ecotest::step('another author may neither change nor delete it');
     $bob->patch("/v1/posts/{$id}", json: '{"title":"By Bob now"}')->problem(403);

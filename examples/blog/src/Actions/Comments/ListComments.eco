@@ -1,0 +1,25 @@
+namespace Blog::Actions::Comments;
+
+use Blog::Services::CommentService;
+use Blog::Transformers::CommentTransformer;
+
+/**
+ * The comments on a post, oldest first, each with its author.
+ */
+public class ListComments : nexus::Action
+{
+    private CommentService $comments;
+    private CommentTransformer $transformer;
+
+    public constructor(CommentService $comments, CommentTransformer $transformer)
+    {
+        $this->comments = $comments;
+        $this->transformer = $transformer;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id) : result<nexus::Response, nexus::Problem>
+    {
+        $all = try $this->comments->on($id);
+        return $this->transformer->createCollectionResponse($payload, $all);
+    }
+}

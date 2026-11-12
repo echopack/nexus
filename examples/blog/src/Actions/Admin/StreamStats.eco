@@ -1,0 +1,36 @@
+namespace Blog::Actions::Admin;
+
+use Blog::Feeds::StatsFeed;
+use Blog::Types::Caller;
+
+/**
+ * The blog's numbers as a live, one-way stream of server-sent events, for an admin's dashboard: a
+ * `stats` event at once, then a fresh one every `BLOG_STATS_EVERY` while the page stays open and
+ * its admin may still watch.
+ */
+#[nexus::through: [
+    "Blog::Middleware::RequireUser",
+    "Blog::Middleware::RequireAdmin"
+]]
+public class StreamStats : nexus::Action
+{
+    private StatsFeed $feed;
+
+    public constructor(StatsFeed $feed)
+    {
+        $this->feed = $feed;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        $me = try $payload->state<Caller>();
+        json::Value $now = try StatsFeed::snapshot($payload);
+        StatsFeed $feed = $this->feed;
+        nexus::auth::Identity $who = $me->identity;
+        return .ok(nexus::Response(events: function[$feed, $now, $who](nexus::EventStream $s) : void {
+            $feed->watch($s, $now, $who);
+        }, closed: function[$feed](nexus::EventStream $s) : void {
+            $feed->forget($s);
+        }));
+    }
+}

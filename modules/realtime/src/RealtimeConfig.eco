@@ -1,0 +1,76 @@
+namespace nexus::realtime;
+
+use std::time;
+
+/**
+ * The realtime settings, read from `NEXUS_REALTIME_URL`, `_PREFIX`, `_TICKET`, `_BACKLOG`,
+ * `_MAX_CHANNELS`, `_MAX_SOCKETS`, `_RATE`, `_MAX_WHISPER`, `_RECHECK` and `_BEAT`.
+ */
+#[nexus::config: "NEXUS_REALTIME"]
+public struct RealtimeConfig
+{
+    /**
+     * Where broadcasts travel between processes: `local:` keeps them in this one, `redis://host`
+     * carries them to every server (nexus-realtime-redis).
+     */
+    #[nexus::env: 'URL']
+    #[nexus::secret]
+    public string $url = 'local:';
+
+    /**
+     * What the Redis channel broadcasts travel on starts with.
+     */
+    #[nexus::env: 'PREFIX']
+    public string $prefix = 'nexus:';
+
+    /**
+     * How long a ticket for opening a websocket is good for.
+     */
+    #[nexus::env: 'TICKET']
+    public time::duration $ticket = .secs(30);
+
+    /**
+     * How many recent broadcasts a reconnecting socket can catch up on with `after`.
+     */
+    #[nexus::env: 'BACKLOG']
+    public uint64 $backlog = 1024;
+
+    /**
+     * How many channels one socket may subscribe to.
+     */
+    #[nexus::env: 'MAX_CHANNELS']
+    public uint32 $maxChannels = 50;
+
+    /**
+     * How many sockets one caller may have open on one server: by subject when signed in, else by
+     * address. 0 for no limit.
+     */
+    #[nexus::env: 'MAX_SOCKETS']
+    public uint32 $maxSockets = 10;
+
+    /**
+     * How many messages a second one socket may send, up to twice that at once. 0 for no limit.
+     */
+    #[nexus::env: 'RATE']
+    public uint32 $rate = 20;
+
+    /**
+     * The largest whisper frame in bytes. 0 for no limit.
+     */
+    #[nexus::env: 'MAX_WHISPER']
+    public uint64 $maxWhisper = 4096;
+
+    /**
+     * How often a server asks whether the credentials of its open sockets still hold, closing those
+     * that expired. 0s never asks; ending a credential closes its sockets either way.
+     */
+    #[nexus::env: 'RECHECK']
+    public time::duration $recheck = .secs(60);
+
+    /**
+     * How often a server tells the presence roster it is alive; the members of one silent for three
+     * beats are taken out.
+     */
+    #[nexus::env: 'BEAT']
+    public time::duration $beat = .secs(10);
+}

@@ -1,0 +1,127 @@
+namespace nexus::realtime;
+
+/**
+ * What the relay carries between the processes of an app, each a JSON object with a `kind`: a
+ * broadcast, a whisper, a credential that ended (every hub closes the sockets opened with it), a
+ * member that joined or left a presence channel.
+ */
+public enum Note
+{
+    case broadcast(Envelope $e);
+    case whisper(Whisper $w);
+    case ended(nexus::auth::Ending $e);
+    case presence(PresenceNote $p);
+
+    /**
+     * `$member` joined presence channel `$channel`.
+     */
+    public static function joined(const string& $channel, const Present& $member) : Note
+    {
+        return Note::presence(PresenceNote($channel, $member, true));
+    }
+
+    /**
+     * The member `$id` left presence channel `$channel`.
+     */
+    public static function left(const string& $channel, const string& $id) : Note
+    {
+        return Note::presence(PresenceNote($channel, Present($id, json::nil()), false));
+    }
+
+    /**
+     * The note as one line of JSON.
+     */
+    public const function encode(const string& $from = '') : string
+    {
+        json::Value $doc = json::object();
+        match ($this) {
+            Note::broadcast($e) => {
+                $doc = $e->json();
+                $doc['kind'] = json::str('broadcast');
+            },
+            Note::whisper($w) => {
+                $doc = $w->json();
+                $doc['kind'] = json::str('whisper');
+            },
+            Note::ended($end) => {
+                $doc['kind'] = json::str('ended');
+                match ($end) {
+                    nexus::auth::Ending::credential($via, $id) => {
+                        $doc['via'] = json::str($via);
+                        $doc['credential'] = json::str($id);
+                    },
+                    nexus::auth::Ending::subject($via, $subject) => {
+                        $doc['via'] = json::str($via);
+                        $doc['subject'] = json::str($subject);
+                    },
+                }
+            },
+            Note::presence($p) => {
+                $doc['kind'] = json::str('presence');
+                $doc['channel'] = json::str($p->channel);
+                $doc['member'] = $p->member->json();
+                $doc['joined'] = json::bool($p->joined);
+            },
+        }
+        if (!$from->empty()) {
+            $doc['node'] = json::str($from);
+        }
+        return json::dump($doc);
+    }
+
+    /**
+     * The note `encode` wrote, or null for anything else.
+     */
+    public static function decode(const string& $text) : Note?
+    {
+        json::Value $doc = guard json::parse($text) else {
+            return null;
+        };
+        string $kind = $doc->get('kind')?->asStr() ?? '';
+        if ($kind == 'broadcast') {
+            Envelope $e = guard Envelope::read($doc) else {
+                return null;
+            };
+            return Note::broadcast($e);
+        }
+        if ($kind == 'whisper') {
+            Whisper $w = guard Whisper::read($doc) else {
+                return null;
+            };
+            return Note::whisper($w);
+        }
+        if ($kind == 'ended') {
+            string $via = $doc->get('via')?->asStr() ?? '';
+            string? $credential = $doc->get('credential')?->asStr();
+            if ($credential != null) {
+                return Note::ended(nexus::auth::Ending::credential($via, $credential ?? ''));
+            }
+            string $subject = guard $doc->get('subject')?->asStr() else {
+                return null;
+            };
+            return Note::ended(nexus::auth::Ending::subject($via, $subject));
+        }
+        if ($kind == 'presence') {
+            string $channel = guard $doc->get('channel')?->asStr() else {
+                return null;
+            };
+            Present $member = guard Present::read($doc->get('member') ?? json::nil()) else {
+                return null;
+            };
+            bool $joined = $doc->get('joined')?->asBool() ?? false;
+            return Note::presence(PresenceNote($channel, $member, $joined));
+        }
+        return null;
+    }
+
+    /**
+     * The node `encode` stamped, empty when none did.
+     */
+    public static function source(const string& $text) : string
+    {
+        json::Value $doc = guard json::parse($text) else {
+            return '';
+        };
+        return $doc->get('node')?->asStr() ?? '';
+    }
+}

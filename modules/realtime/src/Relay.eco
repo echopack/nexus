@@ -1,0 +1,31 @@
+namespace nexus::realtime;
+
+/**
+ * How notes reach the hubs: straight into this process's (`LocalRelay`), or through a broker every
+ * server listens on (nexus-realtime-redis). `publish` works in every process; `start` listens and
+ * hands each note to `$hub`, under `serve` only.
+ */
+public interface Relay
+{
+    /**
+     * Where notes go, for logs: `local`, `redis://host:6379`.
+     */
+    const function describe() : string;
+
+    function publish(const Note& $n) : status<RealtimeError>;
+
+    /**
+     * Starts handing every note to `$hub`.
+     */
+    function start(Hub $hub) : status<RealtimeError>
+    {
+        return .ok;
+    }
+
+    /**
+     * Stops listening.
+     */
+    function stop() : void
+    {
+    }
+}

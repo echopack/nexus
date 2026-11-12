@@ -1,0 +1,186 @@
+namespace nexus::realtime;
+
+use std::thread;
+use std::time;
+
+/**
+ * Short lived, single use tickets that carry a caller from a signed request to a websocket, which
+ * a browser opens without an `Authorization` header: `POST /realtime/ticket` (signed) hands one
+ * out, the socket opens with `?ticket=`. A ticket is the caller's identity and an expiry, signed
+ * with a key derived from `NEXUS_AUTH_KEY`. Opening checks once more that the credential behind it
+ * still holds (`Guards::holds`), so a ticket of a session that signed out opens nothing. The nonce
+ * is claimed only once the socket is admitted, so a 429 leaves the ticket usable. With Redis the
+ * nonce is stored there, so several servers share the one-use rule.
+ */
+#[atomic]
+public class Tickets
+{
+    private string $key;
+    private time::duration $lifetime;
+    private calendar::Clock $clock;
+    private Claims $claims;
+
+    public constructor(const string& $authKey, time::duration $lifetime, calendar::Clock $clock)
+    {
+        $this->key = nexus::auth::Signature::sign($authKey, 'nexus-realtime ticket');
+        $this->lifetime = $lifetime;
+        $this->clock = $clock;
+        $this->claims = LocalClaims();
+    }
+
+    /**
+     * Uses `$claims` for nonces from now on, so several servers can share one-use tickets.
+     */
+    public function remember(Claims $claims) : void
+    {
+        $this->claims = $claims;
+    }
+
+    /**
+     * A ticket for `$who`, good for the configured lifetime.
+     */
+    public function issue(const nexus::auth::Identity& $who) : Ticket
+    {
+        time::timestamp $ends = $this->clock->now() + $this->lifetime;
+        json::Value $claim = json::object();
+        $claim['v'] = json::int(1);
+        $claim['via'] = json::str($who->via);
+        $claim['sub'] = json::str($who->subject);
+        $claim['cred'] = json::str($who->credential);
+        $claim['aud'] = json::str($who->audience);
+        $claim['cli'] = json::str($who->client);
+        array<json::Value> $scopes = [];
+        foreach ($who->scopes as const &$s) {
+            $scopes[] = json::str($s);
+        }
+        $claim['scp'] = json::arr($scopes);
+        $claim['exp'] = json::int($ends->unix_secs());
+        $claim['n'] = json::str(nexus::auth::Secrets::hex(8));
+        string $body = crypto::base64url(json::dump($claim));
+        string $sig = nexus::auth::Signature::sign($this->key, $body);
+        return Ticket("{$body}.{$sig}", $ends);
+    }
+
+    /**
+     * The caller ticket `$text` carries, without taking the nonce: a 401 when it is malformed,
+     * forged or expired.
+     */
+    public function read(const string& $text) : result<Pass, nexus::Problem>
+    {
+        nexus::Problem $bad = .unauthorized('the realtime ticket is not valid', $reason: 'ticket_invalid');
+        $parts = str::split($text, '.');
+        if ($parts->count() != 2) {
+            return .error($bad);
+        }
+        string $body = string($parts->at(0));
+        string $sig = string($parts->at(1));
+        if (!crypto::equal(nexus::auth::Signature::sign($this->key, $body), $sig)) {
+            return .error($bad);
+        }
+        string $raw = guard crypto::unbase64url($body) else {
+            return .error($bad);
+        };
+        json::Value $claim = guard json::parse($raw) else {
+            return .error($bad);
+        };
+        int64 $exp = $claim->get('exp')?->asInt() ?? 0;
+        string $nonce = $claim->get('n')?->asStr() ?? '';
+        int64 $now = $this->clock->now()->unix_secs();
+        if ($exp <= $now) {
+            return .error(.unauthorized('the realtime ticket has expired; ask for a new one', $reason: 'ticket_expired'));
+        }
+        if ($nonce->empty()) {
+            return .error($bad);
+        }
+        array<string> $scopes = [];
+        foreach ($claim->get('scp')?->asArray() ?? array<json::Value>() as const &$s) {
+            $scopes[] = $s->asStr() ?? '';
+        }
+        string $subject = $claim->get('sub')?->asStr() ?? '';
+        nexus::auth::Identity $who = nexus::auth::Identity(
+            $via: $claim->get('via')?->asStr() ?? '',
+            $subject: $subject,
+            $credential: $claim->get('cred')?->asStr() ?? '',
+            $scopes: $scopes,
+            $audience: $claim->get('aud')?->asStr() ?? '',
+            $client: $claim->get('cli')?->asStr() ?? ''
+        );
+        return .ok(Pass($who, $nonce, $exp));
+    }
+
+    /**
+     * Takes the nonce of `$pass`; false when it was taken already.
+     */
+    public function claim(const Pass& $pass) : result<bool, nexus::Problem>
+    {
+        int64 $now = $this->clock->now()->unix_secs();
+        bool $got = guard $this->claims->claim($pass->nonce, $pass->exp, $now) else ($e) {
+            return .error(.unavailable($e->message()));
+        };
+        return .ok($got);
+    }
+
+    /**
+     * The caller ticket `$text` carries: a 401 when it is malformed, forged, expired or was taken
+     * already.
+     */
+    public function take(const string& $text) : result<nexus::auth::Identity, nexus::Problem>
+    {
+        Pass $pass = try $this->read($text);
+        bool $got = try $this->claim($pass);
+        if (!$got) {
+            return .error(.unauthorized('the realtime ticket was used already', $reason: 'ticket_used'));
+        }
+        return .ok($pass->who);
+    }
+}
+
+/**
+ * A verified ticket, nonce not yet taken.
+ */
+public struct Pass
+{
+    public nexus::auth::Identity $who;
+    public string $nonce;
+    public int64 $exp;
+}
+
+/**
+ * Nonces taken in this process.
+ */
+#[atomic]
+internal class LocalClaims : Claims
+{
+    private thread::mutex<Taken> $taken = thread::mutex<Taken>(Taken());
+
+    public function claim(const string& $nonce, int64 $exp, int64 $now) : result<bool, RealtimeError>
+    {
+        thread::locked<Taken> $held = $this->taken->lock();
+        Taken& $t = $held->value;
+        if ($t->until->has($nonce)) {
+            return .ok(false);
+        }
+        if ($t->swept != $now) {
+            array<string> $old = [];
+            foreach ($t->until as $n => const &$ends) {
+                if ($ends <= $now) {
+                    $old[] = $n;
+                }
+            }
+            foreach ($old as const &$n) {
+                $t->until->remove($n);
+            }
+            $t->swept = $now;
+        }
+        $t->until[$nonce] = $exp;
+        return .ok(true);
+    }
+}
+
+internal struct Taken
+{
+    public map<string, int64> $until = [];
+
+    // the second the ended ones were last forgotten
+    public int64 $swept = 0;
+}

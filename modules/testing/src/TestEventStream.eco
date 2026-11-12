@@ -1,0 +1,140 @@
+namespace nexus::testing;
+
+use std::thread;
+
+/**
+ * An event stream opened in process, `TestApp::events()`: it keeps every event the app sends,
+ * from whichever thread sends it. A request the app refused is a stream that never opened, with
+ * the status and body it was answered with.
+ *
+ * ```echo
+ * $s = $app->events('/v1/admin/stats/stream', signed: $admin);
+ * $feed->streams->settle();
+ * expect($s->named('stats'))->size(1);
+ * ```
+ */
+#[atomic]
+public class TestEventStream : nexus::EventStream
+{
+    public const int32 $status;
+    public const string $body;
+    public const nexus::Headers $headers;
+    private int64 $serial;
+    private nexus::EventHooks? $hooks;
+    private thread::mutex<array<nexus::ServerEvent>> $seen = thread::mutex<array<nexus::ServerEvent>>(array<nexus::ServerEvent>());
+    private atomic<bool> $ended = atomic<bool>(false);
+
+    public constructor(const nexus::Response& $answer, int64 $id)
+    {
+        $this->status = $answer->status;
+        $this->body = $answer->body;
+        $this->headers = $answer->headers;
+        $this->serial = $id;
+        $this->hooks = $answer->events;
+        if ($answer->events == null) {
+            $this->ended->store(true);
+        }
+    }
+
+    /**
+     * Whether the app answered with an event stream.
+     */
+    public const function opened() : bool
+    {
+        return $this->hooks != null;
+    }
+
+    /**
+     * Every event sent so far, oldest first.
+     */
+    public function events() : array<nexus::ServerEvent>
+    {
+        thread::locked<array<nexus::ServerEvent>> $held = $this->seen->lock();
+        return $held->value->clone();
+    }
+
+    /**
+     * The events sent so far under the name `$event`.
+     */
+    public function named(const string& $event) : array<nexus::ServerEvent>
+    {
+        array<nexus::ServerEvent> $out = [];
+        foreach ($this->events() as const &$e) {
+            if (($e->event ?? '') == $event) {
+                $out[] = $e;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * The newest event, or null before the first.
+     */
+    public function last() : nexus::ServerEvent?
+    {
+        array<nexus::ServerEvent> $all = $this->events();
+        if ($all->empty()) {
+            return null;
+        }
+        return $all[$all->count() - 1];
+    }
+
+    /**
+     * The client goes away: the stream ends and the app's close hook runs, as the transport does
+     * when a connection closes.
+     */
+    public function leave() : void
+    {
+        if ($this->ended->exchange(true)) {
+            return;
+        }
+        nexus::EventHooks $h = guard $this->hooks else {
+            return;
+        };
+        $h->close($this);
+    }
+
+    public function id() : int64
+    {
+        return $this->serial;
+    }
+
+    public function send(const nexus::ServerEvent& $e) : bool
+    {
+        if ($this->ended->load()) {
+            return false;
+        }
+        thread::locked<array<nexus::ServerEvent>> $held = $this->seen->lock();
+        $held->value->push($e);
+        return true;
+    }
+
+    public function comment(const string& $text) : bool
+    {
+        return !$this->ended->load();
+    }
+
+    /**
+     * The app ends the stream: the close hook runs, as it does on a connection.
+     */
+    public function close() : void
+    {
+        $this->leave();
+    }
+
+    public function open() : bool
+    {
+        return !$this->ended->load();
+    }
+
+    /**
+     * For `TestApp`: runs the app's open hook.
+     */
+    internal function start() : void
+    {
+        nexus::EventHooks $h = guard $this->hooks else {
+            return;
+        };
+        $h->open($this);
+    }
+}

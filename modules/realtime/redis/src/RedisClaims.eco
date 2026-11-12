@@ -1,0 +1,35 @@
+namespace nexus::realtime::redis;
+
+use std::time;
+
+/**
+ * Ticket nonces in Redis, `<prefix>ticket:<nonce>`, so several servers share one-use tickets.
+ * Each key lives until the ticket would have expired.
+ */
+#[atomic]
+public class RedisClaims : nexus::realtime::Claims
+{
+    private redis::Pool $pool;
+    private string $prefix;
+
+    public constructor(redis::Pool $pool, const string& $prefix)
+    {
+        $this->pool = $pool;
+        $this->prefix = $prefix;
+    }
+
+    public function claim(const string& $nonce, int64 $exp, int64 $now) : result<bool, nexus::realtime::RealtimeError>
+    {
+        int64 $secs = $exp - $now;
+        if ($secs < 1) {
+            $secs = 1;
+        }
+        redis::SetOptions $o = redis::SetOptions();
+        $o->condition = redis::Condition::nx;
+        $o->expiry = redis::Expiry(after: time::duration::secs($secs));
+        bool $set = guard $this->pool->set("{$this->prefix}ticket:{$nonce}", '1', $o) else ($e) {
+            return .error(.relay("{$e}"));
+        };
+        return .ok($set);
+    }
+}

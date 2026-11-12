@@ -1,0 +1,59 @@
+namespace Blog::Channels;
+
+use Blog::DB::Model::UserRepository;
+use Blog::DB::Repository::PostRepository;
+use Blog::Services::BlogUsers;
+
+/**
+ * `posts.<id>`: what happens to a post's comments, who is reading it, and who is typing a comment.
+ * Anybody may follow a post that exists. It is a presence channel: every reader is a member, shown
+ * by name when signed in. A signed in reader may whisper `typing`; the channel puts the name in
+ * from the account, so nobody types as somebody else.
+ */
+public class PostChannel : nexus::realtime::Channel
+{
+    private PostRepository $posts;
+    private UserRepository $users;
+
+    public constructor(PostRepository $posts, UserRepository $users)
+    {
+        $this->posts = $posts;
+        $this->users = $users;
+    }
+
+    public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : status<nexus::Problem>
+    {
+        int64 $id = $topic->number('id') ?? 0;
+        $found = try $this->posts->find()->get($id);
+        if ($found == null) {
+            return .error(.notFound('the post'));
+        }
+        return .ok;
+    }
+
+    public function member(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : result<json::Value?, nexus::Problem>
+    {
+        json::Value $info = json::object();
+        $info['name'] = json::nil();
+        if (!$who->anonymous()) {
+            $me = try BlogUsers::of($this->users, $who->subject);
+            $info['name'] = json::str($me->name);
+        }
+        return .ok($info);
+    }
+
+    public function whisper(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic, nexus::realtime::Whisper& $w) : status<nexus::Problem>
+    {
+        if ($w->event != 'typing') {
+            return .error(.forbidden('readers of a post whisper typing only'));
+        }
+        if ($who->anonymous()) {
+            return .error(.unauthorized('sign in to comment', $reason: 'signed_in_required'));
+        }
+        $me = try BlogUsers::of($this->users, $who->subject);
+        json::Value $data = json::object();
+        $data['name'] = json::str($me->name);
+        $w->data = $data;
+        return .ok;
+    }
+}

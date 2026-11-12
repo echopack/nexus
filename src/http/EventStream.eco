@@ -1,0 +1,35 @@
+namespace nexus;
+
+/**
+ * One open server-sent event stream: what `Response(events:)` hands its open hook. The transport
+ * keeps the connection without holding a thread for it; whoever keeps the stream sends to it later,
+ * from any thread. For an explicit one-way feed (a dashboard's numbers, a log tail); realtime
+ * channels go over websockets (nexus-realtime).
+ */
+public interface EventStream
+{
+    /**
+     * A number no other open stream or socket of this process has.
+     */
+    function id() : int64;
+
+    /**
+     * Sends one event. False once the stream is closed or the client is gone.
+     */
+    function send(const ServerEvent& $e) : bool;
+
+    /**
+     * Sends a comment line, which clients ignore. False the same way as `send`.
+     */
+    function comment(const string& $text) : bool;
+
+    /**
+     * Ends the stream. The close hook runs shortly after.
+     */
+    function close() : void;
+
+    /**
+     * Whether a send still reaches anyone.
+     */
+    function open() : bool;
+}

@@ -1,0 +1,11 @@
+namespace nexus::realtime;
+
+/**
+ * One channel with subscribers here: how many, and how many of them are presence members.
+ */
+public struct ChannelInfo
+{
+    public string $name;
+    public usize $subscribers;
+    public usize $present;
+}

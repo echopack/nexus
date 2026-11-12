@@ -30,10 +30,10 @@ public class BlogUsers : nexus::connect::Users
         int64 $key = guard str::int($subject) else {
             return .error(.unauthorized('the credential names nobody', $reason: 'account_unknown'));
         };
-        User? $loaded = guard $users->find()->get($key) else ($e) {
+        $loaded = guard $users->find()->get($key) else ($e) {
             return .error(nexus::carbon::Problems::of($e));
         };
-        User $user = guard $loaded else {
+        $user = guard $loaded else {
             return .error(.unauthorized('the account is gone', $reason: 'account_gone'));
         };
         return .ok($user);
@@ -44,7 +44,7 @@ public class BlogUsers : nexus::connect::Users
         int64 $id = guard str::int($subject) else {
             return .ok(false);
         };
-        User? $found = guard $this->users->find()->get($id) else ($e) {
+        $found = guard $this->users->find()->get($id) else ($e) {
             return .error(nexus::carbon::Problems::of($e));
         };
         return .ok($found != null);
@@ -52,10 +52,10 @@ public class BlogUsers : nexus::connect::Users
 
     public function withEmail(const string& $email) : result<string?, nexus::Problem>
     {
-        User? $found = guard $this->users->find()->where(UserTable::$email == $email)->first() else ($e) {
+        $found = guard $this->users->find()->where(UserTable::$email == $email)->first() else ($e) {
             return .error(nexus::carbon::Problems::of($e));
         };
-        User $u = guard $found else {
+        $u = guard $found else {
             return .ok(null);
         };
         return .ok("{$u->id}");
@@ -67,7 +67,7 @@ public class BlogUsers : nexus::connect::Users
         if ($name->empty()) {
             $name = $who->email->sub(0, $who->email->find('@'))->clone();
         }
-        User $made = guard $this->users->create(User($email: $who->email, $name: $name)) else ($e) {
+        $made = guard $this->users->create(User($email: $who->email, $name: $name)) else ($e) {
             if ($e->duplicate()) {
                 return .error(nexus::connect::Accounts::taken());
             }

@@ -1,7 +1,7 @@
 namespace Blog::DB;
 
 use Blog::DB::Model::UserRepository;
-use Blog::DB::Repository::PostRepository;
+use Blog::DB::Repository::{CommentRepository, PostRepository};
 
 /**
  * The database `NEXUS_DATABASE_URL` names: a MySQL pool with the blog's repositories registered and
@@ -26,6 +26,7 @@ public function wire(carbon::DB $db) : status<carbon::Error>
 {
     try $db->register<UserRepository>();
     try $db->register<PostRepository>();
+    try $db->register<CommentRepository>();
     try Blog::DB::Model::Carbon::check($db);
     try nexus::auth::carbon::Tables::wire($db);
     try nexus::work::carbon::Tables::wire($db);

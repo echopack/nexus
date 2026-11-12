@@ -43,16 +43,3 @@ public struct CacheConfig
     #[nexus::env: 'MAX_ENTRIES']
     public uint64 $maxEntries = 100000;
 }
-
-/**
- * The scheme `$url` starts with, lowercased: `memory`, `redis`, `rediss`; empty when it has none.
- */
-public function scheme(const string& $url) : string
-{
-    string $u = string::from(str::trim($url));
-    usize $colon = $u->find(':');
-    if ($colon >= $u->size()) {
-        return str::lower($u);
-    }
-    return str::lower($u->sub(0, $colon));
-}

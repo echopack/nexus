@@ -1,0 +1,51 @@
+namespace nexus::realtime;
+
+/**
+ * `GET /realtime`: opens a realtime websocket. Who opens it comes from `?ticket=` (what a browser
+ * does: `POST /realtime/ticket` first), else from the request's own credential (an Echo client
+ * signing it), else nobody: a socket for public channels only. A caller with as many sockets open
+ * on this server as `NEXUS_REALTIME_MAX_SOCKETS` gets a 429; the ticket is not taken then, so it
+ * still opens once a place is free. Upgrades that raced past the limit have the extra sockets
+ * closed with 4029 as they open.
+ *
+ * The socket lives as long as the credential it was opened with: ending that session or token
+ * closes it with 4001 at once, and a recheck every `NEXUS_REALTIME_RECHECK` closes those whose
+ * credential expired. An open socket does not keep its session alive; the requests the client
+ * signs do.
+ */
+public class Connect : nexus::Action
+{
+    private Gateway $gateway;
+    private Tickets $tickets;
+    private nexus::auth::Guards $guards;
+
+    public constructor(Gateway $gateway, Tickets $tickets, nexus::auth::Guards $guards)
+    {
+        $this->gateway = $gateway;
+        $this->tickets = $tickets;
+        $this->guards = $guards;
+    }
+
+    public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
+    {
+        string $peer = $payload->request->peer;
+        string? $ticket = $payload->request->query->get('ticket');
+        if ($ticket != null) {
+            Pass $pass = try $this->tickets->read($ticket ?? '');
+            bool $holds = try $this->guards->holds($payload, $pass->who);
+            if (!$holds) {
+                return .error(.unauthorized('the sign in behind this ticket has ended', $reason: 'ticket_ended'));
+            }
+            try $this->gateway->admit($pass->who, $peer);
+            bool $got = try $this->tickets->claim($pass);
+            if (!$got) {
+                return .error(.unauthorized('the realtime ticket was used already', $reason: 'ticket_used'));
+            }
+            return .ok(nexus::Response(websocket: $this->gateway->hooks($pass->who, $peer)));
+        }
+        nexus::auth::Identity? $found = try $this->guards->credential($payload);
+        nexus::auth::Identity $who = $found ?? Gateway::nobody();
+        try $this->gateway->admit($who, $peer);
+        return .ok(nexus::Response(websocket: $this->gateway->hooks($who, $peer)));
+    }
+}

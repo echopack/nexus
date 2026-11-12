@@ -1,9 +1,11 @@
 namespace nexus::debug;
 
+use std::thread;
+
 /**
  * A live feed of the console: the log, the requests, the jobs. Whatever has something to tell
- * publishes a record to it, or a JSON object; readers follow it as server-sent events or ask for
- * what came after the last event they saw.
+ * publishes a record to it, or a JSON object; readers follow it as server-sent events (`follow`)
+ * or ask for what came after the last event they saw.
  */
 #[atomic]
 public class Topic
@@ -12,11 +14,27 @@ public class Topic
     public const string $title;
     public Ring $ring;
 
+    // the event streams following the topic, and how many there are: a publish hands its event
+    // to the sender only when somebody follows
+    private nexus::EventStreams $streams = nexus::EventStreams();
+    private atomic<int64> $followers = atomic<int64>(0);
+
+    // the topic's own thread: it encodes each event and hands it to the streams, so the thread
+    // that published it (a request, a log call) never pays for the encoding
+    private nexus::Mailbox<TopicJob> $mail;
+
+    // held across a publish and across a follow's catch up, so a follower gets every event once
+    private thread::mutex<bool> $gate = thread::mutex<bool>(false);
+
     public constructor(const string& $name, const string& $title, usize $keep)
     {
         $this->name = $name;
         $this->title = $title;
         $this->ring = Ring($keep);
+        $sender = TopicSender($name, $this->streams);
+        $this->mail = nexus::Mailbox<TopicJob>(function[$sender](TopicJob $job) : void {
+            $sender->run($job);
+        });
     }
 
     /**
@@ -24,7 +42,7 @@ public class Topic
      */
     public function publish(const json::Value& $data) : uint64
     {
-        return $this->ring->publish(json::dump($data));
+        return $this->publish(Encoded(json::dump($data)));
     }
 
     /**
@@ -33,6 +51,100 @@ public class Topic
      */
     public function publish(Record $record) : uint64
     {
-        return $this->ring->publish($record);
+        thread::locked<bool> $held = $this->gate->lock();
+        Event $e = $this->ring->publish($record);
+        if ($this->followers->load() > 0) {
+            $this->mail->put(TopicJob::publish($e));
+        }
+        return $e->seq;
+    }
+
+    /**
+     * Sends `$s` every kept event after number `$after` (at most `$limit`), then each new one as it
+     * is published, until it ends.
+     */
+    public function follow(nexus::EventStream $s, uint64 $after, usize $limit) : void
+    {
+        thread::locked<bool> $held = $this->gate->lock();
+        $this->followers->add(1);
+        $this->mail->put(TopicJob::join($s, $this->ring->since($after, $limit)));
+    }
+
+    /**
+     * Stops sending to `$s`; its stream's close hook calls this.
+     */
+    public function unfollow(nexus::EventStream $s) : void
+    {
+        thread::locked<bool> $held = $this->gate->lock();
+        $this->followers->sub(1);
+        $this->mail->put(TopicJob::leave($s));
+    }
+
+    /**
+     * How many streams follow the topic.
+     */
+    public function following() : int64
+    {
+        return $this->followers->load();
+    }
+
+    /**
+     * Waits until every event published so far went out to the followers.
+     */
+    public function settle() : void
+    {
+        $this->mail->settle();
+        $this->streams->settle();
+    }
+}
+
+internal enum TopicJob
+{
+    case publish(Event $e);
+    case join(nexus::EventStream $stream, array<Event> $backlog);
+    case leave(nexus::EventStream $stream);
+}
+
+/**
+ * What a topic's thread works on: it encodes events and hands them to the streams, in the order
+ * the topic put them.
+ */
+#[atomic]
+internal class TopicSender
+{
+    private string $name;
+    private nexus::EventStreams $streams;
+
+    public constructor(const string& $name, nexus::EventStreams $streams)
+    {
+        $this->name = $name;
+        $this->streams = $streams;
+    }
+
+    public function run(TopicJob $job) : void
+    {
+        match ($job) {
+            TopicJob::publish($e) => {
+                $this->streams->publish($this->event($e));
+            },
+            TopicJob::join($s, $backlog) => {
+                array<nexus::ServerEvent> $encoded = [];
+                foreach ($backlog as const &$e) {
+                    $encoded[] = $this->event($e);
+                }
+                $this->streams->join($s, mv $encoded);
+            },
+            TopicJob::leave($s) => {
+                $this->streams->remove($s);
+            },
+        }
+    }
+
+    /**
+     * `$e` as a server-sent event: its number as the id, the topic as the name.
+     */
+    private const function event(const Event& $e) : nexus::ServerEvent
+    {
+        return nexus::ServerEvent($e->json(), $event: $this->name, $id: "{$e->seq}");
     }
 }

@@ -44,12 +44,4 @@ public struct Topics
         }
         return $rows;
     }
-
-    /**
-     * One server-sent event: `id`, `event` (the topic) and the event as `data`.
-     */
-    public static function sse(const string& $topic, const Event& $e) : string
-    {
-        return "id: {$e->seq}\nevent: {$topic}\ndata: {$e->json()}\n\n";
-    }
 }

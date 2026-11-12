@@ -1,0 +1,9 @@
+{
+  "services": [
+    {
+      "name": "redis",
+      "run": ["sh", "-c", "docker rm -f nexus-realtime-redis-test >/dev/null 2>&1; exec docker run --rm --name nexus-realtime-redis-test -p 127.0.0.1:63791:6379 redis:7-alpine"],
+      "url": "redis://127.0.0.1:63791/15"
+    }
+  ]
+}

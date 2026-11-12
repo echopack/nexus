@@ -1,0 +1,110 @@
+/**
+ * The realtime sockets in the debug console: the panel's views, closing a socket from it, and the
+ * live `realtime` topic.
+ */
+
+use ecotest::expect;
+use nexus::testing::{TestApp, TestSocket};
+
+internal const TOKEN = 'a-debug-token-of-at-least-thirty-two-chars';
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+
+internal class TRooms : nexus::realtime::Channel
+{
+    public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : status<nexus::Problem>
+    {
+        return .ok;
+    }
+
+    public function member(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : result<json::Value?, nexus::Problem>
+    {
+        return .ok(json::object());
+    }
+}
+
+internal class TExt : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'rooms';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<TRooms>(put: TRooms());
+        $s->get<nexus::realtime::Channels>()->add<TRooms>('rooms.{name}', 'TRooms');
+        return .ok;
+    }
+}
+
+internal function app(bool $enabled = true) : TestApp
+{
+    map<string, string> $vars = ['NEXUS_DEBUG_TOKEN' => TOKEN, 'NEXUS_AUTH_KEY' => KEY];
+    if ($enabled) {
+        $vars['NEXUS_DEBUG_ENABLED'] = 'true';
+    }
+    array<nexus::Extension> $exts = [
+        nexus::auth::Extension('rt'),
+        nexus::realtime::Extension(),
+        nexus::debug::Extension(),
+        nexus::debug::realtime::Extension(),
+        TExt(),
+    ];
+    return TestApp($exts, $vars);
+}
+
+internal function hub(TestApp $app) : nexus::realtime::Hub
+{
+    return $app->kernel->services->get<nexus::realtime::Hub>();
+}
+
+test with_the_console_off_nothing_is_added
+{
+    TestApp $app = app(false);
+    expect($app->kernel->services->find<nexus::debug::Debug>())->none();
+    TestSocket $ws = $app->socket('/realtime');
+    expect($ws->opened())->yes(says: 'realtime works without the console');
+}
+
+test the_panel_lists_sockets_channels_and_broadcasts
+{
+    TestApp $app = app();
+    TestSocket $a = $app->socket('/realtime');
+    TestSocket $b = $app->socket('/realtime');
+    $a->say('{"op":"subscribe","channel":"rooms.tea"}');
+    $b->say('{"op":"subscribe","channel":"rooms.tea"}');
+    hub($app)->settle();
+    guard $app->kernel->services->get<nexus::realtime::Broadcaster>()->send('rooms.tea', 'said', json::object());
+    hub($app)->settle();
+    ecotest::http::Api $api = $app->api()->bearer(TOKEN);
+    $api->get('/__nexus/api')->ok()->has('"name":"realtime"');
+    $api->get('/__nexus/api/panels/realtime/stats')->ok()
+        ->json('$.stats[0].label', 'Sockets')
+        ->json('$.stats[0].value', 2)
+        ->json('$.stats[2].value', 1);
+    $api->get('/__nexus/api/panels/realtime/sockets')->ok()
+        ->json('$.rows[0].who', 'guest')
+        ->json('$.rows[0].channels', 'rooms.tea');
+    $api->get('/__nexus/api/panels/realtime/channels')->ok()
+        ->json('$.rows[0].channel', 'rooms.tea')
+        ->json('$.rows[0].subscribers', 2)
+        ->json('$.rows[0].present', 2);
+    $api->get('/__nexus/api/panels/realtime/kept')->ok()
+        ->json('$.rows[0].event', 'said');
+    $api->get('/__nexus/api/topics/realtime?limit=100')->ok()
+        ->has('"kind":"opened"')
+        ->has('"kind":"joined"')
+        ->has('"kind":"broadcast"');
+}
+
+test a_socket_is_closed_from_the_console
+{
+    TestApp $app = app();
+    TestSocket $ws = $app->socket('/realtime');
+    array<json::Value> $ready = $ws->where('op', 'ready');
+    string $id = $ready[0]->get('socket_id')?->asStr() ?? '';
+    ecotest::http::Api $api = $app->api()->bearer(TOKEN);
+    $api->post('/__nexus/api/panels/realtime/actions/close', json: "\{\"id\":\"{$id}\"}")->ok()->json('$.message', "closed {$id}");
+    expect($ws->closedWith->load())->is(4000);
+    $api->post('/__nexus/api/panels/realtime/actions/close', json: '{"id":"ffffffff.1"}')->problem(404);
+}

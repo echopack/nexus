@@ -104,6 +104,16 @@ internal class QRig
         return $this->app->api()->bearer(TOKEN);
     }
 
+    /**
+     * The console token as an `Authorization` header, for a stream.
+     */
+    public function auth() : map<string, string>
+    {
+        string $token = TOKEN;
+        map<string, string> $h = ['Authorization' => "Bearer {$token}"];
+        return $h;
+    }
+
     public function jobs() : DistributedQueue<QJobs>
     {
         nexus::Payload $p = $this->app->kernel->background('test', 'push');
@@ -167,7 +177,12 @@ test the_queues_panel_lists_every_lane_with_its_counts
         ->json('$.rows[1].pushed', 1)
         ->json('$.rows[1].done', 1);
     $r->api()->get('/__nexus/api/panels/queues/events')->ok()->has('"kind":"started"');
-    $r->api()->get('/__nexus/api/topics/jobs/stream')->ok()->has('event: jobs');
+    $s = $r->app->events('/__nexus/api/topics/jobs/stream', $r->auth());
+    expect($s->opened())->yes(says: 'the jobs topic streams');
+    nexus::debug::Topic $jobs = expect($r->app->kernel->services->get<nexus::debug::Debug>()->named('jobs'))->some();
+    $jobs->settle();
+    expect($s->named('jobs')->empty())->no(says: 'the jobs so far arrived as events');
+    $s->leave();
 }
 
 test a_failed_stored_task_is_listed_and_sent_back

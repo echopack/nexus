@@ -1,0 +1,29 @@
+namespace nexus::auth;
+
+/**
+ * A credential that ended, as `Endings` tells its listeners: one session or token (a sign out, a
+ * revoke), or every one a guard issued to a subject (a password change).
+ */
+public enum Ending
+{
+    /**
+     * The credential `$id` the guard `$via` reads.
+     */
+    case credential(string $via, string $id);
+
+    /**
+     * Every credential the guard `$via` reads for `$subject`.
+     */
+    case subject(string $via, string $subject);
+
+    /**
+     * Whether `$who` was read from a credential that ended.
+     */
+    public const function covers(const Identity& $who) : bool
+    {
+        return match ($this) {
+            Ending::credential($via, $id) => $who->via == $via && $who->credential == $id,
+            Ending::subject($via, $subject) => $who->via == $via && !$who->subject->empty() && $who->subject == $subject,
+        };
+    }
+}

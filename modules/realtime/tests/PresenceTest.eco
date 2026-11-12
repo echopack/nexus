@@ -1,0 +1,381 @@
+/**
+ * Presence channels list their members and announce who joins and leaves; whispers go to the
+ * other subscribers through the channel class; the hub's index and ring.
+ */
+
+use nexus::realtime::{Broadcaster, ChannelInfo, Connection, Envelope, Gateway, Hub, HubObserver, LocalRelay, LocalRoster, Note, Present, PresenceNote, RealtimeError, Relay, Roster, SocketInfo, Whisper};
+use nexus::testing::{TestApp, TestSocket};
+use ecotest::expect;
+
+internal function members(const json::Value& $frame) : array<string>
+{
+    array<string> $out = [];
+    array<json::Value> $all = $frame->get('members')?->asArray() ?? array<json::Value>();
+    foreach ($all as const &$m) {
+        $out[] = $m->get('id')?->asStr() ?? '';
+    }
+    return $out;
+}
+
+internal function whisper(const string& $channel, const string& $event, const json::Value& $data) : json::Value
+{
+    json::Value $doc = json::object();
+    $doc['op'] = json::str('whisper');
+    $doc['channel'] = json::str($channel);
+    $doc['event'] = json::str($event);
+    $doc['data'] = $data;
+    return $doc;
+}
+
+test a_presence_channel_lists_and_announces_its_members
+{
+    $r = Rig();
+    TestSocket $ann = $r->bearer($r->token('7'));
+    TestSocket $guest = $r->app->socket('/realtime');
+    $r->say($ann, 'subscribe', 'rooms.tea');
+    json::Value $first = last($ann);
+    expect(str($first, 'op'))->is('subscribed');
+    expect(str($first, 'me'))->is($r->idOf($ann));
+    expect(members($first))->is([$r->idOf($ann)]);
+    $r->say($guest, 'subscribe', 'rooms.tea');
+    expect(members(last($guest)))->size(2);
+    json::Value $joined = last($ann);
+    expect(str($joined, 'op'))->is('joined');
+    expect($joined->get('member')?->get('id')?->asStr())->some($r->idOf($guest));
+    expect($guest->where('op', 'joined'))->size(0);
+    $guest->leave();
+    $r->hub()->settle();
+    json::Value $left = last($ann);
+    expect(str($left, 'op'))->is('left');
+    expect($left->get('member')?->get('id')?->asStr())->some($r->idOf($guest));
+    $r->say($ann, 'unsubscribe', 'rooms.tea');
+    TestSocket $late = $r->app->socket('/realtime');
+    $r->say($late, 'subscribe', 'rooms.tea');
+    expect(members(last($late)))->size(1);
+    $r->say($late, 'subscribe', 'posts.5');
+    expect(last($late)->get('members'))->none();
+}
+
+test a_presence_join_does_not_land_after_the_socket_is_gone
+{
+    $r = Rig();
+    TestSocket $ann = $r->bearer($r->token('7'));
+    $r->say($ann, 'subscribe', 'rooms.tea');
+    TDropped $ghost = TDropped();
+    $r->hub()->attach($ghost, Gateway::nobody(), '127.0.0.1');
+    Gateway $g = $r->app->kernel->services->get<Gateway>();
+    Connection $conn = Connection(Gateway::nobody(), $g->limits->rate);
+    $g->heard($ghost, $conn, nexus::SocketMessage::text('{"op":"subscribe","channel":"rooms.tea"}'));
+    $r->hub()->drop($ghost->id());
+    $r->hub()->settle();
+    array<Present> $left = guard $r->app->kernel->services->get<Roster>()->members('rooms.tea');
+    expect($left)->size(1);
+    expect($left[0]->id)->is($r->idOf($ann));
+    expect($ann->where('op', 'joined'))->size(0);
+    expect($ann->where('op', 'left'))->size(0);
+}
+
+test whispers_go_to_the_others_through_the_channel_class
+{
+    $r = Rig();
+    TestSocket $ann = $r->bearer($r->token('7'));
+    TestSocket $bob = $r->app->socket('/realtime');
+    $r->say($ann, 'subscribe', 'rooms.tea');
+    $r->say($bob, 'subscribe', 'rooms.tea');
+    $r->say($ann, 'subscribe', 'posts.5');
+    usize $kept = $r->hub()->kept()->count();
+
+    $r->tell($ann, whisper('rooms.tea', 'typing', json::str('I am somebody else')));
+    array<json::Value> $heard = $bob->where('op', 'whisper');
+    expect($heard)->size(1);
+    expect(str($heard[0], 'from'))->is($r->idOf($ann));
+    expect($heard[0]->get('data')?->get('user')?->asStr())->some('7');
+    expect($ann->where('op', 'whisper'))->size(0);
+    expect($r->hub()->kept()->count())->is($kept);
+
+    $r->tell($ann, whisper('rooms.tea', 'shout', json::nil()));
+    expect(str(last($ann), 'op'))->is('error');
+    expect(last($ann)->get('problem')?->get('status')?->asInt())->some(403 as int64);
+
+    $r->tell($ann, whisper('posts.5', 'typing', json::nil()));
+    expect(str(last($ann), 'message'))->has('no whispers');
+
+    $r->tell($ann, whisper('rooms.coffee', 'typing', json::nil()));
+    expect(str(last($ann), 'message'))->has('subscribe to rooms.coffee');
+
+    $r->tell($ann, whisper('rooms.tea', 'typing', json::str(str::repeat('a', 5000))));
+    expect(str(last($ann), 'message'))->has('4096 bytes');
+    expect($bob->where('op', 'whisper'))->size(1);
+}
+
+test the_ring_catches_up_after_it_wrapped
+{
+    map<string, string> $more = ['NEXUS_REALTIME_BACKLOG' => '4'];
+    $r = Rig($more);
+    TestSocket $first = $r->app->socket('/realtime');
+    $r->say($first, 'subscribe', 'posts.5');
+    array<string> $ids = [];
+    int64 $n = 1;
+    while ($n <= 7) {
+        string $channel = 'posts.5';
+        if ($n % 2 == 0) {
+            $channel = 'posts.6';
+        }
+        $r->broadcast($channel, 'x', $n);
+        $ids[] = $r->hub()->kept()[$r->hub()->kept()->count() - 1]->id;
+        $n = $n + 1;
+    }
+    expect($r->hub()->kept())->size(4);
+    TestSocket $late = $r->app->socket('/realtime');
+    $r->say($late, 'subscribe', 'posts.5', $ids[3]);
+    array<json::Value> $events = $late->where('op', 'event');
+    expect($events)->size(2);
+    expect($events[0]->get('data')?->get('n')?->asInt())->some(5 as int64);
+    expect($events[1]->get('data')?->get('n')?->asInt())->some(7 as int64);
+    TestSocket $lost = $r->app->socket('/realtime');
+    $r->say($lost, 'subscribe', 'posts.5', $ids[1]);
+    expect(ops($lost))->is(['ready', 'subscribed', 'reset']);
+    expect($r->hub()->subscribers('posts.5'))->is(3 as usize);
+    $r->say($late, 'unsubscribe', 'posts.5');
+    $lost->leave();
+    $r->hub()->settle();
+    expect($r->hub()->subscribers('posts.5'))->is(1 as usize);
+    $r->broadcast('posts.5', 'x', 8);
+    expect($first->where('op', 'event'))->size(5);
+    expect($late->where('op', 'event'))->size(2);
+}
+
+#[atomic]
+internal class Watcher : HubObserver
+{
+    public atomic<int32> $opened = atomic<int32>(0);
+    public atomic<int32> $closed = atomic<int32>(0);
+    public atomic<int32> $joined = atomic<int32>(0);
+    public atomic<int32> $reached = atomic<int32>(0);
+
+    public function opened(const SocketInfo& $s) : void
+    {
+        $this->opened->add(1);
+    }
+
+    public function closed(const string& $id) : void
+    {
+        $this->closed->add(1);
+    }
+
+    public function joined(const string& $id, const string& $channel) : void
+    {
+        $this->joined->add(1);
+    }
+
+    public function delivered(const Envelope& $e, usize $reached) : void
+    {
+        $this->reached->add($reached as int32);
+    }
+}
+
+test the_hub_tells_its_observers_and_lists_what_is_open
+{
+    $r = Rig();
+    Watcher $w = Watcher();
+    $r->hub()->observe($w);
+    TestSocket $a = $r->bearer($r->token('7'));
+    TestSocket $b = $r->app->socket('/realtime');
+    $r->say($a, 'subscribe', 'posts.5');
+    $r->say($a, 'subscribe', 'rooms.tea');
+    $r->say($b, 'subscribe', 'posts.5');
+    $r->broadcast('posts.5', 'x', 1);
+    array<ChannelInfo> $channels = $r->hub()->channels();
+    expect($channels)->size(2);
+    expect($channels[0]->name)->is('posts.5');
+    expect($channels[0]->subscribers)->is(2 as usize);
+    expect($channels[1]->present)->is(1 as usize);
+    array<SocketInfo> $open = $r->hub()->sockets();
+    expect($open)->size(2);
+    expect($r->hub()->close($r->idOf($b), 4000, 'closed from the console'))->yes(says: 'a socket of this node');
+    $r->hub()->settle();
+    expect($b->closedWith->load())->is(4000);
+    expect($r->hub()->close('ffffffff.1', 4000, ''))->no(says: 'another node');
+    expect($w->opened->load())->is(2);
+    expect($w->joined->load())->is(3);
+    expect($w->reached->load())->is(2);
+    expect($w->closed->load())->is(1);
+}
+
+test notes_travel_as_one_line
+{
+    Envelope $e = Envelope(fresh: 'posts.5', 'x', json::object());
+    $e->except = 'abcd0123.1';
+    Note $back = expect(Note::decode(Note::broadcast($e)->encode()))->some();
+    match ($back) {
+        Note::broadcast($got) => {
+            expect($got->except)->is('abcd0123.1');
+            expect($got->id)->is($e->id);
+        },
+        else => {
+            assert(false, 'a broadcast');
+        },
+    }
+    Whisper $w = Whisper('rooms.tea', 'typing', json::object(), 'abcd0123.1');
+    expect(Note::decode(Note::whisper($w)->encode()))->some();
+    expect(Note::decode(Note::ended(nexus::auth::Ending::credential('signed', 'abc'))->encode()))->some();
+    expect(Note::decode(Note::ended(nexus::auth::Ending::subject('signed', '7'))->encode()))->some();
+    expect(Note::decode(Note::presence(PresenceNote('rooms.tea', Present('abcd0123.1', json::nil()), true))->encode()))->some();
+    expect(Note::decode('{"kind":"nope"}'))->none();
+    expect(Note::decode('not json'))->none();
+}
+
+/**
+ * The local roster, but `members` fails while `broken` is set, as Redis does when it hiccups.
+ */
+#[atomic]
+internal class TFlakyRoster : Roster
+{
+    public LocalRoster $inner = LocalRoster();
+    public atomic<bool> $broken = atomic<bool>(false);
+    public atomic<bool> $joinBroken = atomic<bool>(false);
+
+    public constructor()
+    {
+    }
+
+    public function join(const string& $channel, const Present& $member) : status<RealtimeError>
+    {
+        if ($this->joinBroken->load()) {
+            return .error(.relay('the roster is down'));
+        }
+        return $this->inner->join($channel, $member);
+    }
+
+    public function leave(const string& $channel, const string& $id) : status<RealtimeError>
+    {
+        return $this->inner->leave($channel, $id);
+    }
+
+    public function members(const string& $channel) : result<array<Present>, RealtimeError>
+    {
+        if ($this->broken->load()) {
+            return .error(.relay('the roster is down'));
+        }
+        return $this->inner->members($channel);
+    }
+}
+
+internal class TFlaky : nexus::Extension
+{
+    public TFlakyRoster $roster;
+
+    public constructor(TFlakyRoster $roster)
+    {
+        $this->roster = $roster;
+    }
+
+    public function name() : string
+    {
+        return 'test-flaky-roster';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        // in place of nexus-realtime-redis: the URL names Redis, so nothing else binds these
+        LocalRelay $relay = LocalRelay($s->get<Hub>());
+        $s->bind<LocalRelay>(put: $relay);
+        $s->alias<Relay, LocalRelay>();
+        $s->bind<TFlakyRoster>(put: $this->roster);
+        $s->alias<Roster, TFlakyRoster>();
+        $s->bind<Broadcaster>(put: Broadcaster($relay));
+        return .ok;
+    }
+}
+
+test a_refused_presence_subscribe_leaves_no_member_behind
+{
+    TFlakyRoster $roster = TFlakyRoster();
+    array<nexus::Extension> $exts = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), TChannels(), TFlaky($roster)];
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => 'redis://127.0.0.1:1/0'];
+    $app = TestApp($exts, $vars);
+    Hub $hub = $app->kernel->services->get<Hub>();
+    TestSocket $ws = $app->socket('/realtime');
+    $roster->joinBroken->store(true);
+    $ws->say('{"op":"subscribe","channel":"rooms.tea"}');
+    $hub->settle();
+    expect(ops($ws))->is(['ready', 'refused']);
+    $roster->joinBroken->store(false);
+    array<Present> $left = guard $roster->members('rooms.tea');
+    expect($left)->size(0);
+
+    $roster->broken->store(true);
+    $ws->say('{"op":"subscribe","channel":"rooms.tea"}');
+    $hub->settle();
+    array<json::Value> $subscribed = $ws->where('op', 'subscribed');
+    expect($subscribed)->size(1);
+    expect(members($subscribed[0]))->size(1);
+    $roster->broken->store(false);
+    array<Present> $kept = guard $roster->members('rooms.tea');
+    expect($kept)->size(1);
+}
+
+/**
+ * A socket whose sends fail once `down` is set: a client that went away before its close
+ * arrived.
+ */
+#[atomic]
+internal class TDropped : nexus::Socket
+{
+    public atomic<bool> $down = atomic<bool>(false);
+
+    public constructor()
+    {
+    }
+
+    public function id() : int64
+    {
+        return 535353;
+    }
+
+    public function send(const string& $text) : bool
+    {
+        return !$this->down->load();
+    }
+
+    public function sendBinary(const string& $bytes) : bool
+    {
+        return $this->send($bytes);
+    }
+
+    public function close(int32 $code, const string& $reason) : void
+    {
+    }
+
+    public function open() : bool
+    {
+        return !$this->down->load();
+    }
+}
+
+test the_hub_tells_closed_once_however_a_socket_goes
+{
+    $r = Rig();
+    Watcher $w = Watcher();
+    $r->hub()->observe($w);
+
+    // a broadcast's send fails: dropped there, and its transport's close later finds nothing
+    TDropped $dropped = TDropped();
+    $r->hub()->attach($dropped, Gateway::nobody(), '127.0.0.1');
+    $r->hub()->seat($dropped->id(), 'posts.5', false);
+    $r->hub()->join($dropped, 'posts.5', null);
+    $r->hub()->settle();
+    $dropped->down->store(true);
+    $r->broadcast('posts.5', 'x', 1);
+    expect($w->closed->load())->is(1);
+    $r->hub()->detach($dropped->id());
+    $r->hub()->settle();
+    expect($w->closed->load())->is(1);
+
+    // a drain closes the rest, each told once
+    TestSocket $a = $r->app->socket('/realtime');
+    TestSocket $b = $r->app->socket('/realtime');
+    $r->hub()->closeAll(1001, 'server stopping');
+    $r->hub()->settle();
+    expect($w->closed->load())->is(3);
+}

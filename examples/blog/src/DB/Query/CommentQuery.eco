@@ -1,0 +1,29 @@
+namespace Blog::DB::Query;
+
+use Blog::DB::Model::{Comment, CommentRelations, CommentRows, CommentTable};
+
+/**
+ * Reading comments.
+ */
+public struct CommentQuery : carbon::Query<Comment, CommentQuery>, CommentRelations<CommentQuery>
+{
+    internal CommentRows $rows;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->rows = CommentRows($session);
+    }
+
+    public function rows() : CommentRows&
+    {
+        return $this->rows;
+    }
+
+    /**
+     * The comments on post `$post`.
+     */
+    public function on(int64 $post) : CommentQuery
+    {
+        return $this->where(CommentTable::$postId == $post);
+    }
+}

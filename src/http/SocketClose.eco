@@ -1,0 +1,12 @@
+namespace nexus;
+
+/**
+ * How a websocket ended: the close code (1000 normal, 1001 going away, 1006 gone without a close),
+ * the reason the client gave, and whether both sides said goodbye.
+ */
+public struct SocketClose
+{
+    public int32 $code;
+    public string $reason = '';
+    public bool $clean = false;
+}

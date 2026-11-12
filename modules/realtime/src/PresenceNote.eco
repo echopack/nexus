@@ -1,0 +1,12 @@
+namespace nexus::realtime;
+
+/**
+ * A member that joined or left a presence channel, for the hubs to tell the channel's other
+ * subscribers.
+ */
+public struct PresenceNote
+{
+    public string $channel;
+    public Present $member;
+    public bool $joined;
+}

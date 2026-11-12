@@ -66,7 +66,7 @@ public class PostService
         $span = $this->log->span('batch', ['posts' => $in->count()]);
         $repo = $this->posts;
         int64 $authorId = $author->id;
-        array<NewPost> $all = $in;
+        $all = $in;
         $made = try $repo->connection()->transaction<array<Post>>(function[$repo, $authorId, $all]() : result<array<Post>, carbon::Error> {
             $out = arr::room<Post>($all->count());
             foreach ($all as const &$one) {
@@ -110,6 +110,7 @@ public class PostService
             foreach ($out as const &$have) {
                 if ($have == $tag) {
                     $seen = true;
+                    break;
                 }
             }
             if ($seen) {

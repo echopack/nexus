@@ -1,0 +1,633 @@
+/**
+ * nexus-realtime through its extension: channel patterns, the socket protocol, channel checks,
+ * tickets and catching up, on sockets opened in process and a clock the tests move.
+ */
+
+use nexus::realtime::{Broadcaster, ChannelPattern, Channels, Envelope, Hub, Note, Topic};
+use nexus::testing::{TestApp, TestSocket};
+use std::time;
+use ecotest::expect;
+
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+internal const START = 1700000000;
+
+/**
+ * Posts below 100 exist, and anybody may follow one.
+ */
+#[atomic]
+internal class TPosts : nexus::realtime::Channel
+{
+    public atomic<int32> $asked = atomic<int32>(0);
+
+    public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const Topic& $topic) : status<nexus::Problem>
+    {
+        $this->asked->add(1);
+        if ($payload->door != nexus::Door::realtime) {
+            return .error(.forbidden('not asked on the realtime door'));
+        }
+        int64 $id = $topic->number('id') ?? 0;
+        if ($id >= 100) {
+            return .error(.notFound("post {$id}"));
+        }
+        return .ok;
+    }
+}
+
+/**
+ * A user's own channel: only that user, signed in.
+ */
+#[atomic]
+internal class TUsers : nexus::realtime::Channel
+{
+    public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const Topic& $topic) : status<nexus::Problem>
+    {
+        if ($who->anonymous()) {
+            return .error(.unauthorized('sign in to follow your own channel', $reason: 'signed_in_required'));
+        }
+        if (($who->number() ?? -1) != ($topic->number('id') ?? -2)) {
+            return .error(.forbidden('this is somebody else\'s channel'));
+        }
+        return .ok;
+    }
+}
+
+/**
+ * A room anybody may join, with presence (the member's subject, null for a guest) and `typing`
+ * whispers, which the class stamps with who typed.
+ */
+#[atomic]
+internal class TRooms : nexus::realtime::Channel
+{
+    public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const Topic& $topic) : status<nexus::Problem>
+    {
+        return .ok;
+    }
+
+    public function member(nexus::Payload& $payload, const nexus::auth::Identity& $who, const Topic& $topic) : result<json::Value?, nexus::Problem>
+    {
+        json::Value $info = json::object();
+        $info['user'] = json::nil();
+        if (!$who->anonymous()) {
+            $info['user'] = json::str($who->subject);
+        }
+        return .ok($info);
+    }
+
+    public function whisper(nexus::Payload& $payload, const nexus::auth::Identity& $who, const Topic& $topic, nexus::realtime::Whisper& $w) : status<nexus::Problem>
+    {
+        if ($w->event != 'typing') {
+            return .error(.forbidden('only typing is whispered here'));
+        }
+        json::Value $data = json::object();
+        $data['user'] = json::str($who->subject);
+        $w->data = $data;
+        // ignored: a hook says what is whispered, not who says it
+        $w->from = '';
+        return .ok;
+    }
+}
+
+internal class TChannels : nexus::Extension
+{
+    public bool $bindUsers;
+    public bool $twice;
+
+    public constructor(bool $bindUsers = true, twice: bool $twice = false)
+    {
+        $this->bindUsers = $bindUsers;
+        $this->twice = $twice;
+    }
+
+    public function name() : string
+    {
+        return 'test-channels';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<TPosts>(put: TPosts());
+        $s->bind<TRooms>(put: TRooms());
+        if ($this->bindUsers) {
+            $s->bind<TUsers>(put: TUsers());
+        }
+        Channels $c = $s->get<Channels>();
+        $c->add<TPosts>('posts.{id:integer}', 'TPosts');
+        $c->add<TUsers>('users.{id:integer}', 'TUsers');
+        $c->add<TRooms>('rooms.{name}', 'TRooms');
+        if ($this->twice) {
+            $c->add<TPosts>('posts.{id:integer}', 'TPosts');
+        }
+        return .ok;
+    }
+}
+
+internal class Rig
+{
+    public TestApp $app;
+    public calendar::ManualClock $clock;
+
+    public constructor(map<string, string> $more = [])
+    {
+        $this->clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+        map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_AUTH_TOKENS' => '1h'];
+        foreach ($more as $k => const &$v) {
+            $vars[$k] = $v;
+        }
+        array<nexus::Extension> $exts = [
+            nexus::auth::Extension('rt', clock: $this->clock, cost: crypto::PasswordCost(8, 1)),
+            nexus::realtime::Extension(clock: $this->clock),
+            TChannels(),
+        ];
+        $this->app = TestApp($exts, $vars);
+    }
+
+    public function hub() : Hub
+    {
+        return $this->app->kernel->services->get<Hub>();
+    }
+
+    public function broadcast(const string& $channel, const string& $event, int64 $n) : void
+    {
+        json::Value $doc = json::object();
+        $doc['n'] = json::int($n);
+        guard $this->app->kernel->services->get<Broadcaster>()->send($channel, $event, $doc);
+        $this->hub()->settle();
+    }
+
+    /**
+     * A bearer token for user `$subject`.
+     */
+    public function token(const string& $subject) : string
+    {
+        return $this->issue($subject)->token;
+    }
+
+    /**
+     * A bearer token for user `$subject`, with its stored id.
+     */
+    public function issue(const string& $subject) : nexus::auth::Issued
+    {
+        nexus::Payload $p = $this->app->kernel->background('test', 'token');
+        nexus::auth::Issued $t = guard $p->get<nexus::auth::Tokens>()->issue($subject);
+        nexus::Kernel::finish($p);
+        return $t;
+    }
+
+    /**
+     * A socket opened with the bearer token `$token`.
+     */
+    public function bearer(const string& $token) : TestSocket
+    {
+        map<string, string> $h = ['Authorization' => "Bearer {$token}"];
+        return $this->app->socket('/realtime', $h);
+    }
+
+    /**
+     * The global id `ready` gave `$ws`.
+     */
+    public function idOf(TestSocket $ws) : string
+    {
+        array<json::Value> $ready = $ws->where('op', 'ready');
+        if ($ready->empty()) {
+            return '';
+        }
+        return str($ready[0], 'socket_id');
+    }
+
+    /**
+     * Says `$doc` on `$ws`, then waits for the hub.
+     */
+    public function tell(TestSocket $ws, const json::Value& $doc) : void
+    {
+        $ws->say(json::dump($doc));
+        $this->hub()->settle();
+    }
+
+    /**
+     * A ticket for the holder of `$token`.
+     */
+    public function ticket(const string& $token) : string
+    {
+        return $this->app->api()->bearer($token)->post('/realtime/ticket', json: '{}')->status(201)->capture('$.ticket');
+    }
+
+    /**
+     * Says `{"op":..., "channel":...}` on `$ws`, then waits for the hub.
+     */
+    public function say(TestSocket $ws, const string& $op, const string& $channel, string? $after = null) : void
+    {
+        json::Value $doc = json::object();
+        $doc['op'] = json::str($op);
+        $doc['channel'] = json::str($channel);
+        if ($after != null) {
+            $doc['after'] = json::str($after ?? '');
+        }
+        $ws->say(json::dump($doc));
+        $this->hub()->settle();
+    }
+}
+
+internal function ops(TestSocket $ws) : array<string>
+{
+    array<string> $out = [];
+    foreach ($ws->messages() as const &$m) {
+        $out[] = $m->get('op')?->asStr() ?? '';
+    }
+    return $out;
+}
+
+internal function last(TestSocket $ws) : json::Value
+{
+    array<json::Value> $all = $ws->messages();
+    if ($all->empty()) {
+        return json::nil();
+    }
+    return $all[$all->count() - 1];
+}
+
+internal function str(const json::Value& $doc, const string& $key) : string
+{
+    return $doc->get($key)?->asStr() ?? '';
+}
+
+test patterns_read_words_and_params
+{
+    ChannelPattern $p = expect(ChannelPattern::parse('posts.{id:integer}'))->ok();
+    Topic $t = expect($p->topic('posts.5'))->some();
+    expect($t->number('id'))->some(5 as int64);
+    expect($t->text('id'))->some('5');
+    expect($p->topic('posts.new'))->none();
+    expect($p->topic('posts.5.likes'))->none();
+    expect($p->topic('users.5'))->none();
+    ChannelPattern $any = expect(ChannelPattern::parse('rooms.{slug}.chat'))->ok();
+    expect(expect($any->topic('rooms.tea-time.chat'))->some()->text('slug'))->some('tea-time');
+    expect(ChannelPattern::parse('posts.{id'))->fails();
+    expect(ChannelPattern::parse('posts..x'))->fails();
+    expect(ChannelPattern::parse(''))->fails();
+    expect(ChannelPattern::named('posts.5'))->yes(says: 'a plain name');
+    expect(ChannelPattern::named('posts 5'))->no(says: 'a space is no name');
+    expect(ChannelPattern::named('posts.'))->no(says: 'an empty segment is no name');
+}
+
+test an_envelope_travels_as_one_line
+{
+    json::Value $doc = json::object();
+    $doc['text'] = json::str('hi');
+    Envelope $e = Envelope(fresh: 'posts.5', 'comment.posted', $doc);
+    Note $note = expect(Note::decode(Note::broadcast($e)->encode()))->some();
+    match ($note) {
+        Note::broadcast($back) => {
+            expect($back->id)->is($e->id);
+            expect($back->channel)->is('posts.5');
+            expect($back->event)->is('comment.posted');
+            expect(str($back->data, 'text'))->is('hi');
+        },
+        else => {
+            assert(false, 'a broadcast');
+        },
+    }
+    expect(Note::decode('{"kind":"broadcast","id":1}'))->none();
+}
+
+test a_subscribe_then_unsubscribe_does_not_keep_the_channel
+{
+    $r = Rig();
+    TestSocket $ws = $r->app->socket('/realtime');
+    $ws->say('{"op":"subscribe","channel":"posts.5"}');
+    $ws->say('{"op":"unsubscribe","channel":"posts.5"}');
+    $r->hub()->settle();
+    $r->broadcast('posts.5', 'comment.posted', 1);
+    expect($ws->where('op', 'event'))->size(0);
+    expect($r->hub()->subscribers('posts.5'))->is(0 as usize);
+    expect($r->hub()->follows($ws->id(), 'posts.5'))->no(says: 'unsubscribed before join ran');
+}
+
+test a_socket_follows_a_public_channel
+{
+    $r = Rig();
+    TestSocket $ws = $r->app->socket('/realtime');
+    expect($ws->opened())->yes(says: 'upgraded');
+    expect(last($ws)->get('signed_in')?->asBool())->some(false);
+    $r->say($ws, 'subscribe', 'posts.5');
+    expect(str(last($ws), 'op'))->is('subscribed');
+    expect($r->hub()->subscribers('posts.5'))->is(1 as usize);
+
+    $r->broadcast('posts.5', 'comment.posted', 1);
+    $r->broadcast('posts.6', 'comment.posted', 2);
+    json::Value $got = last($ws);
+    expect(str($got, 'op'))->is('event');
+    expect(str($got, 'channel'))->is('posts.5');
+    expect(str($got, 'event'))->is('comment.posted');
+    expect($got->get('data')?->get('n')?->asInt())->some(1 as int64);
+    expect($ws->where('op', 'event'))->size(1);
+
+    $r->say($ws, 'unsubscribe', 'posts.5');
+    expect(str(last($ws), 'op'))->is('unsubscribed');
+    $r->broadcast('posts.5', 'comment.posted', 3);
+    expect($ws->where('op', 'event'))->size(1);
+
+    $ws->say('{"op":"ping"}');
+    expect(str(last($ws), 'op'))->is('pong');
+    $ws->leave();
+    $r->hub()->settle();
+    expect($r->hub()->connections())->is(0 as usize);
+}
+
+test a_channel_class_decides_who_may_subscribe
+{
+    $r = Rig();
+    TestSocket $ws = $r->app->socket('/realtime');
+    $r->say($ws, 'subscribe', 'posts.500');
+    json::Value $gone = last($ws);
+    expect(str($gone, 'op'))->is('refused');
+    expect($gone->get('problem')?->get('status')?->asInt())->some(404 as int64);
+
+    $r->say($ws, 'subscribe', 'nothing.1');
+    expect(last($ws)->get('problem')?->get('status')?->asInt())->some(404 as int64);
+
+    $r->say($ws, 'subscribe', 'users.7');
+    expect(last($ws)->get('problem')?->get('status')?->asInt())->some(401 as int64);
+    expect($r->hub()->subscribers('users.7'))->is(0 as usize);
+
+    $ws->say('not json');
+    expect(str(last($ws), 'op'))->is('error');
+    $ws->say('{"op":"subscribe","channel":"posts 5"}');
+    expect(str(last($ws), 'op'))->is('error');
+    $ws->say('{"op":"shout"}');
+    expect(str(last($ws), 'op'))->is('error');
+}
+
+test a_ticket_carries_the_caller_to_the_socket
+{
+    $r = Rig();
+    string $token = $r->token('7');
+    TestSocket $ws = $r->app->socket("/realtime?ticket={$r->ticket($token)}");
+    expect($ws->opened())->yes(says: 'a good ticket opens');
+    expect(last($ws)->get('signed_in')?->asBool())->some(true);
+    $r->say($ws, 'subscribe', 'users.7');
+    expect(str(last($ws), 'op'))->is('subscribed');
+    $r->say($ws, 'subscribe', 'users.8');
+    expect(last($ws)->get('problem')?->get('status')?->asInt())->some(403 as int64);
+    $r->broadcast('users.7', 'comment.received', 1);
+    expect($ws->where('op', 'event'))->size(1);
+}
+
+test a_ticket_opens_once_and_not_for_long
+{
+    $r = Rig();
+    string $token = $r->token('7');
+    string $ticket = $r->ticket($token);
+    expect($r->app->socket("/realtime?ticket={$ticket}")->opened())->yes(says: 'first use');
+    TestSocket $again = $r->app->socket("/realtime?ticket={$ticket}");
+    expect($again->opened())->no(says: 'a ticket opens one socket');
+    expect($again->status)->is(401);
+    expect($again->body)->has('ticket_used');
+
+    string $forged = "{$ticket}0";
+    expect($r->app->socket("/realtime?ticket={$forged}")->status)->is(401);
+    expect($r->app->socket('/realtime?ticket=nonsense')->status)->is(401);
+
+    string $late = $r->ticket($token);
+    $r->clock->advance(time::duration::secs(31));
+    TestSocket $expired = $r->app->socket("/realtime?ticket={$late}");
+    expect($expired->status)->is(401);
+    expect($expired->body)->has('ticket_expired');
+}
+
+test a_ticket_of_an_ended_sign_in_opens_nothing
+{
+    $r = Rig();
+    string $token = $r->token('7');
+    string $ticket = $r->ticket($token);
+    $r->app->api()->get('/realtime/ticket')->status(405);
+    nexus::Payload $p = $r->app->kernel->background('test', 'revoke');
+    nexus::auth::Identity $id = guard $p->get<nexus::auth::Tokens>()->check($token);
+    guard $p->get<nexus::auth::Tokens>()->revoke($id->credential);
+    nexus::Kernel::finish($p);
+    TestSocket $ws = $r->app->socket("/realtime?ticket={$ticket}");
+    expect($ws->status)->is(401);
+    expect($ws->body)->has('ticket_ended');
+}
+
+test nobody_gets_a_ticket
+{
+    $r = Rig();
+    $r->app->api()->post('/realtime/ticket', json: '{}')->problem(401);
+}
+
+test a_signed_client_opens_with_its_own_credential
+{
+    $r = Rig();
+    string $token = $r->token('7');
+    map<string, string> $h = ['Authorization' => "Bearer {$token}"];
+    TestSocket $ws = $r->app->socket('/realtime', $h);
+    expect(last($ws)->get('signed_in')?->asBool())->some(true);
+    $r->say($ws, 'subscribe', 'users.7');
+    expect(str(last($ws), 'op'))->is('subscribed');
+    string $secret = str::repeat('a', 64);
+    map<string, string> $bad = ['Authorization' => "Bearer rt_000000000000_{$secret}"];
+    expect($r->app->socket('/realtime', $bad)->status)->is(401);
+}
+
+test a_socket_catches_up_after_the_last_broadcast_it_saw
+{
+    $r = Rig();
+    TestSocket $first = $r->app->socket('/realtime');
+    $r->say($first, 'subscribe', 'posts.5');
+    $r->broadcast('posts.5', 'comment.posted', 1);
+    string $seen = str(last($first), 'id');
+    $r->broadcast('posts.5', 'comment.posted', 2);
+    $r->broadcast('posts.6', 'comment.posted', 3);
+    $r->broadcast('posts.5', 'comment.deleted', 4);
+
+    TestSocket $back = $r->app->socket('/realtime');
+    $r->say($back, 'subscribe', 'posts.5', $seen);
+    expect(ops($back))->is(['ready', 'subscribed', 'event', 'event']);
+    array<json::Value> $missed = $back->where('op', 'event');
+    expect($missed[0]->get('data')?->get('n')?->asInt())->some(2 as int64);
+    expect(str($missed[1], 'event'))->is('comment.deleted');
+
+    TestSocket $lost = $r->app->socket('/realtime');
+    $r->say($lost, 'subscribe', 'posts.5', 'long-gone');
+    expect(ops($lost))->is(['ready', 'subscribed', 'reset']);
+}
+
+test the_backlog_keeps_the_newest
+{
+    map<string, string> $more = ['NEXUS_REALTIME_BACKLOG' => '2'];
+    $r = Rig($more);
+    TestSocket $first = $r->app->socket('/realtime');
+    $r->say($first, 'subscribe', 'posts.5');
+    $r->broadcast('posts.5', 'x', 1);
+    string $oldest = str(last($first), 'id');
+    $r->broadcast('posts.5', 'x', 2);
+    $r->broadcast('posts.5', 'x', 3);
+    TestSocket $late = $r->app->socket('/realtime');
+    $r->say($late, 'subscribe', 'posts.5', $oldest);
+    expect(ops($late))->is(['ready', 'subscribed', 'reset']);
+}
+
+test a_socket_follows_so_many_channels_at_most
+{
+    map<string, string> $more = ['NEXUS_REALTIME_MAX_CHANNELS' => '2'];
+    $r = Rig($more);
+    TestSocket $ws = $r->app->socket('/realtime');
+    $r->say($ws, 'subscribe', 'posts.1');
+    $r->say($ws, 'subscribe', 'posts.2');
+    $r->say($ws, 'subscribe', 'posts.2');
+    expect(str(last($ws), 'op'))->is('subscribed');
+    $r->say($ws, 'subscribe', 'posts.3');
+    expect(str(last($ws), 'op'))->is('error');
+    expect(str(last($ws), 'message'))->has('2 channels at most');
+    $r->say($ws, 'unsubscribe', 'posts.1');
+    $r->say($ws, 'subscribe', 'posts.3');
+    expect(str(last($ws), 'op'))->is('subscribed');
+}
+
+test a_broadcast_needs_a_channel_name
+{
+    $r = Rig();
+    json::Value $doc = json::object();
+    expect($r->app->kernel->services->get<Broadcaster>()->send('not a channel', 'x', $doc))->fails();
+    expect($r->app->kernel->services->get<Broadcaster>()->describe())->is('local');
+}
+
+test the_boot_refuses_what_cannot_work
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => 'nats://x'];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), TChannels()];
+    nexus::BootError $scheme = expect(TestApp::attempt($exts, $vars))->fails();
+    expect(str::join($scheme->lines(), ' '))->has("scheme 'nats'");
+
+    $vars['NEXUS_REALTIME_URL'] = 'redis://127.0.0.1:6379';
+    nexus::BootError $redis = expect(TestApp::attempt($exts, $vars))->fails();
+    expect(str::join($redis->lines(), ' '))->has('nexus::realtime::redis::Extension()');
+
+    map<string, string> $plain = ['NEXUS_AUTH_KEY' => KEY];
+    array<nexus::Extension> $unbound = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), TChannels(false)];
+    nexus::BootError $missing = expect(TestApp::attempt($unbound, $plain))->fails();
+    expect(str::join($missing->lines(), ' '))->has('users.{id:integer} is guarded by TUsers, which is not bound');
+
+    array<nexus::Extension> $twice = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), TChannels(true, twice: true)];
+    nexus::BootError $repeated = expect(TestApp::attempt($twice, $plain))->fails();
+    expect(str::join($repeated->lines(), ' '))->has('posts.{id:integer} is guarded twice');
+
+    array<nexus::Extension> $alone = [nexus::realtime::Extension()];
+    nexus::BootError $noAuth = expect(TestApp::attempt($alone, $plain))->fails();
+    expect(str::join($noAuth->lines(), ' '))->has('list nexus::auth::Extension() before');
+}
+
+/**
+ * A socket on a client that takes its time with every message.
+ */
+#[atomic]
+internal class TSlow : nexus::Socket
+{
+    public atomic<int32> $got = atomic<int32>(0);
+
+    public function id() : int64
+    {
+        return 424242;
+    }
+
+    public function send(const string& $text) : bool
+    {
+        std::thread::sleep(200);
+        $this->got->add(1);
+        return true;
+    }
+
+    public function sendBinary(const string& $bytes) : bool
+    {
+        return $this->send($bytes);
+    }
+
+    public function close(int32 $code, const string& $reason) : void
+    {
+    }
+
+    public function open() : bool
+    {
+        return true;
+    }
+}
+
+test a_slow_socket_does_not_hold_up_a_broadcast
+{
+    $r = Rig();
+    TSlow $slow = TSlow();
+    $r->hub()->attach($slow, nexus::realtime::Gateway::nobody(), "127.0.0.1");
+    $r->hub()->seat($slow->id(), 'posts.5', false);
+    $r->hub()->join($slow, 'posts.5', null);
+    json::Value $doc = json::object();
+    time::instant $start = .now();
+    guard $r->app->kernel->services->get<Broadcaster>()->send('posts.5', 'x', $doc);
+    guard $r->app->kernel->services->get<Broadcaster>()->send('posts.5', 'x', $doc);
+    time::duration $took = $start->elapsed();
+    expect($took < time::duration::millis(100))->yes(says: 'send queued and returned');
+    $r->hub()->settle();
+    expect($slow->got->load())->is(3);
+}
+
+test drain_says_going_away
+{
+    $r = Rig();
+    TestSocket $ws = $r->app->socket('/realtime');
+    $r->say($ws, 'subscribe', 'posts.5');
+    $r->app->kernel->drain();
+    expect($ws->closedWith->load())->is(1001);
+    expect($r->hub()->connections())->is(0 as usize);
+}
+
+test a_socket_catches_up_from_the_cursor_subscribed_gave
+{
+    $r = Rig();
+    $r->broadcast('posts.6', 'x', 1);
+    TestSocket $first = $r->app->socket('/realtime');
+    $r->say($first, 'subscribe', 'posts.5');
+    string $cursor = str($first->where('op', 'subscribed')[0], 'after');
+    expect($cursor)->is($r->hub()->kept()[0]->id);
+
+    // it drops before any event on its channel came, and two come while it is away
+    $first->leave();
+    $r->broadcast('posts.5', 'x', 2);
+    $r->broadcast('posts.5', 'x', 3);
+    TestSocket $back = $r->app->socket('/realtime');
+    $r->say($back, 'subscribe', 'posts.5', $cursor);
+    expect(ops($back))->is(['ready', 'subscribed', 'event', 'event']);
+    expect($back->where('op', 'event')[0]->get('data')?->get('n')?->asInt())->some(2 as int64);
+}
+
+test an_empty_cursor_catches_up_while_nothing_was_let_go
+{
+    map<string, string> $more = ['NEXUS_REALTIME_BACKLOG' => '2'];
+    $r = Rig($more);
+    TestSocket $first = $r->app->socket('/realtime');
+    $r->say($first, 'subscribe', 'posts.5');
+    expect(str($first->where('op', 'subscribed')[0], 'after'))->is('');
+    $first->leave();
+    $r->broadcast('posts.5', 'x', 1);
+    TestSocket $back = $r->app->socket('/realtime');
+    $r->say($back, 'subscribe', 'posts.5', '');
+    expect(ops($back))->is(['ready', 'subscribed', 'event']);
+
+    // once the ring let one go, an empty cursor cannot say what was missed
+    $r->broadcast('posts.5', 'x', 2);
+    $r->broadcast('posts.5', 'x', 3);
+    TestSocket $late = $r->app->socket('/realtime');
+    $r->say($late, 'subscribe', 'posts.5', '');
+    expect(ops($late))->is(['ready', 'subscribed', 'reset']);
+    expect(str(last($late), 'after'))->is($r->hub()->kept()[1]->id);
+}
+
+test realtime_send_refuses_a_relay_that_stays_in_this_process
+{
+    string $key = KEY;
+    std::fs::path $env = guard std::fs::tempfile();
+    guard std::fs::writefile($env, "NEXUS_AUTH_KEY={$key}\nNEXUS_REALTIME_URL=local:\n");
+    array<nexus::Extension> $exts = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), TChannels()];
+    array<string> $args = ['rt', 'realtime:send', '--channel', 'posts.5', '--env-file', "{$env}"];
+    int32 $code = nexus::Console::run($exts, $args);
+    guard std::fs::remove($env);
+    expect($code)->is(1);
+}

@@ -1,0 +1,11 @@
+namespace Blog::Inputs;
+
+/**
+ * What commenting on a post takes. Its author is whoever is signed in, the post the path's.
+ */
+#[nexus::input]
+public struct NewComment
+{
+    #[nexus::rule: { trim: true, notBlank: true, max: 2000 }]
+    public string $body;
+}

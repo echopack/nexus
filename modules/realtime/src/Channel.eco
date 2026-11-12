@@ -1,0 +1,49 @@
+namespace nexus::realtime;
+
+/**
+ * Who may subscribe to the channels of one pattern, and what else they may do there. Bound like
+ * any service (it may take scoped ones, a repository) and asked on a payload of its own with the
+ * door `.realtime`; `.ok` lets the socket in, a problem refuses it with that problem.
+ *
+ * ```echo
+ * public class UserChannel : nexus::realtime::Channel
+ * {
+ *     public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : status<nexus::Problem>
+ *     {
+ *         if ($who->anonymous()) {
+ *             return .error(.unauthorized('sign in to follow your own channel', $reason: 'signed_in_required'));
+ *         }
+ *         if (($who->number() ?? -1) != ($topic->number('id') ?? -2)) {
+ *             return .error(.forbidden('this is somebody else\'s channel'));
+ *         }
+ *         return .ok;
+ *     }
+ * }
+ * ```
+ *
+ * `$who` is anonymous for a socket opened without a ticket or credential.
+ */
+public interface Channel
+{
+    function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const Topic& $topic) : status<nexus::Problem>;
+
+    /**
+     * What the channel's other subscribers see about a socket that subscribed, which makes it a
+     * presence channel: every subscriber gets the members and hears who joins and leaves. Null, the
+     * default, keeps the channel without presence. Asked right after `authorize` let it in.
+     */
+    function member(nexus::Payload& $payload, const nexus::auth::Identity& $who, const Topic& $topic) : result<json::Value?, nexus::Problem>
+    {
+        return .ok(null);
+    }
+
+    /**
+     * Whether a subscriber may whisper `$w` to the others, asked for every whisper: `.ok` sends it
+     * as it is now, so this may change its `event` and `data` (put the sender's name in from the
+     * server, say); a problem drops it and tells the sender. Refused by default.
+     */
+    function whisper(nexus::Payload& $payload, const nexus::auth::Identity& $who, const Topic& $topic, Whisper& $w) : status<nexus::Problem>
+    {
+        return .error(.forbidden('this channel takes no whispers'));
+    }
+}

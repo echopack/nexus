@@ -1,6 +1,7 @@
 /**
- * The cache against a real Redis server, named by CACHE_REDIS_URL (`redis://127.0.0.1:6379/15`);
- * skipped otherwise. Every test keeps to a prefix of its own.
+ * The cache against a real Redis server, named by CACHE_REDIS_URL (`redis://127.0.0.1:6379/15`),
+ * else the one ecotest starts from ecotest.json (ECOTEST_REDIS_URL); skipped without either.
+ * Every test keeps to a prefix of its own.
  */
 
 use nexus::cache::Cache;
@@ -9,12 +10,14 @@ use ecotest::expect;
 
 internal function liveUrl() : string?
 {
-    string::view? $v = std::env::var('CACHE_REDIS_URL');
-    if ($v == null) {
-        return null;
+    foreach (['CACHE_REDIS_URL', 'ECOTEST_REDIS_URL'] as const &$name) {
+        string::view? $v = std::env::var($name);
+        if ($v != null) {
+            string::view $url = guard $v;
+            return string($url);
+        }
     }
-    string::view $url = guard $v;
-    return string($url);
+    return null;
 }
 
 // a prefix no other run shares
@@ -46,7 +49,7 @@ internal function read(Cache $cache, const string& $key) : string
 test live_a_value_put_is_read_back
 {
     string $url = guard liveUrl() else {
-        ecotest::skip('CACHE_REDIS_URL is not set');
+        ecotest::skip('CACHE_REDIS_URL is not set and ecotest started no redis');
         return;
     };
     Cache $cache = liveApp($url, fresh())->kernel->services->get<Cache>();
@@ -61,7 +64,7 @@ test live_a_value_put_is_read_back
 test live_an_entry_expires
 {
     string $url = guard liveUrl() else {
-        ecotest::skip('CACHE_REDIS_URL is not set');
+        ecotest::skip('CACHE_REDIS_URL is not set and ecotest started no redis');
         return;
     };
     Cache $cache = liveApp($url, fresh())->kernel->services->get<Cache>();
@@ -75,7 +78,7 @@ test live_an_entry_expires
 test live_forever_sets_no_expiry_and_the_default_does
 {
     string $url = guard liveUrl() else {
-        ecotest::skip('CACHE_REDIS_URL is not set');
+        ecotest::skip('CACHE_REDIS_URL is not set and ecotest started no redis');
         return;
     };
     string $prefix = fresh();
@@ -93,7 +96,7 @@ test live_forever_sets_no_expiry_and_the_default_does
 test live_flush_forgets_only_the_prefix
 {
     string $url = guard liveUrl() else {
-        ecotest::skip('CACHE_REDIS_URL is not set');
+        ecotest::skip('CACHE_REDIS_URL is not set and ecotest started no redis');
         return;
     };
     string $prefix = fresh();
@@ -116,7 +119,7 @@ test live_flush_forgets_only_the_prefix
 test live_a_prefix_with_glob_characters_flushes_only_itself
 {
     string $url = guard liveUrl() else {
-        ecotest::skip('CACHE_REDIS_URL is not set');
+        ecotest::skip('CACHE_REDIS_URL is not set and ecotest started no redis');
         return;
     };
     string $base = fresh();
@@ -136,7 +139,7 @@ test live_a_prefix_with_glob_characters_flushes_only_itself
 test live_the_callback_get_fills_redis
 {
     string $url = guard liveUrl() else {
-        ecotest::skip('CACHE_REDIS_URL is not set');
+        ecotest::skip('CACHE_REDIS_URL is not set and ecotest started no redis');
         return;
     };
     Cache $cache = liveApp($url, fresh())->kernel->services->get<Cache>();

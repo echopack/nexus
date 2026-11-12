@@ -1,0 +1,79 @@
+namespace Blog::Services;
+
+use Blog::Inputs::NewComment;
+use Blog::DB::Model::{Comment, CommentTable, Post, User};
+use Blog::DB::Repository::{CommentRepository, PostRepository};
+use Blog::Signals::{CommentDeleted, CommentPosted};
+
+/**
+ * What the blog does with comments: read them, write one as the signed in user, delete one when
+ * allowed. Each write is told on the dispatcher, which broadcasts it.
+ */
+public class CommentService
+{
+    private CommentRepository $comments;
+    private PostRepository $posts;
+    private nexus::SignalDispatcher $signals;
+
+    public constructor(CommentRepository $comments, PostRepository $posts, nexus::SignalDispatcher $signals)
+    {
+        $this->comments = $comments;
+        $this->posts = $posts;
+        $this->signals = $signals;
+    }
+
+    /**
+     * The comments on post `$post`, oldest first, with their authors; a 404 when there is no
+     * such post.
+     */
+    public function on(int64 $post) : result<array<Comment>, nexus::Problem>
+    {
+        try $this->post($post);
+        $all = try $this->comments->find()->on($post)->withAuthor()->order(asc: CommentTable::$id)->get();
+        return .ok($all);
+    }
+
+    /**
+     * Comments `$in` on post `$post` as `$me`; the broadcast skips the realtime socket `$except`.
+     */
+    public function create(const User& $me, int64 $post, const NewComment& $in, const nexus::realtime::SocketId& $except = nexus::realtime::SocketId()) : result<Comment, nexus::Problem>
+    {
+        Post $p = try $this->post($post);
+        $made = try $this->comments->create(Comment($postId: $post, $authorId: $me->id, $body: $in->body));
+        Comment $full = try $this->comment($post, $made->id);
+        try $this->signals->send(CommentPosted($full, $p->authorId, $except));
+        return .ok($full);
+    }
+
+    /**
+     * Deletes comment `$id` on post `$post`, when `$me` may; the broadcast skips the realtime socket
+     * `$except`.
+     */
+    public function delete(const User& $me, int64 $post, int64 $id, const nexus::realtime::SocketId& $except = nexus::realtime::SocketId()) : status<nexus::Problem>
+    {
+        Post $p = try $this->post($post);
+        Comment $c = try $this->comment($post, $id);
+        try $c->deletableBy($me, $p);
+        try $this->comments->delete($c);
+        try $this->signals->send(CommentDeleted($post, $id, $except));
+        return .ok;
+    }
+
+    private function post(int64 $id) : result<Post, nexus::Problem>
+    {
+        $found = try $this->posts->find()->get($id);
+        $p = guard $found else {
+            return .error(.notFound('the post'));
+        };
+        return .ok($p);
+    }
+
+    private function comment(int64 $post, int64 $id) : result<Comment, nexus::Problem>
+    {
+        $found = try $this->comments->find()->on($post)->withAuthor()->get($id);
+        $c = guard $found else {
+            return .error(.notFound('the comment'));
+        };
+        return .ok($c);
+    }
+}

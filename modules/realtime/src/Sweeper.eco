@@ -1,0 +1,129 @@
+namespace nexus::realtime;
+
+use std::thread;
+use std::time;
+
+/**
+ * A server's housekeeping thread, under `serve`: every `recheck` it asks whether the credentials
+ * of its open sockets still hold and closes those whose credential expired (4001), and every
+ * `beat` it tells the roster it is alive and takes out the members of servers that stopped, telling
+ * the channels they left.
+ */
+#[atomic]
+public class Sweeper
+{
+    private Hub $hub;
+    public const time::duration $every;
+    public const time::duration $beat;
+    private atomic<bool> $halt = atomic<bool>(false);
+
+    // the thread; dropping it joins
+    private result<thread::handle, thread::error>? $runner = null;
+
+    public constructor(Hub $hub, time::duration $every, time::duration $beat)
+    {
+        $this->hub = $hub;
+        $this->every = $every;
+        $this->beat = $beat;
+    }
+
+    public function start(nexus::Kernel $kernel) : void
+    {
+        if ($this->runner != null) {
+            return;
+        }
+        $this->halt->store(false);
+        Sweeper $self = $this;
+        $this->runner = thread::spawn(function[$self, $kernel]() : void {
+            $self->loop($kernel);
+        });
+    }
+
+    public function stop() : void
+    {
+        $this->halt->store(true);
+        $this->runner = null;
+    }
+
+    /**
+     * Asks once whether the credential of every signed in socket still holds, on one payload, and
+     * closes the sockets of those that do not: how many credentials ended. A guard that cannot
+     * answer (its store is down) closes nothing.
+     */
+    public function recheck(nexus::Kernel $kernel) : usize
+    {
+        // via and credential of every identity asked about already
+        map<string, bool> $asked = [];
+        array<nexus::auth::Ending> $ended = [];
+        nexus::Payload $payload = $kernel->background('realtime', 'recheck');
+        $payload->door = .realtime;
+        nexus::auth::Guards $guards = $payload->get<nexus::auth::Guards>();
+        foreach ($this->hub->sockets() as const &$s) {
+            if ($s->who->anonymous() || $s->who->credential->empty()) {
+                continue;
+            }
+            string $key = "{$s->who->via} {$s->who->credential}";
+            if ($asked->has($key)) {
+                continue;
+            }
+            $asked[$key] = true;
+            result<bool, nexus::Problem> $holds = $guards->holds($payload, $s->who);
+            bool $still = guard $holds else ($p) {
+                $kernel->log->warn('realtime recheck could not ask a guard', ['via' => $s->who->via, 'problem' => $p->title()]);
+                continue;
+            };
+            if (!$still) {
+                $ended[] = nexus::auth::Ending::credential($s->who->via, $s->who->credential);
+            }
+        }
+        nexus::Kernel::finish($payload);
+        foreach ($ended as const &$e) {
+            $this->hub->hear(Note::ended($e));
+        }
+        return $ended->count();
+    }
+
+    /**
+     * Tells the roster this server is alive, and takes out the members of the presence channels
+     * followed here whose server stopped beating.
+     */
+    public function pulse(nexus::Kernel $kernel) : void
+    {
+        Roster $roster = $kernel->services->get<Roster>();
+        Gateway $gateway = $kernel->services->get<Gateway>();
+        guard $roster->beat($this->hub->node) else ($e) {
+            $kernel->log->warn('realtime presence beat failed', ['error' => $e->message()]);
+            return;
+        };
+        foreach ($this->hub->channels() as const &$c) {
+            if ($c->present == 0) {
+                continue;
+            }
+            array<string> $stale = guard $roster->prune($c->name) else ($e) {
+                $kernel->log->warn('realtime presence prune failed', ['channel' => $c->name, 'error' => $e->message()]);
+                continue;
+            };
+            foreach ($stale as const &$id) {
+                $gateway->publish(Note::left($c->name, $id));
+            }
+        }
+    }
+
+    internal function loop(nexus::Kernel $kernel) : void
+    {
+        time::instant $checked = time::instant::now();
+        time::instant $beaten = time::instant::now();
+        $this->pulse($kernel);
+        while (!$this->halt->load()) {
+            thread::sleep(100);
+            if ($this->every > time::duration::zero() && $checked->elapsed() >= $this->every) {
+                $this->recheck($kernel);
+                $checked = time::instant::now();
+            }
+            if ($this->beat > time::duration::zero() && $beaten->elapsed() >= $this->beat) {
+                $this->pulse($kernel);
+                $beaten = time::instant::now();
+            }
+        }
+    }
+}

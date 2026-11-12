@@ -1,0 +1,11 @@
+namespace nexus::realtime;
+
+/**
+ * Who a subscribe to a presence channel found there: the socket's own member and every member, for
+ * the `subscribed` frame.
+ */
+public struct Roll
+{
+    public Present $me;
+    public array<Present> $members;
+}

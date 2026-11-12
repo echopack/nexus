@@ -1,0 +1,82 @@
+/**
+ * The admin's live numbers, a one-way server-sent event stream: for admins only, a snapshot at
+ * once and every one the feed publishes after.
+ */
+
+use ecotest::expect;
+use nexus::testing::TestEventStream;
+use Blog::Feeds::StatsFeed;
+
+#[group: "integration"]
+test an_admin_watches_the_numbers
+{
+    $world = World();
+    nexus::auth::Signer $s = $world->adminSigner();
+    $admin = $world->session($s);
+    $admin->post('/v1/posts', json: newPost('Counted'))->status(201);
+
+    ecotest::step('the stream opens with a snapshot');
+    TestEventStream $stream = $world->app->events('/v1/admin/stats/stream', signed: World::sign($s));
+    expect($stream->opened())->yes(says: 'the admin gets the stream');
+    expect($stream->headers->get('Content-Type'))->some('text/event-stream');
+    StatsFeed $feed = $world->app->kernel->services->get<StatsFeed>();
+    $feed->streams->settle();
+    array<nexus::ServerEvent> $first = $stream->named('stats');
+    expect($first)->size(1);
+    json::Value $doc = expect(json::parse($first[0]->data))->ok();
+    expect($doc->get('posts')?->asInt())->some(1 as int64);
+    expect($doc->get('users')?->asInt())->some(1 as int64);
+    expect($doc->get('comments')?->asInt())->some(0 as int64);
+
+    ecotest::step('every snapshot the feed publishes follows');
+    json::Value $next = json::object();
+    $next['posts'] = json::int(2);
+    $feed->publish($next);
+    $feed->streams->settle();
+    expect($stream->named('stats'))->size(2);
+    expect($stream->last()?->id)->some('2');
+
+    ecotest::step('once the page is gone the feed stops sending to it');
+    $stream->leave();
+    $feed->streams->settle();
+    expect($feed->streams->count())->is(0 as usize);
+}
+
+#[group: "integration"]
+test only_admins_watch_the_numbers
+{
+    $world = World();
+    TestEventStream $author = $world->app->events('/v1/admin/stats/stream', signed: World::sign($world->authorSigner('Ada')));
+    expect($author->opened())->no(says: 'an author gets no stream');
+    expect($author->status)->is(403);
+    TestEventStream $nobody = $world->app->events('/v1/admin/stats/stream');
+    expect($nobody->status)->is(401);
+}
+
+#[group: "integration"]
+test the_numbers_stop_when_the_admin_may_no_longer_watch
+{
+    $world = World();
+    StatsFeed $feed = $world->app->kernel->services->get<StatsFeed>();
+
+    ecotest::step('signing out closes the stream at once');
+    nexus::auth::Signer $s = $world->adminSigner();
+    TestEventStream $stream = $world->app->events('/v1/admin/stats/stream', signed: World::sign($s));
+    expect($stream->opened())->yes(says: 'the admin gets the stream');
+    $world->session($s)->delete('/v1/auth')->status(204);
+    expect($stream->open())->no(says: 'the session it was opened with ended');
+    $feed->streams->settle();
+    expect($feed->streams->count())->is(0 as usize);
+
+    ecotest::step('an admin who is one no more is let go at the next tick');
+    nexus::auth::Signer $again = $world->adminSigner();
+    TestEventStream $next = $world->app->events('/v1/admin/stats/stream', signed: World::sign($again));
+    expect($next->opened())->yes(says: 'signed in again');
+    nexus::Payload $p = $world->app->kernel->background('test', 'recheck');
+    $feed->recheck($p);
+    expect($next->open())->yes(says: 'still an admin');
+    $world->role('editor@example.com', Blog::Types::Role::author);
+    $feed->recheck($p);
+    nexus::Kernel::finish($p);
+    expect($next->open())->no(says: 'no admin any more');
+}

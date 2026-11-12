@@ -1,0 +1,30 @@
+namespace Blog::Actions::Comments;
+
+use Blog::Inputs::NewComment;
+use Blog::Services::CommentService;
+use Blog::Transformers::CommentTransformer;
+use Blog::Types::Caller;
+
+/**
+ * Comments on a post as whoever is signed in. Everyone reading the post sees it come in.
+ */
+#[nexus::through: ["Blog::Middleware::RequireUser"]]
+public class CreateComment : nexus::Action
+{
+    private CommentService $comments;
+    private CommentTransformer $transformer;
+
+    public constructor(CommentService $comments, CommentTransformer $transformer)
+    {
+        $this->comments = $comments;
+        $this->transformer = $transformer;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id, nexus::Body<NewComment> $in) : result<nexus::Response, nexus::Problem>
+    {
+        $me = try $payload->state<Caller>();
+        // the page shows its own comment from this answer, so its socket is skipped
+        $made = try $this->comments->create($me->user, $id, $in->value, nexus::realtime::SocketId::of($payload));
+        return $this->transformer->createResponse($payload, $made, status: 201);
+    }
+}

@@ -37,6 +37,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::auth::AuthConfig>('nexus::auth::AuthConfig');
     $g->name<nexus::auth::Authenticate>('nexus::auth::Authenticate');
     $g->name<nexus::auth::BearerGuard>('nexus::auth::BearerGuard');
+    $g->name<nexus::auth::Endings>('nexus::auth::Endings');
     $g->name<nexus::auth::Extension>('nexus::auth::Extension');
     $g->name<nexus::auth::Guards>('nexus::auth::Guards');
     $g->name<nexus::auth::Identity>('nexus::auth::Identity');

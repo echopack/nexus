@@ -1,0 +1,167 @@
+namespace nexus::debug::realtime;
+
+use nexus::debug::{ActionSpec, View, Topic};
+
+/**
+ * This server's realtime side: its open sockets (close one from here), the channels they follow
+ * with their presence members, the broadcasts kept for catching up, and what happens live.
+ */
+#[atomic]
+public class RealtimePanel : nexus::debug::Panel
+{
+    private nexus::realtime::Hub $hub;
+    private Watch $watch;
+    private Topic $topic;
+
+    public constructor(nexus::realtime::Hub $hub, Watch $watch, Topic $topic)
+    {
+        $this->hub = $hub;
+        $this->watch = $watch;
+        $this->topic = $topic;
+    }
+
+    public function name() : string
+    {
+        return 'realtime';
+    }
+
+    public function title() : string
+    {
+        return 'Realtime';
+    }
+
+    public function views() : array<View>
+    {
+        array<View> $v = [
+            View('stats', 'Now', .stats)->every(5),
+            View('sockets', 'Sockets', .table)
+                ->column('id', 'Socket', 'code')
+                ->column('who', 'Who')
+                ->column('peer', 'From', 'code')
+                ->column('opened', 'Opened', 'time')
+                ->column('channels', 'Channels', 'code')
+                ->action(ActionSpec('close', 'Close', $row: true, $confirm: true, $destructive: true))
+                ->every(5),
+            View('channels', 'Channels', .table)
+                ->column('channel', 'Channel', 'code')
+                ->column('subscribers', 'Subscribers', 'number')
+                ->column('present', 'Present', 'number')
+                ->every(5),
+            View('events', 'Live', .table)
+                ->live($this->topic->name)
+                ->column('at', 'At', 'time')
+                ->column('kind', 'What', 'status')
+                ->column('socket', 'Socket', 'code')
+                ->column('channel', 'Channel', 'code')
+                ->column('event', 'Event')
+                ->column('reached', 'Reached', 'number'),
+            View('kept', 'Kept broadcasts', .table)
+                ->column('id', 'Id', 'code')
+                ->column('channel', 'Channel', 'code')
+                ->column('event', 'Event')
+                ->column('except', 'Skipped', 'code')
+                ->every(10),
+        ];
+        return $v;
+    }
+
+    public function read(nexus::Payload& $payload, const string& $view) : result<json::Value, nexus::Problem>
+    {
+        if ($view == 'stats') {
+            return .ok($this->stats($payload));
+        }
+        if ($view == 'sockets') {
+            return .ok(View::rows($this->sockets()));
+        }
+        if ($view == 'channels') {
+            return .ok(View::rows($this->channels()));
+        }
+        if ($view == 'events') {
+            return .ok(View::rows(nexus::debug::Topics::rows($this->topic, 200)));
+        }
+        if ($view == 'kept') {
+            return .ok(View::rows($this->kept()));
+        }
+        return .error(.notFound("view {$view}"));
+    }
+
+    public function act(nexus::Payload& $payload, const string& $action, const json::Value& $input) : result<json::Value, nexus::Problem>
+    {
+        if ($action != 'close') {
+            return .error(.notFound("action {$action}"));
+        }
+        string $id = $input->get('id')?->asStr() ?? '';
+        if ($id->empty()) {
+            return .error(.badRequest('name the socket to close: {"id": "..."}'));
+        }
+        if (!$this->hub->close($id, 4000, 'closed from the debug console')) {
+            return .error(.notFound("socket {$id} on this server"));
+        }
+        json::Value $o = json::object();
+        $o['message'] = json::str("closed {$id}");
+        return .ok($o);
+    }
+
+    internal function stats(nexus::Payload& $payload) : json::Value
+    {
+        string $relay = $payload->get<nexus::realtime::Relay>()->describe();
+        json::Value $stats = json::arr();
+        $stats[] = nexus::debug::OverviewPanel::stat('Sockets', json::int($this->hub->connections() as int64), "{$this->watch->opened->load()} opened since boot");
+        $stats[] = nexus::debug::OverviewPanel::stat('Channels', json::int($this->hub->channels()->count() as int64), 'with subscribers here');
+        $stats[] = nexus::debug::OverviewPanel::stat('Broadcasts', json::int($this->watch->broadcasts->load() as int64), "reached {$this->watch->reached->load()} sockets since boot");
+        $stats[] = nexus::debug::OverviewPanel::stat('Closed by sign out', json::int($this->watch->ended->load() as int64), 'sockets whose credential ended');
+        $stats[] = nexus::debug::OverviewPanel::stat('Node', json::str($this->hub->node), "relay {$relay}");
+        json::Value $o = json::object();
+        $o['stats'] = mv $stats;
+        return $o;
+    }
+
+    internal function sockets() : json::Value
+    {
+        json::Value $rows = json::arr();
+        foreach ($this->hub->sockets() as const &$s) {
+            json::Value $r = json::object();
+            $r['id'] = json::str($s->id);
+            $r['who'] = json::str(who($s->who));
+            $r['peer'] = json::str($s->peer);
+            $r['opened'] = json::str(nexus::log::Stamp::rfc3339($s->opened));
+            $r['channels'] = json::str(str::join($s->channels, ' '));
+            $rows[] = mv $r;
+        }
+        return $rows;
+    }
+
+    internal function channels() : json::Value
+    {
+        json::Value $rows = json::arr();
+        foreach ($this->hub->channels() as const &$c) {
+            json::Value $r = json::object();
+            $r['channel'] = json::str($c->name);
+            $r['subscribers'] = json::int($c->subscribers as int64);
+            $r['present'] = json::int($c->present as int64);
+            $rows[] = mv $r;
+        }
+        return $rows;
+    }
+
+    internal function kept() : json::Value
+    {
+        json::Value $rows = json::arr();
+        array<nexus::realtime::Envelope> $all = $this->hub->kept();
+        usize $i = $all->count();
+        // newest first, the last hundred
+        usize $shown = 0;
+        while ($i > 0 && $shown < 100) {
+            $i = $i - 1;
+            const nexus::realtime::Envelope& $e = $all[$i];
+            json::Value $r = json::object();
+            $r['id'] = json::str($e->id);
+            $r['channel'] = json::str($e->channel);
+            $r['event'] = json::str($e->event);
+            $r['except'] = json::str($e->except);
+            $rows[] = mv $r;
+            $shown = $shown + 1;
+        }
+        return $rows;
+    }
+}

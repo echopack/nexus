@@ -13,11 +13,6 @@ public struct Api
     public const int64 WAIT = 25;
 
     /**
-     * Seconds between the keep-alive comments of an idle stream.
-     */
-    public const int64 BEAT = 15;
-
-    /**
      * The panel named `$name`, or the 404 saying there is none.
      */
     public static function panel(Debug $debug, const string& $name) : result<Listed, nexus::Problem>

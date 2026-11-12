@@ -1,0 +1,14 @@
+namespace nexus::realtime;
+
+/**
+ * One open socket as the hub sees it: its global id, who opened it from where and when, and the
+ * channels it follows.
+ */
+public struct SocketInfo
+{
+    public string $id;
+    public nexus::auth::Identity $who;
+    public string $peer;
+    public std::time::timestamp $opened;
+    public array<string> $channels = [];
+}

@@ -1,0 +1,67 @@
+namespace nexus::realtime;
+
+/**
+ * Sends broadcasts to channels, from any thread of any process: a service, a signal handler, a
+ * task. Every socket subscribed to the channel gets the event, on every server the relay reaches.
+ *
+ * ```echo
+ * $this->broadcaster->send("posts.{$post->id}", 'comment.posted', $json);
+ * ```
+ *
+ * `except:` names a socket the broadcast skips: the one whose request caused it, from
+ * `SocketId::of($payload)`, so a client that shows its own change at once does not get it twice.
+ * A skip with a caller only honours a socket that caller owns.
+ */
+#[atomic]
+public class Broadcaster
+{
+    private Relay $relay;
+
+    public constructor(Relay $relay)
+    {
+        $this->relay = $relay;
+    }
+
+    /**
+     * Sends event `$event` with `$data` to every socket subscribed to `$channel` but the socket
+     * `$except` (a global socket id; empty skips none). No caller is stamped, so the id is skipped
+     * as named.
+     */
+    public function send(const string& $channel, const string& $event, const json::Value& $data, except: const string& $except = '') : status<RealtimeError>
+    {
+        return $this->send($channel, $event, $data, except: SocketId($id: $except));
+    }
+
+    /**
+     * Sends event `$event` with `$data` to every socket subscribed to `$channel` but the socket
+     * `$except` names, when that socket is `$except`'s caller.
+     */
+    public function send(const string& $channel, const string& $event, const json::Value& $data, except: const SocketId& $except) : status<RealtimeError>
+    {
+        if (!ChannelPattern::named($channel)) {
+            return .error(.badChannel($channel));
+        }
+        Envelope $e = Envelope(fresh: $channel, $event, $data);
+        $e->except = $except->id;
+        $e->exceptVia = $except->via;
+        $e->exceptCredential = $except->credential;
+        $e->exceptSubject = $except->subject;
+        return $this->relay->publish(Note::broadcast($e));
+    }
+
+    /**
+     * Sends `$b` to its channel, but the socket `$except`.
+     */
+    public function send<B : Broadcast>(const B& $b, except: const string& $except = '') : status<RealtimeError>
+    {
+        return $this->send($b->channel(), $b->event(), $b->data(), except: $except);
+    }
+
+    /**
+     * Where broadcasts go, for logs.
+     */
+    public const function describe() : string
+    {
+        return $this->relay->describe();
+    }
+}

@@ -1,0 +1,113 @@
+namespace nexus::realtime;
+
+use container::Container;
+
+/**
+ * Realtime channels for a nexus app: binds the `Hub` of this process's sockets, the `Channels` the
+ * app guards, the `Broadcaster`, and routes `GET <path>` (the websocket) and `POST <path>/ticket`.
+ * Broadcasts travel on `NEXUS_REALTIME_URL`: `local:` keeps them in the process, `redis://` needs
+ * nexus-realtime-redis listed after this one. List it after nexus-auth, whose guards say who opens
+ * a socket.
+ *
+ * ```echo
+ * nexus::auth::Extension('blog'),
+ * nexus::realtime::Extension(),
+ * nexus::realtime::redis::Extension(),   // only when the app may run on Redis
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public string $path;
+    public calendar::Clock $clock;
+
+    public constructor(path: string $path = '/realtime', clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->path = $path;
+        $this->clock = $clock;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-realtime';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        if ($s->find<nexus::auth::Guards>() == null) {
+            return .error(.extension('nexus-realtime', 'sockets are opened by callers nexus-auth knows; list nexus::auth::Extension() before nexus::realtime::Extension()'));
+        }
+        RealtimeConfig $config = $s->get<RealtimeConfig>();
+        if ($config->ticket <= std::time::duration::zero()) {
+            return .error(.extension('nexus-realtime', "NEXUS_REALTIME_TICKET is {$config->ticket}; expected more than 0s"));
+        }
+        if ($config->maxChannels == 0) {
+            return .error(.extension('nexus-realtime', 'NEXUS_REALTIME_MAX_CHANNELS is 0; a socket could follow nothing'));
+        }
+        string $kind = nexus::scheme($config->url);
+        if ($kind != 'local' && $kind != 'redis' && $kind != 'rediss') {
+            return .error(.extension('nexus-realtime', "NEXUS_REALTIME_URL has the scheme '{$kind}'; expected local: or redis://host"));
+        }
+        $hub = Hub($config->backlog as usize);
+        $channels = Channels();
+        $s->bind<Hub>(put: $hub);
+        $s->bind<Channels>(put: $channels);
+        $s->bind<Tickets>(put: Tickets($s->get<nexus::auth::AuthConfig>()->key, $config->ticket, $this->clock));
+        // with Redis nexus-realtime-redis binds the relay, the roster and the broadcaster; boot checks that it did
+        if ($kind == 'local') {
+            $relay = LocalRelay($hub);
+            $s->bind<LocalRelay>(put: $relay);
+            $s->alias<Relay, LocalRelay>();
+            $s->bind<LocalRoster>(put: LocalRoster());
+            $s->alias<Roster, LocalRoster>();
+            $s->bind<Broadcaster>(put: Broadcaster($relay));
+        }
+        Limits $limits = Limits($config->maxChannels as usize, $config->maxSockets as usize, $config->rate, $config->maxWhisper as usize);
+        $gateway = Gateway($hub, $channels, $limits);
+        $s->bind<Gateway>(put: $gateway);
+        $s->bind<Sweeper>(put: Sweeper($hub, $config->recheck, $config->beat));
+        // a credential that ends, in this process or any other, closes the sockets opened with it
+        $s->get<nexus::auth::Endings>()->listen(function[$gateway](nexus::auth::Ending $e) : void {
+            $gateway->publish(Note::ended($e));
+        });
+        $s->bindAction<Connect>(method: .get, path: $this->path, function(Container $c) : Connect {
+            return Connect($c->get<Gateway>(), $c->get<Tickets>(), $c->get<nexus::auth::Guards>());
+        });
+        $s->bindAction<IssueTicket>(method: .post, path: "{$this->path}/ticket", function(Container $c) : IssueTicket {
+            return IssueTicket($c->get<Tickets>(), $c->get<nexus::auth::Guards>());
+        });
+        return .ok;
+    }
+
+    public function commands(nexus::Commands& $cmds) : void
+    {
+        $cmds->add(SendCommand());
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        if (!$kernel->services->has<Relay>() || !$kernel->services->has<Roster>()) {
+            return .error(.extension('nexus-realtime', 'NEXUS_REALTIME_URL names Redis; list nexus::realtime::redis::Extension() after nexus::realtime::Extension()'));
+        }
+        try $kernel->services->get<Channels>()->check($kernel->services);
+        Gateway $gateway = $kernel->services->get<Gateway>();
+        $gateway->kernel = $kernel;
+        $kernel->log->debug("realtime broadcasts go {$kernel->services->get<Relay>()->describe()}");
+        return .ok;
+    }
+
+    public function start(nexus::Kernel $kernel, const nexus::Serve& $options) : status<nexus::BootError>
+    {
+        guard $kernel->services->get<Relay>()->start($kernel->services->get<Hub>()) else ($e) {
+            return .error(.extension('nexus-realtime', $e->message()));
+        };
+        $kernel->services->get<Sweeper>()->start($kernel);
+        return .ok;
+    }
+
+    public function drain(nexus::Kernel $kernel) : void
+    {
+        $kernel->services->get<Sweeper>()->stop();
+        $kernel->services->get<Relay>()->stop();
+        $kernel->services->get<Hub>()->closeAll(1001, 'server stopping');
+    }
+}

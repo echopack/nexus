@@ -4,10 +4,10 @@
 
 use ecotest::expect;
 
+#[group: "integration"]
 test a_requests_timeline_holds_the_queries_it_ran
 {
-    map<string, string> $more = ['NEXUS_DEBUG_ENABLED' => 'true'];
-    $world = World($more);
+    $world = World(['NEXUS_DEBUG_ENABLED' => 'true']);
     $admin = $world->admin();
     $admin->post('/v1/posts', json: newPost('Hello'))->status(201);
     $admin->with('X-Request-Id', 'list-posts-1')->get('/v1/posts')->ok();
@@ -17,8 +17,15 @@ test a_requests_timeline_holds_the_queries_it_ran
         ->has('"kind":"query"')
         ->has('"kind":"action"')
         ->has('posts');
-    string $queries = $admin->get('/__nexus/api/panels/requests/recent')->ok()
+    $queries = $admin->get('/__nexus/api/panels/requests/recent')->ok()
         ->json('$.rows[0].id', 'list-posts-1')
         ->capture('$.rows[0].queries');
     expect($queries == '0')->no(says: 'the row counts the queries');
+}
+
+#[group: "integration"]
+test the_debug_console_lists_the_realtime_panel
+{
+    $world = World(['NEXUS_DEBUG_ENABLED' => 'true']);
+    $world->admin()->get('/__nexus/api')->ok()->has('"name":"realtime"');
 }

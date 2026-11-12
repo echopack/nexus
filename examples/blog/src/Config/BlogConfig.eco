@@ -1,8 +1,10 @@
 namespace Blog::Config;
 
+use std::time;
+
 /**
- * The blog's settings. Read from BLOG_TITLE and BLOG_DEFAULT_PAGE_SIZE, in the environment or a
- * .env file.
+ * The blog's settings. Read from BLOG_TITLE, BLOG_DEFAULT_PAGE_SIZE and BLOG_STATS_EVERY, in the
+ * environment or a .env file.
  */
 #[nexus::config: "BLOG"]
 public struct BlogConfig
@@ -18,4 +20,10 @@ public struct BlogConfig
      */
     #[nexus::env: 'DEFAULT_PAGE_SIZE']
     public uint32 $pageSize = 10;
+
+    /**
+     * How often the admin's live stats stream sends a fresh snapshot while somebody watches.
+     */
+    #[nexus::env: 'STATS_EVERY']
+    public time::duration $statsEvery = .secs(2);
 }

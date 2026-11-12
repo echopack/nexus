@@ -1,0 +1,10 @@
+namespace nexus;
+
+/**
+ * One whole websocket message from the client.
+ */
+public enum SocketMessage
+{
+    case text(string $data);
+    case binary(string $data);
+}

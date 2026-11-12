@@ -1,0 +1,30 @@
+namespace nexus::realtime;
+
+/**
+ * One member of a presence channel: a socket, by its global id, and what the channel class let
+ * the others see about it (`Channel::member`).
+ */
+public struct Present
+{
+    public string $id;
+    public json::Value $info;
+
+    public const function json() : json::Value
+    {
+        json::Value $doc = json::object();
+        $doc['id'] = json::str($this->id);
+        $doc['info'] = $this->info;
+        return $doc;
+    }
+
+    /**
+     * The member `json` wrote, or null for anything else.
+     */
+    public static function read(const json::Value& $doc) : Present?
+    {
+        string $id = guard $doc->get('id')?->asStr() else {
+            return null;
+        };
+        return Present($id, $doc->get('info') ?? json::nil());
+    }
+}

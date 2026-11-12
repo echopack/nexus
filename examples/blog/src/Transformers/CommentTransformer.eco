@@ -1,0 +1,12 @@
+namespace Blog::Transformers;
+
+use Blog::DB::Model::{Comment, CommentMapping};
+
+/**
+ * A comment as the API and the realtime channels show it: what `Comment` exposes
+ * (`CommentMapping`), its author included.
+ */
+#[atomic]
+public class CommentTransformer : nexus::rest::Transformer<Comment>, CommentMapping
+{
+}

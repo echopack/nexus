@@ -5,7 +5,8 @@ use std::time;
 /**
  * The server's side of the flow, per request on the store: authorization requests read and
  * answered by the consent page, codes traded for grants, refresh tokens traded for new pairs,
- * access tokens checked (as an identity for the grant's resource only) and revoked.
+ * access tokens checked (as an identity for the grant's resource only) and revoked. A grant that
+ * ends is told to nexus-auth's `Endings`, so what was opened with it (a realtime socket) closes.
  */
 public class Grants
 {
@@ -16,13 +17,15 @@ public class Grants
     public Clients $clients;
     public const OAuthConfig $config;
     public calendar::Clock $clock;
+    private nexus::auth::Endings $endings;
 
-    public constructor(OAuthStore $store, Clients $clients, OAuthConfig $config, calendar::Clock $clock)
+    public constructor(OAuthStore $store, Clients $clients, OAuthConfig $config, calendar::Clock $clock, nexus::auth::Endings $endings)
     {
         $this->store = $store;
         $this->clients = $clients;
         $this->config = $config;
         $this->clock = $clock;
+        $this->endings = $endings;
     }
 
     /**
@@ -122,7 +125,7 @@ public class Grants
             return .error(.invalidGrant('the refresh token is not valid'));
         }
         if (!$g->previousHash->empty() && $t->matches($g->previousHash)) {
-            try $this->store->drop($g->id);
+            try $this->drop($g->id);
             return .error(.invalidGrant('the refresh token was already used; connect the app again'));
         }
         if (!$t->matches($g->refreshHash)) {
@@ -166,6 +169,30 @@ public class Grants
     }
 
     /**
+     * Whether grant `$id` of `$subject` still holds: it was not revoked and its access token has not
+     * lapsed. A refresh keeps it holding; what was opened with an access token lives as long as
+     * the grant, not the one token.
+     */
+    public function holds(const string& $id, const string& $subject) : result<bool, nexus::Problem>
+    {
+        Grant? $found = try $this->store->grant($id);
+        Grant $g = guard $found else {
+            return .ok(false);
+        };
+        return .ok($g->subject == $subject && $g->accessExpiresAt > $this->clock->now());
+    }
+
+    /**
+     * Ends grant `$id`: its tokens stop working, and `Endings` hears of it.
+     */
+    public function drop(const string& $id) : status<nexus::Problem>
+    {
+        try $this->store->drop($id);
+        $this->endings->ended(nexus::auth::Ending::credential(OAuthGuard::NAME, $id));
+        return .ok;
+    }
+
+    /**
      * Whether `$subject` already allowed client `$client` the scopes `$r` asks for on its
      * resource, so a consent page may skip the question.
      */
@@ -199,7 +226,7 @@ public class Grants
             return .ok;
         };
         if ($t->matches($g->accessHash) || $t->matches($g->refreshHash)) {
-            return $this->store->drop($g->id);
+            return $this->drop($g->id);
         }
         return .ok;
     }

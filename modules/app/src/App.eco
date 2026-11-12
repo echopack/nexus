@@ -316,6 +316,33 @@ public class App
         nexus::carbon::Repositories::bind<R>($this->services);
     }
 
+    // realtime channels ---------------------------------------------------------
+
+    /**
+     * Binds realtime channel class `C` once per subscribe, built by `$make`; `->on(pattern)` says
+     * which channels it guards:
+     *
+     * ```echo
+     * $app->bindChannel<PostChannel>((Container $c) => PostChannel($c->get<PostRepository>()))
+     *     ->on('posts.{id:integer}');
+     * ```
+     */
+    public function bindChannel<C>(function<C(Container)> $make) : nexus::app::ChannelRef<C>
+    {
+        $this->services->bind<C>(scope: $make);
+        return nexus::app::ChannelRef<C>($this->services);
+    }
+
+    /**
+     * Binds realtime channel class `C` once per subscribe, built by `$make`, which needs nothing
+     * from the container.
+     */
+    public function bindChannel<C>(function<C()> $make) : nexus::app::ChannelRef<C>
+    {
+        $this->services->bind<C>(scope: $make);
+        return nexus::app::ChannelRef<C>($this->services);
+    }
+
     // tools, queues and schedules ---------------------------------------------
 
     /**

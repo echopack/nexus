@@ -24,14 +24,14 @@ public class ShowSession : nexus::Action
     {
         $session = try $payload->state<nexus::auth::Identity>();
         if ($session->anonymous()) {
-            json::Value $o = json::object();
-            $o['signed_in'] = json::bool(false);
+            $o = json::object();
+            $o['signed_in'] = false;
             $o['data'] = json::nil();
             return .ok(nexus::Response(json: $o));
         }
         $user = try BlogUsers::of($this->users, $session->subject);
         $meta = nexus::rest::Meta();
-        $meta->with('signed_in', json::bool(true));
+        $meta->with('signed_in', true);
         return $this->transformer->own($payload, $user, $meta);
     }
 }

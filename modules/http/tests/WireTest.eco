@@ -49,6 +49,30 @@ test a_streamed_response_streams
     expect($r->headers->get('Content-Type'))->some('text/event-stream');
 }
 
+test an_event_stream_opens_an_outlet
+{
+    $out = nexus::Response(events: function(nexus::EventStream $s) : void {
+        $s->send(nexus::ServerEvent('hi'));
+    });
+    $out->header('X-Feed', 'stats');
+    $r = Wire::response($out);
+    expect($r->feeds())->yes(says: 'the wire response opens an outlet');
+    expect($r->streamed())->no(says: 'and holds no worker');
+    expect($r->status)->is(200);
+    expect($r->headers->get('Content-Type'))->some('text/event-stream');
+    expect($r->headers->get('Cache-Control'))->some('no-store');
+    expect($r->headers->get('X-Feed'))->some('stats');
+}
+
+test a_websocket_upgrades
+{
+    $hooks = nexus::SocketHooks()->onMessage(function(nexus::Socket $s, nexus::SocketMessage $m) : void {
+    });
+    $r = Wire::response(nexus::Response(websocket: $hooks, protocol: 'nexus.v1'));
+    expect($r->upgrades())->yes(says: 'the wire response upgrades');
+    expect($r->status)->is(101);
+}
+
 internal function forwarded(const string& $peer, const string& $xff) : http::Request
 {
     $h = http::Headers();

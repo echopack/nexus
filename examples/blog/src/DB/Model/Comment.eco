@@ -1,0 +1,55 @@
+namespace Blog::DB::Model;
+
+use std::time;
+use Blog::DB::Repository::CommentRepository;
+use Blog::Types::Role;
+
+/**
+ * A comment on a post, by a signed in user. Its author comes along by default, so a list of
+ * comments shows who wrote each.
+ */
+#[carbon::model: 'comments']
+public class Comment : carbon::Model<Comment, CommentRepository>
+{
+    public carbon::Link $link = .detached();
+
+    #[carbon::key]
+    #[nexus::expose: { attribute: true }]
+    public int64 $id = 0;
+
+    #[nexus::expose]
+    public int64 $postId;
+
+    public int64 $authorId;
+
+    #[nexus::expose]
+    public string $body;
+
+    #[carbon::created]
+    #[nexus::expose]
+    public time::timestamp? $createdAt = null;
+
+    #[carbon::updated]
+    public time::timestamp? $updatedAt = null;
+
+    #[carbon::belongsTo: 'authorId']
+    #[nexus::expose: { include: 'default' }]
+    public carbon::One<User> $author = .unloaded();
+
+    public function link() : carbon::Link&
+    {
+        return $this->link;
+    }
+
+    /**
+     * Whether `$me` may delete this comment on `$post`: its author, the post's author or an admin
+     * may, a 403 for anyone else.
+     */
+    public const function deletableBy(const User& $me, const Post& $post) : status<nexus::Problem>
+    {
+        if ($this->authorId == $me->id || $post->authorId == $me->id || $me->role == Role::admin) {
+            return .ok;
+        }
+        return .error(.forbidden('only its author, the author of the post or an admin may delete a comment'));
+    }
+}

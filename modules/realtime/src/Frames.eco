@@ -1,0 +1,140 @@
+namespace nexus::realtime;
+
+/**
+ * The messages a realtime socket sends, one JSON object each with its `op`:
+ *
+ * - `ready` once it is open, `signed_in` whether it carries a caller, `socket_id` its global id
+ *   (send it as `X-Socket-Id` so a broadcast your request causes skips you);
+ * - `subscribed` / `unsubscribed` with the `channel`; `subscribed` also has `after`, the cursor to
+ *   catch up from until an `event` gives a newer one (empty when nothing was kept yet) on this
+ *   process's ring (a reconnect that lands on another worker `reset`s), and on a presence channel
+ *   `me` (your member id) and `members` (`[{id, info}]`, you included);
+ * - `joined` with the `channel` and the `member`, `left` with the `channel` and the `member`'s `id`,
+ *   on a presence channel; keyed by id, so a member seen twice is the same one;
+ * - `refused` with the `channel` and the RFC 9457 `problem` why;
+ * - `event` with `channel`, `event`, `id` and `data`, one broadcast;
+ * - `whisper` with `channel`, `event`, `data` and `from` (the sender's member id), one whisper;
+ * - `reset` with the `channel` and a fresh `after` when the one sent named a broadcast no longer
+ *   kept: fetch afresh;
+ * - `pong` for a `ping`, `error` with a `message` for a frame it could not use (and the `channel`
+ *   and `problem` for a whisper the channel refused).
+ */
+public struct Frames
+{
+    public static function ready(bool $signedIn, const string& $socketId) : string
+    {
+        json::Value $doc = Frames::op('ready');
+        $doc['signed_in'] = json::bool($signedIn);
+        $doc['socket_id'] = json::str($socketId);
+        return json::dump($doc);
+    }
+
+    public static function subscribed(const string& $channel, const string& $after, const Roll? $roll = null) : string
+    {
+        json::Value $doc = Frames::op('subscribed');
+        $doc['channel'] = json::str($channel);
+        $doc['after'] = json::str($after);
+        if ($roll != null) {
+            Roll $r = guard $roll;
+            array<json::Value> $members = [];
+            foreach ($r->members as const &$m) {
+                $members[] = $m->json();
+            }
+            $doc['me'] = json::str($r->me->id);
+            $doc['members'] = json::arr($members);
+        }
+        return json::dump($doc);
+    }
+
+    public static function joined(const string& $channel, const Present& $member) : string
+    {
+        json::Value $doc = Frames::op('joined');
+        $doc['channel'] = json::str($channel);
+        $doc['member'] = $member->json();
+        return json::dump($doc);
+    }
+
+    public static function left(const string& $channel, const string& $id) : string
+    {
+        json::Value $doc = Frames::op('left');
+        $doc['channel'] = json::str($channel);
+        json::Value $member = json::object();
+        $member['id'] = json::str($id);
+        $doc['member'] = $member;
+        return json::dump($doc);
+    }
+
+    public static function whisper(const Whisper& $w) : string
+    {
+        json::Value $doc = Frames::op('whisper');
+        $doc['channel'] = json::str($w->channel);
+        $doc['event'] = json::str($w->event);
+        $doc['data'] = $w->data;
+        $doc['from'] = json::str($w->from);
+        return json::dump($doc);
+    }
+
+    public static function unsubscribed(const string& $channel) : string
+    {
+        json::Value $doc = Frames::op('unsubscribed');
+        $doc['channel'] = json::str($channel);
+        return json::dump($doc);
+    }
+
+    public static function refused(const string& $channel, const nexus::Problem& $p, nexus::Mode $mode) : string
+    {
+        json::Value $doc = Frames::op('refused');
+        $doc['channel'] = json::str($channel);
+        $doc['problem'] = $p->json($mode, '');
+        return json::dump($doc);
+    }
+
+    public static function event(const Envelope& $e) : string
+    {
+        json::Value $doc = Frames::op('event');
+        $doc['channel'] = json::str($e->channel);
+        $doc['event'] = json::str($e->event);
+        $doc['id'] = json::str($e->id);
+        $doc['data'] = $e->data;
+        return json::dump($doc);
+    }
+
+    public static function reset(const string& $channel, const string& $after) : string
+    {
+        json::Value $doc = Frames::op('reset');
+        $doc['channel'] = json::str($channel);
+        $doc['after'] = json::str($after);
+        return json::dump($doc);
+    }
+
+    public static function pong() : string
+    {
+        return json::dump(Frames::op('pong'));
+    }
+
+    public static function error(const string& $message) : string
+    {
+        json::Value $doc = Frames::op('error');
+        $doc['message'] = json::str($message);
+        return json::dump($doc);
+    }
+
+    /**
+     * A whisper on `$channel` the channel class refused, with the problem why.
+     */
+    public static function error(channel: const string& $channel, const nexus::Problem& $p, nexus::Mode $mode) : string
+    {
+        json::Value $doc = Frames::op('error');
+        $doc['message'] = json::str($p->detail($mode));
+        $doc['channel'] = json::str($channel);
+        $doc['problem'] = $p->json($mode, '');
+        return json::dump($doc);
+    }
+
+    private static function op(const string& $name) : json::Value
+    {
+        json::Value $doc = json::object();
+        $doc['op'] = json::str($name);
+        return $doc;
+    }
+}

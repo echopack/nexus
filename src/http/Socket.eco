@@ -1,0 +1,33 @@
+namespace nexus;
+
+/**
+ * One open websocket, as the transport hands it to `SocketHooks`. Sends are safe from any thread
+ * and never interleave. The transport keeps the connection without holding a thread for it.
+ */
+public interface Socket
+{
+    /**
+     * A number no other open socket or stream of this process has.
+     */
+    function id() : int64;
+
+    /**
+     * Sends a text message. False once the socket is closing or the client is gone.
+     */
+    function send(const string& $text) : bool;
+
+    /**
+     * Sends a binary message. False the same way as `send`.
+     */
+    function sendBinary(const string& $bytes) : bool;
+
+    /**
+     * Starts the closing handshake; nothing more can be sent. The close hook runs once it is done.
+     */
+    function close(int32 $code, const string& $reason) : void;
+
+    /**
+     * Whether a send still reaches anyone.
+     */
+    function open() : bool;
+}

@@ -1,0 +1,128 @@
+namespace nexus::realtime;
+
+/**
+ * Which channel names a channel class answers for: dot separated segments, each a word or a
+ * `{param}`, `{param:integer}` for digits only. `posts.{id:integer}` answers `posts.5`, not
+ * `posts.new` and not `posts.5.likes`. A segment is letters, digits, `_` and `-`.
+ */
+public struct ChannelPattern
+{
+    public string $text;
+    internal array<ChannelPart> $parts = [];
+
+    /**
+     * The pattern `$text`, or what is wrong with it.
+     */
+    public static function parse(const string& $text) : result<ChannelPattern, string>
+    {
+        array<ChannelPart> $parts = [];
+        if ($text->empty()) {
+            return .error('a channel pattern needs at least one segment');
+        }
+        foreach (str::split($text, '.') as const &$seg) {
+            string $s = string($seg);
+            if ($s->starts('{') && $s->ends('}')) {
+                string $inner = $s->sub(1, $s->size() - 2);
+                bool $integer = false;
+                if ($inner->ends(':integer')) {
+                    $inner = $inner->sub(0, $inner->size() - 8);
+                    $integer = true;
+                }
+                if (!ChannelPattern::word($inner)) {
+                    return .error("'{$s}' in '{$text}' is no parameter; write \{name} or \{name:integer}");
+                }
+                $parts[] = ChannelPart('', $inner, $integer);
+                continue;
+            }
+            if (!ChannelPattern::word($s)) {
+                return .error("'{$s}' in '{$text}' is no segment; use letters, digits, _ and -");
+            }
+            $parts[] = ChannelPart($s, '', false);
+        }
+        return .ok(ChannelPattern($text, mv $parts));
+    }
+
+    /**
+     * Whether `$name` is a channel name a socket could subscribe to: dot separated segments of
+     * letters, digits, `_` and `-`, at most 200 characters.
+     */
+    public static function named(const string& $name) : bool
+    {
+        if ($name->empty() || $name->size() > 200) {
+            return false;
+        }
+        foreach (str::split($name, '.') as const &$seg) {
+            if (!ChannelPattern::word(string($seg))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * `$name` as a topic of this pattern, or null when the pattern does not answer for it.
+     */
+    public const function topic(const string& $name) : Topic?
+    {
+        if (!ChannelPattern::named($name)) {
+            return null;
+        }
+        return $this->topic($name, str::split($name, '.')->owned());
+    }
+
+    /**
+     * `$name`, a channel name already, as a topic of this pattern given its segments `$segs`, or
+     * null when the pattern does not answer for it.
+     */
+    internal const function topic(const string& $name, const array<string>& $segs) : Topic?
+    {
+        if ($segs->count() != $this->parts->count()) {
+            return null;
+        }
+        map<string, string> $params = [];
+        usize $i = 0;
+        while ($i < $this->parts->count()) {
+            const string& $s = $segs[$i];
+            ChannelPart $p = $this->parts[$i];
+            $i = $i + 1;
+            if ($p->param->empty()) {
+                if ($s != $p->literal) {
+                    return null;
+                }
+                continue;
+            }
+            if ($p->integer && !nexus::Constraint::number->admits($s)) {
+                return null;
+            }
+            $params[$p->param] = $s;
+        }
+        return Topic($name, mv $params);
+    }
+
+    internal static function word(const string& $s) : bool
+    {
+        if ($s->empty()) {
+            return false;
+        }
+        usize $i = 0;
+        while ($i < $s->size()) {
+            uint8 $b = $s->byte($i);
+            bool $ok = ($b >= 48 && $b <= 57) || ($b >= 65 && $b <= 90) || ($b >= 97 && $b <= 122) || $b == 95 || $b == 45;
+            if (!$ok) {
+                return false;
+            }
+            $i = $i + 1;
+        }
+        return true;
+    }
+}
+
+/**
+ * One segment of a pattern: a word, or a param (integer only or any word).
+ */
+internal struct ChannelPart
+{
+    public string $literal;
+    public string $param;
+    public bool $integer;
+}

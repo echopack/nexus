@@ -1,0 +1,34 @@
+namespace nexus;
+
+use std::time;
+
+/**
+ * One server-sent event: `data` (each of its lines goes out as a `data:` line) and optionally the
+ * event's name, its id (what a reconnecting client sends back as `Last-Event-ID`) and how long the
+ * client waits before reconnecting. Empty data writes no `data:` line, for an event that only sets
+ * the `retry` or the `id`, which clients do not dispatch.
+ *
+ *     $stream->send(nexus::ServerEvent(json: $snapshot, $event: 'stats', $id: "{$n}"));
+ */
+public struct ServerEvent
+{
+    public string $data = '';
+    public string? $event = null;
+    public string? $id = null;
+    public time::duration? $retry = null;
+
+    public constructor(const string& $data, string? $event = null, string? $id = null)
+    {
+        $this->data = $data;
+        $this->event = $event;
+        $this->id = $id;
+    }
+
+    /**
+     * An event whose data is `$doc`, compact JSON on one line.
+     */
+    public constructor(json: const json::Value& $doc, string? $event = null, string? $id = null)
+    {
+        $this = ServerEvent(json::dump($doc), $event: $event, $id: $id);
+    }
+}

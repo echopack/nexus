@@ -220,6 +220,7 @@ public class Kernel
         if ($req->method == Method::head) {
             $res->body = '';
             $res->stream = null;
+            $res->events = null;
         }
         $this->served->add(1);
 

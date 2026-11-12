@@ -1,0 +1,49 @@
+namespace nexus::auth;
+
+use std::thread;
+
+/**
+ * Where `Sessions` and `Tokens` say a credential ended, once the store forgot it: a sign out, a
+ * revoke, a password change that ends them all. What holds on to an identity past its request
+ * listens, as nexus-realtime does to close the sockets opened with it.
+ *
+ * ```echo
+ * $s->get<nexus::auth::Endings>()->listen(function(nexus::auth::Ending $e) : void { ... });
+ * ```
+ *
+ * A listener runs on the thread that ended the credential and cannot fail the sign out; one that
+ * has slow work to do hands it on. An ending inside a transaction that rolls back is still told.
+ */
+#[atomic]
+public class Endings
+{
+    private thread::mutex<array<function<void(Ending)>>> $listeners = thread::mutex<array<function<void(Ending)>>>(array<function<void(Ending)>>());
+
+    public constructor()
+    {
+    }
+
+    /**
+     * Runs `$fn` for every credential that ends from now on.
+     */
+    public function listen(function<void(Ending)> $fn) : void
+    {
+        thread::locked<array<function<void(Ending)>>> $held = $this->listeners->lock();
+        $held->value->push($fn);
+    }
+
+    /**
+     * Tells every listener that `$e` ended.
+     */
+    public function ended(const Ending& $e) : void
+    {
+        array<function<void(Ending)>> $all = [];
+        {
+            thread::locked<array<function<void(Ending)>>> $held = $this->listeners->lock();
+            $all = $held->value->clone();
+        }
+        foreach ($all as const &$fn) {
+            $fn($e);
+        }
+    }
+}

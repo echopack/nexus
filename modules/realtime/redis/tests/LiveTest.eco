@@ -1,0 +1,240 @@
+/**
+ * Broadcasts between two apps through a real Redis server, named by REALTIME_REDIS_URL
+ * (`redis://127.0.0.1:6379/15`), else the one ecotest starts from ecotest.json
+ * (ECOTEST_REDIS_URL); skipped without either. Every test keeps to a prefix of its own.
+ */
+
+use nexus::testing::{TestApp, TestSocket};
+use ecotest::expect;
+use std::thread;
+
+internal function liveUrl() : string?
+{
+    foreach (['REALTIME_REDIS_URL', 'ECOTEST_REDIS_URL'] as const &$name) {
+        string::view? $v = std::env::var($name);
+        if ($v != null) {
+            string::view $url = guard $v;
+            return string($url);
+        }
+    }
+    return null;
+}
+
+/**
+ * Anybody may follow `rooms.*`, and is a presence member there.
+ */
+internal class LRooms : nexus::realtime::Channel
+{
+    public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : status<nexus::Problem>
+    {
+        return .ok;
+    }
+
+    public function member(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : result<json::Value?, nexus::Problem>
+    {
+        return .ok(json::object());
+    }
+}
+
+internal class LChannels : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'live-channels';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        $s->bind<LRooms>(put: LRooms());
+        $s->get<nexus::realtime::Channels>()->add<LRooms>('rooms.{name}', 'LRooms');
+        return .ok;
+    }
+}
+
+/**
+ * One server of the app on `$url`, listening as `serve` does.
+ */
+internal function server(const string& $url, const string& $prefix) : TestApp
+{
+    array<nexus::Extension> $exts = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), nexus::realtime::redis::Extension(), LChannels()];
+    $app = TestApp($exts, ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => $url, 'NEXUS_REALTIME_PREFIX' => $prefix]);
+    guard $app->kernel->services->get<nexus::realtime::Relay>()->start($app->kernel->services->get<nexus::realtime::Hub>());
+    return $app;
+}
+
+/**
+ * Waits up to two seconds for `$ws` to have `$n` events.
+ */
+internal function events(TestSocket $ws, usize $n) : bool
+{
+    return waits($ws, 'event', $n);
+}
+
+/**
+ * Waits up to two seconds for `$ws` to have `$n` messages with op `$op`.
+ */
+internal function waits(TestSocket $ws, const string& $op, usize $n) : bool
+{
+    int32 $tries = 0;
+    while ($tries < 200) {
+        if ($ws->where('op', $op)->count() >= $n) {
+            return true;
+        }
+        thread::sleep(10);
+        $tries = $tries + 1;
+    }
+    return false;
+}
+
+/**
+ * Waits up to two seconds for `$ws` to be closed by the app.
+ */
+internal function closes(TestSocket $ws) : bool
+{
+    int32 $tries = 0;
+    while ($tries < 200) {
+        if (!$ws->open()) {
+            return true;
+        }
+        thread::sleep(10);
+        $tries = $tries + 1;
+    }
+    return false;
+}
+
+internal function stop(TestApp $app) : void
+{
+    $app->kernel->services->get<nexus::realtime::Relay>()->stop();
+}
+
+test live_a_broadcast_on_one_server_reaches_a_socket_on_another
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('REALTIME_REDIS_URL is not set and ecotest started no redis');
+        return;
+    };
+    string $run = nexus::Kernel::id();
+    string $prefix = "test:{$run}:";
+    TestApp $a = server($url, $prefix);
+    TestApp $b = server($url, $prefix);
+    expect($a->kernel->services->get<nexus::realtime::Broadcaster>()->describe())->has('redis://');
+
+    TestSocket $ws = $b->socket('/realtime');
+    $ws->say('{"op":"subscribe","channel":"rooms.tea"}');
+    json::Value $doc = json::object();
+    $doc['text'] = json::str('hello');
+    guard $a->kernel->services->get<nexus::realtime::Broadcaster>()->send('rooms.tea', 'said', $doc);
+    expect(events($ws, 1))->yes(says: 'the event crossed over');
+    json::Value $got = $ws->where('op', 'event')[0];
+    expect($got->get('data')?->get('text')?->asStr())->some('hello');
+
+    // a process that only publishes, as `work` or a command does, reaches the same sockets
+    array<nexus::Extension> $quiet = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), nexus::realtime::redis::Extension(), LChannels()];
+    TestApp $worker = TestApp($quiet, ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => $url, 'NEXUS_REALTIME_PREFIX' => $prefix]);
+    guard $worker->kernel->services->get<nexus::realtime::Broadcaster>()->send('rooms.tea', 'said', $doc);
+    expect(events($ws, 2))->yes(says: 'a publishing process reaches the server');
+
+    $a->kernel->services->get<nexus::realtime::Relay>()->stop();
+    $b->kernel->services->get<nexus::realtime::Relay>()->stop();
+}
+
+test live_another_prefix_hears_nothing
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('REALTIME_REDIS_URL is not set and ecotest started no redis');
+        return;
+    };
+    string $run = nexus::Kernel::id();
+    TestApp $a = server($url, "test:{$run}:a:");
+    TestApp $b = server($url, "test:{$run}:b:");
+    TestSocket $ws = $b->socket('/realtime');
+    $ws->say('{"op":"subscribe","channel":"rooms.tea"}');
+    json::Value $doc = json::object();
+    guard $a->kernel->services->get<nexus::realtime::Broadcaster>()->send('rooms.tea', 'said', $doc);
+    thread::sleep(300);
+    expect($ws->where('op', 'event'))->size(0);
+    $a->kernel->services->get<nexus::realtime::Relay>()->stop();
+    $b->kernel->services->get<nexus::realtime::Relay>()->stop();
+}
+
+test live_a_credential_ended_on_one_server_closes_its_sockets_on_another
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('REALTIME_REDIS_URL is not set and ecotest started no redis');
+        return;
+    };
+    string $run = nexus::Kernel::id();
+    string $prefix = "test:{$run}:";
+    TestApp $a = server($url, $prefix);
+    TestApp $b = server($url, $prefix);
+    nexus::Payload $p = $b->kernel->background('test', 'token');
+    nexus::auth::Issued $t = guard $p->get<nexus::auth::Tokens>()->issue('7');
+    nexus::Kernel::finish($p);
+    map<string, string> $h = ['Authorization' => "Bearer {$t->token}"];
+    TestSocket $ws = $b->socket('/realtime', $h);
+    TestSocket $guest = $b->socket('/realtime');
+    // a password change in another process ends every token of the user
+    nexus::Payload $q = $a->kernel->background('test', 'password');
+    guard $q->get<nexus::auth::Tokens>()->revokeAll('7');
+    nexus::Kernel::finish($q);
+    expect(closes($ws))->yes(says: 'the ending crossed over');
+    expect($ws->closedWith->load())->is(4001);
+    expect($guest->open())->yes(says: 'a guest stays');
+    stop($a);
+    stop($b);
+}
+
+test live_presence_spans_servers
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('REALTIME_REDIS_URL is not set and ecotest started no redis');
+        return;
+    };
+    string $run = nexus::Kernel::id();
+    string $prefix = "test:{$run}:";
+    TestApp $a = server($url, $prefix);
+    TestApp $b = server($url, $prefix);
+    TestSocket $ann = $a->socket('/realtime');
+    TestSocket $bob = $b->socket('/realtime');
+    $ann->say('{"op":"subscribe","channel":"rooms.tea"}');
+    expect(waits($ann, 'subscribed', 1))->yes(says: 'ann is in');
+    $bob->say('{"op":"subscribe","channel":"rooms.tea"}');
+    expect(waits($bob, 'subscribed', 1))->yes(says: 'bob is in');
+    json::Value $roll = $bob->where('op', 'subscribed')[0];
+    array<json::Value> $members = $roll->get('members')?->asArray() ?? array<json::Value>();
+    expect($members)->size(2);
+    expect(waits($ann, 'joined', 1))->yes(says: 'ann heard bob join on the other server');
+    $bob->leave();
+    expect(waits($ann, 'left', 1))->yes(says: 'ann heard bob leave');
+    stop($a);
+    stop($b);
+}
+
+test live_the_members_of_a_server_that_stopped_beating_are_taken_out
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('REALTIME_REDIS_URL is not set and ecotest started no redis');
+        return;
+    };
+    string $run = nexus::Kernel::id();
+    string $prefix = "test:{$run}:";
+    array<nexus::Extension> $exts = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), nexus::realtime::redis::Extension(), LChannels()];
+    TestApp $app = TestApp($exts, ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => $url, 'NEXUS_REALTIME_PREFIX' => $prefix, 'NEXUS_REALTIME_BEAT' => '100ms']);
+    nexus::realtime::Roster $roster = $app->kernel->services->get<nexus::realtime::Roster>();
+    guard $roster->join('rooms.tea', nexus::realtime::Present('deadbeef.1', json::object()));
+    guard $roster->join('rooms.tea', nexus::realtime::Present('0badf00d.2', json::object()));
+    array<nexus::realtime::Present> $both = guard $roster->members('rooms.tea');
+    expect($both)->size(2);
+    thread::sleep(200);
+    guard $roster->beat('0badf00d');
+    thread::sleep(200);
+    guard $roster->beat('0badf00d');
+    array<nexus::realtime::Present> $alive = guard $roster->members('rooms.tea');
+    expect($alive)->size(1);
+    expect($alive[0]->id)->is('0badf00d.2');
+    array<string> $pruned = guard $roster->prune('rooms.tea');
+    expect($pruned)->is(['deadbeef.1']);
+    array<string> $again = guard $roster->prune('rooms.tea');
+    expect($again)->size(0);
+}
+

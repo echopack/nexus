@@ -208,6 +208,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::debug::Static>('nexus::debug::Static');
     $g->name<nexus::debug::TokenGate>('nexus::debug::TokenGate');
     $g->name<nexus::debug::Topic>('nexus::debug::Topic');
+    $g->name<nexus::debug::TopicSender>('nexus::debug::TopicSender');
     $g->name<nexus::debug::Topics>('nexus::debug::Topics');
     $g->name<nexus::debug::View>('nexus::debug::View');
     $g->name<nexus::debug::Viewer>('nexus::debug::Viewer');

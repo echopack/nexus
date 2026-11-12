@@ -9,7 +9,7 @@ public struct CountUsers : nexus::work::Task
 {
     public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
     {
-        UserRepository $users = $payload->get<UserRepository>();
+        $users = $payload->get<UserRepository>();
         uint64 $n = guard $users->find()->count() else ($e) {
             return .error(.retry("counting users: {$e}"));
         };

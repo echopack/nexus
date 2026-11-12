@@ -1,0 +1,12 @@
+/*
+ * wsprobe: the blog smoke test's websocket client, since curl speaks none.
+ */
+
+#[module: "wsprobe"]
+#[version: "0.1.0"]
+
+#[depends: "../../../../../libtcp"]
+
+#[sources: "main.eco"]
+
+#[target: exe { name: "wsprobe", entry: "main.eco" }]

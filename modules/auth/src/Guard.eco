@@ -16,6 +16,16 @@ public interface Guard
     function identify(nexus::Payload& $payload) : result<Identity?, nexus::Problem>;
 
     /**
+     * Whether the credential `$id` names still holds: the session is open, the token unexpired.
+     * For a credential checked once and used later, as a ticket for a websocket is. A guard whose
+     * credentials cannot end answers true.
+     */
+    function holds(nexus::Payload& $payload, const Identity& $id) : result<bool, nexus::Problem>
+    {
+        return .ok(true);
+    }
+
+    /**
      * Ends the credential `$id` names, for a logout.
      */
     function revoke(nexus::Payload& $payload, const Identity& $id) : status<nexus::Problem>

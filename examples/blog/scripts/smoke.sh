@@ -12,7 +12,11 @@
 # `posts:show` and `posts:create` on the command line, and an MCP client
 # that registers, is allowed by the editor on the request the authorize
 # step kept, trades its code with PKCE, calls the post tools and
-# refreshes its token.
+# refreshes its token. Realtime: a websocket (scripts/wsprobe, since curl speaks
+# none) follows a post and sees a comment come in, and a broadcast from the
+# command line reach it through a throwaway Redis in Docker; a ticket opens
+# the editor's own channel once; the admin's stats arrive as server-sent
+# events, and sixteen of those streams open on two workers hold none of them.
 #
 #   scripts/smoke.sh                     # mysql:8.0
 #   IMAGE=mariadb:11 scripts/smoke.sh
@@ -24,6 +28,7 @@ base="http://127.0.0.1:${port}"
 echoc="${ECHOC:-echoc}"
 cd "${here}"
 "${echoc}" build >/dev/null || { echo "build failed"; exit 1; }
+(cd scripts/wsprobe && "${echoc}" build -o "${here}/ecobuild/wsprobe" >/dev/null) || { echo "wsprobe build failed"; exit 1; }
 
 db_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 name="nexus-blog-smoke-$$"
@@ -37,12 +42,17 @@ mail_name="nexus-blog-mail-$$"
 docker run -d --rm --name "${mail_name}" \
     -p "127.0.0.1:${mail_smtp}:1025" -p "127.0.0.1:${mail_http}:8025" "${MAIL_IMAGE:-axllent/mailpit}" >/dev/null \
     || { docker rm -f -v "${name}" >/dev/null 2>&1; echo "docker run (mailpit) failed"; exit 1; }
-trap 'docker rm -f -v "${name}" "${mail_name}" >/dev/null 2>&1 || true' EXIT
+redis_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+redis_name="nexus-blog-redis-$$"
+docker run -d --rm --name "${redis_name}" -p "127.0.0.1:${redis_port}:6379" "${REDIS_IMAGE:-redis:7}" >/dev/null \
+    || { docker rm -f -v "${name}" "${mail_name}" >/dev/null 2>&1; echo "docker run (redis) failed"; exit 1; }
+trap 'docker rm -f -v "${name}" "${mail_name}" "${redis_name}" >/dev/null 2>&1 || true' EXIT
 mailapi="http://127.0.0.1:${mail_http}/api/v1"
 
 export NEXUS_DATABASE_URL="mysql://app:secret@127.0.0.1:${db_port}/blog?fetchServerKey=true"
 export NEXUS_AUTH_KEY=smoke-auth-key-of-at-least-32-characters
 export NEXUS_MAIL_URL="smtp://127.0.0.1:${mail_smtp}" NEXUS_MAIL_TLS=none NEXUS_MAIL_FROM=hello@blog.test NEXUS_MAIL_FROM_NAME="A nexus blog"
+export NEXUS_REALTIME_URL="redis://127.0.0.1:${redis_port}/0" NEXUS_REALTIME_MAX_SOCKETS=3 BLOG_STATS_EVERY=1s
 
 failed=0
 check() {
@@ -64,9 +74,9 @@ for _ in $(seq 1 90); do
     migrated=""
     sleep 1
 done
-check "migrate"           7 "$(printf '%s\n' "${migrated}" | grep -c '^migrated')"
+check "migrate"           8 "$(printf '%s\n' "${migrated}" | grep -c '^migrated')"
 check "migrate again"     "nothing to do" "$(./ecobuild/blog migrate 2>&1)"
-check "migrate:status"    7 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^ran')"
+check "migrate:status"    8 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^ran')"
 check "password, nobody"  1 "$(./ecobuild/blog user:password --email nobody@example.com --password smoke-password-1 >/dev/null 2>&1; echo $?)"
 check "password, short"   1 "$(./ecobuild/blog user:password --email editor@example.com --password short >/dev/null 2>&1; echo $?)"
 check "password"          "password set for editor@example.com" "$(./ecobuild/blog user:password --email editor@example.com --password smoke-password-1 2>&1)"
@@ -90,8 +100,15 @@ check "mail, live"        1 "$(printf '%s\n' "${live}" | grep -c '^ok .*LiveTest
 # the subjects of every mail to `$1` Mailpit holds
 mailed() { curl -s -G --data-urlencode "query=to:$1" "${mailapi}/search" | grep -o '"Subject":"[^"]*"'; }
 
+# Redis takes a moment too; the server pings it once at boot
+for _ in $(seq 1 50); do
+    docker exec "${redis_name}" redis-cli ping 2>/dev/null | grep -q PONG && break
+    sleep 0.2
+done
+
 log="$(mktemp)"
-./ecobuild/blog serve --listen "127.0.0.1:${port}" >"${log}" 2>&1 &
+# two workers: the event streams opened below must hold none of them
+./ecobuild/blog serve --listen "127.0.0.1:${port}" --workers 2 >"${log}" 2>&1 &
 pid=$!
 for _ in $(seq 1 50); do
     curl -s -o /dev/null "${base}/health" && break
@@ -149,6 +166,114 @@ check "update, missing"   404 "$(scode "${editor}" PATCH /v1/posts/99 '{}')"
 check "delete"            204 "$(scode "${editor}" DELETE /v1/posts/2 '')"
 check "deleted"           404 "$(scode "${visitor}" GET /v1/posts/2 '')"
 check "delete, nobody"    401 "$(scode "${visitor}" DELETE /v1/posts/1 '')"
+
+# comments, and the same comments live over the realtime websocket
+probe() { "${here}/ecobuild/wsprobe" "${port}" "$@"; }
+# waits until file $1 has a line matching $2
+seen() {
+    for _ in $(seq 1 50); do
+        grep -q "$2" "$1" && return 0
+        sleep 0.1
+    done
+    return 1
+}
+check "comments, empty"   '"data":[]' "$(as "${visitor}" GET /v1/posts/1/comments '' | grep -o '"data":\[\]')"
+check "comment, nobody"   401 "$(scode "${visitor}" POST /v1/posts/1/comments '{"body":"me too"}')"
+check "comment, blank"    422 "$(scode "${editor}" POST /v1/posts/1/comments '{"body":"   "}')"
+check "comment, no post"  404 "$(scode "${editor}" POST /v1/posts/99/comments '{"body":"hello"}')"
+live_log="$(mktemp)"
+# the binary itself in the background, so the kill below reaches it, not a subshell
+"${here}/ecobuild/wsprobe" "${port}" /realtime 5 '{"op":"subscribe","channel":"posts.1"}' >"${live_log}" 2>&1 &
+probe_pid=$!
+seen "${live_log}" '"op":"subscribed","channel":"posts.1"'
+check "ws, subscribed"    0 "$?"
+check "comment"           201 "$(scode "${editor}" POST /v1/posts/1/comments '{"body":"Live from curl"}')"
+# another process, the command line, reaches the server's socket through Redis
+check "realtime:send"     1 "$(./ecobuild/blog realtime:send --channel posts.1 --event note --data '{"text":"from the shell"}' 2>&1 | grep -c '^sent note to posts.1 (redis://')"
+seen "${live_log}" '"event":"note"'
+check "ws, comment came"  1 "$(grep -c '"event":"comment.posted".*"body":"Live from curl"' "${live_log}")"
+check "ws, via redis"     1 "$(grep -c '"event":"note".*"text":"from the shell"' "${live_log}")"
+kill -KILL "${probe_pid}" 2>/dev/null
+wait "${probe_pid}" 2>/dev/null
+rm -f "${live_log}"
+check "comments, listed"  '"body":"Live from curl"' "$(as "${visitor}" GET /v1/posts/1/comments '' | grep -o '"body":"Live from curl"')"
+check "ws, own, nobody"   1 "$(probe /realtime 1 '{"op":"subscribe","channel":"users.1"}' | grep -c '"op":"refused".*"status":401')"
+ticket="$(as "${editor}" POST /realtime/ticket '{}' | field ticket)"
+check "ticket, nobody"    401 "$(scode "${visitor}" POST /realtime/ticket '{}')"
+check "ws, own, ticket"   1 "$(probe "/realtime?ticket=${ticket}" 1 '{"op":"subscribe","channel":"users.1"}' | grep -c '"op":"subscribed","channel":"users.1"')"
+check "ws, ticket again"  "refused 401" "$(probe "/realtime?ticket=${ticket}" 1)"
+check "ws, not a socket"  426 "$(code "${base}/realtime")"
+
+# a post's readers see each other and who types, a commenter's own socket is skipped, and signing
+# out closes the socket of the session that ended
+reader_log="$(mktemp)"
+writer_log="$(mktemp)"
+"${here}/ecobuild/wsprobe" "${port}" /realtime 8 '{"op":"subscribe","channel":"posts.1"}' >"${reader_log}" 2>&1 &
+reader_pid=$!
+seen "${reader_log}" '"op":"subscribed","channel":"posts.1"'
+leaver="$(opensession)"
+check "login, leaver"     200 "$(scode "${leaver}" POST /v1/auth/signin "${login}")"
+ticket="$(as "${leaver}" POST /realtime/ticket '{}' | field ticket)"
+"${here}/ecobuild/wsprobe" "${port}" "/realtime?ticket=${ticket}" 8 '{"op":"subscribe","channel":"posts.1"}' '{"op":"whisper","channel":"posts.1","event":"typing","data":{"name":"Mallory"}}' >"${writer_log}" 2>&1 &
+writer_pid=$!
+seen "${reader_log}" '"op":"whisper"'
+check "ws, presence"      1 "$(grep -c '"op":"subscribed","channel":"posts.1".*"members":.*"name":"The editor"' "${writer_log}")"
+check "ws, joined"        1 "$(grep -c '"op":"joined","channel":"posts.1"' "${reader_log}")"
+check "ws, typing"        1 "$(grep -c '"op":"whisper".*"name":"The editor"' "${reader_log}")"
+socket_id="$(grep -o '"socket_id":"[^"]*"' "${writer_log}" | cut -d'"' -f4)"
+check "comment, skips me" 201 "$(scode "${leaver}" POST /v1/posts/1/comments '{"body":"Not to myself"}' -H "X-Socket-Id: ${socket_id}")"
+seen "${reader_log}" 'Not to myself'
+check "ws, others see it" 1 "$(grep -c '"body":"Not to myself"' "${reader_log}")"
+check "ws, not to me"     0 "$(grep -c '"body":"Not to myself"' "${writer_log}")"
+check "logout, leaver"    204 "$(scode "${leaver}" DELETE /v1/auth '')"
+seen "${writer_log}" '^closed'
+check "ws, signed out"    "closed 4001" "$(grep '^closed' "${writer_log}")"
+seen "${reader_log}" '"op":"left"'
+check "ws, left"          1 "$(grep -c '"op":"left","channel":"posts.1"' "${reader_log}")"
+kill -KILL "${reader_pid}" "${writer_pid}" 2>/dev/null
+wait "${reader_pid}" "${writer_pid}" 2>/dev/null
+rm -f "${reader_log}" "${writer_log}"
+
+# one address opens three sockets at most (NEXUS_REALTIME_MAX_SOCKETS)
+held=()
+held_logs=()
+for _ in 1 2 3; do
+    held_log="$(mktemp)"
+    "${here}/ecobuild/wsprobe" "${port}" /realtime 4 >"${held_log}" 2>&1 &
+    held+=($!)
+    held_logs+=("${held_log}")
+done
+for held_log in "${held_logs[@]}"; do
+    seen "${held_log}" '"op":"ready"'
+done
+check "ws, a fourth"      "refused 429" "$(probe /realtime 1)"
+kill -KILL "${held[@]}" 2>/dev/null
+wait "${held[@]}" 2>/dev/null
+rm -f "${held_logs[@]}"
+
+# the admin's numbers, a server-sent event stream: one at once, then one a second
+check "stats, nobody"     401 "$(code "${base}/v1/admin/stats/stream")"
+stats="$(curl -s -N --max-time 3 -H 'Accept: text/event-stream' -H "$(authz "${editor}" GET /v1/admin/stats/stream '')" "${base}/v1/admin/stats/stream")"
+check "stats, streamed"   1 "$([ "$(printf '%s\n' "${stats}" | grep -c '^event: stats$')" -ge 2 ] && echo 1 || echo 0)"
+check "stats, comments"   '"comments":2' "$(printf '%s\n' "${stats}" | grep -o '"comments":[0-9]*' | head -1)"
+# every probe above has hung up, the killed ones too: by the last snapshot the server let go of
+# their sockets
+check "stats, sockets"    '"sockets":0' "$(printf '%s\n' "${stats}" | grep -o '"sockets":[0-9]*' | tail -1)"
+# sixteen streams open at once hold neither of the two workers
+streams=()
+stream_logs=()
+for _ in $(seq 1 16); do
+    stream_log="$(mktemp)"
+    curl -s -N --max-time 4 -o "${stream_log}" -H "$(authz "${editor}" GET /v1/admin/stats/stream '')" "${base}/v1/admin/stats/stream" &
+    streams+=($!)
+    stream_logs+=("${stream_log}")
+done
+for stream_log in "${stream_logs[@]}"; do
+    seen "${stream_log}" '^event: stats$'
+done
+check "streams, a worker free" 200 "$(code --max-time 2 "${base}/health")"
+wait "${streams[@]}"
+rm -f "${stream_logs[@]}"
 # a second session for the editor, kept until the end: it outlives a restart
 keeper="$(opensession)"
 check "login, kept"       200 "$(scode "${keeper}" POST /v1/auth/signin "${login}")"
@@ -259,6 +384,19 @@ check "users, the admin"  '"name":"First reader"' "$(as "${keeper}" GET /v1/user
 check "users, emails"     '"email":"first@example.com"' "$(as "${keeper}" GET /v1/users '' | grep -o '"email":"first@example.com"')"
 check "users, roles"      '"role":2' "$(as "${keeper}" GET /v1/users '' | grep -o '"role":2')"
 check "delete, not yours" 403 "$(scode "${first}" DELETE /v1/posts/1 '')"
+check "stats, a reader"   403 "$(scode "${first}" GET /v1/admin/stats/stream '')"
+# a new password from the command line, another process, closes the reader's socket through Redis
+ticket="$(as "${first}" POST /realtime/ticket '{}' | field ticket)"
+reader_log="$(mktemp)"
+"${here}/ecobuild/wsprobe" "${port}" "/realtime?ticket=${ticket}" 8 >"${reader_log}" 2>&1 &
+reader_pid=$!
+seen "${reader_log}" '"op":"ready"'
+check "password, reader"  "password set for first@example.com" "$(./ecobuild/blog user:password --email first@example.com --password first-password-2 2>&1)"
+seen "${reader_log}" '^closed'
+check "ws, new password"  "closed 4001" "$(grep '^closed' "${reader_log}")"
+check "reader signed out" 401 "$(scode "${first}" GET /v1/me '')"
+wait "${reader_pid}" 2>/dev/null
+rm -f "${reader_log}"
 
 kill -TERM "${pid}"
 wait "${pid}"
@@ -318,6 +456,6 @@ wait "${pid}"
 check "auth:prune"        "pruned  0 tokens|pruned  0 sessions|pruned  0 oauth requests, codes and grants|pruned  0 sign-in attempts" "$(./ecobuild/blog auth:prune 2>&1 | paste -sd '|' -)"
 check "reset wants force" 1 "$(./ecobuild/blog migrate:reset --mode prod >/dev/null 2>&1; echo $?)"
 check "work:failed, end"  "no failed tasks" "$(./ecobuild/blog work:failed 2>&1)"
-check "migrate:reset"     7 "$(./ecobuild/blog migrate:reset 2>&1 | grep -c '^undone')"
-check "all pending"       7 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^pending')"
+check "migrate:reset"     8 "$(./ecobuild/blog migrate:reset 2>&1 | grep -c '^undone')"
+check "all pending"       8 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^pending')"
 exit ${failed}

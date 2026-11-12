@@ -16,10 +16,12 @@ public class Tokens
     public const string $prefix;
     public const time::duration $lifetime;
     public calendar::Clock $clock;
+    private Endings $endings;
 
-    public constructor(TokenStore $store, const string& $prefix, time::duration $lifetime, calendar::Clock $clock)
+    public constructor(TokenStore $store, const string& $prefix, time::duration $lifetime, calendar::Clock $clock, Endings $endings)
     {
         $this->store = $store;
+        $this->endings = $endings;
         $this->prefix = $prefix;
         $this->lifetime = $lifetime;
         $this->clock = $clock;
@@ -41,17 +43,36 @@ public class Tokens
         return .ok(Issued($t->text(), mv $s));
     }
 
+    /**
+     * Revokes token `$id`, and tells `Endings`.
+     */
     public function revoke(const string& $id) : status<nexus::Problem>
     {
-        return $this->store->remove($id);
+        try $this->store->remove($id);
+        $this->endings->ended(Ending::credential(BearerGuard::NAME, $id));
+        return .ok;
     }
 
     /**
-     * Revokes every token of `$subject`.
+     * Revokes every token of `$subject`, and tells `Endings`.
      */
     public function revokeAll(const string& $subject) : status<nexus::Problem>
     {
-        return $this->store->removeAll($subject);
+        try $this->store->removeAll($subject);
+        $this->endings->ended(Ending::subject(BearerGuard::NAME, $subject));
+        return .ok;
+    }
+
+    /**
+     * Whether token `$id` is still stored, unexpired, for `$subject`.
+     */
+    public function holds(const string& $id, const string& $subject) : result<bool, nexus::Problem>
+    {
+        StoredToken? $found = try $this->store->find($id);
+        StoredToken $s = guard $found else {
+            return .ok(false);
+        };
+        return .ok(!$s->expired($this->clock->now()) && $s->subject == $subject);
     }
 
     /**

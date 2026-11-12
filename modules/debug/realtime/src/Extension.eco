@@ -1,0 +1,36 @@
+namespace nexus::debug::realtime;
+
+/**
+ * Adds the realtime sockets to the debug console: the Realtime panel and the live `realtime` topic.
+ * List it after nexus-realtime and nexus-debug:
+ *
+ * ```echo
+ * nexus::realtime::Extension(),
+ * nexus::debug::Extension(),
+ * nexus::debug::realtime::Extension(),
+ * ```
+ *
+ * With the console off it binds nothing and hears nothing.
+ */
+public class Extension : nexus::Extension
+{
+    public function name() : string
+    {
+        return 'nexus-debug-realtime';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::debug::Debug $debug = guard $s->find<nexus::debug::Debug>() else {
+            return .ok;
+        };
+        nexus::realtime::Hub $hub = guard $s->find<nexus::realtime::Hub>() else {
+            return .error(.extension('nexus-debug-realtime', 'the realtime panel reads nexus-realtime; list nexus::realtime::Extension() before nexus::debug::realtime::Extension()'));
+        };
+        nexus::debug::Topic $topic = $debug->topic('realtime', 'Realtime');
+        $watch = Watch($topic);
+        $hub->observe($watch);
+        $debug->panel(RealtimePanel($hub, $watch, $topic));
+        return .ok;
+    }
+}

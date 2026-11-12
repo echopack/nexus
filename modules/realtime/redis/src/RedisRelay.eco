@@ -1,0 +1,143 @@
+namespace nexus::realtime::redis;
+
+use std::thread;
+use std::time;
+
+/**
+ * Notes through one Redis channel, `<NEXUS_REALTIME_PREFIX>realtime`: every process publishes on
+ * it through a pool, and every server listens on it with a subscriber of its own and hands each
+ * note (a broadcast, a whisper, an ended credential, a presence change) to its hub. A publish
+ * also applies here at once, so a listener blip does not drop this process's own notes; the
+ * listener skips notes this node stamped. A listener that loses the server connects again, waiting a
+ * little longer each time up to five seconds; what was published meanwhile is lost to it.
+ */
+#[atomic]
+public class RedisRelay : nexus::realtime::Relay
+{
+    public const string $channel;
+    private redis::Pool $pool;
+    private redis::Options $options;
+    private string $at;
+    private nexus::Logger $log;
+    private nexus::Flag $halt = nexus::Flag();
+    private nexus::realtime::Hub? $hub = null;
+    private string $node = '';
+
+    // the listener; dropping it joins the thread
+    private result<thread::handle, thread::error>? $listener = null;
+
+    public constructor(redis::Pool $pool, const redis::Options& $options, const string& $prefix, const string& $at, nexus::Logger $log)
+    {
+        $this->pool = $pool;
+        $this->options = $options;
+        $this->channel = "{$prefix}realtime";
+        $this->at = $at;
+        $this->log = $log;
+    }
+
+    public const function describe() : string
+    {
+        return $this->at;
+    }
+
+    public function publish(const nexus::realtime::Note& $n) : status<nexus::realtime::RealtimeError>
+    {
+        guard $this->pool->publish($this->channel, $n->encode($this->node)) else ($err) {
+            return .error(.relay("{$err}"));
+        };
+        nexus::realtime::Hub? $here = $this->hub;
+        if ($here != null) {
+            nexus::realtime::Hub $h = guard $here;
+            $h->hear($n);
+        }
+        return .ok;
+    }
+
+    public function start(nexus::realtime::Hub $hub) : status<nexus::realtime::RealtimeError>
+    {
+        if ($this->listener != null) {
+            return .ok;
+        }
+        $this->hub = $hub;
+        $this->node = $hub->node;
+        $this->halt = nexus::Flag();
+        redis::Options $o = $this->options;
+        string $channel = $this->channel;
+        string $at = $this->at;
+        nexus::Logger $log = $this->log;
+        nexus::Flag $halt = $this->halt;
+        // the first subscribe happens here, so a server that does not answer stops the start
+        redis::Subscriber $first = guard redis::Subscriber::open($o) else ($e) {
+            return .error(.relay("cannot reach {$at}: {$e}"));
+        };
+        array<string> $channels = [$channel];
+        guard $first->subscribe($channels) else ($e) {
+            $first->close();
+            return .error(.relay("cannot subscribe on {$at}: {$e}"));
+        };
+        string $node = $hub->node;
+        $this->listener = thread::spawn(function[$first, $at, $log, $halt, $hub, $node]() : void {
+            RedisRelay::listen($first, $at, $log, $halt, $hub, $node);
+        });
+        return .ok;
+    }
+
+    public function stop() : void
+    {
+        $this->halt->raise();
+        $this->listener = null;
+    }
+
+    /**
+     * The listener's loop: each message to the hub, until halted, connecting again when the
+     * connection breaks.
+     */
+    internal static function listen(redis::Subscriber $sub, string $at, nexus::Logger $log, nexus::Flag $halt, nexus::realtime::Hub $hub, string $node) : void
+    {
+        while (!$halt->raised()) {
+            result<redis::Message?, redis::Error> $got = $sub->next(by: tcp::Deadline::from(time::duration::millis(500)));
+            redis::Message? $m = guard $got else ($e) {
+                $log->warn('realtime listener lost redis', ['at' => $at, 'error' => "{$e}"]);
+                if (RedisRelay::reconnect($sub, $halt)) {
+                    $log->info('realtime listener back on redis', ['at' => $at]);
+                }
+                continue;
+            };
+            if ($m == null) {
+                continue;
+            }
+            redis::Message $msg = guard $m;
+            if (nexus::realtime::Note::source($msg->payload) == $node && !$node->empty()) {
+                continue;
+            }
+            nexus::realtime::Note? $read = nexus::realtime::Note::decode($msg->payload);
+            if ($read == null) {
+                $log->warn('realtime listener dropped a message it could not read', ['at' => $at]);
+                continue;
+            }
+            nexus::realtime::Note $n = guard $read;
+            $hub->hear($n);
+        }
+        $sub->close();
+    }
+
+    /**
+     * Connects `$sub` again on what it listened to, trying every so often, longer each time up to
+     * five seconds; false once halted.
+     */
+    internal static function reconnect(redis::Subscriber& $sub, nexus::Flag $halt) : bool
+    {
+        int64 $wait = 100;
+        while (!$halt->raised()) {
+            thread::sleep($wait as int32);
+            $wait = $wait * 2;
+            if ($wait > 5000) {
+                $wait = 5000;
+            }
+            if (!$sub->reconnect()->failed()) {
+                return true;
+            }
+        }
+        return false;
+    }
+}

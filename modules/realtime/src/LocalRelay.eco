@@ -1,0 +1,27 @@
+namespace nexus::realtime;
+
+/**
+ * Notes that stay in this process: each goes straight to its hub. A process with no sockets
+ * (`work`, a command) reaches nobody this way; an app that broadcasts from there runs on Redis.
+ */
+#[atomic]
+public class LocalRelay : Relay
+{
+    private Hub $hub;
+
+    public constructor(Hub $hub)
+    {
+        $this->hub = $hub;
+    }
+
+    public const function describe() : string
+    {
+        return 'local';
+    }
+
+    public function publish(const Note& $n) : status<RealtimeError>
+    {
+        $this->hub->hear($n);
+        return .ok;
+    }
+}

@@ -1,0 +1,209 @@
+/**
+ * Live comments over the realtime websocket, on a real database: a page following a post sees
+ * comments come and go, an author follows their own channel with a ticket, and nobody follows
+ * somebody else's; a post's readers see each other and who is typing, a commenter's own socket is
+ * skipped, and signing out or a new password closes the sockets of the sign in that ended.
+ */
+
+use ecotest::expect;
+use nexus::testing::TestSocket;
+
+internal function subscribe(TestSocket $ws, const string& $channel) : void
+{
+    $ws->say("\{\"op\":\"subscribe\",\"channel\":\"{$channel}\"}");
+}
+
+internal function whisper(TestSocket $ws, const string& $channel, const string& $event) : void
+{
+    $ws->say("\{\"op\":\"whisper\",\"channel\":\"{$channel}\",\"event\":\"{$event}\",\"data\":\{\"name\":\"Mallory\"}}");
+}
+
+internal function socketId(TestSocket $ws) : string
+{
+    return $ws->where('op', 'ready')[0]->get('socket_id')?->asStr() ?? '';
+}
+
+internal function names(const json::Value& $subscribed) : array<string>
+{
+    array<string> $out = [];
+    foreach ($subscribed->get('members')?->asArray() ?? array<json::Value>() as const &$m) {
+        $out[] = $m->get('info')?->get('name')?->asStr() ?? 'guest';
+    }
+    $out->sort();
+    return $out;
+}
+
+internal function refusal(TestSocket $ws) : int64
+{
+    array<json::Value> $refused = $ws->where('op', 'refused');
+    if ($refused->empty()) {
+        return 0;
+    }
+    return $refused[$refused->count() - 1]->get('problem')?->get('status')?->asInt() ?? 0;
+}
+
+#[group: "integration"]
+test a_page_following_a_post_sees_comments_come_and_go
+{
+    $world = World();
+    $admin = $world->admin();
+    $ada = $world->author('Ada');
+    $post = $admin->post('/v1/posts', json: newPost('Live'))->status(201)->capture('$.data.id');
+
+    ecotest::step('a visitor opens a socket without signing in and follows the post');
+    TestSocket $page = $world->app->socket('/realtime');
+    expect($page->opened())->yes(says: 'the socket opened');
+    subscribe($page, "posts.{$post}");
+    $world->settle();
+    expect($page->where('op', 'subscribed'))->size(1);
+
+    ecotest::step('Ada comments, and the page sees it with her name');
+    $id = $ada->post("/v1/posts/{$post}/comments", json: newComment('Hello, live'))->status(201)->capture('$.data.id');
+    $world->settle();
+    array<json::Value> $events = $page->where('op', 'event');
+    expect($events)->size(1);
+    expect($events[0]->get('event')?->asStr())->some('comment.posted');
+    expect($events[0]->get('data')?->get('body')?->asStr())->some('Hello, live');
+    expect($events[0]->get('data')?->get('author')?->get('name')?->asStr())->some('Ada');
+
+    ecotest::step('Ada deletes it, and the page sees that too');
+    $ada->delete("/v1/posts/{$post}/comments/{$id}")->status(204);
+    $world->settle();
+    $events = $page->where('op', 'event');
+    expect($events)->size(2);
+    expect($events[1]->get('event')?->asStr())->some('comment.deleted');
+    expect($events[1]->get('data')?->get('id')?->asInt())->some(str::int($id) ?? 0);
+
+    ecotest::step('a post that does not exist cannot be followed');
+    subscribe($page, 'posts.999999');
+    expect(refusal($page))->is(404 as int64);
+}
+
+#[group: "integration"]
+test an_author_follows_their_own_channel_with_a_ticket
+{
+    $world = World();
+    nexus::auth::Signer $adaSession = $world->authorSigner('Ada');
+    $ada = $world->session($adaSession);
+    $bob = $world->author('Bob');
+    $adaId = $ada->get('/v1/me')->status(200)->capture('$.data.id');
+    $bobId = $bob->get('/v1/me')->status(200)->capture('$.data.id');
+    $post = $ada->post('/v1/posts', json: newPost('Ada asks'))->status(201)->capture('$.data.id');
+
+    ecotest::step('a socket without a ticket follows nobody\'s own channel');
+    TestSocket $anon = $world->app->socket('/realtime');
+    subscribe($anon, "users.{$adaId}");
+    expect(refusal($anon))->is(401 as int64);
+
+    ecotest::step('a visitor gets no ticket; Ada does');
+    $world->api->post('/realtime/ticket', json: '{}')->problem(401);
+    $ticket = $ada->post('/realtime/ticket', json: '{}')->status(201)->capture('$.ticket');
+    TestSocket $mine = $world->app->socket("/realtime?ticket={$ticket}");
+    expect($mine->where('op', 'ready')[0]->get('signed_in')?->asBool())->some(true);
+    subscribe($mine, "users.{$adaId}");
+    $world->settle();
+    expect($mine->where('op', 'subscribed'))->size(1);
+    subscribe($mine, "users.{$bobId}");
+    expect(refusal($mine))->is(403 as int64);
+
+    ecotest::step('a ticket opens one socket');
+    expect($world->app->socket("/realtime?ticket={$ticket}")->status)->is(401);
+
+    ecotest::step('Bob comments on Ada\'s post and Ada is told; her own comment does not');
+    $bob->post("/v1/posts/{$post}/comments", json: newComment('Bob answers'))->status(201);
+    $ada->post("/v1/posts/{$post}/comments", json: newComment('Thanks'))->status(201);
+    $world->settle();
+    array<json::Value> $told = $mine->where('op', 'event');
+    expect($told)->size(1);
+    expect($told[0]->get('event')?->asStr())->some('comment.received');
+    expect($told[0]->get('data')?->get('body')?->asStr())->some('Bob answers');
+
+    ecotest::step('a ticket of a session that signed out opens nothing');
+    $late = $ada->post('/realtime/ticket', json: '{}')->status(201)->capture('$.ticket');
+    $ada->delete('/v1/auth')->status(204);
+    TestSocket $ended = $world->app->socket("/realtime?ticket={$late}");
+    expect($ended->status)->is(401);
+    expect($ended->body)->has('ticket_ended');
+}
+
+#[group: "integration"]
+test readers_see_each_other_and_who_types_and_signing_out_closes_the_socket
+{
+    $world = World();
+    nexus::auth::Signer $adaSession = $world->authorSigner('Ada');
+    $ada = $world->session($adaSession);
+    $post = $ada->post('/v1/posts', json: newPost('Who is here'))->status(201)->capture('$.data.id');
+    string $channel = "posts.{$post}";
+
+    ecotest::step('Ada opens the post with a ticket and is its first reader');
+    $ticket = $ada->post('/realtime/ticket', json: '{}')->status(201)->capture('$.ticket');
+    TestSocket $mine = $world->app->socket("/realtime?ticket={$ticket}");
+    subscribe($mine, $channel);
+    $world->settle();
+    json::Value $first = $mine->where('op', 'subscribed')[0];
+    expect($first->get('me')?->asStr())->some(socketId($mine));
+    expect(names($first))->is(['Ada']);
+
+    ecotest::step('a visitor reads along: both see two readers');
+    TestSocket $page = $world->app->socket('/realtime');
+    subscribe($page, $channel);
+    $world->settle();
+    expect(names($page->where('op', 'subscribed')[0]))->is(['Ada', 'guest']);
+    array<json::Value> $joined = $mine->where('op', 'joined');
+    expect($joined)->size(1);
+    expect($joined[0]->get('member')?->get('id')?->asStr())->some(socketId($page));
+
+    ecotest::step('Ada types: the visitor sees her name, as the server knows it');
+    whisper($mine, $channel, 'typing');
+    $world->settle();
+    array<json::Value> $typing = $page->where('op', 'whisper');
+    expect($typing)->size(1);
+    expect($typing[0]->get('data')?->get('name')?->asStr())->some('Ada');
+    expect($typing[0]->get('from')?->asStr())->some(socketId($mine));
+    expect($mine->where('op', 'whisper'))->size(0);
+
+    ecotest::step('a visitor may not whisper, and nobody whispers anything but typing');
+    whisper($page, $channel, 'typing');
+    expect($page->where('op', 'error')[0]->get('problem')?->get('status')?->asInt())->some(401 as int64);
+    whisper($mine, $channel, 'shout');
+    expect($mine->where('op', 'error')[0]->get('problem')?->get('status')?->asInt())->some(403 as int64);
+
+    ecotest::step('Ada comments from the page: the visitor gets it, her own socket does not');
+    $ada->with('X-Socket-Id', socketId($mine))->post("/v1/posts/{$post}/comments", json: newComment('Hello'))->status(201);
+    $world->settle();
+    expect($page->where('op', 'event'))->size(1);
+    expect($mine->where('op', 'event'))->size(0);
+
+    ecotest::step('Ada signs out: her socket closes and the visitor sees her leave');
+    $ada->delete('/v1/auth')->status(204);
+    $world->settle();
+    expect($mine->closedWith->load())->is(4001);
+    $world->settle();
+    array<json::Value> $left = $page->where('op', 'left');
+    expect($left)->size(1);
+    expect($left[0]->get('member')?->get('id')?->asStr())->some(socketId($mine));
+    expect($page->open())->yes(says: 'the visitor stays');
+}
+
+#[group: "integration"]
+test a_new_password_closes_every_socket_of_the_user
+{
+    $world = World();
+    $bob = $world->author('Bob');
+    $first = $bob->post('/realtime/ticket', json: '{}')->status(201)->capture('$.ticket');
+    $second = $bob->post('/realtime/ticket', json: '{}')->status(201)->capture('$.ticket');
+    TestSocket $one = $world->app->socket("/realtime?ticket={$first}");
+    TestSocket $two = $world->app->socket("/realtime?ticket={$second}");
+    TestSocket $page = $world->app->socket('/realtime');
+    $in = nexus::Invocation(nexus::Mode::testing);
+    $in->values['email'] = 'bob@example.com';
+    $in->given['email'] = true;
+    $in->values['password'] = 'a brand new password';
+    $in->given['password'] = true;
+    expect(command($world, Blog::Commands::SetPassword(), $in))->is(0);
+    $world->settle();
+    expect($one->closedWith->load())->is(4001);
+    expect($two->closedWith->load())->is(4001);
+    expect($page->open())->yes(says: 'a visitor is nobody whose password changed');
+}
+

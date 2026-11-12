@@ -1,0 +1,84 @@
+namespace nexus::realtime;
+
+/**
+ * The realtime socket a request comes from, as its client says in `X-Socket-Id` (the `socket_id`
+ * of `ready`), plus who made the request: pass it as `except:` so the broadcast the request causes
+ * skips that socket, and only that socket, not one whose id a presence channel listed.
+ *
+ * ```echo
+ * $this->broadcaster->send("posts.{$id}", 'comment.posted', $json, except: SocketId::of($payload));
+ * ```
+ */
+public struct SocketId
+{
+    public const string HEADER = 'X-Socket-Id';
+
+    public string $id = '';
+    public string $via = '';
+    public string $credential = '';
+    public string $subject = '';
+
+    /**
+     * The socket `$payload`'s request names, owned by who is calling; empty id for none, one that
+     * is malformed, or a header with no caller (an unsigned id is not a skip).
+     */
+    public static function of(nexus::Payload& $payload) : SocketId
+    {
+        SocketId $skip = SocketId();
+        nexus::auth::Guards? $guards = $payload->find<nexus::auth::Guards>();
+        if ($guards == null) {
+            return $skip;
+        }
+        nexus::auth::Guards $g = guard $guards;
+        nexus::auth::Identity? $found = guard $g->credential($payload) else {
+            return $skip;
+        };
+        if ($found == null) {
+            return $skip;
+        }
+        nexus::auth::Identity $who = guard $found;
+        if ($who->via->empty()) {
+            return $skip;
+        }
+        string $text = $payload->request->header(SocketId::HEADER) ?? '';
+        if (SocketId::valid($text)) {
+            $skip->id = $text;
+        }
+        $skip->via = $who->via;
+        $skip->credential = $who->credential;
+        $skip->subject = $who->subject;
+        return $skip;
+    }
+
+    /**
+     * The global id of socket `$id` on `$node`.
+     */
+    public static function global(const string& $node, int64 $id) : string
+    {
+        return "{$node}.{$id}";
+    }
+
+    /**
+     * The node a global socket id starts with.
+     */
+    public static function node(const string& $id) : string
+    {
+        usize $dot = $id->find('.');
+        if ($dot >= $id->size()) {
+            return $id;
+        }
+        return string($id->sub(0, $dot));
+    }
+
+    /**
+     * Whether `$text` is a socket id: eight hex characters, a dot, digits.
+     */
+    public static function valid(const string& $text) : bool
+    {
+        if ($text->size() < 10 || $text->size() > 30 || $text->byte(8) != 46) {
+            return false;
+        }
+        return nexus::auth::Secrets::isHex(string($text->sub(0, 8)))
+            && nexus::Constraint::number->admits(string($text->sub(9, $text->size() - 9)));
+    }
+}

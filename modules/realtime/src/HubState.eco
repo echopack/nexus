@@ -1,0 +1,794 @@
+namespace nexus::realtime;
+
+use std::thread;
+use std::time;
+
+internal enum HubJob
+{
+    case join(int64 $id, string $channel, string? $after, Present? $me, bool $fresh);
+    case leave(int64 $id, string $channel);
+    case detach(int64 $id);
+    case hear(Note $n);
+}
+
+/**
+ * Whether a subscribe landed on an open socket, and whether it is newly a presence member.
+ */
+public struct Seat
+{
+    public bool $on = false;
+    public bool $fresh = false;
+}
+
+/**
+ * Whether an unsubscribe was following, and whether it was a presence member.
+ */
+internal struct Unseat
+{
+    public bool $followed = false;
+    public bool $present = false;
+}
+
+/**
+ * One open socket, who opened it, and its channels.
+ */
+internal struct Attached
+{
+    public nexus::Socket $socket;
+    public nexus::auth::Identity $who;
+    public string $peer;
+    public string $key;
+    public time::timestamp $opened;
+    public array<string> $channels = [];
+
+    // the channels it is a presence member of
+    public array<string> $present = [];
+
+    // still counted against the socket limit; end and close clear it before the transport drops
+    public bool $counted = true;
+
+    public const function follows(const string& $channel) : bool
+    {
+        return has($this->channels, $channel);
+    }
+}
+
+/**
+ * A broadcast kept for catching up, with its `event` frame encoded once.
+ */
+internal struct Kept
+{
+    public Envelope $e;
+    public string $frame;
+}
+
+internal struct HubData
+{
+    public usize $backlog;
+    public map<int64, Attached> $members = [];
+
+    // how many sockets the limit counts by each key
+    public map<string, usize> $held = [];
+
+    // channel to the sockets that follow it, so a broadcast looks at those only
+    public map<string, map<int64, bool>> $byChannel = [];
+
+    // the last broadcasts, a ring: broadcast `seq` sits at `seq % backlog`
+    public array<Kept> $ring = [];
+    public map<string, uint64> $seqOf = [];
+    public uint64 $next = 0;
+
+    public function follow(int64 $id, const string& $channel) : void
+    {
+        if (!$this->byChannel->has($channel)) {
+            $this->byChannel[$channel] = map<int64, bool>();
+        }
+        map<int64, bool>& $ids = $this->byChannel->at($channel);
+        $ids[$id] = true;
+    }
+
+    public function unfollow(int64 $id, const string& $channel) : void
+    {
+        if (!$this->byChannel->has($channel)) {
+            return;
+        }
+        map<int64, bool>& $ids = $this->byChannel->at($channel);
+        $ids->remove($id);
+        if ($ids->empty()) {
+            $this->byChannel->remove($channel);
+        }
+    }
+
+    public function add(int64 $id, const Attached& $a) : void
+    {
+        $this->members[$id] = $a;
+        $this->held[$a->key] = $this->holding($a->key) + 1;
+    }
+
+    /**
+     * Stops counting `$id` against the socket limit; false when it was not counted.
+     */
+    public function uncount(int64 $id) : bool
+    {
+        if (!$this->members->has($id)) {
+            return false;
+        }
+        Attached& $m = $this->members->at($id);
+        if (!$m->counted) {
+            return false;
+        }
+        $m->counted = false;
+        $this->putHeld($m->key, $this->holding($m->key) - 1);
+        return true;
+    }
+
+    /**
+     * Forgets socket `$id` and its channels; what it was, if it was here.
+     */
+    public function drop(int64 $id) : Attached?
+    {
+        if (!$this->members->has($id)) {
+            return null;
+        }
+        Attached $gone = $this->members->at($id);
+        foreach ($gone->channels as const &$c) {
+            $this->unfollow($id, $c);
+        }
+        $this->members->remove($id);
+        if ($gone->counted) {
+            $this->putHeld($gone->key, $this->holding($gone->key) - 1);
+        }
+        return $gone;
+    }
+
+    /**
+     * How many sockets the limit counts by `$key`.
+     */
+    public const function holding(const string& $key) : usize
+    {
+        if (!$this->held->has($key)) {
+            return 0;
+        }
+        return $this->held->at($key);
+    }
+
+    /**
+     * The sockets following `$channel`, but `$skip`.
+     */
+    public const function following(const string& $channel, int64 $skip) : array<nexus::Socket>
+    {
+        array<nexus::Socket> $out = [];
+        if (!$this->byChannel->has($channel)) {
+            return $out;
+        }
+        foreach ($this->byChannel->at($channel) as $id => const &$on) {
+            if ($id != $skip && $this->members->has($id)) {
+                $out[] = $this->members->at($id)->socket;
+            }
+        }
+        return $out;
+    }
+
+    public function keep(const Envelope& $e, const string& $frame) : void
+    {
+        if ($this->backlog == 0) {
+            return;
+        }
+        uint64 $seq = $this->next;
+        $this->next = $seq + 1;
+        if ($this->ring->count() < $this->backlog) {
+            $this->ring->push(Kept($e, $frame));
+        } else {
+            usize $slot = $this->slot($seq);
+            $this->seqOf->remove($this->ring[$slot]->e->id);
+            $this->ring[$slot] = Kept($e, $frame);
+        }
+        $this->seqOf[$e->id] = $seq;
+    }
+
+    /**
+     * The id of the newest kept broadcast, empty when none is kept: the cursor a subscribe hands
+     * out.
+     */
+    public const function last() : string
+    {
+        if ($this->ring->empty()) {
+            return '';
+        }
+        return $this->ring[$this->slot($this->next - 1)]->e->id;
+    }
+
+    /**
+     * The `event` frames of the kept broadcasts on `$channel` after the one `$after` names (empty:
+     * every one, while none was let go yet); null when that one is not kept.
+     */
+    public const function since(const string& $after, const string& $channel) : array<string>?
+    {
+        uint64 $seq = 0;
+        if ($after->empty()) {
+            if ($this->next != ($this->ring->count() as uint64)) {
+                return null;
+            }
+        } else {
+            if (!$this->seqOf->has($after)) {
+                return null;
+            }
+            $seq = $this->seqOf->at($after) + 1;
+        }
+        array<string> $out = [];
+        while ($seq < $this->next) {
+            const Kept& $k = $this->ring[$this->slot($seq)];
+            if ($k->e->channel == $channel) {
+                $out[] = $k->frame;
+            }
+            $seq = $seq + 1;
+        }
+        return $out;
+    }
+
+    public const function kept() : array<Envelope>
+    {
+        array<Envelope> $out = [];
+        uint64 $seq = $this->next - ($this->ring->count() as uint64);
+        while ($seq < $this->next) {
+            $out[] = $this->ring[$this->slot($seq)]->e;
+            $seq = $seq + 1;
+        }
+        return $out;
+    }
+
+    private function putHeld(const string& $key, usize $n) : void
+    {
+        if ($n == 0) {
+            $this->held->remove($key);
+        } else {
+            $this->held[$key] = $n;
+        }
+    }
+
+    // where broadcast `seq` sits in the ring
+    private const function slot(uint64 $seq) : usize
+    {
+        return ($seq % ($this->backlog as uint64)) as usize;
+    }
+}
+
+internal function has(const array<string>& $all, const string& $s) : bool
+{
+    foreach ($all as const &$x) {
+        if ($x == $s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+internal function without(array<string>& $all, const string& $s) : bool
+{
+    usize $i = 0;
+    while ($i < $all->count()) {
+        if ($all[$i] == $s) {
+            $all->remove($i);
+            return true;
+        }
+        $i = $i + 1;
+    }
+    return false;
+}
+
+/**
+ * What the hub's sender thread works on: membership, the catch-up ring, and sending.
+ */
+#[atomic]
+internal class HubState
+{
+    private string $node;
+
+    // what the global ids of this node's sockets start with
+    private string $prefix;
+    private thread::mutex<HubData> $data;
+    private thread::mutex<array<HubObserver>> $observers = thread::mutex<array<HubObserver>>(array<HubObserver>());
+
+    public constructor(const string& $node, usize $backlog)
+    {
+        $this->node = $node;
+        $this->prefix = "{$node}.";
+        $this->data = thread::mutex<HubData>(HubData($backlog));
+    }
+
+    public function observe(HubObserver $o) : void
+    {
+        thread::locked<array<HubObserver>> $held = $this->observers->lock();
+        $held->value->push($o);
+    }
+
+    public function attach(nexus::Socket $s, const nexus::auth::Identity& $who, const string& $peer, usize $most) : bool
+    {
+        Attached $a = Attached($s, $who, $peer, Hub::keyOf($who, $peer), time::timestamp::now());
+        {
+            // counted and added under one lock, so upgrades that race all see each other
+            thread::locked<HubData> $held = $this->data->lock();
+            if ($most > 0 && $held->value->holding($a->key) >= $most) {
+                return false;
+            }
+            $held->value->add($s->id(), $a);
+        }
+        SocketInfo $info = $this->info($a);
+        foreach ($this->watchers() as $o) {
+            $o->opened($info);
+        }
+        return true;
+    }
+
+    /**
+     * Subscribes `$id` to `$channel` at once, so the protocol thread can ask `follows` without
+     * waiting on the sender; `$fresh` when `$present` and it was not a member yet. Not on: the
+     * socket is gone.
+     */
+    public function seat(int64 $id, const string& $channel, bool $present) : Seat
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        if (!$held->value->members->has($id)) {
+            return Seat();
+        }
+        Attached& $m = $held->value->members->at($id);
+        bool $fresh = $present && !has($m->present, $channel);
+        if (!$m->follows($channel)) {
+            $m->channels->push($channel);
+        }
+        if ($fresh) {
+            $m->present->push($channel);
+        }
+        $held->value->follow($id, $channel);
+        return Seat(true, $fresh);
+    }
+
+    public function follows(int64 $id, const string& $channel) : bool
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        if (!$held->value->members->has($id)) {
+            return false;
+        }
+        return $held->value->members->at($id)->follows($channel);
+    }
+
+    public function subscriptions(int64 $id) : usize
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        if (!$held->value->members->has($id)) {
+            return 0;
+        }
+        return $held->value->members->at($id)->channels->count();
+    }
+
+    /**
+     * Unsubscribes `$id` from `$channel` at once.
+     */
+    public function stop(int64 $id, const string& $channel) : Unseat
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        if (!$held->value->members->has($id)) {
+            return Unseat();
+        }
+        Attached& $m = $held->value->members->at($id);
+        Unseat $u = Unseat();
+        $u->present = without($m->present, $channel);
+        $u->followed = without($m->channels, $channel);
+        if ($u->followed) {
+            $held->value->unfollow($id, $channel);
+        }
+        return $u;
+    }
+
+    /**
+     * Stops counting sockets `$end` covers against the limit, so a connect that races the close
+     * sees the places free.
+     */
+    public function release(const nexus::auth::Ending& $end) : void
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        array<int64> $ids = [];
+        foreach ($held->value->members as $id => const &$m) {
+            if ($end->covers($m->who)) {
+                $ids[] = $id;
+            }
+        }
+        foreach ($ids as const &$id) {
+            $held->value->uncount($id);
+        }
+    }
+
+    public function count() : usize
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        return $held->value->members->count();
+    }
+
+    public function subscribers(const string& $channel) : usize
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        if (!$held->value->byChannel->has($channel)) {
+            return 0;
+        }
+        return $held->value->byChannel->at($channel)->count();
+    }
+
+    public function holding(const string& $key) : usize
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        return $held->value->holding($key);
+    }
+
+    public function sockets() : array<SocketInfo>
+    {
+        array<SocketInfo> $out = [];
+        thread::locked<HubData> $held = $this->data->lock();
+        foreach ($held->value->members as $id => const &$m) {
+            $out[] = $this->info($m);
+        }
+        return $out;
+    }
+
+    public function channels() : array<ChannelInfo>
+    {
+        array<ChannelInfo> $out = [];
+        thread::locked<HubData> $held = $this->data->lock();
+        foreach ($held->value->byChannel as $name => const &$ids) {
+            usize $present = 0;
+            foreach ($ids as $id => const &$on) {
+                if ($held->value->members->has($id) && has($held->value->members->at($id)->present, $name)) {
+                    $present = $present + 1;
+                }
+            }
+            $out[] = ChannelInfo($name, $ids->count(), $present);
+        }
+        $out->sort(key: (const ChannelInfo& $c) : string => $c->name);
+        return $out;
+    }
+
+    public function kept() : array<Envelope>
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        return $held->value->kept();
+    }
+
+    public function close(const string& $id, int32 $code, const string& $reason) : bool
+    {
+        int64 $local = $this->local($id);
+        Attached? $was = $this->take($local);
+        if ($was == null) {
+            return false;
+        }
+        Attached $gone = guard $was;
+        nexus::Socket $s = $gone->socket;
+        $this->tellGone($local, $gone);
+        $s->close($code, $reason);
+        return true;
+    }
+
+    public function closeAll(int32 $code, const string& $reason) : void
+    {
+        array<Attached> $all = [];
+        {
+            thread::locked<HubData> $held = $this->data->lock();
+            foreach ($held->value->members as $id => const &$m) {
+                $all[] = $m;
+            }
+            $held->value->members = [];
+            $held->value->held = [];
+            $held->value->byChannel = [];
+        }
+        foreach ($all as &$a) {
+            nexus::Socket $s = $a->socket;
+            $this->tellGone($s->id(), $a);
+            $s->close($code, $reason);
+        }
+    }
+
+    /**
+     * Forgets the socket `$id` and tells the observers it closed, once: a failed send drops it
+     * here first, so its transport's close finds nothing left to tell. The presence channels it
+     * was in, for the gateway to leave the roster.
+     */
+    public function gone(int64 $id) : array<string>
+    {
+        Attached? $was = $this->take($id);
+        if ($was == null) {
+            array<string> $none = [];
+            return $none;
+        }
+        Attached $gone = guard $was;
+        $this->tellGone($id, $gone);
+        return $gone->present->clone();
+    }
+
+    public function run(HubJob $job) : void
+    {
+        match ($job) {
+            HubJob::join($id, $channel, $after, $me, $fresh) => {
+                $this->join($id, $channel, $after, $me, $fresh);
+            },
+            HubJob::leave($id, $channel) => {
+                nexus::Socket? $s = $this->socketOf($id);
+                if ($s != null) {
+                    nexus::Socket $sock = guard $s;
+                    $sock->send(Frames::unsubscribed($channel));
+                    string $gid = $this->idOf($id);
+                    foreach ($this->watchers() as $o) {
+                        $o->left($gid, $channel);
+                    }
+                }
+            },
+            HubJob::detach($id) => {
+                $this->gone($id);
+            },
+            HubJob::hear($n) => {
+                $this->hear($n);
+            },
+        }
+    }
+
+    private function hear(const Note& $n) : void
+    {
+        match ($n) {
+            Note::broadcast($e) => {
+                $this->deliver($e);
+            },
+            Note::whisper($w) => {
+                $this->send($w->channel, $this->local($w->from), Frames::whisper($w));
+            },
+            Note::ended($end) => {
+                $this->end($end);
+            },
+            Note::presence($p) => {
+                string $frame = Frames::left($p->channel, $p->member->id);
+                if ($p->joined) {
+                    $frame = Frames::joined($p->channel, $p->member);
+                }
+                $this->send($p->channel, $this->local($p->member->id), $frame);
+            },
+        }
+    }
+
+    private function join(int64 $id, const string& $channel, string? $after, Present? $me, bool $fresh) : void
+    {
+        nexus::Socket? $found = null;
+        array<string> $missed = [];
+        bool $reset = false;
+        string $cursor = '';
+        {
+            thread::locked<HubData> $held = $this->data->lock();
+            if (!$held->value->members->has($id)) {
+                return;
+            }
+            Attached& $m = $held->value->members->at($id);
+            if (!$m->follows($channel)) {
+                return;
+            }
+            $found = $m->socket;
+            $cursor = $held->value->last();
+            if ($after != null) {
+                array<string>? $since = $held->value->since($after ?? '', $channel);
+                if ($since == null) {
+                    $reset = true;
+                } else {
+                    $missed = $since ?? $missed;
+                }
+            }
+        }
+        nexus::Socket $s = guard $found;
+        Roll? $roll = null;
+        if ($me != null) {
+            Present $member = guard $me;
+            result<array<Present>, RealtimeError> $listed = $this->appearing($channel, $member);
+            array<Present> $members = guard $listed else ($e) {
+                if ($fresh) {
+                    $this->stop($id, $channel);
+                }
+                $s->send(Frames::refused($channel, .unavailable($e->message()), .prod));
+                return;
+            };
+            if (!$this->follows($id, $channel)) {
+                $this->tellVanish($channel, $member->id);
+                return;
+            }
+            $roll = Roll($member, $members);
+        }
+        bool $ok = $s->send(Frames::subscribed($channel, $cursor, $roll));
+        if ($reset) {
+            $ok = $ok && $s->send(Frames::reset($channel, $cursor));
+        }
+        foreach ($missed as const &$frame) {
+            $ok = $ok && $s->send($frame);
+        }
+        if (!$ok) {
+            if ($me != null) {
+                Present $member = guard $me;
+                $this->tellVanish($channel, $member->id);
+            }
+            $this->gone($id);
+            return;
+        }
+        if ($me != null && $fresh) {
+            Present $member = guard $me;
+            foreach ($this->watchers() as $o) {
+                $o->appeared($channel, $member);
+            }
+        }
+        string $gid = $this->idOf($id);
+        foreach ($this->watchers() as $o) {
+            $o->joined($gid, $channel);
+        }
+    }
+
+    /**
+     * The roster's members for `$channel` after joining `$me`, or `$me` alone when no observer
+     * owns the roster.
+     */
+    private function appearing(const string& $channel, const Present& $me) : result<array<Present>, RealtimeError>
+    {
+        array<Present> $members = [];
+        $members[] = $me;
+        foreach ($this->watchers() as $o) {
+            result<array<Present>, RealtimeError>? $got = $o->appearing($channel, $me);
+            if ($got == null) {
+                continue;
+            }
+            result<array<Present>, RealtimeError> $listed = guard $got;
+            return $listed;
+        }
+        return .ok($members);
+    }
+
+    private function tellVanish(const string& $channel, const string& $id) : void
+    {
+        foreach ($this->watchers() as $o) {
+            $o->vanish($channel, $id);
+        }
+    }
+
+    private function deliver(const Envelope& $e) : void
+    {
+        string $frame = Frames::event($e);
+        {
+            thread::locked<HubData> $held = $this->data->lock();
+            $held->value->keep($e, $frame);
+        }
+        int64 $skip = $this->local($e->except);
+        if ($skip >= 0 && !$this->letsSkip($skip, $e)) {
+            $skip = -1;
+        }
+        usize $reached = $this->send($e->channel, $skip, $frame);
+        foreach ($this->watchers() as $o) {
+            $o->delivered($e, $reached);
+        }
+    }
+
+    /**
+     * Sends `$frame` to the sockets following `$channel`, but the socket `$skip`; how many it
+     * reached.
+     */
+    private function send(const string& $channel, int64 $skip, const string& $frame) : usize
+    {
+        array<nexus::Socket> $to = [];
+        {
+            thread::locked<HubData> $held = $this->data->lock();
+            $to = $held->value->following($channel, $skip);
+        }
+        usize $reached = 0;
+        foreach ($to as $s) {
+            if ($s->send($frame)) {
+                $reached = $reached + 1;
+            } else {
+                $this->gone($s->id());
+            }
+        }
+        return $reached;
+    }
+
+    /**
+     * Closes every socket opened with a credential `$end` covers, 4001 `credential_ended`.
+     */
+    private function end(const nexus::auth::Ending& $end) : void
+    {
+        array<int64> $ids = [];
+        {
+            thread::locked<HubData> $held = $this->data->lock();
+            foreach ($held->value->members as $id => const &$m) {
+                if ($end->covers($m->who)) {
+                    $ids[] = $id;
+                }
+            }
+        }
+        array<Attached> $to = [];
+        foreach ($ids as const &$id) {
+            Attached? $was = $this->take($id);
+            if ($was != null) {
+                Attached $gone = guard $was;
+                $to[] = $gone;
+            }
+        }
+        foreach ($to as &$a) {
+            nexus::Socket $s = $a->socket;
+            $this->tellGone($s->id(), $a);
+            $s->close(4001, 'credential_ended');
+        }
+        foreach ($this->watchers() as $o) {
+            $o->ended($end, $to->count());
+        }
+    }
+
+    /**
+     * Whether the socket `$id` may be the one `$e` skips: no owner on the envelope (a command, a
+     * test) skips by id; otherwise the socket has to be the same credential, or the same first-party
+     * subject.
+     */
+    private function letsSkip(int64 $id, const Envelope& $e) : bool
+    {
+        if ($e->exceptVia->empty()) {
+            return true;
+        }
+        thread::locked<HubData> $held = $this->data->lock();
+        if (!$held->value->members->has($id)) {
+            return false;
+        }
+        nexus::auth::Identity $who = $held->value->members->at($id)->who;
+        if ($who->via == $e->exceptVia && !$e->exceptCredential->empty() && $who->credential == $e->exceptCredential) {
+            return true;
+        }
+        return $who->via == $e->exceptVia && $who->firstParty() && !$e->exceptSubject->empty() && $who->subject == $e->exceptSubject;
+    }
+
+    private function take(int64 $id) : Attached?
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        return $held->value->drop($id);
+    }
+
+    private function tellGone(int64 $id, const Attached& $was) : void
+    {
+        string $gid = $this->idOf($id);
+        array<string> $present = $was->present->clone();
+        foreach ($this->watchers() as $o) {
+            $o->dropped($gid, $present);
+            $o->closed($gid);
+        }
+    }
+
+    private function socketOf(int64 $id) : nexus::Socket?
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        if (!$held->value->members->has($id)) {
+            return null;
+        }
+        return $held->value->members->at($id)->socket;
+    }
+
+    private const function idOf(int64 $id) : string
+    {
+        return SocketId::global($this->node, $id);
+    }
+
+    /**
+     * The local id in global id `$id`, or -1 for a socket of another node or none.
+     */
+    private const function local(const string& $id) : int64
+    {
+        if (!$id->starts($this->prefix)) {
+            return -1;
+        }
+        return str::int(string($id->sub($this->prefix->size(), $id->size() - $this->prefix->size()))) ?? -1;
+    }
+
+    private const function info(const Attached& $a) : SocketInfo
+    {
+        nexus::Socket $s = $a->socket;
+        return SocketInfo($this->idOf($s->id()), $a->who, $a->peer, $a->opened, $a->channels->clone());
+    }
+
+    private function watchers() : array<HubObserver>
+    {
+        thread::locked<array<HubObserver>> $held = $this->observers->lock();
+        return $held->value->clone();
+    }
+}

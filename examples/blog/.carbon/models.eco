@@ -3,6 +3,399 @@
 namespace Blog::DB::Model;
 
 /**
+ * The columns of `comments` and how `Comment` maps onto them.
+ */
+#[atomic]
+public class CommentTable : hydrahon::Source, carbon::Schema<Blog::DB::Model::Comment, int64>
+{
+    public static hydrahon::Term<int64> $id = carbon::select::column<int64>('comments', 'id');
+    public static hydrahon::Term<int64> $postId = carbon::select::column<int64>('comments', 'post_id');
+    public static hydrahon::Term<int64> $authorId = carbon::select::column<int64>('comments', 'author_id');
+    public static hydrahon::Term<string> $body = carbon::select::column<string>('comments', 'body');
+    public static hydrahon::Term<hydrahon::DateTime?> $createdAt = carbon::select::column<hydrahon::DateTime?>('comments', 'created_at');
+    public static hydrahon::Term<hydrahon::DateTime?> $updatedAt = carbon::select::column<hydrahon::DateTime?>('comments', 'updated_at');
+    private hydrahon::Table $carbonTable;
+
+    public constructor()
+    {
+        $this->carbonTable = hydrahon::Table(name: 'comments');
+    }
+
+    /**
+     * The table under `$alias`, to join it, or join it twice: `$p = CommentTable::alias('p');`, then
+     * `$p->id`. `$schema` names the database for a table that lives in
+     * another one.
+     */
+    public static function alias(string $alias, schema: string? $schema = null) : CommentTableAlias
+    {
+        return CommentTableAlias(alias: $alias, schema: $schema);
+    }
+
+    public const function table() : hydrahon::Table
+    {
+        return $this->carbonTable;
+    }
+
+    public const function fields() : array<hydrahon::Field>
+    {
+        array<hydrahon::Field> $out = [CommentTable::$id, CommentTable::$postId, CommentTable::$authorId, CommentTable::$body, CommentTable::$createdAt, CommentTable::$updatedAt];
+        return $out;
+    }
+
+    public const function keyIs(int64 $key) : hydrahon::Term<bool>
+    {
+        return CommentTable::$id == $key;
+    }
+
+    public const function keyIn(const array<int64>& $keys) : hydrahon::Term<bool>
+    {
+        return CommentTable::$id in $keys;
+    }
+
+    public const function keyAfter(int64 $key) : hydrahon::Term<bool>
+    {
+        return CommentTable::$id > $key;
+    }
+
+    public const function byKey() : hydrahon::Order
+    {
+        return CommentTable::$id->asc();
+    }
+
+    public const function created() : hydrahon::Order?
+    {
+        return CommentTable::$createdAt->asc();
+    }
+
+    public const function keyAt() : usize
+    {
+        return 0;
+    }
+
+    public const function generated() : bool
+    {
+        return true;
+    }
+
+    public const function keyOf(const Blog::DB::Model::Comment& $m) : int64
+    {
+        return $m->id;
+    }
+
+    public const function read(const carbon::Cursor& $row, const carbon::select::Selected& $extra) : result<Blog::DB::Model::Comment, carbon::Error>
+    {
+        int64 $c0 = guard $row->int(0) else { return .error(.column('id', carbon::Problem::of($row, 0))); }
+        int64 $c1 = guard $row->int(1) else { return .error(.column('post_id', carbon::Problem::of($row, 1))); }
+        int64 $c2 = guard $row->int(2) else { return .error(.column('author_id', carbon::Problem::of($row, 2))); }
+        string $c3 = guard $row->text(3) else { return .error(.column('body', carbon::Problem::of($row, 3))); }
+        std::time::timestamp? $c4 = null;
+        if (!$row->isNull(4)) {
+            hydrahon::DateTime $r4 = guard $row->datetime(4) else { return .error(.column('created_at', carbon::Problem::of($row, 4))); }
+            std::time::timestamp $v4 = guard carbon::codec::Instant()->decode($r4) else ($p) { return .error(.column('created_at', $p)); }
+            $c4 = $v4;
+        }
+        std::time::timestamp? $c5 = null;
+        if (!$row->isNull(5)) {
+            hydrahon::DateTime $r5 = guard $row->datetime(5) else { return .error(.column('updated_at', carbon::Problem::of($row, 5))); }
+            std::time::timestamp $v5 = guard carbon::codec::Instant()->decode($r5) else ($p) { return .error(.column('updated_at', $p)); }
+            $c5 = $v5;
+        }
+        return .ok(Blog::DB::Model::Comment($id: $c0, $postId: $c1, $authorId: $c2, $body: $c3, $createdAt: $c4, $updatedAt: $c5));
+    }
+
+    public const function snapshot(const Blog::DB::Model::Comment& $m) : carbon::change::Snapshot
+    {
+        carbon::change::Snapshot $out = carbon::change::Snapshot();
+        int64 $s0 = $m->id;
+        $out->values[] = hydrahon::Value::from($s0);
+        int64 $s1 = $m->postId;
+        $out->values[] = hydrahon::Value::from($s1);
+        int64 $s2 = $m->authorId;
+        $out->values[] = hydrahon::Value::from($s2);
+        string $s3 = $m->body;
+        $out->values[] = hydrahon::Value::from($s3);
+        hydrahon::DateTime? $s4 = null;
+        if ($m->createdAt != null) {
+            std::time::timestamp $x4 = guard $m->createdAt;
+            $s4 = carbon::codec::Instant()->encode($x4);
+        }
+        $out->values[] = hydrahon::Value::from($s4);
+        hydrahon::DateTime? $s5 = null;
+        if ($m->updatedAt != null) {
+            std::time::timestamp $x5 = guard $m->updatedAt;
+            $s5 = carbon::codec::Instant()->encode($x5);
+        }
+        $out->values[] = hydrahon::Value::from($s5);
+        return $out;
+    }
+
+    public const function write(const Blog::DB::Model::Comment& $m, const carbon::change::Changes& $only, hydrahon::Values& $into) : void
+    {
+        if ($only->has(0)) {
+            int64 $s0 = $m->id;
+            $into[CommentTable::$id] = $s0;
+        }
+        if ($only->has(1)) {
+            int64 $s1 = $m->postId;
+            $into[CommentTable::$postId] = $s1;
+        }
+        if ($only->has(2)) {
+            int64 $s2 = $m->authorId;
+            $into[CommentTable::$authorId] = $s2;
+        }
+        if ($only->has(3)) {
+            string $s3 = $m->body;
+            $into[CommentTable::$body] = $s3;
+        }
+        if ($only->has(4)) {
+            hydrahon::DateTime? $s4 = null;
+            if ($m->createdAt != null) {
+                std::time::timestamp $x4 = guard $m->createdAt;
+                $s4 = carbon::codec::Instant()->encode($x4);
+            }
+            $into[CommentTable::$createdAt] = $s4;
+        }
+        if ($only->has(5)) {
+            hydrahon::DateTime? $s5 = null;
+            if ($m->updatedAt != null) {
+                std::time::timestamp $x5 = guard $m->updatedAt;
+                $s5 = carbon::codec::Instant()->encode($x5);
+            }
+            $into[CommentTable::$updatedAt] = $s5;
+        }
+    }
+
+    public const function inserted(Blog::DB::Model::Comment& $m, int64 $key) : void
+    {
+        $m->id = $key;
+    }
+
+    public const function link(Blog::DB::Model::Comment& $m) : carbon::Link&
+    {
+        return $m->link;
+    }
+
+    public const function stamp(Blog::DB::Model::Comment& $m, carbon::Event $event, std::time::timestamp $now) : void
+    {
+        if ($event == carbon::Event::creating) {
+            $m->createdAt = $now;
+        }
+        $m->updatedAt = $now;
+    }
+
+    public const function trash(Blog::DB::Model::Comment& $m, std::time::timestamp? $at) : bool
+    {
+        return false;
+    }
+
+    public const function trashed(const Blog::DB::Model::Comment& $m) : std::time::timestamp?
+    {
+        return null;
+    }
+
+    public const function live() : hydrahon::Term<bool>?
+    {
+        return null;
+    }
+}
+
+/**
+ * `comments` under an alias, from `CommentTable::alias`.
+ */
+#[atomic]
+public class CommentTableAlias : hydrahon::Source
+{
+    public const hydrahon::Term<int64> $id;
+    public const hydrahon::Term<int64> $postId;
+    public const hydrahon::Term<int64> $authorId;
+    public const hydrahon::Term<string> $body;
+    public const hydrahon::Term<hydrahon::DateTime?> $createdAt;
+    public const hydrahon::Term<hydrahon::DateTime?> $updatedAt;
+    private hydrahon::Table $carbonTable;
+
+    public constructor(alias: string $alias, schema: string? $schema = null)
+    {
+        $this->carbonTable = hydrahon::Table(name: 'comments', alias: $alias, $schema: $schema);
+    }
+
+    init
+    {
+        $this->id = $this->carbonTable->column<int64>('id');
+        $this->postId = $this->carbonTable->column<int64>('post_id');
+        $this->authorId = $this->carbonTable->column<int64>('author_id');
+        $this->body = $this->carbonTable->column<string>('body');
+        $this->createdAt = $this->carbonTable->column<hydrahon::DateTime?>('created_at');
+        $this->updatedAt = $this->carbonTable->column<hydrahon::DateTime?>('updated_at');
+    }
+
+    public const function table() : hydrahon::Table
+    {
+        return $this->carbonTable;
+    }
+}
+
+/**
+ * What a query for `Comment` models gathers: the field a query struct keeps.
+ */
+public type CommentRows = carbon::Rows<Blog::DB::Model::Comment, int64, Blog::DB::Model::CommentTable>;
+
+/**
+ * The `author` of a batch of `Comment` models, loaded with one query.
+ */
+public class CommentAuthorRelation : carbon::Eager<Blog::DB::Model::Comment>
+{
+    internal carbon::relation::Loader<Blog::DB::Model::Comment, Blog::DB::Model::User, int64, int64, Blog::DB::Model::UserQuery, Blog::DB::Model::UserRepository> $loader;
+
+    public constructor()
+    {
+        $this->loader = carbon::relation::Loader<Blog::DB::Model::Comment, Blog::DB::Model::User, int64, int64, Blog::DB::Model::UserQuery, Blog::DB::Model::UserRepository>(
+            belongsTo: 'Blog::DB::Model::UserRepository',
+            function(Blog::DB::Model::Comment $m) : int64? { return $m->authorId; },
+            function(Blog::DB::Model::User $t) : int64? { return $t->id; },
+            function(Blog::DB::Model::User $t) : int64 { return $t->id; },
+            function(array<int64> $keys) : hydrahon::Term<bool> { return Blog::DB::Model::UserTable::$id in mv $keys; },
+            function(Blog::DB::Model::Comment $m, Blog::DB::Model::User? $found) : void { $m->author->set($found); },
+            function(Blog::DB::Model::Comment $m, Blog::DB::Model::User $held) : void { $m->author->share($held); }
+        );
+    }
+
+    /**
+     * Start from `$base`, a query of the related model, for its conditions, order and scope.
+     */
+    public function from(Blog::DB::Model::UserQuery $base) : CommentAuthorRelation
+    {
+        $this->loader->from($base);
+        return $this;
+    }
+
+    public function where(hydrahon::Term<bool> $condition) : CommentAuthorRelation
+    {
+        $this->loader->where($condition);
+        return $this;
+    }
+
+    /**
+     * Let `$constrain` change the related query before it runs: order, scope, its own scopes.
+     */
+    public function constrain(function<Blog::DB::Model::UserQuery(Blog::DB::Model::UserQuery)> $constrain) : CommentAuthorRelation
+    {
+        $this->loader->constrain($constrain);
+        return $this;
+    }
+
+    /**
+     * Load `$relation` for the related models too, with one more query.
+     */
+    public function with(carbon::Eager<Blog::DB::Model::User> $relation) : CommentAuthorRelation
+    {
+        $this->loader->with($relation);
+        return $this;
+    }
+
+    public function load(array<Blog::DB::Model::Comment>& $models, carbon::Session $session, carbon::Loaded $seen) : status<carbon::Error>
+    {
+        return $this->loader->load($models, $session, $seen);
+    }
+}
+
+/**
+ * The relations of `Comment` models as `with…()` methods, for its query and its `load()`.
+ * A query struct written by hand names it:
+ * `CommentQuery : carbon::Query<Comment, CommentQuery>, CommentRelations<CommentQuery>`.
+ */
+public interface CommentRelations<S>
+{
+    /**
+     * Load the `author` of every model too, with one more query.
+     */
+    function withAuthor() : S
+    {
+        return $this->with(CommentAuthorRelation());
+    }
+
+    /**
+     * Load the `author` of every model too, its query changed by `$constrain` first:
+     * order, scope, and its own `with…()` for the relations of the related models.
+     */
+    function withAuthor(function<Blog::DB::Model::UserQuery(Blog::DB::Model::UserQuery)> $constrain) : S
+    {
+        return $this->with(CommentAuthorRelation()->constrain($constrain));
+    }
+}
+
+/**
+ * The relations to fill on `Comment` models already in hand:
+ * `$repo->load()->with…()->into($models)`. It has no conditions or order; the models are
+ * the ones given.
+ */
+public struct CommentLoad : CommentRelations<CommentLoad>
+{
+    internal carbon::Fill<Blog::DB::Model::Comment> $fill;
+
+    public constructor(carbon::Session $session)
+    {
+        $this->fill = carbon::Fill<Blog::DB::Model::Comment>($session);
+    }
+
+    /**
+     * Fill `$relation` too: what the `with…()` methods call, and where a relation written by
+     * hand goes.
+     */
+    public function with(carbon::Eager<Blog::DB::Model::Comment> $relation) : CommentLoad
+    {
+        CommentLoad $copy = $this;
+        $copy->fill->add($relation);
+        return $copy;
+    }
+
+    /**
+     * Fill every relation asked for on `$models`, one query each.
+     */
+    public function into(array<Blog::DB::Model::Comment>& $models) : status<carbon::Error>
+    {
+        // the models in hand are the load's first: relations back to them share them
+        carbon::Loaded $seen = carbon::Loaded();
+        foreach ($models as const &$m) {
+            $seen->add<int64, Blog::DB::Model::Comment>($m->id, $m);
+        }
+        return $this->fill->into($models, $seen);
+    }
+}
+
+/**
+ * What a repository of `Comment` models reaches through carbon: its session and the model's
+ * store. A repository written by hand names it and keeps its session in `$session`:
+ * `CommentRepository : carbon::Repository<Comment, …>, CommentWiring`.
+ */
+public interface CommentWiring
+{
+    /**
+     * The session the repository was built for.
+     */
+    function session() : carbon::Session
+    {
+        return $this->session;
+    }
+
+    /**
+     * The store of `Comment` models, shared by every session.
+     */
+    function store() : carbon::Store<Blog::DB::Model::Comment, int64, Blog::DB::Model::CommentTable>
+    {
+        carbon::Session $s = $this->session();
+        return $s->store<Blog::DB::Model::Comment, int64, Blog::DB::Model::CommentTable>();
+    }
+
+    /**
+     * Start filling the relations of models already in hand.
+     */
+    function load() : CommentLoad
+    {
+        return CommentLoad($this->session());
+    }
+}
+
+/**
  * The columns of `posts` and how `Post` maps onto them.
  */
 #[atomic]
@@ -825,15 +1218,19 @@ public struct Carbon
     public static function check(carbon::DB $db) : status<carbon::Error>
     {
         array<string> $missing = [];
-        if (!$db->has<Blog::DB::Repository::PostRepository>()) {
-            $missing[] = 'Blog::DB::Repository::PostRepository';
+        if (!$db->has<Blog::DB::Repository::CommentRepository>()) {
+            $missing[] = 'Blog::DB::Repository::CommentRepository';
         }
         if (!$db->has<Blog::DB::Model::UserRepository>()) {
             $missing[] = 'Blog::DB::Model::UserRepository';
         }
+        if (!$db->has<Blog::DB::Repository::PostRepository>()) {
+            $missing[] = 'Blog::DB::Repository::PostRepository';
+        }
         if ($missing->count() > 0) {
             return .error(.unregistered(str::join($missing, ', ')));
         }
+        $db->store<Blog::DB::Model::Comment, int64, Blog::DB::Model::CommentTable>();
         $db->store<Blog::DB::Model::Post, int64, Blog::DB::Model::PostTable>();
         $db->store<Blog::DB::Model::User, int64, Blog::DB::Model::UserTable>();
         return .ok();
@@ -855,6 +1252,7 @@ public struct Carbon
         array<carbon::migrate::Step> $out = [
             carbon::migrate::Step('20261102100000_create_users', Blog::DB::Migration::CreateUsers(), true),
             carbon::migrate::Step('20261102100100_create_posts', Blog::DB::Migration::CreatePosts(), true),
+            carbon::migrate::Step('20261102100150_create_comments', Blog::DB::Migration::CreateComments(), true),
             carbon::migrate::Step('20261102100200_seed_editor', Blog::DB::Migration::SeedEditor(), true),
         ];
         return $out;

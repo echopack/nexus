@@ -8,7 +8,7 @@ public struct PruneAuth : nexus::work::Task
 {
     public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>
     {
-        array<nexus::auth::Pruned> $done = guard $payload->get<nexus::auth::Pruning>()->run($payload) else ($p) {
+        $done = guard $payload->get<nexus::auth::Pruning>()->run($payload) else ($p) {
             return .error(.retry("pruning: {$p->detail(.dev)}"));
         };
         foreach ($done as const &$d) {

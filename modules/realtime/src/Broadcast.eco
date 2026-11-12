@@ -1,0 +1,22 @@
+namespace nexus::realtime;
+
+/**
+ * A broadcast as a type of its own: where it goes, what it is called, what it carries.
+ *
+ * ```echo
+ * public struct CommentPosted : nexus::realtime::Broadcast
+ * {
+ *     public const function channel() : string { return "posts.{$this->post}"; }
+ *     public const function event() : string { return 'comment.posted'; }
+ *     public const function data() : json::Value { return $this->comment; }
+ * }
+ * ```
+ */
+public interface Broadcast
+{
+    const function channel() : string;
+
+    const function event() : string;
+
+    const function data() : json::Value;
+}

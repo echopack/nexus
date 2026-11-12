@@ -42,14 +42,14 @@ public struct SendWelcome : nexus::work::Task
         $latest = guard $payload->get<PostRepository>()->find()->readonly()->order(desc: PostTable::$id)->limit(3)->get() else ($e) {
             return .error(.retry("the posts table: {$e}"));
         };
-        nexus::Router $router = $payload->get<nexus::Router>();
-        array<PostLink> $posts = [];
+        $router = $payload->get<nexus::Router>();
+        $posts = arr::room<PostLink>($latest->count());
         foreach ($latest as const &$p) {
             $posts[] = PostLink($p->title, $router->url<ShowPost>(['id' => "{$p->id}"])->text());
         }
         $mail = WelcomeMail($u->name, $payload->get<BlogConfig>()->title, $this->locale, $payload->get<nexus::Messages>(), mv $posts);
-        nexus::mail::Mailer $mailer = $payload->get<nexus::mail::Mailer>();
-        nexus::mail::Message $msg = $mailer->compose($mail)->to(nexus::mail::Address($u->email, $u->name));
+        $mailer = $payload->get<nexus::mail::Mailer>();
+        $msg = $mailer->compose($mail)->to(nexus::mail::Address($u->email, $u->name));
         guard $mailer->send($msg) else ($e) {
             return .error(nexus::work::Failure::of($e->problem()));
         };

@@ -1,0 +1,78 @@
+/**
+ * Sockets live as long as the credential they were opened with: ending it closes them at once,
+ * and a recheck closes those whose credential expired.
+ */
+
+use nexus::realtime::{Hub, Note, Sweeper};
+use nexus::testing::TestSocket;
+use ecotest::expect;
+
+test revoking_a_token_closes_the_sockets_opened_with_it
+{
+    $r = Rig();
+    nexus::auth::Issued $a = $r->issue('7');
+    nexus::auth::Issued $b = $r->issue('7');
+    TestSocket $first = $r->bearer($a->token);
+    TestSocket $second = $r->bearer($b->token);
+    TestSocket $guest = $r->app->socket('/realtime');
+    nexus::Payload $p = $r->app->kernel->background('test', 'revoke');
+    guard $p->get<nexus::auth::Tokens>()->revoke($a->stored->id);
+    $r->hub()->settle();
+    expect($first->closedWith->load())->is(4001);
+    expect($r->hub()->holding(nexus::realtime::Hub::keyOf(nexus::auth::Identity($via: 'bearer', $subject: '7', $credential: $a->stored->id), '')))->is(1 as usize);
+    expect($second->open())->yes(says: 'another token of the same user');
+    guard $p->get<nexus::auth::Tokens>()->revokeAll('7');
+    nexus::Kernel::finish($p);
+    $r->hub()->settle();
+    expect($second->closedWith->load())->is(4001);
+    expect($guest->open())->yes(says: 'a guest opened with no credential');
+    expect($r->hub()->connections())->is(1 as usize);
+}
+
+test closing_a_session_closes_its_socket_and_no_other
+{
+    $r = Rig();
+    nexus::Payload $p = $r->app->kernel->background('test', 'sessions');
+    nexus::auth::Sessions $sessions = $p->get<nexus::auth::Sessions>();
+    nexus::auth::Opened $mine = guard $sessions->open('7');
+    nexus::auth::Opened $other = guard $sessions->open('8');
+    nexus::auth::Signer $ms = $mine->signer();
+    nexus::auth::Signer $os = $other->signer();
+    TestSocket $a = $r->app->socket('/realtime', signed: function[$ms](string $method, string $target, string $body) : string {
+        return $ms->header($method, $target, START, $body);
+    });
+    TestSocket $b = $r->app->socket('/realtime', signed: function[$os](string $method, string $target, string $body) : string {
+        return $os->header($method, $target, START, $body);
+    });
+    expect(last($a)->get('signed_in')?->asBool())->some(true);
+    guard $sessions->close($mine->stored->id);
+    nexus::Kernel::finish($p);
+    $r->hub()->settle();
+    expect($a->closedWith->load())->is(4001);
+    expect($b->open())->yes(says: 'the other session holds');
+}
+
+test an_ended_note_from_another_process_closes_the_sockets_here
+{
+    $r = Rig();
+    TestSocket $ws = $r->bearer($r->token('9'));
+    $r->hub()->hear(Note::ended(nexus::auth::Ending::subject('bearer', '9')));
+    $r->hub()->settle();
+    expect($ws->closedWith->load())->is(4001);
+}
+
+test a_recheck_closes_the_sockets_whose_credential_expired
+{
+    $r = Rig();
+    TestSocket $ws = $r->bearer($r->token('7'));
+    TestSocket $guest = $r->app->socket('/realtime');
+    Sweeper $sweeper = $r->app->kernel->services->get<Sweeper>();
+    expect($sweeper->recheck($r->app->kernel))->is(0 as usize);
+    $r->hub()->settle();
+    expect($ws->open())->yes(says: 'the token holds');
+    $r->clock->advance(.mins(61));
+    expect($sweeper->recheck($r->app->kernel))->is(1 as usize);
+    $r->hub()->settle();
+    expect($ws->closedWith->load())->is(4001);
+    expect($guest->open())->yes(says: 'a guest has nothing to expire');
+}

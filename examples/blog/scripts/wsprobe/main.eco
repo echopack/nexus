@@ -1,0 +1,158 @@
+/**
+ * Connects to 127.0.0.1:<port>, opens a websocket on <target>, sends each <message> as a text
+ * message, then prints every text message the server sends, one per line, until <seconds> have
+ * passed or the server closes. A refused upgrade prints `refused <status>` and exits 1; a close
+ * prints `closed <code>`.
+ *
+ *     wsprobe 8080 '/realtime?ticket=...' 3 '{"op":"subscribe","channel":"posts.1"}'
+ */
+
+use std::time;
+
+internal const uint32 KEY = 0x11223344;
+
+/**
+ * One frame as a client sends it: final, masked with `KEY`.
+ */
+internal function frame(uint8 $op, const string& $payload) : string
+{
+    string $out = '';
+    usize $n = $payload->size();
+    $out->push(0x80 | $op);
+    if ($n < 126) {
+        $out->push(0x80 | ($n as uint8));
+    } else {
+        $out->push(0x80 | 126);
+        $out->push((($n >> 8) & 0xFF) as uint8);
+        $out->push(($n & 0xFF) as uint8);
+    }
+    array<uint8> $key = [(KEY >> 24) as uint8, ((KEY >> 16) & 0xFF) as uint8, ((KEY >> 8) & 0xFF) as uint8, (KEY & 0xFF) as uint8];
+    foreach ($key as $b) {
+        $out->push($b);
+    }
+    usize $i = 0;
+    while ($i < $n) {
+        $out->push($payload->byte($i) ^ $key[$i % 4]);
+        $i = $i + 1;
+    }
+    return $out;
+}
+
+internal function say(std::io::writer& $out, const string& $text) : void
+{
+    $out->write($text);
+    $out->write("\n");
+    $out->flush();
+}
+
+array<string> $args = std::env::argv();
+if ($args->count() < 4) {
+    std::io::eprintln('usage: wsprobe <port> <target> <seconds> [message ...]');
+    std::env::exit(2);
+}
+int64 $port = str::int($args[1]) ?? 0;
+string $target = $args[2];
+int64 $seconds = str::int($args[3]) ?? 1;
+std::io::writer $out = std::io::writer(std::io::stdout);
+
+tcp::Stream $s = guard tcp::Stream::connect(host: '127.0.0.1', $port as uint16, tcp::Deadline::from(time::duration::secs(5))) else ($e) {
+    std::io::eprintln("wsprobe: connect: {$e}");
+    std::env::exit(1);
+    return;
+};
+string $hello = "GET {$target} HTTP/1.1\r\nHost: 127.0.0.1:{$port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+guard $s->write($hello, tcp::Deadline::from(time::duration::secs(5))) else ($e) {
+    std::io::eprintln("wsprobe: write: {$e}");
+    std::env::exit(1);
+    return;
+};
+
+tcp::Deadline $until = tcp::Deadline::from(time::duration::secs($seconds));
+string $buf = '';
+while ($buf->find("\r\n\r\n") >= $buf->size()) {
+    result<usize?, tcp::Error> $got = $s->read($buf, 4096, $until);
+    usize? $n = guard $got else {
+        std::io::eprintln('wsprobe: the server closed before it answered');
+        std::env::exit(1);
+        return;
+    };
+    if ($n == null) {
+        std::io::eprintln('wsprobe: no answer in time');
+        std::env::exit(1);
+        return;
+    }
+}
+usize $headEnd = $buf->find("\r\n\r\n");
+if (!$buf->starts('HTTP/1.1 101')) {
+    string $status = string($buf->sub(9, 3));
+    say($out, "refused {$status}");
+    std::env::exit(1);
+    return;
+}
+$buf = string($buf->sub($headEnd + 4, $buf->size() - $headEnd - 4));
+
+usize $sent = 4;
+while ($sent < $args->count()) {
+    guard $s->write(frame(1, $args[$sent]), tcp::Deadline::from(time::duration::secs(5))) else ($e) {
+        std::io::eprintln("wsprobe: send: {$e}");
+        std::env::exit(1);
+        return;
+    };
+    $sent = $sent + 1;
+}
+
+while (true) {
+    // every whole frame in the buffer
+    while ($buf->size() >= 2) {
+        uint8 $op = $buf->byte(0) & 0x0F;
+        usize $len = ($buf->byte(1) & 0x7F) as usize;
+        usize $at = 2;
+        if ($len == 126) {
+            if ($buf->size() < 4) {
+                break;
+            }
+            $len = (($buf->byte(2) as usize) << 8) | ($buf->byte(3) as usize);
+            $at = 4;
+        } else if ($len == 127) {
+            if ($buf->size() < 10) {
+                break;
+            }
+            $len = 0;
+            usize $i = 2;
+            while ($i < 10) {
+                $len = ($len << 8) | ($buf->byte($i) as usize);
+                $i = $i + 1;
+            }
+            $at = 10;
+        }
+        if ($buf->size() < $at + $len) {
+            break;
+        }
+        string $payload = string($buf->sub($at, $len));
+        $buf = string($buf->sub($at + $len, $buf->size() - $at - $len));
+        if ($op == 1) {
+            say($out, $payload);
+        } else if ($op == 9) {
+            $s->write(frame(10, $payload), tcp::Deadline::from(time::duration::secs(5)));
+        } else if ($op == 8) {
+            int64 $code = 1005;
+            if ($payload->size() >= 2) {
+                $code = (($payload->byte(0) as int64) << 8) | ($payload->byte(1) as int64);
+            }
+            say($out, "closed {$code}");
+            std::env::exit(0);
+            return;
+        }
+    }
+    result<usize?, tcp::Error> $more = $s->read($buf, 65536, $until);
+    usize? $n = guard $more else {
+        std::env::exit(0);
+        return;
+    };
+    if ($n == null) {
+        // the time is up
+        $s->write(frame(8, ''), tcp::Deadline::from(time::duration::secs(1)));
+        std::env::exit(0);
+        return;
+    }
+}

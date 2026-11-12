@@ -1,0 +1,24 @@
+namespace Blog::Actions::Comments;
+
+use Blog::Services::CommentService;
+use Blog::Types::Caller;
+
+/**
+ * Deletes a comment. Its author, the post's author or an admin may.
+ */
+#[nexus::through: ["Blog::Middleware::RequireUser"]]
+public class DeleteComment : nexus::Action
+{
+    private CommentService $comments;
+
+    public constructor(CommentService $comments)
+    {
+        $this->comments = $comments;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id, int64 $comment) : status<nexus::Problem>
+    {
+        $me = try $payload->state<Caller>();
+        return $this->comments->delete($me->user, $id, $comment, nexus::realtime::SocketId::of($payload));
+    }
+}

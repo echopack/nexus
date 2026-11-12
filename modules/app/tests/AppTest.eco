@@ -108,6 +108,7 @@ internal function appGenerated(nexus::Generated $g) : void
     $g->name<APrune>('APrune');
     $g->name<ASend>('ASend');
     $g->name<AWorkerLane>('AWorkerLane');
+    $g->name<AItems>('AItems');
     $g->name<AJobLane>('AJobLane');
 }
 
@@ -202,6 +203,20 @@ internal class AEvery : nexus::Middleware
 }
 
 /**
+ * Who may follow an item: anybody, for items that exist.
+ */
+internal class AItems : nexus::realtime::Channel
+{
+    public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : status<nexus::Problem>
+    {
+        if (($topic->number('id') ?? 0) > 10) {
+            return .error(.notFound('item'));
+        }
+        return .ok;
+    }
+}
+
+/**
  * The items part of the app, wired as a provider.
  */
 internal class ItemsProvider : nexus::Provider
@@ -223,6 +238,11 @@ internal class AApp : nexus::Extension
 {
     public bool $noLane = false;
     public bool $noMethods = false;
+
+    /**
+     * Guards realtime channels, for an app booted with nexus-realtime (or without, to see it fail).
+     */
+    public bool $channels = false;
 
     /**
      * Binds the async queue without a count, so `NEXUS_WORK_THREADS` says.
@@ -262,16 +282,22 @@ internal class AApp : nexus::Extension
             ->bind<AAlsoHappened, ANoter>($app->get<AHeard>());
         $app->bind<AEvery>(scoped: () => AEvery());
         $app->middleware<AEvery>();
+        if ($this->channels) {
+            $app->bindChannel<AItems>(() => AItems())->on('items.{id:integer}')->on('things.{id:integer}');
+        }
         return .ok;
     }
 }
 
-internal function aBoot(AApp $app, bool $mcp, map<string, string> $vars = map<string, string>()) : result<TestApp, nexus::BootError>
+internal function aBoot(AApp $app, bool $mcp, map<string, string> $vars = map<string, string>(), realtime: bool $realtime = false) : result<TestApp, nexus::BootError>
 {
     $vars['NEXUS_AUTH_KEY'] = KEY;
     array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::work::Extension()];
     if ($mcp) {
         $exts[] = nexus::mcp::Extension();
+    }
+    if ($realtime) {
+        $exts[] = nexus::realtime::Extension();
     }
     $exts[] = $app;
     return TestApp::attempt($exts, $vars);
@@ -425,4 +451,25 @@ test a_tool_without_nexus_mcp_stops_the_boot
     $r = aBoot(AApp(), false);
     nexus::BootError $e = expect($r)->fails();
     expect(aFirst($e))->has('tool show_item: list nexus::mcp::Extension() before the extension that offers it');
+}
+
+test a_channel_class_guards_every_pattern_it_is_bound_on
+{
+    $a = AApp();
+    $a->channels = true;
+    TestApp $app = guard aBoot($a, true, realtime: true);
+    nexus::testing::TestSocket $ws = $app->socket('/realtime');
+    $ws->say('{"op":"subscribe","channel":"things.3"}');
+    $app->kernel->services->get<nexus::realtime::Hub>()->settle();
+    expect($ws->where('op', 'subscribed'))->size(1);
+    $ws->say('{"op":"subscribe","channel":"items.30"}');
+    expect($ws->where('op', 'refused'))->size(1);
+}
+
+test a_channel_without_nexus_realtime_stops_the_boot
+{
+    $a = AApp();
+    $a->channels = true;
+    nexus::BootError $e = expect(aBoot($a, true))->fails();
+    expect(aFirst($e))->has('channel items.{id:integer}: list nexus::realtime::Extension() before the extension that guards it');
 }

@@ -406,6 +406,53 @@ test tokens_expire_and_can_be_revoked
     expect(status($s->bearer('/', $other->token)))->is(200);
 }
 
+/**
+ * What a listener on `Endings` was told, as text.
+ */
+#[atomic]
+internal class Heard
+{
+    public std::thread::mutex<array<string>> $seen = std::thread::mutex<array<string>>(array<string>());
+
+    public function add(const nexus::auth::Ending& $e) : void
+    {
+        string $text = match ($e) {
+            nexus::auth::Ending::credential($via, $id) => "{$via} credential",
+            nexus::auth::Ending::subject($via, $subject) => "{$via} subject {$subject}",
+        };
+        std::thread::locked<array<string>> $held = $this->seen->lock();
+        $held->value->push($text);
+    }
+
+    public function all() : array<string>
+    {
+        std::thread::locked<array<string>> $held = $this->seen->lock();
+        return $held->value->clone();
+    }
+}
+
+test endings_hear_every_credential_that_ends
+{
+    Rig $r = rig();
+    Heard $heard = Heard();
+    $r->get('/')->get<nexus::auth::Endings>()->listen(function[$heard](nexus::auth::Ending $e) : void {
+        $heard->add($e);
+    });
+    Issued $t = $r->issue('7');
+    Opened $o = $r->open('7');
+    nexus::Payload $p = $r->get('/');
+    guard $p->get<Tokens>()->revoke($t->stored->id);
+    guard $p->get<Sessions>()->close($o->stored->id);
+    guard $p->get<Tokens>()->revokeAll('7');
+    guard $p->get<Sessions>()->closeAll('7');
+    expect($heard->all())->is(['bearer credential', 'signed credential', 'bearer subject 7', 'signed subject 7']);
+    Identity $signed = Identity($via: 'signed', $subject: '7', $credential: 'abc');
+    expect(nexus::auth::Ending::credential('signed', 'abc')->covers($signed))->yes(says: 'the same credential');
+    expect(nexus::auth::Ending::credential('bearer', 'abc')->covers($signed))->no(says: 'another guard');
+    expect(nexus::auth::Ending::subject('signed', '7')->covers($signed))->yes(says: 'the same subject');
+    expect(nexus::auth::Ending::subject('signed', '')->covers(Identity($via: 'signed', $subject: '', $credential: 'g', $guest: true)))->no(says: 'nobody names a guest');
+}
+
 test a_signed_request_names_its_session
 {
     Rig $r = rig();

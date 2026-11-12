@@ -1,0 +1,83 @@
+namespace nexus::realtime;
+
+/**
+ * One broadcast on its way to the sockets of a channel: its id (what a reconnecting socket names in
+ * `after`), the channel, the event's name and its data, and the socket it skips (`except`, the
+ * global id of the socket whose request caused it; empty for none).
+ */
+public struct Envelope
+{
+    public string $id;
+    public string $channel;
+    public string $event;
+    public json::Value $data;
+    public string $except = '';
+
+    // who asked to skip `except`: empty via skips by id (a command, a test); otherwise the socket
+    // has to be that credential, or that first-party subject
+    public string $exceptVia = '';
+    public string $exceptCredential = '';
+    public string $exceptSubject = '';
+
+    public constructor(const string& $id, const string& $channel, const string& $event, const json::Value& $data)
+    {
+        $this->id = $id;
+        $this->channel = $channel;
+        $this->event = $event;
+        $this->data = $data;
+    }
+
+    /**
+     * A broadcast with a fresh id: the time in milliseconds and eight random hex characters.
+     */
+    public constructor(fresh: const string& $channel, const string& $event, const json::Value& $data)
+    {
+        int64 $ms = std::time::timestamp::now()->unix_millis();
+        string $tail = nexus::auth::Secrets::hex(4);
+        $this->id = "{$ms}-{$tail}";
+        $this->channel = $channel;
+        $this->event = $event;
+        $this->data = $data;
+    }
+
+    public const function json() : json::Value
+    {
+        json::Value $doc = json::object();
+        $doc['id'] = json::str($this->id);
+        $doc['channel'] = json::str($this->channel);
+        $doc['event'] = json::str($this->event);
+        $doc['data'] = $this->data;
+        if (!$this->except->empty()) {
+            $doc['except'] = json::str($this->except);
+            if (!$this->exceptVia->empty()) {
+                $doc['except_via'] = json::str($this->exceptVia);
+                $doc['except_cred'] = json::str($this->exceptCredential);
+                $doc['except_sub'] = json::str($this->exceptSubject);
+            }
+        }
+        return $doc;
+    }
+
+    /**
+     * The envelope `json` wrote, or null for anything else.
+     */
+    public static function read(const json::Value& $doc) : Envelope?
+    {
+        string $id = guard $doc->get('id')?->asStr() else {
+            return null;
+        };
+        string $channel = guard $doc->get('channel')?->asStr() else {
+            return null;
+        };
+        string $event = guard $doc->get('event')?->asStr() else {
+            return null;
+        };
+        json::Value $data = $doc->get('data') ?? json::nil();
+        Envelope $e = Envelope($id, $channel, $event, $data);
+        $e->except = $doc->get('except')?->asStr() ?? '';
+        $e->exceptVia = $doc->get('except_via')?->asStr() ?? '';
+        $e->exceptCredential = $doc->get('except_cred')?->asStr() ?? '';
+        $e->exceptSubject = $doc->get('except_sub')?->asStr() ?? '';
+        return $e;
+    }
+}

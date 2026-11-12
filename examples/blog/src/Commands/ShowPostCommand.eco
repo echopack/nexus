@@ -20,7 +20,7 @@ public class ShowPostCommand : nexus::Cli
     {
         $p = try $this->posts->find($in->id);
         $out->line("#{$p->id}  {$p->title}");
-        User? $author = $p->author->get();
+        $author = $p->author->get();
         if ($author != null) {
             $u = guard $author;
             $out->line("by {$u->name} <{$u->email}>");

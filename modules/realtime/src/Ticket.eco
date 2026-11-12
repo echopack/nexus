@@ -1,0 +1,10 @@
+namespace nexus::realtime;
+
+/**
+ * A ticket for opening a websocket as a signed in caller, and when it stops being good.
+ */
+public struct Ticket
+{
+    public string $text;
+    public std::time::timestamp $expiresAt;
+}

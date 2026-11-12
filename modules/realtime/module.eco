@@ -1,0 +1,43 @@
+/*
+ * nexus-realtime: websocket channels for nexus apps.
+ *
+ * A browser opens one websocket to `/realtime` and subscribes to
+ * channels (`posts.5`, `users.12`); a channel class the app binds says
+ * who may, and may make the channel a presence one (who else is there)
+ * or let subscribers whisper to each other (typing, through a hook).
+ * Anything in any process broadcasts to a channel through the
+ * `Broadcaster`; with `NEXUS_REALTIME_URL=redis://...` nexus-realtime-redis
+ * carries it to every server's sockets. A socket lives as long as the
+ * sign in it was opened with: ending that closes it.
+ *
+ *   nexus::realtime::Extension(),
+ *   $app->bindChannel<PostChannel>(...)->on('posts.{id:integer}');
+ *   $this->broadcaster->send('posts.5', 'comment.posted', $json);
+ *
+ * One-way streams that are not channels (a dashboard's numbers) are
+ * core server-sent events: `nexus::Response(events:)`.
+ */
+
+#[module: "nexus-realtime"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "Websocket channels with authorization and broadcasts for nexus apps"]
+
+#[depends: "../.."]
+#[depends: "../auth"]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../libcrypto"]
+#[depends: "../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+}

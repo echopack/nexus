@@ -148,6 +148,27 @@ public interface Transformer<M>
     }
 
     /**
+     * `$m` as JSON, outside any request: what a broadcast or a log carries. Models nested in it
+     * come from `$network` (the app's, `TransformerNetwork` in the container) when `$inc` asks for
+     * them.
+     *
+     * ```echo
+     * json::Value $doc = $this->transformer->json($comment, $this->network, EchoPack::Rest::Includes::of(['author']));
+     * ```
+     */
+    function json(const M& $m, TransformerNetwork $network, EchoPack::Rest::Includes $inc) : json::Value
+    {
+        $o = Out(EchoPack::Rest::Format::json, mv $inc);
+        $o->network = $network;
+        $none = Meta();
+        $ctx = TransformerContext();
+        $o->begin($none);
+        $this->transformEntity($o, $ctx, $m);
+        json::Value $doc = $o->document();
+        return $doc->get('data') ?? json::nil();
+    }
+
+    /**
      * `$ms` as the answer, a list under `data`.
      */
     function createCollectionResponse(nexus::Payload& $payload, const array<M>& $ms) : result<nexus::Response, nexus::Problem>

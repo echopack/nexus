@@ -56,12 +56,20 @@ public struct Wire
     }
 
     /**
-     * The wire response for a nexus response; a streamed one streams, chunked.
+     * The wire response for a nexus response: a streamed one streams, chunked; an event stream
+     * opens an outlet; a websocket upgrades.
      */
     public static function response(const nexus::Response& $out) : http::Response
     {
         $r = http::Response($out->status, $out->body);
-        if ($out->stream != null) {
+        if ($out->events != null) {
+            nexus::EventHooks $hooks = guard $out->events;
+            $r = http::Response(events: Wire::feed($hooks));
+            $r->status = $out->status;
+        } else if ($out->websocket != null) {
+            nexus::SocketHooks $hooks = guard $out->websocket;
+            $r = http::Response(websocket: Wire::channel($hooks), protocol: $out->protocol);
+        } else if ($out->stream != null) {
             function<void(nexus::Writer)> $fn = guard $out->stream;
             $r = http::Response(stream: function[$fn](http::Writer $w) : void {
                 $fn(WireWriter($w));
@@ -72,5 +80,42 @@ public struct Wire
             $r->headers->add($h->name, $h->value);
         }
         return $r;
+    }
+
+    /**
+     * libhttp's hooks for an event stream, each outlet handed on as a nexus stream.
+     */
+    public static function feed(nexus::EventHooks $hooks) : http::Feed
+    {
+        $feed = http::Feed();
+        $feed->onOpen(function[$hooks](http::Outlet $o) : void {
+            $hooks->open(WireEventStream($o));
+        });
+        $feed->onClose(function[$hooks](http::Outlet $o) : void {
+            $hooks->close(WireEventStream($o));
+        });
+        return $feed;
+    }
+
+    /**
+     * libhttp's hooks for a websocket, each socket handed on as a nexus socket.
+     */
+    public static function channel(nexus::SocketHooks $hooks) : http::Channel
+    {
+        $channel = http::Channel();
+        $channel->onOpen(function[$hooks](http::Socket $s) : void {
+            $hooks->opened(WireSocket($s));
+        });
+        $channel->onMessage(function[$hooks](http::Socket $s, http::Message $m) : void {
+            nexus::SocketMessage $msg = match ($m) {
+                http::Message::text($t) => nexus::SocketMessage::text($t),
+                http::Message::binary($b) => nexus::SocketMessage::binary($b),
+            };
+            $hooks->received(WireSocket($s), $msg);
+        });
+        $channel->onClose(function[$hooks](http::Socket $s, http::Close $c) : void {
+            $hooks->closed(WireSocket($s), nexus::SocketClose($c->code, $c->reason, $c->clean));
+        });
+        return $channel;
     }
 }

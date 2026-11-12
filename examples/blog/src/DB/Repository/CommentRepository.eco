@@ -1,0 +1,23 @@
+namespace Blog::DB::Repository;
+
+use Blog::DB::Model::{Comment, CommentWiring};
+use Blog::DB::Query::CommentQuery;
+
+/**
+ * Writing comments: a body is trimmed, and an empty one refused.
+ */
+public struct CommentRepository : carbon::Repository<Comment, CommentQuery, int64>, CommentWiring
+{
+    public carbon::Session $session;
+
+    public function before(carbon::Event $event, Comment& $comment) : status<carbon::Error>
+    {
+        if ($event->saves()) {
+            $comment->body = string::from(str::trim($comment->body));
+            if ($comment->body->empty()) {
+                return .error(.refused(carbon::Refusal('a comment needs a body')));
+            }
+        }
+        return .ok;
+    }
+}

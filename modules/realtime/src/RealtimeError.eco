@@ -1,0 +1,21 @@
+namespace nexus::realtime;
+
+/**
+ * Why a broadcast did not leave this process.
+ */
+public enum RealtimeError
+{
+    // the channel name is not one a socket could subscribe to
+    case badChannel(string $name);
+
+    // the relay between processes refused it or is down
+    case relay(string $why);
+
+    public const function message() : string
+    {
+        return match ($this) {
+            RealtimeError::badChannel($name) => "'{$name}' is no channel name; use dot separated words such as posts.5",
+            RealtimeError::relay($why) => "the broadcast did not leave this process: {$why}",
+        };
+    }
+}

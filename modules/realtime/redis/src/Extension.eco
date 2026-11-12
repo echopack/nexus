@@ -1,0 +1,73 @@
+namespace nexus::realtime::redis;
+
+/**
+ * Carries nexus-realtime's broadcasts between servers through Redis when `NEXUS_REALTIME_URL`
+ * says `redis://`: opens a pool for publishing (pinged once; a server that does not answer stops
+ * the boot) and binds the `Relay` and the `Broadcaster` on it. Under `serve` each server also
+ * listens and hands every broadcast to its sockets. Any other URL leaves the relay to
+ * nexus-realtime. List it after that one:
+ *
+ * ```echo
+ * nexus::realtime::Extension(),
+ * nexus::realtime::redis::Extension(),
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    internal redis::Pool? $pool = null;
+
+    public function name() : string
+    {
+        return 'nexus-realtime-redis';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::realtime::RealtimeConfig $config = $s->get<nexus::realtime::RealtimeConfig>();
+        string $kind = nexus::scheme($config->url);
+        if ($kind != 'redis' && $kind != 'rediss') {
+            return .ok;
+        }
+        // the roster's node keys live three beats; Redis refuses a key that lives 0s
+        if ($config->beat <= std::time::duration::zero()) {
+            return .error(.extension('nexus-realtime-redis', "NEXUS_REALTIME_BEAT is {$config->beat}; presence on Redis counts a server alive for three beats, expected more than 0s"));
+        }
+        redis::Options $o = guard redis::Options::parse($config->url) else ($e) {
+            return .error(.extension('nexus-realtime-redis', "NEXUS_REALTIME_URL: {$e}"));
+        };
+        $o->connectTimeout = std::time::duration::secs(5);
+        $o->timeout = std::time::duration::secs(5);
+        redis::Pool $pool = redis::Pool($o, redis::PoolOptions());
+        string $at = where($o);
+        guard $pool->ping() else ($e) {
+            $pool->close();
+            return .error(.extension('nexus-realtime-redis', "cannot reach {$at}: {$e}"));
+        };
+        $this->pool = $pool;
+        $relay = RedisRelay($pool, $o, $config->prefix, $at, $s->get<nexus::Logger>());
+        $s->bind<RedisRelay>(put: $relay);
+        $s->alias<nexus::realtime::Relay, RedisRelay>();
+        $s->bind<RedisRoster>(put: RedisRoster($pool, $config->prefix, $config->beat));
+        $s->alias<nexus::realtime::Roster, RedisRoster>();
+        $s->bind<nexus::realtime::Broadcaster>(put: nexus::realtime::Broadcaster($relay));
+        $s->get<nexus::realtime::Tickets>()->remember(RedisClaims($pool, $config->prefix));
+        return .ok;
+    }
+
+    public function shutdown(nexus::Kernel $kernel) : void
+    {
+        $this->pool?->close();
+    }
+}
+
+/**
+ * The server `$o` names, as a URL without its password.
+ */
+public function where(const redis::Options& $o) : string
+{
+    string? $socket = $o->socket;
+    if ($socket != null) {
+        return "unix:{$socket ?? ''}";
+    }
+    return "redis://{$o->host}:{$o->port}/{$o->database}";
+}

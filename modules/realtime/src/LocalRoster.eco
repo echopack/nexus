@@ -1,0 +1,64 @@
+namespace nexus::realtime;
+
+use std::thread;
+
+/**
+ * The presence channels of this process, in memory: what `local:` binds.
+ */
+#[atomic]
+public class LocalRoster : Roster
+{
+    private thread::mutex<map<string, array<Present>>> $channels = thread::mutex<map<string, array<Present>>>(map<string, array<Present>>());
+
+    public constructor()
+    {
+    }
+
+    public function join(const string& $channel, const Present& $member) : status<RealtimeError>
+    {
+        thread::locked<map<string, array<Present>>> $held = $this->channels->lock();
+        if (!$held->value->has($channel)) {
+            $held->value[$channel] = array<Present>();
+        }
+        array<Present>& $all = $held->value->at($channel);
+        foreach ($all as &$p) {
+            if ($p->id == $member->id) {
+                $p->info = $member->info;
+                return .ok;
+            }
+        }
+        $all->push($member);
+        return .ok;
+    }
+
+    public function leave(const string& $channel, const string& $id) : status<RealtimeError>
+    {
+        thread::locked<map<string, array<Present>>> $held = $this->channels->lock();
+        if (!$held->value->has($channel)) {
+            return .ok;
+        }
+        array<Present>& $all = $held->value->at($channel);
+        usize $i = 0;
+        while ($i < $all->count()) {
+            if ($all[$i]->id == $id) {
+                $all->remove($i);
+            } else {
+                $i = $i + 1;
+            }
+        }
+        if ($all->empty()) {
+            $held->value->remove($channel);
+        }
+        return .ok;
+    }
+
+    public function members(const string& $channel) : result<array<Present>, RealtimeError>
+    {
+        thread::locked<map<string, array<Present>>> $held = $this->channels->lock();
+        if (!$held->value->has($channel)) {
+            array<Present> $none = [];
+            return .ok($none);
+        }
+        return .ok($held->value->at($channel)->clone());
+    }
+}

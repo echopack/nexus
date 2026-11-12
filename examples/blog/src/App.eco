@@ -2,10 +2,12 @@ namespace Blog;
 
 use container::Container;
 use Blog::Actions::{Health, Home};
+use Blog::Actions::Admin::StreamStats;
 use Blog::Commands::SetPassword;
 use Blog::Config::BlogConfig;
+use Blog::Feeds::StatsFeed;
 use Blog::Middleware::ServerTiming;
-use Blog::Providers::{AuthProvider, PostsProvider};
+use Blog::Providers::{AuthProvider, CommentsProvider, PostsProvider};
 use Blog::Queues::{JobLane, WorkerLane};
 
 /**
@@ -24,11 +26,7 @@ public class App : nexus::Extension
      */
     public function providers() : array<nexus::Provider>
     {
-        array<nexus::Provider> $all = [
-            AuthProvider(), 
-            PostsProvider()
-        ];
-
+        array<nexus::Provider> $all = [AuthProvider(), PostsProvider(), CommentsProvider()];
         return $all;
     }
 
@@ -64,7 +62,34 @@ public class App : nexus::Extension
             $app->register($p);
         }
 
+        // the admin's live numbers, a one-way stream of server-sent events; a sign in that ends
+        // closes the streams opened with it
+        StatsFeed $feed = StatsFeed();
+        $app->instance($feed);
+        $app->get<nexus::auth::Endings>()->listen(function[$feed](nexus::auth::Ending $e) : void {
+            $feed->ended($e);
+        });
+        $app->bindAction<StreamStats>((Container $c) => StreamStats($c->get<StatsFeed>()))
+            ->route([.get], '/v1/admin/stats/stream');
+
         return .ok;
+    }
+
+    /**
+     * Under `serve`: the stats feed starts sending snapshots to whoever watches.
+     */
+    public function start(nexus::Kernel $kernel, const nexus::Serve& $options) : status<nexus::BootError>
+    {
+        $kernel->services->get<StatsFeed>()->start($kernel, $kernel->services->get<BlogConfig>()->statsEvery);
+        return .ok;
+    }
+
+    /**
+     * The stats streams end before the server does.
+     */
+    public function drain(nexus::Kernel $kernel) : void
+    {
+        $kernel->services->get<StatsFeed>()->stop();
     }
 
     /**

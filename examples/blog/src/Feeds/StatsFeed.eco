@@ -1,0 +1,207 @@
+namespace Blog::Feeds;
+
+use std::thread;
+use std::time;
+use Blog::DB::Model::UserRepository;
+use Blog::DB::Repository::{CommentRepository, PostRepository};
+use Blog::Queues::JobQueue;
+use Blog::Services::BlogUsers;
+use Blog::Types::Role;
+
+/**
+ * The admin's live numbers, a one-way stream: how many posts, users and comments there are, how
+ * many realtime sockets this server holds and how many tasks wait. Each admin page that watches
+ * holds an event stream in `streams`; while one does, a thread of the feed's own (started under
+ * `serve`) sends a fresh snapshot every `BLOG_STATS_EVERY`.
+ *
+ * A stream lasts as long as its admin may watch: the sign in it was opened with ending closes it
+ * at once, and each tick first closes those whose credential no longer holds or whose user is no
+ * admin any more.
+ */
+#[atomic]
+public class StatsFeed
+{
+    public nexus::EventStreams $streams = nexus::EventStreams();
+    private atomic<uint64> $sent = atomic<uint64>(0);
+    private atomic<bool> $halt = atomic<bool>(false);
+
+    // stream id to who opened it, for the endings and the recheck
+    private thread::mutex<map<int64, Watching>> $watching = thread::mutex<map<int64, Watching>>(map<int64, Watching>());
+
+    // the ticker; dropping it joins the thread
+    private result<thread::handle, thread::error>? $ticker = null;
+
+    public constructor()
+    {
+    }
+
+    /**
+     * Sends `$s`, opened by `$who`, the snapshot `$now`, then every one after it, until it ends.
+     */
+    public function watch(nexus::EventStream $s, const json::Value& $now, const nexus::auth::Identity& $who) : void
+    {
+        {
+            thread::locked<map<int64, Watching>> $held = $this->watching->lock();
+            $held->value[$s->id()] = Watching($s, $who);
+        }
+        array<nexus::ServerEvent> $first = [$this->event($now)];
+        $this->streams->join($s, mv $first);
+    }
+
+    /**
+     * Stops sending to `$s`; its stream's close hook calls this.
+     */
+    public function forget(nexus::EventStream $s) : void
+    {
+        {
+            thread::locked<map<int64, Watching>> $held = $this->watching->lock();
+            $held->value->remove($s->id());
+        }
+        $this->streams->remove($s);
+    }
+
+    /**
+     * Closes the streams opened with a credential `$e` covers.
+     */
+    public function ended(const nexus::auth::Ending& $e) : void
+    {
+        foreach ($this->watchers() as $w) {
+            if ($e->covers($w->who)) {
+                $w->stream->close();
+            }
+        }
+    }
+
+    /**
+     * Closes the streams whose credential no longer holds or whose user is no admin any more, as
+     * `$payload` reads them. A guard or a database that cannot answer closes nothing.
+     */
+    public function recheck(nexus::Payload& $payload) : void
+    {
+        nexus::auth::Guards $guards = $payload->get<nexus::auth::Guards>();
+        UserRepository $users = $payload->get<UserRepository>();
+        foreach ($this->watchers() as $w) {
+            bool $holds = guard $guards->holds($payload, $w->who) else {
+                continue;
+            };
+            bool $admin = false;
+            if ($holds) {
+                $user = guard BlogUsers::of($users, $w->who->subject) else ($p) {
+                    // a 401 is an account that is gone; anything else is the database
+                    if ($p->status() == 401) {
+                        $w->stream->close();
+                    }
+                    continue;
+                };
+                $admin = $user->role == Role::admin;
+            }
+            if (!$holds || !$admin) {
+                $w->stream->close();
+            }
+        }
+    }
+
+    /**
+     * Sends a snapshot to everyone watching.
+     */
+    public function publish(const json::Value& $now) : void
+    {
+        $this->streams->publish($this->event($now));
+    }
+
+    /**
+     * The numbers as `$payload` reads them.
+     */
+    public static function snapshot(nexus::Payload& $payload) : result<json::Value, nexus::Problem>
+    {
+        uint64 $posts = try $payload->get<PostRepository>()->count();
+        uint64 $users = try $payload->get<UserRepository>()->count();
+        uint64 $comments = try $payload->get<CommentRepository>()->count();
+        uint64 $tasks = try $payload->get<JobQueue>()->waiting();
+        usize $sockets = $payload->get<nexus::realtime::Hub>()->connections();
+        json::Value $doc = json::object();
+        $doc['posts'] = json::int($posts as int64);
+        $doc['users'] = json::int($users as int64);
+        $doc['comments'] = json::int($comments as int64);
+        $doc['sockets'] = json::int($sockets as int64);
+        $doc['tasks_waiting'] = json::int($tasks as int64);
+        $doc['at'] = json::str(nexus::log::Stamp::rfc3339(time::timestamp::now()));
+        return .ok($doc);
+    }
+
+    /**
+     * Starts the ticker: a snapshot every `$every` while anybody watches.
+     */
+    public function start(nexus::Kernel $kernel, time::duration $every) : void
+    {
+        if ($this->ticker != null) {
+            return;
+        }
+        $this->halt->store(false);
+        StatsFeed $self = $this;
+        $this->ticker = thread::spawn(function[$self, $kernel, $every]() : void {
+            $self->tick($kernel, $every);
+        });
+    }
+
+    /**
+     * Stops the ticker and ends every stream.
+     */
+    public function stop() : void
+    {
+        $this->halt->store(true);
+        $this->ticker = null;
+        $this->streams->closeAll();
+    }
+
+    /**
+     * The ticker's loop.
+     */
+    internal function tick(nexus::Kernel $kernel, time::duration $every) : void
+    {
+        int64 $slept = 0;
+        while (!$this->halt->load()) {
+            thread::sleep(100);
+            $slept = $slept + 100;
+            if ($slept < $every->as_millis() || $this->streams->count() == 0) {
+                continue;
+            }
+            $slept = 0;
+            nexus::Payload $payload = $kernel->background('stats', 'tick');
+            $this->recheck($payload);
+            result<json::Value, nexus::Problem> $now = StatsFeed::snapshot($payload);
+            nexus::Kernel::finish($payload);
+            json::Value $doc = guard $now else ($p) {
+                $kernel->log->warn('stats snapshot failed', ['problem' => $p->title()]);
+                continue;
+            };
+            $this->publish($doc);
+        }
+    }
+
+    private function event(const json::Value& $now) : nexus::ServerEvent
+    {
+        uint64 $n = $this->sent->add(1) + 1;
+        return nexus::ServerEvent(json: $now, $event: 'stats', $id: "{$n}");
+    }
+
+    // a copy: closing a stream runs its close hook, which takes the lock again
+    private function watchers() : array<Watching>
+    {
+        array<Watching> $out = [];
+        thread::locked<map<int64, Watching>> $held = $this->watching->lock();
+        foreach ($held->value as $id => const &$w) {
+            $out[] = $w;
+        }
+        return $out;
+    }
+}
+
+/**
+ * A stream watching the numbers and who opened it.
+ */
+internal struct Watching
+{
+    public nexus::EventStream $stream;
+    public nexus::auth::Identity $who;
+}

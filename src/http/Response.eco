@@ -18,6 +18,18 @@ public struct Response
     public function<void(Writer)>? $stream = null;
 
     /**
+     * The hooks of a server-sent event stream the transport keeps open, or null.
+     */
+    public EventHooks? $events = null;
+
+    /**
+     * The hooks of a websocket this response upgrades to, and the subprotocol it agrees on when
+     * the client offered it. Null for any other answer.
+     */
+    public SocketHooks? $websocket = null;
+    public string $protocol = '';
+
+    /**
      * A body of any content type.
      */
     public constructor(int32 $status, const string& $body, type: const string& $type)
@@ -74,6 +86,37 @@ public struct Response
         $this = Response($status);
         $this->stream = $fn;
         $this->headers->set('Content-Type', $type);
+    }
+
+    /**
+     * A server-sent event stream: an explicit, continuous one-way feed to the client, for a use
+     * that is exactly that (a dashboard's numbers, a log tail). The transport writes the head
+     * (`text/event-stream`, never cached), runs `$opened` with the stream, and keeps the connection
+     * without holding a thread for it; whoever keeps the stream sends to it later. `$closed` runs
+     * once when it ends. Both run after the request's container is dropped: capture only shared
+     * services. Realtime channels are websockets (nexus-realtime), not this.
+     *
+     *     return Response(events: function[$feed](nexus::EventStream $s) : void { $feed->streams->add($s); },
+     *         closed: function[$feed](nexus::EventStream $s) : void { $feed->streams->remove($s); });
+     */
+    public constructor(events: function<void(EventStream)> $opened, closed: function<void(EventStream)>? $closed = null)
+    {
+        $this = Response(200);
+        $this->events = EventHooks($opened, $closed);
+        $this->headers->set('Content-Type', 'text/event-stream');
+        $this->headers->set('Cache-Control', 'no-store');
+    }
+
+    /**
+     * Upgrades the connection to a websocket run by `$hooks`, nexus's realtime connection. A bad
+     * handshake is refused by the transport (426 or 400) and runs no hook. `$protocol` is agreed
+     * on only when the client offered it.
+     */
+    public constructor(websocket: SocketHooks $hooks, protocol: const string& $protocol = '')
+    {
+        $this = Response(101);
+        $this->websocket = $hooks;
+        $this->protocol = $protocol;
     }
 
     /**

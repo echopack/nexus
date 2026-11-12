@@ -111,11 +111,13 @@ public class Extension : nexus::Extension
         string $prefix = $this->prefix;
         calendar::Clock $clock = $this->clock;
         time::duration $window = $this->window;
-        $s->bind<Tokens>(scope: function[$prefix, $config, $clock](Container $c) : Tokens {
-            return Tokens($c->get<TokenStore>(), $prefix, $config->tokens, $clock);
+        $endings = Endings();
+        $s->bind<Endings>(put: $endings);
+        $s->bind<Tokens>(scope: function[$prefix, $config, $clock, $endings](Container $c) : Tokens {
+            return Tokens($c->get<TokenStore>(), $prefix, $config->tokens, $clock, $endings);
         });
-        $s->bind<Sessions>(scope: function[$config, $clock, $window](Container $c) : Sessions {
-            return Sessions($c->get<SessionStore>(), $config->key, $config->sessions, $config->guests, $window, $clock);
+        $s->bind<Sessions>(scope: function[$config, $clock, $window, $endings](Container $c) : Sessions {
+            return Sessions($c->get<SessionStore>(), $config->key, $config->sessions, $config->guests, $window, $clock, $endings);
         });
         return .ok;
     }

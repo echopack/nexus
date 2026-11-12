@@ -1,0 +1,38 @@
+/**
+ * The extension without a server: what it leaves alone, and what stops the boot.
+ */
+
+use nexus::testing::TestApp;
+use ecotest::expect;
+
+internal const KEY = 'a-test-key-of-at-least-thirty-two-chars';
+
+internal function exts() : array<nexus::Extension>
+{
+    array<nexus::Extension> $all = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), nexus::realtime::redis::Extension()];
+    return $all;
+}
+
+test without_a_redis_url_broadcasts_stay_local
+{
+    $app = TestApp(exts(), ['NEXUS_AUTH_KEY' => KEY]);
+    expect($app->kernel->services->get<nexus::realtime::Broadcaster>()->describe())->is('local');
+}
+
+test a_server_that_does_not_answer_stops_the_boot
+{
+    nexus::BootError $e = expect(TestApp::attempt(exts(), ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => 'redis://127.0.0.1:1/0']))->fails();
+    expect(str::join($e->lines(), '; '))->has('cannot reach redis://127.0.0.1:1/0');
+}
+
+test a_beat_of_nothing_stops_the_boot_on_redis
+{
+    nexus::BootError $e = expect(TestApp::attempt(exts(), ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => 'redis://127.0.0.1:1/0', 'NEXUS_REALTIME_BEAT' => '0s']))->fails();
+    expect(str::join($e->lines(), '; '))->has('NEXUS_REALTIME_BEAT is 0s');
+}
+
+test tls_is_refused_until_the_client_speaks_it
+{
+    nexus::BootError $e = expect(TestApp::attempt(exts(), ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => 'rediss://127.0.0.1:6380']))->fails();
+    expect(str::join($e->lines(), '; '))->has('NEXUS_REALTIME_URL');
+}

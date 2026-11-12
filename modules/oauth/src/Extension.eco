@@ -92,7 +92,7 @@ public class Extension : nexus::Extension
         calendar::Clock $clock = $this->clock;
         nexus::auth::Throttle $throttle = $this->registrations;
         $s->bind<Grants>(scope: function[$clients, $config, $clock](Container $c) : Grants {
-            return Grants($c->get<OAuthStore>(), $clients, $config, $clock);
+            return Grants($c->get<OAuthStore>(), $clients, $config, $clock, $c->get<nexus::auth::Endings>());
         });
         $s->bindAction<ServerMetadata>(method: .get, path: '/.well-known/oauth-authorization-server', function[$resources](Container $c) : ServerMetadata {
             return ServerMetadata($resources);
@@ -119,7 +119,7 @@ public class Extension : nexus::Extension
             return ListGrants($c->get<Grants>());
         });
         $s->bindAction<DropGrant>(method: .delete, path: '/oauth/grants/{id}', function(Container $c) : DropGrant {
-            return DropGrant($c->get<OAuthStore>());
+            return DropGrant($c->get<Grants>());
         });
         return .ok;
     }

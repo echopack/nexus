@@ -1,0 +1,15 @@
+namespace nexus;
+
+/**
+ * The scheme `$url` starts with, lowercased (`memory`, `local`, `redis`, `rediss`), for an
+ * extension that picks its backend by URL; the whole URL when it has no colon.
+ */
+public function scheme(const string& $url) : string
+{
+    string $u = string::from(str::trim($url));
+    usize $colon = $u->find(':');
+    if ($colon >= $u->size()) {
+        return str::lower($u);
+    }
+    return str::lower($u->sub(0, $colon));
+}

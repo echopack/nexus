@@ -1,0 +1,36 @@
+/*
+ * nexus-realtime-redis: realtime broadcasts between servers through Redis.
+ *
+ * With `NEXUS_REALTIME_URL=redis://host:6379` every process publishes its
+ * broadcasts (and whispers, presence changes, ended sign ins) on one Redis
+ * channel and every server listens on it, so a broadcast from any process
+ * (a request, a task in `work`, a command) reaches the sockets of every
+ * server. Who is in each presence channel is kept in Redis too.
+ *
+ *   nexus::realtime::Extension(),
+ *   nexus::realtime::redis::Extension(),
+ */
+
+#[module: "nexus-realtime-redis"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "nexus-realtime broadcasts between servers through Redis"]
+
+#[depends: "../../.."]
+#[depends: ".."]
+#[depends: "../../auth"]
+#[depends: "../../../../container"]
+#[depends: "../../../../libjson"]
+#[depends: "../../../../libredis"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../testing"]
+    #[sources: "tests/*.eco"]
+}

@@ -1,0 +1,40 @@
+namespace nexus::realtime;
+
+/**
+ * A message one socket sends the other subscribers of a channel, `{"op":"whisper"}`: the event's
+ * name and its data, from the member `from` (the sender's global id). The channel class's `whisper`
+ * sees it first and may change `event` and `data`. It never goes back to the sender (`from`) and is
+ * never kept for catching up.
+ */
+public struct Whisper
+{
+    public string $channel;
+    public string $event;
+    public json::Value $data;
+    public string $from;
+
+    public const function json() : json::Value
+    {
+        json::Value $doc = json::object();
+        $doc['channel'] = json::str($this->channel);
+        $doc['event'] = json::str($this->event);
+        $doc['data'] = $this->data;
+        $doc['from'] = json::str($this->from);
+        return $doc;
+    }
+
+    /**
+     * The whisper `json` wrote, or null for anything else.
+     */
+    public static function read(const json::Value& $doc) : Whisper?
+    {
+        string $channel = guard $doc->get('channel')?->asStr() else {
+            return null;
+        };
+        string $event = guard $doc->get('event')?->asStr() else {
+            return null;
+        };
+        string $from = $doc->get('from')?->asStr() ?? '';
+        return Whisper($channel, $event, $doc->get('data') ?? json::nil(), $from);
+    }
+}

@@ -12,11 +12,11 @@ test the_prune_runs_nightly_at_three
     $w = $r->app->kernel->services->get<nexus::work::Work>();
     expect($w->scheduler->plans)->size(1);
     expect($w->scheduler->plans[0]->into)->is('Blog::Queues::JobLane');
-    nexus::work::Schedule? $parsed = guard nexus::work::Schedule::of('', $w->scheduler->plans[0]->cron);
-    nexus::work::Schedule $nightly = guard $parsed;
+    $parsed = guard nexus::work::Schedule::of('', $w->scheduler->plans[0]->cron);
+    $nightly = guard $parsed;
     calendar::Zone $utc = .utc();
     // 2026-11-02T02:59:30Z
-    time::timestamp $before = time::timestamp::from_unix_secs(1793588370);
+    $before = time::timestamp::from_unix_secs(1793588370);
     $first = expect($nightly->next($before, $utc))->some();
     expect($first->unix_secs())->is(1793588400);
 

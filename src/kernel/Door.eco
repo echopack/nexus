@@ -2,7 +2,8 @@ namespace nexus;
 
 /**
  * Which way work came into the app: an HTTP request, a command on the command line, an MCP tool
- * call or a task on a worker. Guards read it, so a credential can be good for one door only.
+ * call, a task on a worker or a message on an open websocket. Guards read it, so a credential can
+ * be good for one door only.
  */
 public enum Door : uint8
 {
@@ -11,6 +12,9 @@ public enum Door : uint8
     case mcp = 3;
     case work = 4;
 
+    // a message on an open websocket, after its request was answered
+    case realtime = 5;
+
     public const function name() : string
     {
         return match ($this) {
@@ -18,6 +22,7 @@ public enum Door : uint8
             Door::cli => 'cli',
             Door::mcp => 'mcp',
             Door::work => 'work',
+            Door::realtime => 'realtime',
         };
     }
 }

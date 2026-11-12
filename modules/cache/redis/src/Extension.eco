@@ -23,7 +23,7 @@ public class Extension : nexus::Extension
     public function services(nexus::Services& $s) : status<nexus::BootError>
     {
         nexus::cache::CacheConfig $config = $s->get<nexus::cache::CacheConfig>();
-        string $kind = nexus::cache::scheme($config->url);
+        string $kind = nexus::scheme($config->url);
         if ($kind != 'redis' && $kind != 'rediss') {
             return .ok;
         }

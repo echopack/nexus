@@ -1,0 +1,327 @@
+namespace nexus::realtime;
+
+/**
+ * The realtime protocol: what a socket may say and what it gets. A socket sends JSON objects with
+ * an `op`:
+ *
+ * - `{"op":"subscribe","channel":"posts.5"}`, with `"after":"<id>"` to catch up from the broadcast
+ *   it saw last (or the `after` its last `subscribed` gave, before any came); answered
+ *   `subscribed` (then what it missed) or `refused`;
+ * - `{"op":"unsubscribe","channel":"posts.5"}`, answered `unsubscribed`;
+ * - `{"op":"whisper","channel":"posts.5","event":"typing","data":{}}`, to the channel's other
+ *   subscribers, when the channel class lets it;
+ * - `{"op":"ping"}`, answered `pong`.
+ *
+ * Each subscribe and whisper asks the channel class of the first pattern that answers for the name,
+ * on a payload of its own (door `.realtime`); a name no pattern answers is refused with a 404. A
+ * socket that talks faster than the rate gets `error`s, and one that floods is closed with 1008.
+ */
+#[atomic]
+public class Gateway : HubObserver
+{
+    public Hub $hub;
+    private Channels $channels;
+    public const Limits $limits;
+
+    /**
+     * The booted app, null until nexus-realtime's `boot` ran: each subscribe runs its channel check
+     * on a payload of its own, and the relay and the roster come from it (nexus-realtime-redis
+     * binds them after this is).
+     */
+    public nexus::Kernel? $kernel = null;
+
+    public constructor(Hub $hub, Channels $channels, const Limits& $limits)
+    {
+        $this->hub = $hub;
+        $this->channels = $channels;
+        $this->limits = $limits;
+        $hub->observe($this);
+    }
+
+    /**
+     * A 429 when `$who` from `$peer` has as many sockets open here as the limit allows. The hub's
+     * attach is the real gate: upgrades that race all pass this and the extra sockets are closed
+     * with 4029 as they open.
+     */
+    public function admit(const nexus::auth::Identity& $who, const string& $peer) : status<nexus::Problem>
+    {
+        usize $most = $this->limits->sockets;
+        if ($most == 0 || $this->hub->holding(Hub::keyOf($who, $peer)) < $most) {
+            return .ok;
+        }
+        json::Value $extra = json::object();
+        $extra['reason'] = json::str('too_many_sockets');
+        return .error(.custom(nexus::ProblemDetail($type: 'about:blank', $status: 429, $title: 'Too Many Requests',
+            $detail: "{$most} realtime sockets are open for this caller already; close one first", $extra: $extra)));
+    }
+
+    /**
+     * The hooks of a socket opened by `$who` from `$peer`, anonymous for nobody.
+     */
+    public function hooks(const nexus::auth::Identity& $who, const string& $peer) : nexus::SocketHooks
+    {
+        Connection $conn = Connection($who, $this->limits->rate);
+        Gateway $self = $this;
+        // a copy: the closure outlives the borrowed parameter
+        string $from = $peer;
+        return nexus::SocketHooks()
+            ->onOpen(function[$self, $conn, $from](nexus::Socket $s) : void {
+                if (!$self->hub->attach($s, $conn->who, $from, $self->limits->sockets)) {
+                    $s->close(4029, 'too_many_sockets');
+                    return;
+                }
+                $s->send(Frames::ready(!$conn->who->anonymous(), $self->hub->idOf($s->id())));
+            })
+            ->onMessage(function[$self, $conn](nexus::Socket $s, nexus::SocketMessage $m) : void {
+                $self->heard($s, $conn, $m);
+            })
+            ->onClose(function[$self](nexus::Socket $s, nexus::SocketClose $c) : void {
+                $self->hub->drop($s->id());
+            });
+    }
+
+    /**
+     * One message from the socket.
+     */
+    public function heard(nexus::Socket $s, Connection $conn, const nexus::SocketMessage& $m) : void
+    {
+        match ($conn->spend()) {
+            Spent::ok => {},
+            Spent::slow => {
+                $s->send(Frames::error("slow down: {$this->limits->rate} messages a second at most"));
+                return;
+            },
+            Spent::flood => {
+                $s->close(1008, 'too many messages');
+                return;
+            },
+        }
+        string $text = match ($m) {
+            nexus::SocketMessage::text($t) => $t,
+            nexus::SocketMessage::binary($b) => '',
+        };
+        json::Value $doc = guard json::parse($text) else {
+            $s->send(Frames::error('send JSON objects with an op'));
+            return;
+        };
+        string $op = $doc->get('op')?->asStr() ?? '';
+        if ($op == 'ping') {
+            $s->send(Frames::pong());
+            return;
+        }
+        if ($op != 'subscribe' && $op != 'unsubscribe' && $op != 'whisper') {
+            $s->send(Frames::error("unknown op '{$op}'; expected subscribe, unsubscribe, whisper or ping"));
+            return;
+        }
+        string $channel = $doc->get('channel')?->asStr() ?? '';
+        if (!ChannelPattern::named($channel)) {
+            $s->send(Frames::error("'{$channel}' is no channel name"));
+            return;
+        }
+        if ($op == 'unsubscribe') {
+            Unseat $u = $this->hub->leave($s->id(), $channel);
+            if ($u->present) {
+                $this->depart($this->hub->idOf($s->id()), $channel);
+            }
+            return;
+        }
+        if ($op == 'whisper') {
+            $this->whisper($s, $conn, $channel, $doc, $text->size());
+            return;
+        }
+        $this->subscribe($s, $conn, $channel, $doc->get('after')?->asStr());
+    }
+
+    public function dropped(const string& $id, const array<string>& $present) : void
+    {
+        foreach ($present as const &$channel) {
+            $this->depart($id, $channel);
+        }
+    }
+
+    private function subscribe(nexus::Socket $s, Connection $conn, const string& $channel, string? $after) : void
+    {
+        usize $most = $this->limits->channels;
+        if ($most > 0 && !$this->hub->follows($s->id(), $channel) && $this->hub->subscriptions($s->id()) >= $most) {
+            $s->send(Frames::error("a socket may follow {$most} channels at most; unsubscribe from one first"));
+            return;
+        }
+        nexus::Kernel $k = guard $this->kernel else {
+            $s->send(Frames::refused($channel, .unavailable('the app is not ready'), .prod));
+            return;
+        };
+        ChannelMatch $found = guard $this->channels->find($channel) else {
+            $s->send(Frames::refused($channel, .notFound("channel {$channel}"), $k->mode));
+            return;
+        };
+        nexus::Payload $payload = $k->background('realtime', "subscribe {$channel}");
+        $payload->door = .realtime;
+        Channel $guard = $found->entry->open($payload);
+        status<nexus::Problem> $allowed = $guard->authorize($payload, $conn->who, $found->topic);
+        result<json::Value?, nexus::Problem> $shown = .ok(null);
+        if (!$allowed->failed()) {
+            $shown = $guard->member($payload, $conn->who, $found->topic);
+        }
+        nexus::Kernel::finish($payload);
+        guard $allowed else ($p) {
+            $s->send(Frames::refused($channel, $p, $k->mode));
+            return;
+        };
+        json::Value? $info = guard $shown else ($p) {
+            $s->send(Frames::refused($channel, $p, $k->mode));
+            return;
+        };
+        if ($info == null) {
+            Seat $plain = $this->hub->seat($s->id(), $channel, false);
+            if (!$plain->on) {
+                return;
+            }
+            $this->hub->join($s, $channel, $after);
+            return;
+        }
+        Present $me = Present($this->hub->idOf($s->id()), $info ?? json::nil());
+        Seat $seat = $this->hub->seat($s->id(), $channel, true);
+        if (!$seat->on) {
+            return;
+        }
+        $this->hub->join($s, $channel, $after, $me, $seat->fresh);
+    }
+
+    public function appearing(const string& $channel, const Present& $me) : result<array<Present>, RealtimeError>?
+    {
+        nexus::Kernel $k = guard $this->kernel else {
+            return .error(.relay('the app is not ready'));
+        };
+        Roster $roster = $k->services->get<Roster>();
+        guard $roster->join($channel, $me) else ($e) {
+            return .error($e);
+        };
+        return .ok($this->roll($roster, $channel, $me));
+    }
+
+    public function appeared(const string& $channel, const Present& $me) : void
+    {
+        $this->publish(Note::joined($channel, $me));
+    }
+
+    public function vanish(const string& $channel, const string& $id) : void
+    {
+        nexus::Kernel $k = guard $this->kernel else {
+            return;
+        };
+        status<RealtimeError> $gone = $k->services->get<Roster>()->leave($channel, $id);
+        if ($gone->failed()) {
+            $k->log->warn('realtime presence could not forget a member', ['channel' => $channel]);
+        }
+    }
+
+    /**
+     * Everyone in `$channel`, `$me` included: a roster that cannot answer still lists this socket.
+     */
+    private function roll(Roster $roster, const string& $channel, const Present& $me) : array<Present>
+    {
+        array<Present> $members = guard $roster->members($channel) else {
+            array<Present> $only = [];
+            $only[] = $me;
+            return $only;
+        };
+        foreach ($members as const &$m) {
+            if ($m->id == $me->id) {
+                return $members;
+            }
+        }
+        $members[] = $me;
+        return $members;
+    }
+
+    private function whisper(nexus::Socket $s, Connection $conn, const string& $channel, const json::Value& $doc, usize $size) : void
+    {
+        nexus::Kernel $k = guard $this->kernel else {
+            $s->send(Frames::error(channel: $channel, .unavailable('the app is not ready'), .prod));
+            return;
+        };
+        if (!$this->hub->follows($s->id(), $channel)) {
+            $s->send(Frames::error(channel: $channel, .forbidden("subscribe to {$channel} before whispering on it"), $k->mode));
+            return;
+        }
+        usize $most = $this->limits->whisper;
+        if ($most > 0 && $size > $most) {
+            $s->send(Frames::error(channel: $channel, .badRequest("a whisper may be {$most} bytes at most"), $k->mode));
+            return;
+        }
+        string $event = $doc->get('event')?->asStr() ?? '';
+        if ($event->empty()) {
+            $s->send(Frames::error(channel: $channel, .badRequest('a whisper needs an event'), $k->mode));
+            return;
+        }
+        ChannelMatch $found = guard $this->channels->find($channel) else {
+            $s->send(Frames::error(channel: $channel, .notFound("channel {$channel}"), $k->mode));
+            return;
+        };
+        string $me = $this->hub->idOf($s->id());
+        Whisper $w = Whisper($channel, $event, $doc->get('data') ?? json::nil(), $me);
+        nexus::Payload $payload = $k->background('realtime', "whisper {$channel}");
+        $payload->door = .realtime;
+        status<nexus::Problem> $allowed = $found->entry->open($payload)->whisper($payload, $conn->who, $found->topic, $w);
+        nexus::Kernel::finish($payload);
+        guard $allowed else ($p) {
+            $s->send(Frames::error(channel: $channel, $p, $k->mode));
+            return;
+        };
+        // the hook may change what is said, not who says it or where
+        $w->channel = $channel;
+        $w->from = $me;
+        $this->publish(Note::whisper($w));
+    }
+
+    /**
+     * The socket `$id` left presence channel `$channel`: the roster forgets it and the others hear.
+     */
+    internal function depart(const string& $id, const string& $channel) : void
+    {
+        nexus::Kernel $k = guard $this->kernel else {
+            return;
+        };
+        Roster $roster = $k->services->get<Roster>();
+        array<Present> $all = guard $roster->members($channel) else ($e) {
+            $k->log->warn('realtime presence could not list members', ['channel' => $channel, 'error' => $e->message()]);
+            return;
+        };
+        bool $had = false;
+        foreach ($all as const &$m) {
+            if ($m->id == $id) {
+                $had = true;
+            }
+        }
+        if (!$had) {
+            return;
+        }
+        status<RealtimeError> $gone = $roster->leave($channel, $id);
+        if ($gone->failed()) {
+            $k->log->warn('realtime presence could not forget a member', ['channel' => $channel]);
+        }
+        $this->publish(Note::left($channel, $id));
+    }
+
+    /**
+     * Hands `$n` to the relay, for every server; a relay that fails is logged.
+     */
+    public function publish(const Note& $n) : void
+    {
+        nexus::Kernel $k = guard $this->kernel else {
+            return;
+        };
+        guard $k->services->get<Relay>()->publish($n) else ($e) {
+            $k->log->warn('realtime relay failed', ['error' => $e->message()]);
+            return;
+        };
+    }
+
+    /**
+     * Nobody: what a socket opened without a ticket or credential is.
+     */
+    public static function nobody() : nexus::auth::Identity
+    {
+        return nexus::auth::Identity($via: '', $subject: '', $credential: '', $guest: true);
+    }
+}

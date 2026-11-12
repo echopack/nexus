@@ -1,0 +1,14 @@
+namespace Blog::Signals;
+
+use Blog::DB::Model::Comment;
+
+/**
+ * A comment went up on a post, its author loaded; `postAuthor` wrote the post, `except` is the
+ * realtime socket of the request that posted it (empty id for none), which already shows it.
+ */
+public struct CommentPosted
+{
+    public Comment $comment;
+    public int64 $postAuthor;
+    public nexus::realtime::SocketId $except = nexus::realtime::SocketId();
+}

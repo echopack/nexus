@@ -1,0 +1,40 @@
+namespace nexus::http;
+
+/**
+ * A nexus socket over libhttp's websocket, which waits on the reactor and holds no worker.
+ */
+#[atomic]
+public class WireSocket : nexus::Socket
+{
+    private http::Socket $out;
+
+    public constructor(http::Socket $out)
+    {
+        $this->out = $out;
+    }
+
+    public function id() : int64
+    {
+        return $this->out->id();
+    }
+
+    public function send(const string& $text) : bool
+    {
+        return $this->out->send(text: $text);
+    }
+
+    public function sendBinary(const string& $bytes) : bool
+    {
+        return $this->out->send(binary: $bytes);
+    }
+
+    public function close(int32 $code, const string& $reason) : void
+    {
+        $this->out->close($code, $reason);
+    }
+
+    public function open() : bool
+    {
+        return $this->out->open();
+    }
+}

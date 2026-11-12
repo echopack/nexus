@@ -1,0 +1,57 @@
+namespace nexus::realtime;
+
+/**
+ * `realtime:send --channel posts.5 --event note --data '{"text":"hi"}'`: broadcasts one event to a
+ * channel from the command line, through the app's relay; with Redis it reaches every server. On
+ * `local:` it refuses, since the command's own process holds no socket.
+ */
+public class SendCommand : nexus::Command
+{
+    public const function name() : string
+    {
+        return 'realtime:send';
+    }
+
+    public const function summary() : string
+    {
+        return 'broadcast an event to a realtime channel';
+    }
+
+    public const function options() : array<nexus::CommandOption>
+    {
+        array<nexus::CommandOption> $all = [
+            nexus::CommandOption(value: 'channel', 'NAME', 'the channel, such as posts.5'),
+            nexus::CommandOption(value: 'event', 'NAME', 'the event name', 'message'),
+            nexus::CommandOption(value: 'data', 'JSON', 'the data, a JSON value', '{}'),
+            nexus::CommandOption(value: 'except', 'SOCKET', 'a socket id to skip', ''),
+        ];
+        return $all;
+    }
+
+    public const function bound(container::Container $services) : bool
+    {
+        return $services->has<Broadcaster>();
+    }
+
+    public function run(nexus::Invocation& $in) : int32
+    {
+        nexus::Kernel $k = guard $in->kernel() else {
+            return 1;
+        };
+        string $channel = $in->value('channel');
+        string $event = $in->value('event');
+        json::Value $data = guard json::parse($in->value('data')) else {
+            return nexus::Console::report($in->out, nexus::Problem::field('data', 'json', 'The data must be JSON.'), $in->mode);
+        };
+        // a local relay hands the note to this process's hub, which holds no socket
+        if ($k->services->has<LocalRelay>()) {
+            return nexus::Console::report($in->out, .unavailable('NEXUS_REALTIME_URL is local:, so a broadcast from the command line reaches no socket of the running server; run the app on redis:// to send from here'), $in->mode);
+        }
+        Broadcaster $b = $k->services->get<Broadcaster>();
+        guard $b->send($channel, $event, $data, except: $in->value('except')) else ($e) {
+            return nexus::Console::report($in->out, .unavailable($e->message()), $in->mode);
+        };
+        $in->out->line("sent {$event} to {$channel} ({$b->describe()})");
+        return 0;
+    }
+}

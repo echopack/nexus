@@ -17,7 +17,7 @@ public struct WelcomeMail : nexus::mail::Mailable
     {
         // de-CH, then de, then en
         foreach ($this->messages->chain($this->locale) as const &$locale) {
-            string $translated = guard $this->messages->get($locale, 'mail.welcome.subject') else {
+            $translated = guard $this->messages->get($locale, 'mail.welcome.subject') else {
                 continue;
             };
             return str::replace($translated, '{blog}', $this->blog);

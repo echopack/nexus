@@ -36,8 +36,8 @@ public class SignInWith : nexus::Action
         if (!$session->anonymous()) {
             return .error(nexus::auth::Sessions::taken());
         }
-        nexus::connect::ExternalIdentity $who = try $this->connect->claim($in->value->attempt, $in->value->binding);
-        string $subject = try $this->accounts->of($who, BlogUsers($this->users, $this->signals, $payload->locale()));
+        $who = try $this->connect->claim($in->value->attempt, $in->value->binding);
+        $subject = try $this->accounts->of($who, BlogUsers($this->users, $this->signals, $payload->locale()));
         try $this->sessions->attach($session->credential, $subject);
         $user = try BlogUsers::of($this->users, $subject);
         return $this->transformer->own($payload, $user, nexus::rest::Meta());

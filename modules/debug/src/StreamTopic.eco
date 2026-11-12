@@ -1,11 +1,9 @@
 namespace nexus::debug;
 
-use std::time;
-
 /**
  * `GET <base>/api/topics/{topic}/stream?after=`: the topic as server-sent events, from the events
- * after `after` (or `Last-Event-ID`) on, a keep-alive comment while it is quiet. The web app
- * follows it. Holds a worker thread for as long as the client reads.
+ * after `after` (or `Last-Event-ID`) on. The web app follows it. The stream waits on the transport
+ * without holding a thread; the topic sends each new event to it as it is published.
  */
 public class StreamTopic : nexus::Action
 {
@@ -22,33 +20,14 @@ public class StreamTopic : nexus::Action
         int64 $from = Api::number($payload->request->header('Last-Event-ID'), 0);
         $from = Api::number($payload->request->query->get('after'), $from);
         uint64 $start = $from as uint64;
-        $r = nexus::Response(stream: function[$t, $start](nexus::Writer $w) : void {
-            uint64 $cursor = $start;
-            $w->write("retry: 2000\n\n");
-            $stop = function[$w]() : bool {
-                return !$w->open();
-            };
-            while ($w->open()) {
-                array<Event> $events = $t->ring->since($cursor, 200);
-                if ($events->empty()) {
-                    if (!$t->ring->wait($cursor, time::duration::secs(Api::BEAT), $stop)) {
-                        if (!$w->write(": beat\n\n") || !$w->flush()) {
-                            return;
-                        }
-                    }
-                    continue;
-                }
-                foreach ($events as const &$e) {
-                    $w->write(Topics::sse($t->name, $e));
-                    $cursor = $e->seq;
-                }
-                if (!$w->flush()) {
-                    return;
-                }
-            }
-        }, type: 'text/event-stream');
-        $r->header('Cache-Control', 'no-store');
-        $r->header('X-Accel-Buffering', 'no');
+        $r = nexus::Response(events: function[$t, $start](nexus::EventStream $s) : void {
+            nexus::ServerEvent $retry = nexus::ServerEvent('');
+            $retry->retry = std::time::duration::millis(2000);
+            $s->send($retry);
+            $t->follow($s, $start, 200);
+        }, closed: function[$t](nexus::EventStream $s) : void {
+            $t->unfollow($s);
+        });
         return .ok($r);
     }
 }

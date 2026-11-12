@@ -1,0 +1,19 @@
+namespace Blog::Channels;
+
+/**
+ * `users.<id>`: what a user is told alone, a comment on one of their posts. Only that user,
+ * signed in.
+ */
+public class UserChannel : nexus::realtime::Channel
+{
+    public function authorize(nexus::Payload& $payload, const nexus::auth::Identity& $who, const nexus::realtime::Topic& $topic) : status<nexus::Problem>
+    {
+        if ($who->anonymous()) {
+            return .error(.unauthorized('sign in to follow your own channel', $reason: 'signed_in_required'));
+        }
+        if (($who->number() ?? -1) != ($topic->number('id') ?? -2)) {
+            return .error(.forbidden('this channel belongs to another user'));
+        }
+        return .ok;
+    }
+}

@@ -383,14 +383,35 @@ test a_topic_streams_as_server_sent_events
 {
     $app = tokenApp();
     $app->api()->get('/hello')->ok();
-    $api = $app->api()->bearer(TOKEN);
-    $api->get('/__nexus/api/topics/requests/stream')->ok()
-        ->header('Content-Type', 'text/event-stream')
-        ->has('retry: 2000')
-        ->has('id: 1')
-        ->has('event: requests')
-        ->has('"path":"/hello"');
-    $api->with('Last-Event-ID', '1')->get('/__nexus/api/topics/requests/stream?after=0')->ok()->has('id: 1');
+    string $token = TOKEN;
+    map<string, string> $auth = ['Authorization' => "Bearer {$token}"];
+    $s = $app->events('/__nexus/api/topics/requests/stream', $auth);
+    expect($s->opened())->yes(says: 'the topic streams');
+    expect($s->headers->get('Content-Type'))->some('text/event-stream');
+    nexus::debug::Topic $t = expect($app->kernel->services->get<nexus::debug::Debug>()->named('requests'))->some();
+    $t->settle();
+    array<nexus::ServerEvent> $all = $s->events();
+    expect($all)->size(2);
+    expect(($all[0]->retry ?? std::time::duration::zero())->as_millis())->is(2000 as int64);
+    expect($all[1]->id)->some('1');
+    expect($all[1]->event)->some('requests');
+    expect($all[1]->data)->has('"path":"/hello"');
+
+    // what is published while it is open arrives, and once it is gone the topic stops sending
+    $app->api()->get('/hello')->ok();
+    $t->settle();
+    expect($s->named('requests'))->size(2);
+    $s->leave();
+    expect($t->following())->is(0 as int64);
+
+    // a stream that resumes gets only what it missed
+    map<string, string> $resume = ['Authorization' => "Bearer {$token}", 'Last-Event-ID' => '1'];
+    $again = $app->events('/__nexus/api/topics/requests/stream', $resume);
+    $t->settle();
+    array<nexus::ServerEvent> $missed = $again->named('requests');
+    expect($missed)->size(1);
+    expect($missed[0]->id)->some('2');
+    $again->leave();
 }
 
 test the_ring_keeps_the_newest

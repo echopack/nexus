@@ -1,0 +1,36 @@
+/*
+ * nexus-debug-realtime: the realtime sockets in the debug console.
+ *
+ * A panel of this server's open sockets (who opened them from where, the
+ * channels they follow; close one from the console), its channels with
+ * their subscribers and presence members, and the broadcasts kept for
+ * catching up. A live `realtime` topic tells every socket that opens and
+ * closes, every subscribe and broadcast, and every credential that ended.
+ * List it after nexus-realtime and nexus-debug; with the console off it
+ * does nothing.
+ */
+
+#[module: "nexus-debug-realtime"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "The realtime sockets in the nexus debug console"]
+
+#[depends: "../../.."]
+#[depends: ".."]
+#[depends: "../../realtime"]
+#[depends: "../../auth"]
+#[depends: "../../../../container"]
+#[depends: "../../../../libjson"]
+#[depends: "../../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../testing"]
+    #[sources: "tests/*.eco"]
+}

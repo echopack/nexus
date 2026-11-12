@@ -1,0 +1,12 @@
+namespace Blog::Signals;
+
+/**
+ * Comment `comment` on post `post` was deleted; `except` is the realtime socket of the request
+ * that deleted it (empty id for none).
+ */
+public struct CommentDeleted
+{
+    public int64 $post;
+    public int64 $comment;
+    public nexus::realtime::SocketId $except = nexus::realtime::SocketId();
+}

@@ -1,0 +1,90 @@
+namespace nexus::debug::realtime;
+
+/**
+ * Counts what the hub does and tells the console's `realtime` topic.
+ */
+#[atomic]
+public class Watch : nexus::realtime::HubObserver
+{
+    private nexus::debug::Topic $topic;
+    public atomic<uint64> $opened = atomic<uint64>(0);
+    public atomic<uint64> $broadcasts = atomic<uint64>(0);
+    public atomic<uint64> $reached = atomic<uint64>(0);
+    public atomic<uint64> $ended = atomic<uint64>(0);
+
+    public constructor(nexus::debug::Topic $topic)
+    {
+        $this->topic = $topic;
+    }
+
+    public function opened(const nexus::realtime::SocketInfo& $s) : void
+    {
+        $this->opened->add(1);
+        json::Value $o = Watch::event('opened', $s->id, '');
+        $o['who'] = json::str(who($s->who));
+        $o['peer'] = json::str($s->peer);
+        $this->topic->publish($o);
+    }
+
+    public function closed(const string& $id) : void
+    {
+        $this->topic->publish(Watch::event('closed', $id, ''));
+    }
+
+    public function joined(const string& $id, const string& $channel) : void
+    {
+        $this->topic->publish(Watch::event('joined', $id, $channel));
+    }
+
+    public function left(const string& $id, const string& $channel) : void
+    {
+        $this->topic->publish(Watch::event('left', $id, $channel));
+    }
+
+    public function delivered(const nexus::realtime::Envelope& $e, usize $reached) : void
+    {
+        $this->broadcasts->add(1);
+        $this->reached->add($reached as uint64);
+        json::Value $o = Watch::event('broadcast', '', $e->channel);
+        $o['event'] = json::str($e->event);
+        $o['reached'] = json::int($reached as int64);
+        $this->topic->publish($o);
+    }
+
+    public function ended(const nexus::auth::Ending& $e, usize $closed) : void
+    {
+        $this->ended->add($closed as uint64);
+        string $what = match ($e) {
+            nexus::auth::Ending::credential($via, $id) => "{$via} credential",
+            nexus::auth::Ending::subject($via, $subject) => "{$via} credentials of {$subject}",
+        };
+        json::Value $o = Watch::event('ended', '', '');
+        $o['event'] = json::str($what);
+        $o['reached'] = json::int($closed as int64);
+        $this->topic->publish($o);
+    }
+
+    private static function event(const string& $kind, const string& $socket, const string& $channel) : json::Value
+    {
+        json::Value $o = json::object();
+        $o['kind'] = json::str($kind);
+        if (!$socket->empty()) {
+            $o['socket'] = json::str($socket);
+        }
+        if (!$channel->empty()) {
+            $o['channel'] = json::str($channel);
+        }
+        return $o;
+    }
+}
+
+/**
+ * Who opened a socket, for a person: `guest`, or the guard and the subject.
+ */
+internal function who(const nexus::auth::Identity& $id) : string
+{
+    if ($id->anonymous()) {
+        return 'guest';
+    }
+    return "{$id->via} {$id->subject}";
+}

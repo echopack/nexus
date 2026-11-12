@@ -1,0 +1,169 @@
+namespace nexus;
+
+use std::thread;
+
+/**
+ * Work handed from any thread to one thread of its own, which runs `$run` on each item in the
+ * order they were put, so the thread that hands one over never waits on the work. `settle` waits
+ * until everything put before it ran, which tests use to read what a sender thread sent. When the
+ * thread could not start, `put` runs the item on the caller.
+ */
+#[atomic]
+public class Mailbox<T>
+{
+    private MailQueue<T> $queue;
+    private function<void(T)> $run;
+
+    // dropping the last handle joins the thread, after the destructor closed the queue
+    private result<thread::handle, thread::error> $thread;
+
+    public constructor(function<void(T)> $run)
+    {
+        $queue = MailQueue<T>();
+        $this->queue = $queue;
+        $this->run = $run;
+        $this->thread = thread::spawn(function[$queue, $run]() : void {
+            while (true) {
+                array<T> $batch = guard $queue->take() else {
+                    break;
+                };
+                foreach ($batch as $item) {
+                    $run($item);
+                }
+                $queue->done($batch->count() as uint64);
+            }
+        });
+    }
+
+    destructor()
+    {
+        $this->queue->close();
+    }
+
+    /**
+     * Hands `$item` to the thread, or runs it here when there is no thread to run it on.
+     */
+    public function put(T $item) : void
+    {
+        if ($this->thread->failed() || !$this->queue->put($item)) {
+            function<void(T)> $run = $this->run;
+            $run($item);
+        }
+    }
+
+    /**
+     * Waits until every item put before the call ran.
+     */
+    public function settle() : void
+    {
+        if ($this->thread->failed()) {
+            return;
+        }
+        $this->queue->settle();
+    }
+}
+
+/**
+ * The items waiting for a `Mailbox`'s thread: `put` queues, the thread `take`s everything waiting
+ * at once and says when it is `done`.
+ */
+#[atomic]
+internal class MailQueue<T>
+{
+    private thread::mutex<MailboxState<T>> $state = thread::mutex<MailboxState<T>>(MailboxState<T>());
+
+    // something to take, or the mailbox closed
+    private thread::condition $ready = thread::condition();
+
+    // the owning thread finished a batch
+    private thread::condition $finished = thread::condition();
+
+    public constructor()
+    {
+    }
+
+    /**
+     * Queues `$item`. False once the mailbox is closed.
+     */
+    public function put(T $item) : bool
+    {
+        thread::locked<MailboxState<T>> $held = $this->state->lock();
+        if ($held->value->closed) {
+            return false;
+        }
+        bool $woke = $held->value->items->empty();
+        $held->value->items[] = mv $item;
+        $held->value->queued = $held->value->queued + 1;
+        if ($woke) {
+            $this->ready->notify();
+        }
+        return true;
+    }
+
+    /**
+     * Every waiting item, waiting until there is one. Null once the mailbox is closed and empty:
+     * the owning thread is done.
+     */
+    public function take() : array<T>?
+    {
+        thread::locked<MailboxState<T>> $held = $this->state->lock();
+        while (!$held->value->closed && $held->value->items->empty()) {
+            $this->ready->wait($held);
+        }
+        if ($held->value->closed && $held->value->items->empty()) {
+            return null;
+        }
+        return $held->value->drain();
+    }
+
+    /**
+     * The owning thread is through with `$count` more items.
+     */
+    public function done(uint64 $count) : void
+    {
+        thread::locked<MailboxState<T>> $held = $this->state->lock();
+        $held->value->finished = $held->value->finished + $count;
+        $this->finished->notify_all();
+    }
+
+    /**
+     * Waits until every item queued before the call is done, or the mailbox closed.
+     */
+    public function settle() : void
+    {
+        thread::locked<MailboxState<T>> $held = $this->state->lock();
+        uint64 $target = $held->value->queued;
+        while (!$held->value->closed && $held->value->finished < $target) {
+            $this->finished->wait($held);
+        }
+    }
+
+    /**
+     * No more items: the owning thread takes what is queued and stops.
+     */
+    public function close() : void
+    {
+        thread::locked<MailboxState<T>> $held = $this->state->lock();
+        $held->value->closed = true;
+        $this->ready->notify_all();
+        $this->finished->notify_all();
+    }
+}
+
+internal struct MailboxState<T>
+{
+    public array<T> $items = [];
+    public bool $closed = false;
+
+    // items queued, and items the owning thread is through with
+    public uint64 $queued = 0;
+    public uint64 $finished = 0;
+
+    // every waiting item, moved out, the queue left empty
+    public function drain() : array<T>
+    {
+        array<T> $all = mv $this->items;
+        $this->items = [];
+        return $all;
+    }
+}

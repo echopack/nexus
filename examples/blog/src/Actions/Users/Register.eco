@@ -37,8 +37,7 @@ public class Register : nexus::Action
             }
             return .error(nexus::carbon::Problems::of($e));
         };
-        string $locale = $payload->get<nexus::Messages>()->locale($payload);
-        try $this->signals->send(UserRegistered($user: $made->id, $locale: $locale));
+        try $this->signals->send(UserRegistered($user: $made->id, $locale: $payload->locale()));
         return .ok($this->transformer->createResponse($payload, $made, mv $inc, status: 201));
     }
 }

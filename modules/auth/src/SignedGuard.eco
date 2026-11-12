@@ -52,6 +52,11 @@ public class SignedGuard : Guard
         return .ok($id);
     }
 
+    public function holds(nexus::Payload& $payload, const Identity& $id) : result<bool, nexus::Problem>
+    {
+        return $payload->get<Sessions>()->holds($id->credential, $id->subject);
+    }
+
     public function revoke(nexus::Payload& $payload, const Identity& $id) : status<nexus::Problem>
     {
         return $payload->get<Sessions>()->close($id->credential);

@@ -1,0 +1,25 @@
+namespace nexus;
+
+/**
+ * What a `Response(events:)` runs: `opened` once the head is out, `closed` once the stream ended
+ * (the client left, it was closed, the server is stopping). The transport calls both.
+ */
+public struct EventHooks
+{
+    public function<void(EventStream)> $opened;
+    public function<void(EventStream)>? $closed = null;
+
+    public function open(EventStream $s) : void
+    {
+        $fn = $this->opened;
+        $fn($s);
+    }
+
+    public function close(EventStream $s) : void
+    {
+        function<void(EventStream)> $fn = guard $this->closed else {
+            return;
+        };
+        $fn($s);
+    }
+}

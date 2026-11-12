@@ -20,7 +20,7 @@ test signing_up_queues_a_welcome_that_a_worker_sends
     $admin = $world->admin();
 
     ecotest::step('a reader signs up');
-    string $id = $world->api->post('/v1/users', json: registration(' Reader@Example.com ', 'a long password'))
+    $id = $world->api->post('/v1/users', json: registration(' Reader@Example.com ', 'a long password'))
         ->status(201)
         ->json('$.data.name', 'A reader')
         ->capture('$.data.id');
@@ -33,7 +33,7 @@ test signing_up_queues_a_welcome_that_a_worker_sends
     ecotest::step('a worker mails them the welcome');
     int64 $user = str::int($id) ?? 0;
     expect($world->run(Blog::Tasks::SendWelcome($user: $user)))->fine();
-    nexus::mail::Delivery $mail = expect($world->outbox()->find(to: 'reader@example.com'))->some();
+    $mail = expect($world->outbox()->find(to: 'reader@example.com'))->some();
     expect($mail->message->subject)->is('Welcome to A nexus blog');
     // no posts yet, so the list of the latest is left out
     expect($mail->message->text ?? '')->has('Hello A reader,')->has('welcome to A nexus blog')->has('See you soon.');
@@ -57,13 +57,13 @@ test signing_up_queues_a_welcome_that_a_worker_sends
 test the_welcome_is_in_the_language_they_signed_up_in
 {
     $world = World();
-    string $post = $world->admin()->post('/v1/posts', json: newPost('Fresh <news>'))->status(201)->capture('$.data.id');
-    string $id = $world->api->with('Accept-Language', 'de-CH, en;q=0.5')->post('/v1/users', json: registration('leser@example.com', 'a long password'))
+    $post = $world->admin()->post('/v1/posts', json: newPost('Fresh <news>'))->status(201)->capture('$.data.id');
+    $id = $world->api->with('Accept-Language', 'de-CH, en;q=0.5')->post('/v1/users', json: registration('leser@example.com', 'a long password'))
         ->status(201)
         ->capture('$.data.id');
     int64 $user = str::int($id) ?? 0;
     expect($world->run(Blog::Tasks::SendWelcome($user: $user, $locale: 'de-CH')))->fine();
-    nexus::mail::Delivery $mail = expect($world->outbox()->find(to: 'leser@example.com'))->some();
+    $mail = expect($world->outbox()->find(to: 'leser@example.com'))->some();
     expect($mail->message->subject)->is('Willkommen bei A nexus blog');
     expect($mail->mime)->has('Subject: Willkommen bei A nexus blog');
 
@@ -76,10 +76,10 @@ test the_welcome_is_in_the_language_they_signed_up_in
 test a_mail_server_that_is_away_is_tried_again
 {
     $world = World();
-    string $id = $world->api->post('/v1/users', json: registration('later@example.com', 'a long password'))->status(201)->capture('$.data.id');
+    $id = $world->api->post('/v1/users', json: registration('later@example.com', 'a long password'))->status(201)->capture('$.data.id');
     int64 $user = str::int($id) ?? 0;
     $world->outbox()->refuse(.connect('connection refused'));
-    nexus::work::Failure $f = expect($world->run(Blog::Tasks::SendWelcome($user: $user)))->fails();
+    $f = expect($world->run(Blog::Tasks::SendWelcome($user: $user)))->fails();
     expect($f->why())->has('cannot reach the mail server');
     expect(match ($f) { nexus::work::Failure::retry($why) => true, else => false })->yes(says: 'retried, not given up');
     expect($world->outbox()->count() as int64)->is(0 as int64);
@@ -91,7 +91,7 @@ test a_mail_server_that_is_away_is_tried_again
 test the_welcome_gives_up_when_the_user_is_gone
 {
     $world = World();
-    nexus::work::Failure $f = expect($world->run(Blog::Tasks::SendWelcome($user: 9)))->fails();
+    $f = expect($world->run(Blog::Tasks::SendWelcome($user: 9)))->fails();
     expect($f->why())->is('user 9 is gone');
 }
 

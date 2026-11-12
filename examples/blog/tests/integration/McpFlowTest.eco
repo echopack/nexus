@@ -45,7 +45,7 @@ test the_post_tools_publish_and_show_posts
         ->json('$.result.tools[1].description', 'Publishes a post by the signed in user: a title of 3 to 120 characters, a body, and up to five tags. Answers the post as the API does.');
 
     ecotest::step('create_post publishes a post');
-    string $id = toolCall($admin, 'create_post', json::object(['title' => 'Over MCP', 'body' => 'Written by a model']))
+    $id = toolCall($admin, 'create_post', json::object(['title' => 'Over MCP', 'body' => 'Written by a model']))
         ->json('$.result.isError', false)
         ->capture('$.result.structuredContent.data.id');
     expect($world->db->count('posts'))->is(1);

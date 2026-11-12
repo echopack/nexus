@@ -1,7 +1,9 @@
 namespace nexus::http;
 
+use std::time;
+
 /**
- * The HTTP settings, read from `NEXUS_HTTP_TRUSTED_PROXIES`.
+ * The HTTP settings, read from `NEXUS_HTTP_*`.
  */
 #[nexus::config: "NEXUS_HTTP"]
 public struct HttpConfig
@@ -13,4 +15,25 @@ public struct HttpConfig
      */
     #[nexus::env: 'TRUSTED_PROXIES']
     public string $trustedProxies = '';
+
+    /**
+     * How long an open websocket may stay quiet before it is pinged; another interval of silence
+     * closes it. Zero never pings.
+     */
+    #[nexus::env: 'WS_PING']
+    public time::duration $wsPing = .secs(30);
+
+    /**
+     * The largest websocket message a client may send, in bytes; a bigger one closes the socket
+     * with 1009.
+     */
+    #[nexus::env: 'WS_MAX_MESSAGE']
+    public uint64 $wsMaxMessage = 65536;
+
+    /**
+     * How often an open event stream gets a heartbeat comment, which keeps proxies from timing a
+     * quiet one out. Zero sends none.
+     */
+    #[nexus::env: 'SSE_BEAT']
+    public time::duration $sseBeat = .secs(15);
 }

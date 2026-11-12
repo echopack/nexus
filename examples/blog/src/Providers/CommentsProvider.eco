@@ -1,0 +1,44 @@
+namespace Blog::Providers;
+
+use container::Container;
+use Blog::Actions::Comments::{CreateComment, DeleteComment, ListComments};
+use Blog::Channels::{PostChannel, UserChannel};
+use Blog::DB::Model::{Comment, UserRepository};
+use Blog::DB::Repository::{CommentRepository, PostRepository};
+use Blog::Services::CommentService;
+use Blog::Signals::{BroadcastComment, CommentDeleted, CommentPosted};
+use Blog::Transformers::CommentTransformer;
+
+/**
+ * Comments, live: the service, its HTTP actions, the channels a page follows them on, and the
+ * handler that broadcasts every new and deleted one.
+ */
+public class CommentsProvider : nexus::Provider
+{
+    public function register(nexus::App $app) : void
+    {
+        $app->bindRepository<CommentRepository>();
+        $app->bindTransformer<Comment, CommentTransformer>();
+        $app->bind<CommentService>(scoped: (Container $c) => CommentService($c->get<CommentRepository>(), $c->get<PostRepository>(), $c->get<nexus::SignalDispatcher>()));
+
+        $app->bindAction<ListComments>((Container $c) => ListComments($c->get<CommentService>(), $c->get<CommentTransformer>()))
+            ->route([.get], '/v1/posts/{id}/comments');
+        $app->bindAction<CreateComment>((Container $c) => CreateComment($c->get<CommentService>(), $c->get<CommentTransformer>()))
+            ->route([.post], '/v1/posts/{id}/comments');
+        $app->bindAction<DeleteComment>((Container $c) => DeleteComment($c->get<CommentService>()))
+            ->route([.delete], '/v1/posts/{id}/comments/{comment}');
+
+        // who may follow what, asked on every subscribe
+        $app->bindChannel<PostChannel>((Container $c) => PostChannel($c->get<PostRepository>(), $c->get<UserRepository>()))
+            ->on('posts.{id:integer}');
+        $app->bindChannel<UserChannel>(() => UserChannel())
+            ->on('users.{id:integer}');
+
+        // every comment that comes or goes is broadcast to whoever follows its post
+        $broadcast = BroadcastComment($app->get<nexus::realtime::Broadcaster>(), $app->get<CommentTransformer>(),
+            $app->get<nexus::rest::TransformerNetwork>(), $app->get<nexus::Logger>());
+        $app->get<nexus::SignalDispatcher>()
+            ->bind<CommentPosted, BroadcastComment>($broadcast)
+            ->bind<CommentDeleted, BroadcastComment>($broadcast);
+    }
+}

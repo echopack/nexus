@@ -111,6 +111,20 @@ public class Guards
     }
 
     /**
+     * Whether the credential `$id` came with still holds, asked of the guard that read it: for an
+     * identity kept past its request (a websocket ticket). A guard no longer listed answers false.
+     */
+    public function holds(nexus::Payload& $payload, const Identity& $id) : result<bool, nexus::Problem>
+    {
+        foreach ($this->guards as $g) {
+            if ($g->name() == $id->via) {
+                return $g->holds($payload, $id);
+            }
+        }
+        return .ok(false);
+    }
+
+    /**
      * Ends the credential `$id` came with: the logout of a token or a session, whichever guard read
      * it.
      */

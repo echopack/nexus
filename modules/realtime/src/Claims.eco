@@ -1,0 +1,13 @@
+namespace nexus::realtime;
+
+/**
+ * Nonces taken from realtime tickets, so each ticket opens one socket: in this process, or in
+ * Redis when several servers share a relay.
+ */
+public interface Claims
+{
+    /**
+     * Takes `$nonce`, good until `$exp`: false when it was taken already. `$now` is unix seconds.
+     */
+    function claim(const string& $nonce, int64 $exp, int64 $now) : result<bool, RealtimeError>;
+}

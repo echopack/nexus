@@ -62,14 +62,19 @@
 <main id="view"></main>
 <footer id="close" class="hidden"></footer>
 <div id="notice" role="alert" class="fixed inset-x-[var(--m)] bottom-[var(--m)] z-20 hidden max-w-xl bg-alarm px-5 py-4 text-paper [font-size:var(--step-small)]"></div>
+<div id="toast" role="status" class="fixed right-[var(--m)] top-[var(--m)] z-20 hidden max-w-sm bg-ink px-5 py-4 text-paper [font-size:var(--step-small)]"></div>
 
 <script>
 // the blog in a browser: hash routes over the JSON API, every call signed with a session kept in
-// localStorage; the page opens one before its first call, signing in puts the user on it
+// localStorage; the page opens one before its first call, signing in puts the user on it. Comments
+// arrive live over one websocket (/realtime); an admin's numbers over a server-sent event stream
 const $ = (sel) => document.querySelector(sel);
 const view = $('#view');
 const blog = { title: 'A nexus blog' };
 let me = null;
+
+// what the current view does when the page moves on: stop following its channel or its stream
+let leave = null;
 
 function el(tag, attrs = {}, ...children) {
   const n = document.createElement(tag);
@@ -122,6 +127,8 @@ async function send(method, path, text) {
   const headers = { Accept: 'application/json' };
   if (text !== undefined) headers['Content-Type'] = 'application/json';
   headers.Authorization = await sign(await session(), method, path, text ?? '');
+  // the page's realtime socket: a broadcast this request causes skips it, the page shows the change itself
+  if (live.id) headers['X-Socket-Id'] = live.id;
   return fetch(path, { method, headers, body: text });
 }
 
@@ -139,6 +146,99 @@ async function api(method, path, body, retried = false) {
     throw data ?? { title: `${res.status} ${res.statusText}` };
   }
   return data;
+}
+
+// live: one websocket for the whole page, following the channels the views ask for. Signed in, it
+// opens with a ticket so the user's own channel lets it in; it opens again after it drops, catching
+// up on each channel from the last event it saw, or from the cursor `subscribed` gave before any
+// came (a `reset` when that is too long ago). The server
+// closes it with 4001 when the sign in it was opened with ends, here or anywhere: it opens again at
+// once, as whoever the page is now
+const live = {
+  ws: null,
+  ready: false,
+  tries: 0,
+  opening: null,
+  id: null,
+  wanted: new Map(),
+  follow(channel, on) {
+    this.wanted.set(channel, { on, after: null });
+    if (this.ready) this.say({ op: 'subscribe', channel });
+    else this.connect();
+  },
+  unfollow(channel) {
+    if (this.wanted.delete(channel) && this.ready) this.say({ op: 'unsubscribe', channel });
+  },
+  say(message) { this.ws?.send(JSON.stringify(message)); },
+  whisper(channel, event, data) {
+    if (this.ready && this.wanted.has(channel)) this.say({ op: 'whisper', channel, event, data });
+  },
+  connect() {
+    if (this.ws || this.opening || !this.wanted.size) return;
+    this.opening = (async () => {
+      let url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/realtime`;
+      if (me) {
+        try { url += `?ticket=${encodeURIComponent((await api('POST', '/realtime/ticket', {})).ticket)}`; } catch {}
+      }
+      const ws = new WebSocket(url);
+      this.ws = ws;
+      ws.onmessage = (e) => this.heard(JSON.parse(e.data));
+      ws.onclose = (e) => {
+        if (this.ws !== ws) return;
+        this.ws = null;
+        this.ready = false;
+        this.id = null;
+        setTimeout(() => this.connect(), e.code === 4001 ? 0 : Math.min(15000, 500 * 2 ** this.tries++));
+      };
+    })().finally(() => { this.opening = null; });
+  },
+  heard(m) {
+    if (m.op === 'ready') {
+      this.ready = true;
+      this.tries = 0;
+      this.id = m.socket_id;
+      for (const [channel, w] of this.wanted) this.say(w.after !== null ? { op: 'subscribe', channel, after: w.after } : { op: 'subscribe', channel });
+      return;
+    }
+    const w = this.wanted.get(m.channel);
+    if (!w) return;
+    if (m.op === 'event') { w.after = m.id; w.on(m.event, m.data); }
+    else if (m.op === 'reset') { w.after = m.after ?? null; w.on('reset', null); }
+    else if (m.op === 'subscribed') {
+      // the cursor to catch up from until an event gives a newer one; empty means nothing was kept yet
+      if (w.after === null) w.after = m.after ?? null;
+      // a presence channel: everyone on it when it let us in, then who comes and goes
+      if (m.members) w.on('members', m.members);
+    }
+    else if (m.op === 'joined') w.on('joined', m.member);
+    else if (m.op === 'left') w.on('left', m.member);
+    else if (m.op === 'whisper') w.on(`whisper.${m.event}`, { from: m.from, data: m.data });
+  },
+  // signing in or out changes who the socket is: it opens again as the new one
+  restart() {
+    const ws = this.ws;
+    this.ws = null;
+    this.ready = false;
+    ws?.close();
+    this.connect();
+  },
+};
+
+// the signed in user's own channel: somebody commented on one of their posts
+function followMine() {
+  for (const channel of live.wanted.keys()) if (channel.startsWith('users.')) live.unfollow(channel);
+  if (me) live.follow(`users.${me.id}`, (event, c) => {
+    if (event === 'comment.received') toast(`${c.author?.name ?? 'Somebody'} commented on your post.`, `#/posts/${c.post_id}`);
+  });
+  live.restart();
+}
+
+function toast(text, href) {
+  const box = $('#toast');
+  box.replaceChildren(el('a', { href, class: link, onclick: () => box.classList.add('hidden') }, text));
+  box.classList.remove('hidden');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => box.classList.add('hidden'), 6000);
 }
 
 function notice(problem) {
@@ -189,6 +289,7 @@ function renderNav() {
   if (me) {
     nav.replaceChildren(
       el('span', { class: 'hidden sm:inline opacity-80' }, me.name ?? me.email ?? ''),
+      el('a', { href: '#/admin', class: link }, 'Live stats'),
       el('button', { class: link, onclick: signOut }, 'Sign out'),
       el('a', { href: '#/new', class: button(onField) }, 'Write'),
     );
@@ -216,6 +317,7 @@ async function signOut() {
   try { await api('DELETE', '/v1/auth'); } catch {}
   store.session = null;
   me = null;
+  followMine();
   location.hash = '#/';
   route();
 }
@@ -286,7 +388,141 @@ async function postView(id) {
         el('a', { href: '#/', class: `reveal inline-block ${link}` }, '← All posts'),
       ),
     ),
+    comments(p),
   ));
+}
+
+// a post's comments: listed once, then kept up to date over the websocket while the post is open
+function comments(p) {
+  const shown = new Map();
+  const list = el('ol', { class: 'space-y-8' });
+  const count = el('span', { class: 'text-muted' });
+  const recount = () => { count.textContent = shown.size ? ` (${shown.size})` : ''; };
+  const mine = (c) => me && (me.id === c.author?.id || me.id === p.author?.id);
+  const add = (c) => {
+    if (shown.has(c.id)) return;
+    const row = el('li', { class: 'arrive max-w-[65ch]' },
+      el('p', { class: 'whitespace-pre-wrap leading-[1.6]' }, c.body),
+      el('p', { class: 'mt-2 flex gap-4 text-muted [font-size:var(--step-small)]' },
+        `${c.author?.name ?? 'Somebody'}, ${date(c.created_at)}`,
+        mine(c) ? el('button', { class: link, onclick: () => api('DELETE', `/v1/posts/${p.id}/comments/${c.id}`).then(() => drop(c.id)).catch(notice) }, 'Delete') : null));
+    shown.set(c.id, row);
+    list.append(row);
+    recount();
+  };
+  const drop = (id) => { shown.get(id)?.remove(); shown.delete(id); recount(); };
+
+  // who else reads the post, and who is typing a comment, by socket
+  const small = 'text-muted [font-size:var(--step-small)]';
+  const readers = new Map();
+  const here = el('p', { class: `${small} mb-2` });
+  const reread = () => {
+    const names = [...readers.values()].map((r) => r.info?.name).filter(Boolean);
+    const guests = readers.size - names.length;
+    const who = [...names, ...(guests ? [`${guests} guest${guests === 1 ? '' : 's'}`] : [])];
+    here.textContent = readers.size > 1 ? `Reading now: ${who.join(', ')}` : '';
+  };
+  const typers = new Map();
+  const typing = el('p', { class: `${small} mt-2 min-h-[1.6em]`, 'aria-live': 'polite' });
+  const retype = () => {
+    const names = [...typers.values()].map((t) => t.name);
+    typing.textContent = names.length ? `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} typing…` : '';
+  };
+  const stopped = (from) => { clearTimeout(typers.get(from)?.timer); typers.delete(from); retype(); };
+  const load = () => api('GET', `/v1/posts/${p.id}/comments`).then((r) => {
+    for (const id of [...shown.keys()]) drop(id);
+    (r.data ?? []).forEach(add);
+  }).catch(notice);
+
+  const channel = `posts.${p.id}`;
+  live.follow(channel, (event, data) => {
+    if (event === 'comment.posted') add(data);
+    else if (event === 'comment.deleted') drop(data.id);
+    else if (event === 'reset') load();
+    else if (event === 'members') { readers.clear(); for (const m of data) readers.set(m.id, m); reread(); }
+    else if (event === 'joined') { readers.set(data.id, data); reread(); }
+    else if (event === 'left') { readers.delete(data.id); stopped(data.id); reread(); }
+    else if (event === 'whisper.typing') {
+      clearTimeout(typers.get(data.from)?.timer);
+      typers.set(data.from, { name: data.data?.name ?? 'Somebody', timer: setTimeout(() => stopped(data.from), 3000) });
+      retype();
+    }
+  });
+  leave = () => live.unfollow(channel);
+  load();
+
+  const box = el('textarea', { name: 'body', rows: '3', required: '', maxlength: '2000', class: `${field} leading-[1.6]` });
+  // the others see "is typing", at most every two seconds
+  let typed = 0;
+  box.addEventListener('input', () => {
+    if (Date.now() - typed < 2000) return;
+    typed = Date.now();
+    live.whisper(channel, 'typing', {});
+  });
+  const write = me
+    ? form([labelled('Your comment', box)], 'Comment', async (d) => {
+        add((await api('POST', `/v1/posts/${p.id}/comments`, { body: d.get('body') })).data);
+        box.value = '';
+      })
+    : el('p', {}, el('a', { href: '#/login', class: 'underline underline-offset-4' }, 'Sign in'), ' to comment.');
+  return el('section', { class: 'mt-[clamp(64px,8vw,120px)] grid gap-12 md:grid-cols-12' },
+    el('div', { class: 'md:col-span-7' },
+      el('h2', { class: 'mb-2 [font-size:var(--step-lead)]' }, 'Comments', count),
+      here,
+      el('div', { class: 'mt-6' }, list),
+      typing),
+    el('div', { class: 'md:col-span-4 md:col-start-9' }, write));
+}
+
+// the admin's live numbers: a one-way server-sent event stream, read with a signed fetch since an
+// EventSource cannot sign; it opens again after a drop
+function statsView() {
+  if (!me) { location.hash = '#/login'; return; }
+  frame(false, false);
+  const names = [['posts', 'Posts'], ['users', 'Users'], ['comments', 'Comments'], ['sockets', 'Open sockets'], ['tasks_waiting', 'Tasks waiting']];
+  const cells = Object.fromEntries(names.map(([k]) => [k, el('dd', { class: 'font-light tabular-nums leading-none [font-size:var(--step-head)]' }, '–')]));
+  const when = el('p', { class: 'mt-12 text-muted [font-size:var(--step-small)]' }, 'Connecting…');
+  view.replaceChildren(el('section', { class: 'px-[var(--m)] pb-[var(--gap)] pt-[clamp(120px,16vw,220px)]' },
+    el('h1', { class: 'arrive font-light leading-[1.0] tracking-[-0.02em] [font-size:var(--step-head)]' }, 'Live stats.'),
+    el('dl', { class: 'mt-[clamp(48px,6vw,96px)] grid grid-cols-2 gap-x-6 gap-y-12 md:grid-cols-5' },
+      names.map(([k, label]) => el('div', {}, el('dt', { class: 'mb-3 text-muted [font-size:var(--step-small)]' }, label), cells[k]))),
+    when));
+
+  const stop = new AbortController();
+  leave = () => stop.abort();
+  const path = '/v1/admin/stats/stream';
+  (async function follow() {
+    while (!stop.signal.aborted) {
+      try {
+        const res = await fetch(path, { headers: { Accept: 'text/event-stream', Authorization: await sign(await session(), 'GET', path, '') }, signal: stop.signal });
+        if (!res.ok) { notice(await res.json().catch(() => null)); return; }
+        const reader = res.body.getReader();
+        const text = new TextDecoder();
+        let pending = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          pending += text.decode(value, { stream: true });
+          let end;
+          while ((end = pending.indexOf('\n\n')) >= 0) {
+            const frame = pending.slice(0, end);
+            pending = pending.slice(end + 2);
+            const lines = frame.split('\n');
+            const event = lines.find((l) => l.startsWith('event:'))?.slice(6).trim();
+            const data = lines.filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n');
+            if (event !== 'stats' || !data) continue;
+            const n = JSON.parse(data);
+            for (const [k] of names) if (n[k] !== undefined) cells[k].textContent = n[k];
+            when.textContent = `Updated ${new Date(n.at ?? Date.now()).toLocaleTimeString()}`;
+          }
+        }
+      } catch (e) {
+        if (stop.signal.aborted) return;
+      }
+      when.textContent = 'Reconnecting…';
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  })();
 }
 
 function form(fields, label, onsubmit) {
@@ -315,6 +551,7 @@ function sheet(title, intro, body) {
 
 async function signIn(email, password) {
   me = (await api('POST', '/v1/auth/signin', { email, password })).data;
+  followMine();
   location.hash = '#/new';
 }
 
@@ -384,6 +621,8 @@ async function loadMe() {
 }
 
 async function route() {
+  leave?.();
+  leave = null;
   notice(null);
   document.title = blog.title;
   const [path, query] = location.hash.replace(/^#/, '').split('?');
@@ -394,6 +633,7 @@ async function route() {
     else if (path === '/login') loginView();
     else if (path === '/signup') signupView();
     else if (path === '/new') newView();
+    else if (path === '/admin') statsView();
     else await listView(Math.max(1, Number(new URLSearchParams(query).get('page')) || 1));
   } catch (p) {
     frame(false, false);
@@ -409,7 +649,7 @@ window.addEventListener('hashchange', route);
 Promise.all([
   api('GET', '/health').then((h) => { if (h.title) blog.title = h.title; }).catch(() => {}),
   loadMe(),
-]).then(route);
+]).then(() => { followMine(); route(); });
 </script>
 </body>
 </html>

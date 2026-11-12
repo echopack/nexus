@@ -1,0 +1,175 @@
+namespace nexus::testing;
+
+use std::thread;
+
+/**
+ * A websocket opened in process, `TestApp::socket()`: `say` hands the app a message as the
+ * transport would, on the calling thread; every message the app sends, from whichever thread, is
+ * kept. A request the app did not upgrade is a socket that never opened, with the status and body
+ * it was answered with.
+ *
+ * ```echo
+ * $ws = $app->socket('/realtime');
+ * $ws->say('{"op":"subscribe","channel":"posts.1"}');
+ * expect($ws->where('op', 'subscribed'))->size(1);
+ * ```
+ */
+#[atomic]
+public class TestSocket : nexus::Socket
+{
+    public const int32 $status;
+    public const string $body;
+    private int64 $serial;
+    private nexus::SocketHooks? $hooks;
+    private thread::mutex<array<string>> $seen = thread::mutex<array<string>>(array<string>());
+    private atomic<bool> $ended = atomic<bool>(false);
+
+    // the code the app closed with, 0 while open or when the client left first
+    public atomic<int32> $closedWith = atomic<int32>(0);
+
+    public constructor(const nexus::Response& $answer, int64 $id)
+    {
+        $this->status = $answer->status;
+        $this->body = $answer->body;
+        $this->serial = $id;
+        $this->hooks = $answer->websocket;
+        if ($answer->websocket == null) {
+            $this->ended->store(true);
+        }
+    }
+
+    /**
+     * Whether the app upgraded the request.
+     */
+    public const function opened() : bool
+    {
+        return $this->hooks != null;
+    }
+
+    /**
+     * Hands the app a text message from the client and waits for its hook to return.
+     */
+    public function say(const string& $text) : void
+    {
+        if ($this->ended->load()) {
+            return;
+        }
+        nexus::SocketHooks $h = guard $this->hooks else {
+            return;
+        };
+        $h->received($this, nexus::SocketMessage::text($text));
+    }
+
+    /**
+     * Every text message the app sent so far, oldest first.
+     */
+    public function received() : array<string>
+    {
+        thread::locked<array<string>> $held = $this->seen->lock();
+        return $held->value->clone();
+    }
+
+    /**
+     * Every message the app sent so far, parsed as JSON; one that is not JSON is left out.
+     */
+    public function messages() : array<json::Value>
+    {
+        array<json::Value> $out = [];
+        foreach ($this->received() as const &$text) {
+            json::Value $doc = guard json::parse($text) else {
+                continue;
+            };
+            $out[] = $doc;
+        }
+        return $out;
+    }
+
+    /**
+     * The messages whose `$key` is the string `$value`, such as every `op` that is `event`.
+     */
+    public function where(const string& $key, const string& $value) : array<json::Value>
+    {
+        array<json::Value> $out = [];
+        foreach ($this->messages() as const &$m) {
+            if (($m->get($key)?->asStr() ?? '') == $value) {
+                $out[] = $m;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Forgets every message received so far.
+     */
+    public function clear() : void
+    {
+        thread::locked<array<string>> $held = $this->seen->lock();
+        $held->value = array<string>();
+    }
+
+    /**
+     * The client closes the socket: the app's close hook runs with `$code`.
+     */
+    public function leave(int32 $code = 1000) : void
+    {
+        if ($this->ended->exchange(true)) {
+            return;
+        }
+        nexus::SocketHooks $h = guard $this->hooks else {
+            return;
+        };
+        $h->closed($this, nexus::SocketClose($code, '', true));
+    }
+
+    public function id() : int64
+    {
+        return $this->serial;
+    }
+
+    public function send(const string& $text) : bool
+    {
+        if ($this->ended->load()) {
+            return false;
+        }
+        thread::locked<array<string>> $held = $this->seen->lock();
+        $held->value->push($text);
+        return true;
+    }
+
+    public function sendBinary(const string& $bytes) : bool
+    {
+        return $this->send($bytes);
+    }
+
+    /**
+     * The app closes the socket: the close hook runs, as the transport runs it once the client
+     * answered.
+     */
+    public function close(int32 $code, const string& $reason) : void
+    {
+        if ($this->ended->exchange(true)) {
+            return;
+        }
+        $this->closedWith->store($code);
+        nexus::SocketHooks $h = guard $this->hooks else {
+            return;
+        };
+        $h->closed($this, nexus::SocketClose($code, $reason, true));
+    }
+
+    public function open() : bool
+    {
+        return !$this->ended->load();
+    }
+
+    /**
+     * For `TestApp`: runs the app's open hook.
+     */
+    internal function start() : void
+    {
+        nexus::SocketHooks $h = guard $this->hooks else {
+            return;
+        };
+        $h->opened($this);
+    }
+}

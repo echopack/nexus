@@ -98,6 +98,58 @@ public struct HomeDispatch
 }
 
 
+namespace Blog::Actions::Admin;
+
+/**
+ * Runs Blog::Actions::Admin::StreamStats.
+ */
+public struct StreamStatsDispatch
+{
+    /**
+     * Reads what Blog::Actions::Admin::StreamStats::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        $action = $payload->get<Blog::Actions::Admin::StreamStats>();
+        $result = $action->handle($payload);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Admin::StreamStats unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'The blog\'s numbers as a live, one-way stream of server-sent events, for an admin\'s dashboard: a `stats` event at once, then a fresh one every `BLOG_STATS_EVERY` while the page stays open and its admin may still watch.';
+    }
+
+    /**
+     * What Blog::Actions::Admin::StreamStats offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Admin::StreamStatsDispatch::call($payload, $args);
+        };
+        $offer = nexus::mcp::Offer('Blog::Actions::Admin::StreamStats', nexus::mcp::Schema::of('{"type":"object","properties":{},"additionalProperties":false}'), Blog::Actions::Admin::StreamStatsDispatch::about(), mv $call);
+        $offer->through = [nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser'), nexus::MiddlewareRef::of<Blog::Middleware::RequireAdmin>('Blog::Middleware::RequireAdmin')];
+        return $offer;
+    }
+
+    /**
+     * Reads what Blog::Actions::Admin::StreamStats::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        $target = $payload->get<Blog::Actions::Admin::StreamStats>();
+        $result = $target->handle($payload);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+
 namespace Blog::Actions::Auth;
 
 /**
@@ -402,6 +454,194 @@ public struct SignInWithDispatch
         $argIn = nexus::Body<Blog::Inputs::OutsideSignIn>(mv $valueIn);
         $target = $payload->get<Blog::Actions::Auth::SignInWith>();
         $result = $target->handle($payload, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+
+namespace Blog::Actions::Comments;
+
+/**
+ * Runs Blog::Actions::Comments::CreateComment.
+ */
+public struct CreateCommentDispatch
+{
+    /**
+     * Reads what Blog::Actions::Comments::CreateComment::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $fieldsIn = guard nexus::Fields::body($payload) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $valueIn = guard Blog::Inputs::NewCommentDecoder::decode($payload, $fieldsIn) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::NewComment>(mv $valueIn);
+        $action = $payload->get<Blog::Actions::Comments::CreateComment>();
+        $result = $action->handle($payload, $argId, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Comments::CreateComment unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'Comments on a post as whoever is signed in. Everyone reading the post sees it come in.';
+    }
+
+    /**
+     * What Blog::Actions::Comments::CreateComment offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Comments::CreateCommentDispatch::call($payload, $args);
+        };
+        $offer = nexus::mcp::Offer('Blog::Actions::Comments::CreateComment', nexus::mcp::Schema::of('{"type":"object","properties":{"id":{"type":"integer"},"body":{"type":"string","maxLength":2000,"minLength":1}},"required":["id","body"],"additionalProperties":false}'), Blog::Actions::Comments::CreateCommentDispatch::about(), mv $call);
+        $offer->through = [nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')];
+        return $offer;
+    }
+
+    /**
+     * Reads what Blog::Actions::Comments::CreateComment::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        int64? $vAId = $args->int64('id', required: true);
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $okAId = guard $vAId;
+        $valueIn = guard Blog::Inputs::NewCommentDecoder::decode($payload, $args) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::NewComment>(mv $valueIn);
+        $target = $payload->get<Blog::Actions::Comments::CreateComment>();
+        $result = $target->handle($payload, $okAId, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+/**
+ * Runs Blog::Actions::Comments::DeleteComment.
+ */
+public struct DeleteCommentDispatch
+{
+    /**
+     * Reads what Blog::Actions::Comments::DeleteComment::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $argComment = guard nexus::Param::int64($payload, 'comment') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $action = $payload->get<Blog::Actions::Comments::DeleteComment>();
+        $result = $action->handle($payload, $argId, $argComment);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Comments::DeleteComment unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'Deletes a comment. Its author, the post\'s author or an admin may.';
+    }
+
+    /**
+     * What Blog::Actions::Comments::DeleteComment offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Comments::DeleteCommentDispatch::call($payload, $args);
+        };
+        $offer = nexus::mcp::Offer('Blog::Actions::Comments::DeleteComment', nexus::mcp::Schema::of('{"type":"object","properties":{"id":{"type":"integer"},"comment":{"type":"integer"}},"required":["id","comment"],"additionalProperties":false}'), Blog::Actions::Comments::DeleteCommentDispatch::about(), mv $call);
+        $offer->through = [nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')];
+        return $offer;
+    }
+
+    /**
+     * Reads what Blog::Actions::Comments::DeleteComment::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        int64? $vAId = $args->int64('id', required: true);
+        int64? $vAComment = $args->int64('comment', required: true);
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $okAId = guard $vAId;
+        int64 $okAComment = guard $vAComment;
+        $target = $payload->get<Blog::Actions::Comments::DeleteComment>();
+        $result = $target->handle($payload, $okAId, $okAComment);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+/**
+ * Runs Blog::Actions::Comments::ListComments.
+ */
+public struct ListCommentsDispatch
+{
+    /**
+     * Reads what Blog::Actions::Comments::ListComments::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $action = $payload->get<Blog::Actions::Comments::ListComments>();
+        $result = $action->handle($payload, $argId);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Comments::ListComments unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'The comments on a post, oldest first, each with its author.';
+    }
+
+    /**
+     * What Blog::Actions::Comments::ListComments offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Comments::ListCommentsDispatch::call($payload, $args);
+        };
+        return nexus::mcp::Offer('Blog::Actions::Comments::ListComments', nexus::mcp::Schema::of('{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"],"additionalProperties":false}'), Blog::Actions::Comments::ListCommentsDispatch::about(), mv $call);
+    }
+
+    /**
+     * Reads what Blog::Actions::Comments::ListComments::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        int64? $vAId = $args->int64('id', required: true);
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $okAId = guard $vAId;
+        $target = $payload->get<Blog::Actions::Comments::ListComments>();
+        $result = $target->handle($payload, $okAId);
         return nexus::Reply::of($payload, $result);
     }
 }
@@ -1019,6 +1259,43 @@ public class ShowPostCommandCli : nexus::Command
 namespace Blog::DB::Model;
 
 /**
+ * How a Blog::DB::Model::Comment is written in its default shape: conform a
+ * nexus::rest::Transformer<Blog::DB::Model::Comment> to it as well.
+ */
+public interface CommentMapping
+{
+    function name() : string
+    {
+        return 'comment';
+    }
+
+    function availableIncludes() : array<string>
+    {
+        array<string> $out = ['author'];
+        foreach ($this->extraIncludes() as const &$extra) {
+            $out[] = $extra;
+        }
+        return $out;
+    }
+
+    function defaultIncludes() : array<string>
+    {
+        return ['author'];
+    }
+
+    function map(const Blog::DB::Model::Comment& $m, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
+    {
+        $item->attribute('id', $m->id);
+        $item->int('post_id', $m->postId);
+        $item->text('body', $m->body);
+        $item->time('created_at', $m->createdAt);
+        if ($m->author->loaded()) {
+            $item->include<Blog::DB::Model::User>('author', $m->author->get());
+        }
+    }
+}
+
+/**
  * How a Blog::DB::Model::Post is written in its default shape: conform a
  * nexus::rest::Transformer<Blog::DB::Model::Post> to it as well.
  */
@@ -1253,6 +1530,49 @@ public struct CredentialsDecoder
         $okEmail = guard $vEmail;
         $okPassword = guard $vPassword;
         return Blog::Inputs::Credentials($email: mv $okEmail, $password: mv $okPassword);
+    }
+}
+
+/**
+ * Reads and checks a Blog::Inputs::NewComment from request fields.
+ */
+public struct NewCommentDecoder
+{
+    /**
+     * A Blog::Inputs::NewComment from `$f`, or the problem holding everything refused.
+     */
+    public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<Blog::Inputs::NewComment, nexus::Problem>
+    {
+        $value = NewCommentDecoder::read($payload, $f);
+        try $f->done();
+        $out = guard $value;
+        return .ok(mv $out);
+    }
+
+    /**
+     * A Blog::Inputs::NewComment from `$f`, or null when anything was refused.
+     */
+    public static function read(nexus::Payload& $payload, nexus::Fields& $f) : Blog::Inputs::NewComment?
+    {
+        $v = $f->check;
+        $v->input = 'Blog::Inputs::NewComment';
+        usize $before = $v->count();
+        // body
+        $v->at('body', 'string', '');
+        string? $vBody = null;
+        $rBody = $f->string('body', required: true);
+        if ($rBody != null) {
+            $xBody = guard $rBody;
+            $xBody = nexus::Check::trim($xBody);
+            $v->notBlank($xBody);
+            $v->maxLength($xBody, 2000);
+            $vBody = mv $xBody;
+        }
+        if ($v->count() != $before) {
+            return null;
+        }
+        $okBody = guard $vBody;
+        return Blog::Inputs::NewComment($body: mv $okBody);
     }
 }
 
@@ -1848,6 +2168,10 @@ namespace nexusgen::nexus_blog;
 #[nexus::generated: 'nexus-blog']
 public function generated(nexus::Generated $g) : void
 {
+    $g->action<Blog::Actions::Admin::StreamStats>('Blog::Actions::Admin::StreamStats', [], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Admin::StreamStatsDispatch::dispatch($payload);
+    });
+    $g->through<Blog::Actions::Admin::StreamStats>([nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser'), nexus::MiddlewareRef::of<Blog::Middleware::RequireAdmin>('Blog::Middleware::RequireAdmin')]);
     $g->action<Blog::Actions::Auth::Login>('Blog::Actions::Auth::Login', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Auth::LoginDispatch::dispatch($payload);
     });
@@ -1866,6 +2190,17 @@ public function generated(nexus::Generated $g) : void
     });
     $g->action<Blog::Actions::Auth::SignInWith>('Blog::Actions::Auth::SignInWith', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Auth::SignInWithDispatch::dispatch($payload);
+    });
+    $g->action<Blog::Actions::Comments::CreateComment>('Blog::Actions::Comments::CreateComment', [nexus::PathParam('id', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Comments::CreateCommentDispatch::dispatch($payload);
+    });
+    $g->through<Blog::Actions::Comments::CreateComment>([nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')]);
+    $g->action<Blog::Actions::Comments::DeleteComment>('Blog::Actions::Comments::DeleteComment', [nexus::PathParam('id', 'integer', false), nexus::PathParam('comment', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Comments::DeleteCommentDispatch::dispatch($payload);
+    });
+    $g->through<Blog::Actions::Comments::DeleteComment>([nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')]);
+    $g->action<Blog::Actions::Comments::ListComments>('Blog::Actions::Comments::ListComments', [nexus::PathParam('id', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Comments::ListCommentsDispatch::dispatch($payload);
     });
     $g->action<Blog::Actions::Health>('Blog::Actions::Health', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::HealthDispatch::dispatch($payload);
@@ -1910,17 +2245,26 @@ public function generated(nexus::Generated $g) : void
     });
     $g->name<Blog::Tools::CreatePostTool>('Blog::Tools::CreatePostTool');
     $g->name<Blog::App>('Blog::App');
+    $g->name<Blog::Channels::PostChannel>('Blog::Channels::PostChannel');
+    $g->name<Blog::Channels::UserChannel>('Blog::Channels::UserChannel');
     $g->name<Blog::Commands::SetPassword>('Blog::Commands::SetPassword');
     $g->name<Blog::Config::BlogConfig>('Blog::Config::BlogConfig');
+    $g->name<Blog::DB::Migration::CreateComments>('Blog::DB::Migration::CreateComments');
     $g->name<Blog::DB::Migration::CreatePosts>('Blog::DB::Migration::CreatePosts');
     $g->name<Blog::DB::Migration::CreateUsers>('Blog::DB::Migration::CreateUsers');
     $g->name<Blog::DB::Migration::SeedEditor>('Blog::DB::Migration::SeedEditor');
+    $g->name<Blog::DB::Model::Comment>('Blog::DB::Model::Comment');
     $g->name<Blog::DB::Model::Post>('Blog::DB::Model::Post');
     $g->name<Blog::DB::Model::User>('Blog::DB::Model::User');
+    $g->name<Blog::DB::Query::CommentQuery>('Blog::DB::Query::CommentQuery');
     $g->name<Blog::DB::Query::PostQuery>('Blog::DB::Query::PostQuery');
+    $g->name<Blog::DB::Repository::CommentRepository>('Blog::DB::Repository::CommentRepository');
     $g->name<Blog::DB::Repository::PostRepository>('Blog::DB::Repository::PostRepository');
+    $g->name<Blog::Feeds::StatsFeed>('Blog::Feeds::StatsFeed');
+    $g->name<Blog::Feeds::Watching>('Blog::Feeds::Watching');
     $g->name<Blog::Inputs::AuthoredPost>('Blog::Inputs::AuthoredPost');
     $g->name<Blog::Inputs::Credentials>('Blog::Inputs::Credentials');
+    $g->name<Blog::Inputs::NewComment>('Blog::Inputs::NewComment');
     $g->name<Blog::Inputs::NewPost>('Blog::Inputs::NewPost');
     $g->name<Blog::Inputs::OutsideSignIn>('Blog::Inputs::OutsideSignIn');
     $g->name<Blog::Inputs::PostBatch>('Blog::Inputs::PostBatch');
@@ -1934,18 +2278,24 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser');
     $g->name<Blog::Middleware::ServerTiming>('Blog::Middleware::ServerTiming');
     $g->name<Blog::Providers::AuthProvider>('Blog::Providers::AuthProvider');
+    $g->name<Blog::Providers::CommentsProvider>('Blog::Providers::CommentsProvider');
     $g->name<Blog::Providers::PostsProvider>('Blog::Providers::PostsProvider');
     $g->name<Blog::Queues::JobLane>('Blog::Queues::JobLane');
     $g->name<Blog::Queues::WorkerLane>('Blog::Queues::WorkerLane');
     $g->name<Blog::Rules::UniqueEmail>('Blog::Rules::UniqueEmail');
     $g->name<Blog::Services::BlogUsers>('Blog::Services::BlogUsers');
+    $g->name<Blog::Services::CommentService>('Blog::Services::CommentService');
     $g->name<Blog::Services::PostService>('Blog::Services::PostService');
     $g->name<Blog::Services::SignIn>('Blog::Services::SignIn');
+    $g->name<Blog::Signals::BroadcastComment>('Blog::Signals::BroadcastComment');
+    $g->name<Blog::Signals::CommentDeleted>('Blog::Signals::CommentDeleted');
+    $g->name<Blog::Signals::CommentPosted>('Blog::Signals::CommentPosted');
     $g->name<Blog::Signals::UserRegistered>('Blog::Signals::UserRegistered');
     $g->name<Blog::Signals::WelcomeNewUser>('Blog::Signals::WelcomeNewUser');
     $g->name<Blog::Tasks::CountUsers>('Blog::Tasks::CountUsers');
     $g->name<Blog::Tasks::PruneAuth>('Blog::Tasks::PruneAuth');
     $g->name<Blog::Tasks::SendWelcome>('Blog::Tasks::SendWelcome');
+    $g->name<Blog::Transformers::CommentTransformer>('Blog::Transformers::CommentTransformer');
     $g->name<Blog::Transformers::PostTransformer>('Blog::Transformers::PostTransformer');
     $g->name<Blog::Transformers::UserAdminTransformer>('Blog::Transformers::UserAdminTransformer');
     $g->name<Blog::Transformers::UserTransformer>('Blog::Transformers::UserTransformer');
@@ -1975,8 +2325,14 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
         uint32 $xC0PageSize = guard $vC0PageSize;
         $okC0PageSize = $xC0PageSize;
     }
+    std::time::duration $okC0StatsEvery = .secs(2);
+    $vC0StatsEvery = $s->duration('BLOG_STATS_EVERY', required: false);
+    if ($vC0StatsEvery != null) {
+        $xC0StatsEvery = guard $vC0StatsEvery;
+        $okC0StatsEvery = mv $xC0StatsEvery;
+    }
     try $s->done();
-    $b->param<Blog::Config::BlogConfig>(Blog::Config::BlogConfig($title: mv $okC0Title, $pageSize: $okC0PageSize));
+    $b->param<Blog::Config::BlogConfig>(Blog::Config::BlogConfig($title: mv $okC0Title, $pageSize: $okC0PageSize, $statsEvery: mv $okC0StatsEvery));
     return .ok;
 }
 
@@ -1991,6 +2347,8 @@ public function envs() : array<nexus::EnvVar>
     $all[] = nexus::EnvVar($name: 'BLOG_TITLE', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'The blog\'s name, on every page.', $owner: 'Blog::Config::BlogConfig');
     uint32 $d1 = 10;
     $all[] = nexus::EnvVar($name: 'BLOG_DEFAULT_PAGE_SIZE', $type: 'uint32', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How many posts a page lists.', $owner: 'Blog::Config::BlogConfig');
+    std::time::duration $d2 = .secs(2);
+    $all[] = nexus::EnvVar($name: 'BLOG_STATS_EVERY', $type: 'duration', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'How often the admin\'s live stats stream sends a fresh snapshot while somebody watches.', $owner: 'Blog::Config::BlogConfig');
     return $all;
 }
 
@@ -2016,12 +2374,16 @@ public function inputs(nexus::Inputs $in) : void
 #[nexus::mcp::tools: 'nexus-blog']
 public function tools(nexus::mcp::Offers $o) : void
 {
+    $o->add<Blog::Actions::Admin::StreamStats>(Blog::Actions::Admin::StreamStatsDispatch::offer());
     $o->add<Blog::Actions::Auth::Login>(Blog::Actions::Auth::LoginDispatch::offer());
     $o->add<Blog::Actions::Auth::Logout>(Blog::Actions::Auth::LogoutDispatch::offer());
     $o->add<Blog::Actions::Auth::Me>(Blog::Actions::Auth::MeDispatch::offer());
     $o->add<Blog::Actions::Auth::OpenSession>(Blog::Actions::Auth::OpenSessionDispatch::offer());
     $o->add<Blog::Actions::Auth::ShowSession>(Blog::Actions::Auth::ShowSessionDispatch::offer());
     $o->add<Blog::Actions::Auth::SignInWith>(Blog::Actions::Auth::SignInWithDispatch::offer());
+    $o->add<Blog::Actions::Comments::CreateComment>(Blog::Actions::Comments::CreateCommentDispatch::offer());
+    $o->add<Blog::Actions::Comments::DeleteComment>(Blog::Actions::Comments::DeleteCommentDispatch::offer());
+    $o->add<Blog::Actions::Comments::ListComments>(Blog::Actions::Comments::ListCommentsDispatch::offer());
     $o->add<Blog::Actions::Health>(Blog::Actions::HealthDispatch::offer());
     $o->add<Blog::Actions::Home>(Blog::Actions::HomeDispatch::offer());
     $o->add<Blog::Actions::Posts::CreatePost>(Blog::Actions::Posts::CreatePostDispatch::offer());

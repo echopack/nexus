@@ -30,6 +30,16 @@ internal struct KWord
     public string $word;
 }
 
+#[atomic]
+internal class KFeed
+{
+    public nexus::EventStreams $streams = nexus::EventStreams();
+
+    public constructor()
+    {
+    }
+}
+
 internal class KApp : nexus::Extension
 {
     public function name() : string
@@ -70,6 +80,40 @@ internal class KApp : nexus::Extension
             return true;
         };
         $s->route(nexus::Route($g, '/ticks', 'KTicks', $stream, $any, $w));
+
+        $s->bind<KFeed>(put: KFeed());
+        $feed = function(nexus::Payload& $payload) : nexus::Response {
+            if ($payload->request->header('X-Who') == null) {
+                return nexus::Response(text: 'who?', status: 401);
+            }
+            KFeed $f = $payload->get<KFeed>();
+            return nexus::Response(events: function[$f](nexus::EventStream $out) : void {
+                $f->streams->join($out, [nexus::ServerEvent('hello', $event: 'welcome')]);
+            }, closed: function[$f](nexus::EventStream $out) : void {
+                $f->streams->remove($out);
+            });
+        };
+        $s->route(nexus::Route($g, '/feed', 'KFeedAction', $feed, $any, $w));
+
+        $echo = function(nexus::Payload& $payload) : nexus::Response {
+            $hooks = nexus::SocketHooks()->onOpen(function(nexus::Socket $ws) : void {
+                $ws->send('{"op":"hello"}');
+            })->onMessage(function(nexus::Socket $ws, nexus::SocketMessage $m) : void {
+                match ($m) {
+                    nexus::SocketMessage::text($t) => {
+                        if ($t == 'bye') {
+                            $ws->close(4000, 'asked to');
+                        } else {
+                            $ws->send($t);
+                        }
+                    },
+                    nexus::SocketMessage::binary($b) => {
+                    },
+                }
+            });
+            return nexus::Response(websocket: $hooks);
+        };
+        $s->route(nexus::Route($g, '/ws', 'KSocket', $echo, $any, $w));
         return .ok;
     }
 }
@@ -171,6 +215,48 @@ test a_streamed_body_reads_up_to_its_first_flush
 
     $api->get('/ticks')->ok()->header('Content-Type', 'text/plain')->body("tick 1\n");
     $api->head('/ticks')->ok()->body('');
+}
+
+test an_event_stream_opens_in_process
+{
+    $app = kernelApp();
+    KFeed $feed = $app->kernel->services->get<KFeed>();
+    $s = $app->events('/feed', ['X-Who' => 'tester']);
+    expect($s->opened())->yes(says: 'the app answered with a stream');
+    expect($s->headers->get('Content-Type'))->some('text/event-stream');
+    $feed->streams->publish(nexus::ServerEvent('{"n":1}', $event: 'tick'));
+    $feed->streams->settle();
+    expect($s->events())->size(2);
+    expect($s->named('welcome'))->size(1);
+    expect($s->last()?->data ?? '')->is('{"n":1}');
+    expect($feed->streams->count())->is(1);
+    $s->leave();
+    $feed->streams->settle();
+    expect($feed->streams->count())->is(0);
+    expect($s->open())->no(says: 'the stream ended');
+}
+
+test a_refused_event_stream_never_opens
+{
+    $s = kernelApp()->events('/feed');
+    expect($s->opened())->no(says: 'a 401 opens nothing');
+    expect($s->status)->is(401);
+    expect($s->body)->is('who?');
+}
+
+test a_socket_opens_in_process
+{
+    $ws = kernelApp()->socket('/ws');
+    expect($ws->opened())->yes(says: 'upgraded');
+    expect($ws->status)->is(101);
+    $ws->say('{"op":"ping"}');
+    expect($ws->received())->size(2);
+    expect($ws->where('op', 'ping'))->size(1);
+    $ws->say('bye');
+    expect($ws->closedWith->load())->is(4000);
+    expect($ws->open())->no(says: 'closed by the app');
+    $ws->say('ignored');
+    expect($ws->received())->size(2);
 }
 
 test a_test_replaces_what_the_app_bound

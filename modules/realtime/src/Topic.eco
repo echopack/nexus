@@ -1,0 +1,33 @@
+namespace nexus::realtime;
+
+/**
+ * A channel a socket asked for, as its pattern read it: `posts.5` on `posts.{id:integer}` has the
+ * name `posts.5` and the param `id` = `5`.
+ */
+public struct Topic
+{
+    public string $name;
+    public map<string, string> $params = [];
+
+    /**
+     * Param `$key` as written, or null when the pattern has none of that name.
+     */
+    public const function text(const string& $key) : string?
+    {
+        if (!$this->params->has($key)) {
+            return null;
+        }
+        return $this->params->at($key);
+    }
+
+    /**
+     * Param `$key` as a number, or null when it is missing or no number.
+     */
+    public const function number(const string& $key) : int64?
+    {
+        string $raw = guard $this->text($key) else {
+            return null;
+        };
+        return str::int($raw);
+    }
+}

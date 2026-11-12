@@ -1,0 +1,27 @@
+namespace nexus::app;
+
+/**
+ * The realtime channel class `bindChannel` just bound, for the channels it guards:
+ *
+ * ```echo
+ * $app->bindChannel<UserChannel>(() => UserChannel())->on('users.{id:integer}');
+ * ```
+ */
+public class ChannelRef<C>
+{
+    internal nexus::Services $services;
+
+    internal constructor(nexus::Services $services)
+    {
+        $this->services = $services;
+    }
+
+    /**
+     * Guards the channels `$pattern` answers for with `C`; call again for another pattern.
+     */
+    public function on(const string& $pattern) : ChannelRef<C>
+    {
+        nexus::realtime::Channels::on<C>($this->services, $pattern);
+        return $this;
+    }
+}
