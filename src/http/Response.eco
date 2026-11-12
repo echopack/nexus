@@ -146,6 +146,19 @@ public struct Response
     }
 
     /**
+     * Drops every body so a HEAD answer carries the headers and status only. RFC 7231: HEAD must
+     * not change the connection, so a websocket upgrade is cleared too.
+     */
+    public function asHead() : void
+    {
+        $this->body = '';
+        $this->stream = null;
+        $this->events = null;
+        $this->websocket = null;
+        $this->protocol = '';
+    }
+
+    /**
      * Sets a header, replacing earlier ones of the name.
      */
     public function header(const string& $name, const string& $value) : void

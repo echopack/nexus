@@ -54,7 +54,11 @@ public class CarbonAttempts : nexus::connect::AttemptStore
         $set[AttemptRowTable::$externalEmailVerified] = $row->externalEmailVerified;
         $set[AttemptRowTable::$externalName] = $row->externalName;
         $set[AttemptRowTable::$externalClaims] = $row->externalClaims;
-        try $repo->find()->where(AttemptRowTable::$id == $a->id)->update($set);
+        try $repo->find()
+            ->where(AttemptRowTable::$id == $a->id)
+            ->where(AttemptRowTable::$error == '')
+            ->where(AttemptRowTable::$externalSubject == '')
+            ->update($set);
         return .ok;
     }
 

@@ -5,7 +5,7 @@ use std::time;
 
 internal enum HubJob
 {
-    case join(int64 $id, string $channel, string? $after, Present? $me, bool $fresh);
+    case join(int64 $id, string $channel, string? $after, Roll? $roll, bool $fresh);
     case leave(int64 $id, string $channel);
     case detach(int64 $id);
     case hear(Note $n);
@@ -43,6 +43,9 @@ internal struct Attached
 
     // the channels it is a presence member of
     public array<string> $present = [];
+
+    // presence channels whose `subscribed` frame went out; drop publishes `left` only for these
+    public array<string> $heard = [];
 
     // still counted against the socket limit; end and close clear it before the transport drops
     public bool $counted = true;
@@ -505,8 +508,8 @@ internal class HubState
     public function run(HubJob $job) : void
     {
         match ($job) {
-            HubJob::join($id, $channel, $after, $me, $fresh) => {
-                $this->join($id, $channel, $after, $me, $fresh);
+            HubJob::join($id, $channel, $after, $roll, $fresh) => {
+                $this->join($id, $channel, $after, $roll, $fresh);
             },
             HubJob::leave($id, $channel) => {
                 nexus::Socket? $s = $this->socketOf($id);
@@ -550,7 +553,7 @@ internal class HubState
         }
     }
 
-    private function join(int64 $id, const string& $channel, string? $after, Present? $me, bool $fresh) : void
+    private function join(int64 $id, const string& $channel, string? $after, Roll? $roll, bool $fresh) : void
     {
         nexus::Socket? $found = null;
         array<string> $missed = [];
@@ -577,23 +580,6 @@ internal class HubState
             }
         }
         nexus::Socket $s = guard $found;
-        Roll? $roll = null;
-        if ($me != null) {
-            Present $member = guard $me;
-            result<array<Present>, RealtimeError> $listed = $this->appearing($channel, $member);
-            array<Present> $members = guard $listed else ($e) {
-                if ($fresh) {
-                    $this->stop($id, $channel);
-                }
-                $s->send(Frames::refused($channel, .unavailable($e->message()), .prod));
-                return;
-            };
-            if (!$this->follows($id, $channel)) {
-                $this->tellVanish($channel, $member->id);
-                return;
-            }
-            $roll = Roll($member, $members);
-        }
         bool $ok = $s->send(Frames::subscribed($channel, $cursor, $roll));
         if ($reset) {
             $ok = $ok && $s->send(Frames::reset($channel, $cursor));
@@ -602,42 +588,26 @@ internal class HubState
             $ok = $ok && $s->send($frame);
         }
         if (!$ok) {
-            if ($me != null) {
-                Present $member = guard $me;
-                $this->tellVanish($channel, $member->id);
+            if ($roll != null) {
+                Roll $had = guard $roll;
+                $this->tellVanish($channel, $had->me->id);
             }
             $this->gone($id);
             return;
         }
-        if ($me != null && $fresh) {
-            Present $member = guard $me;
-            foreach ($this->watchers() as $o) {
-                $o->appeared($channel, $member);
+        if ($roll != null) {
+            Roll $had = guard $roll;
+            $this->confirm($id, $channel);
+            if ($fresh) {
+                foreach ($this->watchers() as $o) {
+                    $o->appeared($channel, $had->me);
+                }
             }
         }
         string $gid = $this->idOf($id);
         foreach ($this->watchers() as $o) {
             $o->joined($gid, $channel);
         }
-    }
-
-    /**
-     * The roster's members for `$channel` after joining `$me`, or `$me` alone when no observer
-     * owns the roster.
-     */
-    private function appearing(const string& $channel, const Present& $me) : result<array<Present>, RealtimeError>
-    {
-        array<Present> $members = [];
-        $members[] = $me;
-        foreach ($this->watchers() as $o) {
-            result<array<Present>, RealtimeError>? $got = $o->appearing($channel, $me);
-            if ($got == null) {
-                continue;
-            }
-            result<array<Present>, RealtimeError> $listed = guard $got;
-            return $listed;
-        }
-        return .ok($members);
     }
 
     private function tellVanish(const string& $channel, const string& $id) : void
@@ -745,12 +715,35 @@ internal class HubState
         return $held->value->drop($id);
     }
 
+    private function confirm(int64 $id, const string& $channel) : void
+    {
+        thread::locked<HubData> $held = $this->data->lock();
+        if (!$held->value->members->has($id)) {
+            return;
+        }
+        Attached& $m = $held->value->members->at($id);
+        if (!has($m->heard, $channel)) {
+            $m->heard->push($channel);
+        }
+    }
+
     private function tellGone(int64 $id, const Attached& $was) : void
     {
         string $gid = $this->idOf($id);
-        array<string> $present = $was->present->clone();
+        array<string> $heard = [];
+        array<string> $unheard = [];
+        foreach ($was->present as const &$channel) {
+            if (has($was->heard, $channel)) {
+                $heard[] = $channel;
+            } else {
+                $unheard[] = $channel;
+            }
+        }
         foreach ($this->watchers() as $o) {
-            $o->dropped($gid, $present);
+            $o->dropped($gid, $heard);
+            foreach ($unheard as const &$channel) {
+                $o->vanish($channel, $gid);
+            }
             $o->closed($gid);
         }
     }

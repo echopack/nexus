@@ -23,20 +23,29 @@ public struct Serve
     public bool $schedule = true;
 
     /**
-     * Parses `host:port`, `:port` or a bare port into `$host` and `$port`. Refuses a port that is
-     * not a number from 1 to 65535.
+     * Parses `host:port`, `[ipv6]:port`, `:port` or a bare port into `$host` and `$port`. Refuses a
+     * port that is not a number from 1 to 65535.
      */
     public function listen(const string& $address) : status<ConfigError>
     {
         string $a = str::trim($address);
-        usize $colon = $a->find(':');
         string $portText = $a;
-        if ($colon < $a->size()) {
-            string $host = $a->sub(0, $colon);
-            if (!$host->empty()) {
-                $this->host = $host;
+        if ($a->starts('[')) {
+            usize $close = $a->find(']');
+            if ($close + 1 >= $a->size() || $a->byte($close + 1) != 58) {
+                return .error(.invalid('listen', "'{$address}' has no port from 1 to 65535"));
             }
-            $portText = $a->sub($colon + 1, $a->size() - $colon - 1);
+            $this->host = $a->sub(0, $close + 1)->clone();
+            $portText = $a->sub($close + 2, $a->size() - $close - 2);
+        } else {
+            usize $colon = Serve::lastColon($a);
+            if ($colon < $a->size()) {
+                string $host = $a->sub(0, $colon)->clone();
+                if (!$host->empty()) {
+                    $this->host = $host;
+                }
+                $portText = $a->sub($colon + 1, $a->size() - $colon - 1);
+            }
         }
         uint64 $p = guard str::uint($portText) else {
             return .error(.invalid('listen', "'{$address}' has no port from 1 to 65535"));
@@ -46,5 +55,17 @@ public struct Serve
         }
         $this->port = $p as uint16;
         return .ok;
+    }
+
+    internal static function lastColon(const string& $a) : usize
+    {
+        usize $i = $a->size();
+        while ($i > 0) {
+            $i = $i - 1;
+            if ($a->byte($i) == 58) {
+                return $i;
+            }
+        }
+        return $a->size();
     }
 }

@@ -90,7 +90,11 @@ public class TaskScheduler
             time::timestamp $slot = guard $schedule->due($this->lastOf($i), $now, $w->zone) else {
                 continue;
             };
-            if ($this->push($k, $w, $p, $slot)) {
+            bool $did = guard $this->push($k, $w, $p, $slot) else ($e) {
+                $k->log->with(['work' => 'scheduler'])->error('cannot push a scheduled task', ['task' => $p->name, 'detail' => $e->detail(.dev)]);
+                continue;
+            };
+            if ($did) {
                 $queued = $queued + 1;
             }
             thread::locked<map<usize, time::timestamp>> $held = $this->last->lock();
@@ -141,20 +145,18 @@ public class TaskScheduler
     }
 
     /**
-     * Pushes `$plan` for `$slot`; true when it was queued.
+     * Pushes `$plan` for `$slot`; true when it was queued, false when another server stored the
+     * slot first. A store error is returned so `tick` retries the same slot.
      */
-    internal function push(nexus::Kernel $k, Work $w, Planned $plan, time::timestamp $slot) : bool
+    internal function push(nexus::Kernel $k, Work $w, Planned $plan, time::timestamp $slot) : result<bool, nexus::Problem>
     {
         nexus::Logger $log = $k->log->with(['work' => 'scheduler']);
-        Pushed $out = guard TaskScheduler::send($w, $plan, $slot) else ($e) {
-            $log->error('cannot push a scheduled task', ['task' => $plan->name, 'detail' => $e->detail(.dev)]);
-            return false;
-        };
+        Pushed $out = try TaskScheduler::send($w, $plan, $slot);
         bool $queued = $out->queued();
         if ($queued) {
             $log->info('scheduled', ['task' => $plan->name, 'slot' => $slot->unix_secs(), 'lane' => $plan->into]);
         }
-        return $queued;
+        return .ok($queued);
     }
 
     /**

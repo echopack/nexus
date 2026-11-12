@@ -184,7 +184,7 @@ test a_running_key_is_a_lock_row
     $r->fake->rows([$r->row($t)])->fails(.driver(carbon::Failure($fault: .duplicate, $message: 'lock_key taken')))->written(0);
     expect(claimed($r->store(), $r->clock->now(), 1))->empty();
     expect($r->fake->texts()[1])->starts('INSERT INTO `nexus_task_locks`');
-    expect($r->fake->last())->is('UPDATE `nexus_task_locks` SET `holder` = ?, `held_until` = ? WHERE `nexus_task_locks`.`lock_key` = ? AND (`nexus_task_locks`.`held_until` < ? OR `nexus_task_locks`.`holder` = ?)');
+    expect($r->fake->last())->is('UPDATE `nexus_task_locks` SET `holder` = ?, `held_until` = ? WHERE `nexus_task_locks`.`lock_key` = ? AND `nexus_task_locks`.`held_until` < ?');
 }
 
 test done_lets_the_waiting_tasks_go_and_a_stale_claim_changes_nothing

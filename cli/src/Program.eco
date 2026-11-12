@@ -374,12 +374,7 @@ public struct Program
 
     internal const function knowsInput(const string& $qualified) : bool
     {
-        foreach ($this->inputs as const &$i) {
-            if ($i->qualified == $qualified) {
-                return true;
-            }
-        }
-        return false;
+        return $this->findInput($qualified) != null;
     }
 
     internal function readInput(const json::Value& $d) : void
@@ -476,16 +471,24 @@ public struct Program
     }
 
     /**
-     * The `#[nexus::input]` struct named `$qualified`; check `knowsInput` first.
+     * The `#[nexus::input]` struct named `$qualified` in this module, or null.
      */
-    internal const function input(const string& $qualified) : TypeDecl
+    internal const function findInput(const string& $qualified) : TypeDecl?
     {
         foreach ($this->inputs as const &$i) {
             if ($i->qualified == $qualified) {
                 return $i;
             }
         }
-        return TypeDecl($qualified, '', 0);
+        return null;
+    }
+
+    /**
+     * The `#[nexus::input]` struct named `$qualified`; check `knowsInput` first.
+     */
+    internal const function input(const string& $qualified) : TypeDecl
+    {
+        return $this->findInput($qualified) ?? TypeDecl($qualified, '', 0);
     }
 
     internal function readCommand(const json::Value& $d) : void
@@ -940,12 +943,20 @@ public struct Program
 
     internal const function enumNamed(const string& $q) : bool
     {
+        return $this->findEnum($q) != null;
+    }
+
+    /**
+     * The enum named `$q`, or null.
+     */
+    internal const function findEnum(const string& $q) : EnumDecl?
+    {
         foreach ($this->enums as const &$e) {
             if ($e->qualified == $q) {
-                return true;
+                return $e;
             }
         }
-        return false;
+        return null;
     }
 
     /**
@@ -953,11 +964,6 @@ public struct Program
      */
     internal const function enumOf(const string& $q) : EnumDecl
     {
-        foreach ($this->enums as const &$e) {
-            if ($e->qualified == $q) {
-                return $e;
-            }
-        }
-        return EnumDecl($q, true);
+        return $this->findEnum($q) ?? EnumDecl($q, true);
     }
 }

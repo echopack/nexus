@@ -1,0 +1,82 @@
+namespace nexus;
+
+/**
+ * English templates for built-in input rules. `Check` is the sink; this is the catalog.
+ */
+internal struct CheckMessages
+{
+    public static function english(const string& $code, const string& $kind) : string
+    {
+        if ($code == 'required') {
+            return 'The {label} field is required.';
+        }
+        if ($code == 'type') {
+            if ($kind == 'string') { return 'The {label} field must be text.'; }
+            if ($kind == 'integer') { return 'The {label} field must be a whole number.'; }
+            if ($kind == 'number') { return 'The {label} field must be a number.'; }
+            if ($kind == 'boolean') { return 'The {label} field must be true or false.'; }
+            if ($kind == 'list') { return 'The {label} field must be a list.'; }
+            if ($kind == 'object') { return 'The {label} field must be an object.'; }
+            if ($kind == 'date') { return 'The {label} field must be a date like 2026-10-28.'; }
+            if ($kind == 'timestamp') { return 'The {label} field must be a date and time like 2026-10-28T09:30:00Z.'; }
+            return 'The {label} field has the wrong type.';
+        }
+        if ($code == 'range') {
+            return 'The {label} field is out of range.';
+        }
+        if ($code == 'min' || $code == 'max' || $code == 'between' || $code == 'size') {
+            return CheckMessages::measured($code, $kind);
+        }
+        if ($code == 'notBlank') { return 'The {label} field must not be blank.'; }
+        if ($code == 'email') { return 'The {label} field must be a valid email address.'; }
+        if ($code == 'url') { return 'The {label} field must be a valid URL.'; }
+        if ($code == 'uuid') { return 'The {label} field must be a valid UUID.'; }
+        if ($code == 'alpha') { return 'The {label} field must only contain letters.'; }
+        if ($code == 'alphaNum') { return 'The {label} field must only contain letters and numbers.'; }
+        if ($code == 'alphaDash') { return 'The {label} field must only contain letters, numbers, dashes and underscores.'; }
+        if ($code == 'ascii') { return 'The {label} field must only contain ASCII characters.'; }
+        if ($code == 'digits') { return 'The {label} field must only contain digits.'; }
+        if ($code == 'startsWith') { return 'The {label} field must start with one of: {values}.'; }
+        if ($code == 'endsWith') { return 'The {label} field must end with one of: {values}.'; }
+        if ($code == 'oneOf') { return 'The {label} field must be one of: {values}.'; }
+        if ($code == 'noneOf') { return 'The {label} field must not be one of: {values}.'; }
+        if ($code == 'multipleOf') { return 'The {label} field must be a multiple of {value}.'; }
+        if ($code == 'gt') { return 'The {label} field must be greater than {value}.'; }
+        if ($code == 'gte') { return 'The {label} field must be greater than or equal to {value}.'; }
+        if ($code == 'lt') { return 'The {label} field must be less than {value}.'; }
+        if ($code == 'lte') { return 'The {label} field must be less than or equal to {value}.'; }
+        if ($code == 'accepted') { return 'The {label} field must be accepted.'; }
+        if ($code == 'declined') { return 'The {label} field must be declined.'; }
+        if ($code == 'after') { return 'The {label} field must be a date after {date}.'; }
+        if ($code == 'before') { return 'The {label} field must be a date before {date}.'; }
+        if ($code == 'afterOrEqual') { return 'The {label} field must be a date after or equal to {date}.'; }
+        if ($code == 'beforeOrEqual') { return 'The {label} field must be a date before or equal to {date}.'; }
+        if ($code == 'distinct') { return 'The {label} field has a duplicate value.'; }
+        if ($code == 'confirmed') { return 'The {label} field confirmation does not match.'; }
+        if ($code == 'same') { return 'The {label} field must match {other}.'; }
+        if ($code == 'different') { return 'The {label} field must be different from {other}.'; }
+        if ($code == 'requiredWith') { return 'The {label} field is required when {other} is present.'; }
+        if ($code == 'requiredWithout') { return 'The {label} field is required when {other} is not present.'; }
+        return 'The {label} field is invalid.';
+    }
+
+    internal static function measured(const string& $code, const string& $kind) : string
+    {
+        if ($kind == 'string') {
+            if ($code == 'min') { return 'The {label} field must be at least {min} characters.'; }
+            if ($code == 'max') { return 'The {label} field must not be longer than {max} characters.'; }
+            if ($code == 'between') { return 'The {label} field must be between {min} and {max} characters.'; }
+            return 'The {label} field must be {size} characters.';
+        }
+        if ($kind == 'list') {
+            if ($code == 'min') { return 'The {label} field must have at least {min} items.'; }
+            if ($code == 'max') { return 'The {label} field must not have more than {max} items.'; }
+            if ($code == 'between') { return 'The {label} field must have between {min} and {max} items.'; }
+            return 'The {label} field must contain {size} items.';
+        }
+        if ($code == 'min') { return 'The {label} field must be at least {min}.'; }
+        if ($code == 'max') { return 'The {label} field must not be greater than {max}.'; }
+        if ($code == 'between') { return 'The {label} field must be between {min} and {max}.'; }
+        return 'The {label} field must be {size}.';
+    }
+}

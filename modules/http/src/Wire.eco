@@ -52,6 +52,7 @@ public struct Wire
         }
         $r->body = $in->body;
         $r->peer = $proxies->client($in->peer, $r->header('X-Forwarded-For') ?? '');
+        $r->scheme = $proxies->scheme($in->peer, $r->header('X-Forwarded-Proto') ?? '');
         return $r;
     }
 

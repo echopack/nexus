@@ -375,7 +375,8 @@ internal class SessionStore : nexus::work::Store
 
     /**
      * Takes `.running` key `$key` for `$holder` until `$until`: a fresh row, or one whose holder let
-     * its lease run out. False when another task holds it.
+     * its lease run out. False when another task holds it. Steal only on expiry, never because the
+     * holder string matches: two claimers of the same task share the task id as holder.
      */
     internal function lock(const string& $key, const string& $holder, time::timestamp $now, time::timestamp $until) : result<bool, carbon::Error>
     {
@@ -389,7 +390,7 @@ internal class SessionStore : nexus::work::Store
             $set[TaskLockTable::$heldUntil] = $until;
             uint64 $n = try $locks->find()
                 ->where(TaskLockTable::$lockKey == $key)
-                ->where(TaskLockTable::$heldUntil < $now || TaskLockTable::$holder == $holder)
+                ->where(TaskLockTable::$heldUntil < $now)
                 ->update(mv $set);
             return .ok($n == 1);
         };

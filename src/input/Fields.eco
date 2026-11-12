@@ -50,14 +50,15 @@ public class Fields
     }
 
     /**
-     * A nested input: the JSON object `$doc`, or the pairs under `$base`.
+     * A nested input: the JSON object `$doc`, or the pairs under `$base`. `$fromJson` is the
+     * parent's source; do not infer it from `$base`.
      */
-    internal constructor(json: json::Value $doc, pairs: const Query& $pairs, base: const string& $base, check: Check $check)
+    internal constructor(json: json::Value $doc, pairs: const Query& $pairs, base: const string& $base, check: Check $check, fromJson: bool $fromJson)
     {
         $this->doc = mv $doc;
         $this->pairs = $pairs;
         $this->base = $base;
-        $this->json = $base->empty();
+        $this->json = $fromJson;
         $this->check = $check;
     }
 
@@ -69,7 +70,7 @@ public class Fields
     public static function body(Payload& $payload) : result<Fields, Problem>
     {
         string $type = $payload->request->contentType();
-        if ($payload->request->body->empty() && ($type->empty() || $type == 'application/json')) {
+        if ($payload->request->body->empty() && ($type->empty() || $type == 'application/json' || $type->ends('+json'))) {
             return .ok(Fields(json: json::object()));
         }
         if ($type == 'application/json' || $type->ends('+json')) {
@@ -193,6 +194,17 @@ public class Fields
 
     public function uint64(const string& $name, required: bool $required) : uint64?
     {
+        // a form value reads as unsigned, so the top half of the range is not lost to int64
+        if (!$this->json) {
+            if (!$this->present($name, $required, 'integer')) {
+                return null;
+            }
+            uint64? $u = str::uint($this->pairs->get($this->key($name)) ?? '');
+            if ($u == null) {
+                $this->refuse($name, 'type', 'integer');
+            }
+            return $u;
+        }
         int64 $n = guard $this->int64($name, required: $required) else {
             return null;
         };
@@ -367,7 +379,7 @@ public class Fields
         }
         $inner = $this->check->child($name);
         if (!$this->json) {
-            return Fields(json: json::nil(), pairs: $this->pairs, base: $this->key($name), check: $inner);
+            return Fields(json: json::nil(), pairs: $this->pairs, base: $this->key($name), check: $inner, fromJson: false);
         }
         $v = $this->value($name);
         if (!$v->isObject()) {
@@ -375,7 +387,7 @@ public class Fields
             return null;
         }
         $none = Query();
-        return Fields(json: $v, pairs: $none, base: '', check: $inner);
+        return Fields(json: $v, pairs: $none, base: '', check: $inner, fromJson: true);
     }
 
     /**
@@ -392,7 +404,7 @@ public class Fields
             string $key = $this->key($name);
             foreach ($this->indices($key) as const &$i) {
                 $inner = $this->check->child("{$name}.{$i}");
-                $out[] = Fields(json: json::nil(), pairs: $this->pairs, base: "{$key}[{$i}]", check: $inner);
+                $out[] = Fields(json: json::nil(), pairs: $this->pairs, base: "{$key}[{$i}]", check: $inner, fromJson: false);
             }
             return $out;
         }
@@ -409,7 +421,7 @@ public class Fields
                 return null;
             }
             $inner = $this->check->child("{$name}.{$i}");
-            $out[] = Fields(json: $item->clone(), pairs: $none, base: '', check: $inner);
+            $out[] = Fields(json: $item->clone(), pairs: $none, base: '', check: $inner, fromJson: true);
             $i = $i + 1;
         }
         return $out;

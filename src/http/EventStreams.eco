@@ -118,13 +118,16 @@ internal class StreamSet
     {
         match ($job) {
             StreamJob::join($s, $backlog) => {
+                {
+                    thread::locked<array<EventStream>> $held = $this->members->lock();
+                    $held->value->push($s);
+                }
                 foreach ($backlog as const &$e) {
-                    if (!$s->send($e)) {
+                    if (!$s->open() || !$s->send($e)) {
+                        $this->drop($s->id());
                         return;
                     }
                 }
-                thread::locked<array<EventStream>> $held = $this->members->lock();
-                $held->value->push($s);
             },
             StreamJob::leave($id) => {
                 $this->drop($id);

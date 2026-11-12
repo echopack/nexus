@@ -2,7 +2,7 @@
  * The transport-independent request and response values.
  */
 
-use nexus::{Method, Headers, Query, Percent, Request, Response};
+use nexus::{Method, Headers, Query, Percent, Request, Response, SocketHooks, Serve};
 use ecotest::expect;
 
 test method_parses_and_prints
@@ -74,4 +74,25 @@ test responses_build_from_text_redirects_and_json
     $j = Response(json: $doc, status: 201);
     expect($j->status)->is(201);
     expect($j->body)->is('{"ok":true}');
+    $hooks = SocketHooks();
+    $ws = Response(websocket: $hooks, protocol: 'nexus.v1');
+    expect($ws->status)->is(101);
+    $ws->asHead();
+    expect($ws->body)->is('');
+    expect($ws->websocket == null)->yes(says: 'HEAD drops the upgrade');
+    expect($ws->protocol)->is('');
+}
+
+test listen_parses_ipv6_and_host_port
+{
+    $s = Serve();
+    expect($s->listen('127.0.0.1:8080')->has_value())->yes(says: 'host:port parses');
+    expect($s->host)->is('127.0.0.1');
+    expect($s->port)->is(8080);
+    expect($s->listen('[::1]:3246')->has_value())->yes(says: 'bracketed ipv6 parses');
+    expect($s->host)->is('[::1]');
+    expect($s->port)->is(3246);
+    expect($s->listen(':9000')->has_value())->yes(says: 'bare :port keeps the default host');
+    expect($s->port)->is(9000);
+    expect($s->listen('[::1]')->has_value())->no(says: 'ipv6 without a port is refused');
 }

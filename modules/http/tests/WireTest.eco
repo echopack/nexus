@@ -73,11 +73,14 @@ test a_websocket_upgrades
     expect($r->status)->is(101);
 }
 
-internal function forwarded(const string& $peer, const string& $xff) : http::Request
+internal function forwarded(const string& $peer, const string& $xff, const string& $proto = '') : http::Request
 {
     $h = http::Headers();
     if (!$xff->empty()) {
         $h->add('X-Forwarded-For', $xff);
+    }
+    if (!$proto->empty()) {
+        $h->add('X-Forwarded-Proto', $proto);
     }
     return http::Request(http::Method::get, '/', '/', '', http::Query(), 'HTTP/1.1', mv $h, '', $peer);
 }
@@ -104,4 +107,14 @@ test anyone_else_cannot_claim_an_address
     expect($all->peer)->is('10.0.0.2');
     $plain = expect(Wire::request(forwarded('10.0.0.2:40000', '203.0.113.9')))->some();
     expect($plain->peer)->is('10.0.0.2');
+}
+
+test a_trusted_proxy_may_set_the_scheme
+{
+    $p = nexus::http::Proxies(parse: '10.0.0.2');
+    $https = expect(Wire::request(forwarded('10.0.0.2:40000', '', 'https'), $p))->some();
+    expect($https->scheme)->is('https');
+    expect($https->origin())->is('https://localhost');
+    $spoof = expect(Wire::request(forwarded('198.51.100.7:5000', '', 'https'), $p))->some();
+    expect($spoof->scheme)->is('http');
 }

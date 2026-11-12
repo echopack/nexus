@@ -37,8 +37,9 @@ namespace nexus::crud;
  * `find` and `page` hand back the models, for an action that answers itself; `show`, `list`,
  * `create` and `update` answer through `T`. Every read starts from the repository's `find()`,
  * narrowed by `scope` (who sees which rows) and widened by `load` (the relations the request's
- * includes name). `authorize` runs on every record shown or written, `before` and `after` around
- * every write. A database error becomes its `nexus::carbon::Problems` answer.
+ * includes name). `authorize` runs on every single-record show or write; lists are `scope`.
+ * `before` and `after` run around every write. A database error becomes its `nexus::carbon::Problems`
+ * answer.
  */
 public class Crud<M, Q, K, Repo, T>
 {
@@ -209,6 +210,10 @@ public class Crud<M, Q, K, Repo, T>
         try $this->hook(Verb::create, $model);
         $made = try $this->repo->create($model);
         $this->done(Verb::create, $made);
+        if ($this->load != null && !$inc->empty()) {
+            M $loaded = try $this->fetch($this->repo->store()->table->keyOf($made), $inc);
+            return .ok($this->transformer->createResponse($payload, $loaded, $this->context, mv $inc, status: 201));
+        }
         return .ok($this->transformer->createResponse($payload, $made, $this->context, mv $inc, status: 201));
     }
 

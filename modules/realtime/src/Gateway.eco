@@ -184,14 +184,24 @@ public class Gateway : HubObserver
         if (!$seat->on) {
             return;
         }
-        $this->hub->join($s, $channel, $after, $me, $seat->fresh);
+        array<Present> $members = guard $this->appearing($k, $channel, $me) else ($e) {
+            $s->send(Frames::refused($channel, .unavailable($e->message()), $k->mode));
+            $this->hub->unseat($s->id(), $channel);
+            $this->vanish($channel, $me->id);
+            return;
+        };
+        if (!$this->hub->follows($s->id(), $channel)) {
+            $this->vanish($channel, $me->id);
+            return;
+        }
+        $this->hub->join($s, $channel, $after, Roll($me, $members), $seat->fresh);
     }
 
-    public function appearing(const string& $channel, const Present& $me) : result<array<Present>, RealtimeError>?
+    /**
+     * Joins `$me` to the presence roster of `$channel` and returns everyone there, `$me` included.
+     */
+    private function appearing(nexus::Kernel $k, const string& $channel, const Present& $me) : result<array<Present>, RealtimeError>
     {
-        nexus::Kernel $k = guard $this->kernel else {
-            return .error(.relay('the app is not ready'));
-        };
         Roster $roster = $k->services->get<Roster>();
         guard $roster->join($channel, $me) else ($e) {
             return .error($e);
@@ -271,7 +281,10 @@ public class Gateway : HubObserver
         // the hook may change what is said, not who says it or where
         $w->channel = $channel;
         $w->from = $me;
-        $this->publish(Note::whisper($w));
+        guard $this->publish(Note::whisper($w)) else ($e) {
+            $s->send(Frames::error(channel: $channel, .unavailable($e->message()), $k->mode));
+            return;
+        };
     }
 
     /**
@@ -283,38 +296,28 @@ public class Gateway : HubObserver
             return;
         };
         Roster $roster = $k->services->get<Roster>();
-        array<Present> $all = guard $roster->members($channel) else ($e) {
-            $k->log->warn('realtime presence could not list members', ['channel' => $channel, 'error' => $e->message()]);
-            return;
-        };
-        bool $had = false;
-        foreach ($all as const &$m) {
-            if ($m->id == $id) {
-                $had = true;
-            }
-        }
-        if (!$had) {
-            return;
-        }
         status<RealtimeError> $gone = $roster->leave($channel, $id);
         if ($gone->failed()) {
             $k->log->warn('realtime presence could not forget a member', ['channel' => $channel]);
+            return;
         }
         $this->publish(Note::left($channel, $id));
     }
 
     /**
-     * Hands `$n` to the relay, for every server; a relay that fails is logged.
+     * Hands `$n` to the relay, for every server; a relay that fails is logged, and the failure is
+     * returned for a caller that answers the client.
      */
-    public function publish(const Note& $n) : void
+    public function publish(const Note& $n) : status<RealtimeError>
     {
         nexus::Kernel $k = guard $this->kernel else {
-            return;
+            return .error(.relay('the app is not ready'));
         };
-        guard $k->services->get<Relay>()->publish($n) else ($e) {
-            $k->log->warn('realtime relay failed', ['error' => $e->message()]);
-            return;
-        };
+        status<RealtimeError> $sent = $k->services->get<Relay>()->publish($n);
+        if ($sent->failed()) {
+            $k->log->warn('realtime relay failed', ['error' => $sent->failure()->message()]);
+        }
+        return $sent;
     }
 
     /**

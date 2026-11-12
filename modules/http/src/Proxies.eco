@@ -66,6 +66,26 @@ public struct Proxies
     }
 
     /**
+     * `https` when `$peer` is a trusted proxy and `$forwarded` (X-Forwarded-Proto) starts with it,
+     * else `http`. A client cannot flip the scheme on its own.
+     */
+    public const function scheme(const string& $peer, const string& $forwarded) : string
+    {
+        if (!$this->trusts(Proxies::address($peer))) {
+            return 'http';
+        }
+        string $raw = str::lower(str::trim($forwarded));
+        usize $comma = $raw->find(',');
+        if ($comma < $raw->size()) {
+            $raw = str::trim($raw->sub(0, $comma))->clone();
+        }
+        if ($raw == 'https') {
+            return 'https';
+        }
+        return 'http';
+    }
+
+    /**
      * `$peer` without its port.
      */
     public static function address(const string& $peer) : string

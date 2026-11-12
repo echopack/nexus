@@ -61,6 +61,13 @@ test pattern_rest_and_decoding
     $empty = map<string, string>();
     expect($p->matches('/files', $empty))->yes(says: 'the rest segment may be empty');
     expect($empty->get('path'))->is('');
+    Pattern $slug = guard Pattern::parse('/files/{path:slug*}');
+    $ok = map<string, string>();
+    expect($slug->matches('/files/a-b/c-d', $ok))->yes(says: 'each rest piece admits slug');
+    expect($ok->get('path'))->is('a-b/c-d');
+    $bad = map<string, string>();
+    expect($slug->matches('/files/A/B', $bad))->no(says: 'a rest piece that fails the constraint does not match');
+    expect($slug->matches('/files', $bad))->no(says: 'an empty constrained rest does not match');
 }
 
 test pattern_refuses_bad_sources

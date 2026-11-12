@@ -26,15 +26,6 @@ public interface HubObserver
     }
 
     /**
-     * Join `$me` to the presence roster of `$channel` and return everyone there, `$me` included.
-     * Null means this observer does not own the roster. A failure refuses the subscribe.
-     */
-    function appearing(const string& $channel, const Present& $me) : result<array<Present>, RealtimeError>?
-    {
-        return null;
-    }
-
-    /**
      * `$me` is in `$channel` and the others should hear `joined`.
      */
     function appeared(const string& $channel, const Present& $me) : void

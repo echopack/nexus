@@ -132,6 +132,22 @@ public class Extension : nexus::Extension
         if ($kernel->services->get<nexus::auth::Resources>()->all()->empty()) {
             return .error(.extension('nexus-oauth', 'there is no resource to issue tokens for; add nexus::mcp::Extension() or declare one on nexus::auth::Resources'));
         }
+        $kernel->services->get<nexus::auth::Endings>()->listen(function[$kernel](nexus::auth::Ending $e) : void {
+            match ($e) {
+                nexus::auth::Ending::subject($via, $subject) => {
+                    if ($via == OAuthGuard::NAME) {
+                        return;
+                    }
+                    nexus::Payload $payload = $kernel->background('oauth', 'dropAll');
+                    status<nexus::Problem> $gone = $payload->get<Grants>()->dropAll($subject);
+                    nexus::Kernel::finish($payload);
+                    if ($gone->failed()) {
+                        $kernel->log->warn('oauth could not drop grants for a subject that signed out', ['via' => $via]);
+                    }
+                },
+                else => {},
+            }
+        });
         return .ok;
     }
 }

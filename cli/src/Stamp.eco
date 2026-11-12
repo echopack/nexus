@@ -15,10 +15,11 @@ public function digest(const std::fs::path& $root, const string& $echoc) : strin
 {
     $h = crypto::Sha256();
     $h->update($echoc);
-    $h->update('nexus-gen 3');
+    $h->update('nexus-gen 4');
     array<string> $files = [];
     walk($root, '.eco', $files);
     walk($root / mails::FOLDER, '', $files);
+    $files[] = ($root / 'epm.lock.json')->string();
     $files->sort();
     foreach ($files as const &$path) {
         $h->update($path);

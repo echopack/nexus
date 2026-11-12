@@ -106,12 +106,12 @@ public class Hub
     /**
      * Sends `subscribed` for `$channel` on the sender thread, then the broadcasts missed after
      * `$after` (or `reset` when that one is no longer kept). Membership is `seat` already; this
-     * is a no-op unless the socket is still seated. `$me` is a presence member: the roster join
-     * and `joined` run here, only if still seated, `$fresh` when they were not a member yet.
+     * is a no-op unless the socket is still seated. `$roll` is a presence member already joined
+     * to the roster on the socket thread; `$fresh` when they were not a member yet.
      */
-    public function join(nexus::Socket $s, const string& $channel, string? $after, Present? $me = null, bool $fresh = false) : void
+    public function join(nexus::Socket $s, const string& $channel, string? $after, Roll? $roll = null, bool $fresh = false) : void
     {
-        $this->mail->put(HubJob::join($s->id(), $channel, $after, $me, $fresh));
+        $this->mail->put(HubJob::join($s->id(), $channel, $after, $roll, $fresh));
     }
 
     /**

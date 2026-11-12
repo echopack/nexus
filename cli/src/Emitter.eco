@@ -560,7 +560,10 @@ internal function fieldSchema(const Program& $p, const FieldDecl& $f) : json::Va
     }
     $o = json::object();
     if ($f->shape == 'enum' || $f->shape == 'enums') {
-        $e = $p->enumOf($f->item);
+        $e = guard $p->findEnum($f->item) else {
+            $o['type'] = json::str('string');
+            return $o;
+        };
         $one = json::object();
         $values = json::arr();
         foreach ($e->cases as const &$c) {
@@ -583,10 +586,20 @@ internal function fieldSchema(const Program& $p, const FieldDecl& $f) : json::Va
             $o['items'] = mv $one;
         }
     } else if ($f->shape == 'object') {
-        $o = inputSchema($p, $p->input($f->item));
+        $nested = guard $p->findInput($f->item) else {
+            $o['type'] = json::str('object');
+            return $o;
+        };
+        $o = inputSchema($p, $nested);
     } else {
         $o['type'] = json::str('array');
-        $o['items'] = inputSchema($p, $p->input($f->item));
+        $item = guard $p->findInput($f->item) else {
+            json::Value $one = json::object();
+            $one['type'] = json::str('object');
+            $o['items'] = mv $one;
+            return $o;
+        };
+        $o['items'] = inputSchema($p, $item);
     }
     if ($f->kind == 'list') {
         constrain($o, $f->rules, 'list');
@@ -1184,7 +1197,7 @@ internal function envs(Code& $code, const Program& $p) : void
             }
             $name = names::quote($f->wire);
             $type = names::quote($f->reader);
-            $doc = names::quote($f->doc);
+            $doc = names::literal($f->doc);
             $owner = names::quote($t->qualified);
             string $must = 'false';
             if ($required) {

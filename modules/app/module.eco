@@ -36,7 +36,6 @@
 #[depends: "../rest"]
 #[depends: "../carbon"]
 #[depends: "../mcp"]
-#[depends: "../auth"]
 #[depends: "../work"]
 #[depends: "../realtime"]
 #[depends: "../../../container"]
@@ -46,5 +45,6 @@
 
 #[target: test] {
     #[depends: "../testing"]
+    #[depends: "../auth"]
     #[sources: "tests/*.eco"]
 }

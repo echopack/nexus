@@ -4,7 +4,7 @@ use std::thread;
 use std::time;
 
 /**
- * A server's housekeeping thread, under `serve`: every `recheck` it asks whether the credentials
+ * A server's housekeeping threads, under `serve`: every `recheck` it asks whether the credentials
  * of its open sockets still hold and closes those whose credential expired (4001), and every
  * `beat` it tells the roster it is alive and takes out the members of servers that stopped, telling
  * the channels they left.
@@ -17,8 +17,9 @@ public class Sweeper
     public const time::duration $beat;
     private atomic<bool> $halt = atomic<bool>(false);
 
-    // the thread; dropping it joins
-    private result<thread::handle, thread::error>? $runner = null;
+    // the threads; dropping them joins
+    private result<thread::handle, thread::error>? $rechecks = null;
+    private result<thread::handle, thread::error>? $beats = null;
 
     public constructor(Hub $hub, time::duration $every, time::duration $beat)
     {
@@ -29,20 +30,24 @@ public class Sweeper
 
     public function start(nexus::Kernel $kernel) : void
     {
-        if ($this->runner != null) {
+        if ($this->beats != null) {
             return;
         }
         $this->halt->store(false);
         Sweeper $self = $this;
-        $this->runner = thread::spawn(function[$self, $kernel]() : void {
-            $self->loop($kernel);
+        $this->beats = thread::spawn(function[$self, $kernel]() : void {
+            $self->loopBeat($kernel);
+        });
+        $this->rechecks = thread::spawn(function[$self, $kernel]() : void {
+            $self->loopRecheck($kernel);
         });
     }
 
     public function stop() : void
     {
         $this->halt->store(true);
-        $this->runner = null;
+        $this->rechecks = null;
+        $this->beats = null;
     }
 
     /**
@@ -109,20 +114,27 @@ public class Sweeper
         }
     }
 
-    internal function loop(nexus::Kernel $kernel) : void
+    internal function loopBeat(nexus::Kernel $kernel) : void
+    {
+        $this->pulse($kernel);
+        time::instant $beaten = time::instant::now();
+        while (!$this->halt->load()) {
+            thread::sleep(100);
+            if ($this->beat > time::duration::zero() && $beaten->elapsed() >= $this->beat) {
+                $this->pulse($kernel);
+                $beaten = time::instant::now();
+            }
+        }
+    }
+
+    internal function loopRecheck(nexus::Kernel $kernel) : void
     {
         time::instant $checked = time::instant::now();
-        time::instant $beaten = time::instant::now();
-        $this->pulse($kernel);
         while (!$this->halt->load()) {
             thread::sleep(100);
             if ($this->every > time::duration::zero() && $checked->elapsed() >= $this->every) {
                 $this->recheck($kernel);
                 $checked = time::instant::now();
-            }
-            if ($this->beat > time::duration::zero() && $beaten->elapsed() >= $this->beat) {
-                $this->pulse($kernel);
-                $beaten = time::instant::now();
             }
         }
     }

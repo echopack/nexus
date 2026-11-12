@@ -192,7 +192,6 @@ public class Kernel
             $req->id = $req->header('X-Request-Id') ?? '';
         }
         $scope = $this->services->child();
-        $scope->put<Request>($req);
         $log = $this->log->with(['req' => $req->id]);
         $scope->put<Logger>($log);
         $payload = Payload($req, $scope, $this->mode, $log);
@@ -203,6 +202,8 @@ public class Kernel
         $payload->route = $this->router->find($req->method, $req->path, $params, $payload->allow);
         $payload->request->params = mv $params;
         $payload->action = $payload->route?->action ?? '';
+        // after routing, so a factory that takes Request sees the captured path params
+        $scope->put<Request>($payload->request);
 
         Kernel $self = $this;
         array<Middleware> $links = $this->global;
@@ -218,9 +219,7 @@ public class Kernel
         $res = $next->run($payload);
         $res->header('X-Request-Id', $req->id);
         if ($req->method == Method::head) {
-            $res->body = '';
-            $res->stream = null;
-            $res->events = null;
+            $res->asHead();
         }
         $this->served->add(1);
 

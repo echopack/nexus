@@ -86,8 +86,12 @@ test request_and_redirect_speak_url
 {
     $req = Request(.get, '/v1/posts?page=2');
     $req->headers->set('Host', 'blog.example.com:8080');
-    $req->headers->set('X-Forwarded-Proto', 'https');
+    $req->scheme = 'https';
     expect($req->url()->text())->is('https://blog.example.com:8080/v1/posts?page=2');
+    $spoof = Request(.get, '/v1/posts');
+    $spoof->headers->set('Host', 'blog.example.com');
+    $spoof->headers->set('X-Forwarded-Proto', 'https');
+    expect($spoof->origin())->is('http://blog.example.com');
     $odd = Request(.get, '/x');
     $odd->headers->set('Host', 'bad host');
     expect($odd->url()->text())->is('http://localhost/x');

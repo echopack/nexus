@@ -74,6 +74,10 @@ test form_fields_parse_text
 {
     $f = Fields(pairs: Query(parse: 'page=3&on=on&tag=x&tag=y&email=a%40b.ch&day=2026-10-28'));
     expect($f->uint32('page', required: true))->some(3);
+    $wide = Fields(pairs: Query(parse: 'n=18446744073709551615'));
+    expect($wide->uint64('n', required: true))->some(18446744073709551615);
+    $neg = Fields(pairs: Query(parse: 'n=-1'));
+    expect($neg->uint64('n', required: true))->none();
     expect($f->bool('on', required: false))->some(true);
     array<string> $tags = expect($f->strings('tag', required: false))->some();
     expect($tags)->size(2);

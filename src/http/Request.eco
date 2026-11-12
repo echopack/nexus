@@ -24,6 +24,12 @@ public struct Request
     public string $id = '';
 
     /**
+     * `http` or `https`. The transport sets this after the trusted-proxy check; a client cannot
+     * flip it with `X-Forwarded-Proto` on its own.
+     */
+    public string $scheme = 'http';
+
+    /**
      * A request for `$target` (path plus optional `?query`).
      */
     public constructor(Method $method, const string& $target)
@@ -44,6 +50,7 @@ public struct Request
         $this->peer = '';
         $this->params = map<string, string>();
         $this->id = '';
+        $this->scheme = 'http';
     }
 
     /**
@@ -90,21 +97,15 @@ public struct Request
     }
 
     /**
-     * Where the client reached the app, `https://blog.example.com`: the scheme from
-     * `X-Forwarded-Proto` (a proxy that ends TLS sets it), else http, and the `Host` header. For
-     * links in answers to the same client; an app behind several names configures its public origin
-     * instead.
+     * Where the client reached the app, `https://blog.example.com`: `$scheme` and the `Host`
+     * header. For links in answers to the same client; an app behind several names configures its
+     * public origin instead.
      */
     public const function origin() : string
     {
-        string $scheme = 'http';
-        string $forwarded = str::lower(str::trim($this->headers->get('X-Forwarded-Proto') ?? ''));
-        usize $comma = $forwarded->find(',');
-        if ($comma < $forwarded->size()) {
-            $forwarded = str::trim($forwarded->sub(0, $comma));
-        }
-        if ($forwarded == 'https') {
-            $scheme = 'https';
+        string $scheme = $this->scheme;
+        if ($scheme != 'https') {
+            $scheme = 'http';
         }
         string $host = str::trim($this->headers->get('Host') ?? '');
         if ($host->empty()) {

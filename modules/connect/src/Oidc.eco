@@ -132,6 +132,12 @@ public class Oidc : Connector
         if ($found->authorize->empty() || $found->token->empty()) {
             return .error(.unavailable("{$this->named}'s discovery document names no authorization or token endpoint"));
         }
+        if (!Oidc::httpsEndpoint($found->authorize)) {
+            return .error(.unavailable("{$this->named}'s authorization endpoint must be an https URL"));
+        }
+        if (!Oidc::httpsEndpoint($found->token)) {
+            return .error(.unavailable("{$this->named}'s token endpoint must be an https URL"));
+        }
         $this->keep($found);
         return .ok($found);
     }
@@ -146,5 +152,13 @@ public class Oidc : Connector
     {
         thread::locked<Endpoints?> $held = $this->endpoints->lock();
         $held->value = $found;
+    }
+
+    internal static function httpsEndpoint(const string& $raw) : bool
+    {
+        nexus::Url $url = guard nexus::Url::parse($raw) else {
+            return false;
+        };
+        return $url->scheme == 'https' && !$url->host->empty();
     }
 }

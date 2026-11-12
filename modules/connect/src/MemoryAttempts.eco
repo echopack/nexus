@@ -46,7 +46,7 @@ public class MemoryAttempts : AttemptStore
     public function settle(const Attempt& $a) : status<nexus::Problem>
     {
         thread::locked<map<string, Attempt>> $held = $this->attempts->lock();
-        if ($held->value->has($a->id)) {
+        if ($held->value->has($a->id) && !$held->value->at($a->id)->settled()) {
             $held->value[$a->id] = $a;
         }
         return .ok;

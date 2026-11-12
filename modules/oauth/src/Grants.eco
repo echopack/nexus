@@ -193,6 +193,22 @@ public class Grants
     }
 
     /**
+     * Ends every grant of `$subject` (a password change, sign-out everywhere). One `Ending::subject`
+     * closes realtime sockets opened with those access tokens.
+     */
+    public function dropAll(const string& $subject) : status<nexus::Problem>
+    {
+        array<Grant> $all = try $this->store->grants($subject);
+        foreach ($all as const &$g) {
+            try $this->store->drop($g->id);
+        }
+        if (!$all->empty()) {
+            $this->endings->ended(nexus::auth::Ending::subject(OAuthGuard::NAME, $subject));
+        }
+        return .ok;
+    }
+
+    /**
      * Whether `$subject` already allowed client `$client` the scopes `$r` asks for on its
      * resource, so a consent page may skip the question.
      */

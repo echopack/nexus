@@ -253,18 +253,7 @@ public class Check
      */
     public function uuid(const string& $value) : void
     {
-        bool $ok = $value->size() == 36;
-        usize $i = 0;
-        while ($ok && $i < 36) {
-            uint8 $b = $value->byte($i);
-            if ($i == 8 || $i == 13 || $i == 18 || $i == 23) {
-                $ok = $b == 45;
-            } else {
-                $ok = Check::hex($b);
-            }
-            $i = $i + 1;
-        }
-        if (!$ok) {
+        if (!Constraint::isUuid($value)) {
             $this->rule('uuid');
         }
     }
@@ -687,87 +676,7 @@ public class Check
      */
     public static function english(const string& $code, const string& $kind) : string
     {
-        if ($code == 'required') {
-            return 'The {label} field is required.';
-        }
-        if ($code == 'type') {
-            map<string, string> $types = [
-                'string' => 'The {label} field must be text.',
-                'integer' => 'The {label} field must be a whole number.',
-                'number' => 'The {label} field must be a number.',
-                'boolean' => 'The {label} field must be true or false.',
-                'list' => 'The {label} field must be a list.',
-                'object' => 'The {label} field must be an object.',
-                'date' => 'The {label} field must be a date like 2026-10-28.',
-                'timestamp' => 'The {label} field must be a date and time like 2026-10-28T09:30:00Z.',
-            ];
-            return Check::lookup($types, $kind, 'The {label} field has the wrong type.');
-        }
-        if ($code == 'range') {
-            return 'The {label} field is out of range.';
-        }
-        if ($code == 'min' || $code == 'max' || $code == 'between' || $code == 'size') {
-            return Check::measured($code, $kind);
-        }
-        map<string, string> $rules = [
-            'notBlank' => 'The {label} field must not be blank.',
-            'email' => 'The {label} field must be a valid email address.',
-            'url' => 'The {label} field must be a valid URL.',
-            'uuid' => 'The {label} field must be a valid UUID.',
-            'alpha' => 'The {label} field must only contain letters.',
-            'alphaNum' => 'The {label} field must only contain letters and numbers.',
-            'alphaDash' => 'The {label} field must only contain letters, numbers, dashes and underscores.',
-            'ascii' => 'The {label} field must only contain ASCII characters.',
-            'digits' => 'The {label} field must only contain digits.',
-            'startsWith' => 'The {label} field must start with one of: {values}.',
-            'endsWith' => 'The {label} field must end with one of: {values}.',
-            'oneOf' => 'The {label} field must be one of: {values}.',
-            'noneOf' => 'The {label} field must not be one of: {values}.',
-            'multipleOf' => 'The {label} field must be a multiple of {value}.',
-            'gt' => 'The {label} field must be greater than {value}.',
-            'gte' => 'The {label} field must be greater than or equal to {value}.',
-            'lt' => 'The {label} field must be less than {value}.',
-            'lte' => 'The {label} field must be less than or equal to {value}.',
-            'accepted' => 'The {label} field must be accepted.',
-            'declined' => 'The {label} field must be declined.',
-            'after' => 'The {label} field must be a date after {date}.',
-            'before' => 'The {label} field must be a date before {date}.',
-            'afterOrEqual' => 'The {label} field must be a date after or equal to {date}.',
-            'beforeOrEqual' => 'The {label} field must be a date before or equal to {date}.',
-            'distinct' => 'The {label} field has a duplicate value.',
-            'confirmed' => 'The {label} field confirmation does not match.',
-            'same' => 'The {label} field must match {other}.',
-            'different' => 'The {label} field must be different from {other}.',
-            'requiredWith' => 'The {label} field is required when {other} is present.',
-            'requiredWithout' => 'The {label} field is required when {other} is not present.',
-        ];
-        return Check::lookup($rules, $code, 'The {label} field is invalid.');
-    }
-
-    internal static function measured(const string& $code, const string& $kind) : string
-    {
-        if ($kind == 'string') {
-            map<string, string> $chars = [
-                'min' => 'The {label} field must be at least {min} characters.',
-                'max' => 'The {label} field must not be longer than {max} characters.',
-                'between' => 'The {label} field must be between {min} and {max} characters.',
-            ];
-            return Check::lookup($chars, $code, 'The {label} field must be {size} characters.');
-        }
-        if ($kind == 'list') {
-            map<string, string> $items = [
-                'min' => 'The {label} field must have at least {min} items.',
-                'max' => 'The {label} field must not have more than {max} items.',
-                'between' => 'The {label} field must have between {min} and {max} items.',
-            ];
-            return Check::lookup($items, $code, 'The {label} field must contain {size} items.');
-        }
-        map<string, string> $values = [
-            'min' => 'The {label} field must be at least {min}.',
-            'max' => 'The {label} field must not be greater than {max}.',
-            'between' => 'The {label} field must be between {min} and {max}.',
-        ];
-        return Check::lookup($values, $code, 'The {label} field must be {size}.');
+        return CheckMessages::english($code, $kind);
     }
 
     // inside -----------------------------------------------------------------
@@ -857,19 +766,6 @@ public class Check
             return $less;
         }
         return $less || $equal;
-    }
-
-    internal static function lookup(const map<string, string>& $table, const string& $key, const string& $otherwise) : string
-    {
-        if ($table->has($key)) {
-            return $table->get($key);
-        }
-        return $otherwise;
-    }
-
-    internal static function hex(uint8 $b) : bool
-    {
-        return ($b >= 48 && $b <= 57) || ($b >= 65 && $b <= 70) || ($b >= 97 && $b <= 102);
     }
 
     /**

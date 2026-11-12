@@ -120,15 +120,15 @@ public class Cache
     {
         nexus::trace::Timed $m = $this->mark('cache put', $key);
         if ($life->lapsed()) {
-            return $this->store->forget($key);
+            return Cache::timed($m, $this->store->forget($key));
         }
-        return $this->store->put($key, $value, $life);
+        return Cache::timed($m, $this->store->put($key, $value, $life));
     }
 
     public function forget(const string& $key) : status<CacheError>
     {
         nexus::trace::Timed $m = $this->mark('cache forget', $key);
-        return $this->store->forget($key);
+        return Cache::timed($m, $this->store->forget($key));
     }
 
     /**
@@ -137,7 +137,16 @@ public class Cache
     public function flush() : status<CacheError>
     {
         nexus::trace::Timed $m = $this->mark('cache flush', '');
-        return $this->store->flush();
+        return Cache::timed($m, $this->store->flush());
+    }
+
+    // marks `$m` failed when `$done` did, so the trace span shows it
+    private static function timed(nexus::trace::Timed& $m, status<CacheError> $done) : status<CacheError>
+    {
+        if ($done->failed()) {
+            $m->fail();
+        }
+        return $done;
     }
 
     // a failed read is a miss

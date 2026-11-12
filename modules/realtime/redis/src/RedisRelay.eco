@@ -8,8 +8,9 @@ use std::time;
  * it through a pool, and every server listens on it with a subscriber of its own and hands each
  * note (a broadcast, a whisper, an ended credential, a presence change) to its hub. A publish
  * also applies here at once, so a listener blip does not drop this process's own notes; the
- * listener skips notes this node stamped. A listener that loses the server connects again, waiting a
- * little longer each time up to five seconds; what was published meanwhile is lost to it.
+ * listener skips notes this node stamped. A publish applies here first, then fans out, so a Redis
+ * blip still ends this process's own sockets. A listener that loses the server connects again,
+ * waiting a little longer each time up to five seconds; what was published meanwhile is lost to it.
  */
 #[atomic]
 public class RedisRelay : nexus::realtime::Relay
@@ -42,14 +43,14 @@ public class RedisRelay : nexus::realtime::Relay
 
     public function publish(const nexus::realtime::Note& $n) : status<nexus::realtime::RealtimeError>
     {
-        guard $this->pool->publish($this->channel, $n->encode($this->node)) else ($err) {
-            return .error(.relay("{$err}"));
-        };
         nexus::realtime::Hub? $here = $this->hub;
         if ($here != null) {
             nexus::realtime::Hub $h = guard $here;
             $h->hear($n);
         }
+        guard $this->pool->publish($this->channel, $n->encode($this->node)) else ($err) {
+            return .error(.relay("{$err}"));
+        };
         return .ok;
     }
 
