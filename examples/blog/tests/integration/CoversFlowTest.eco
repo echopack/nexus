@@ -1,0 +1,150 @@
+/**
+ * Posts' cover images end to end on a real database, with the covers kept in memory: uploads
+ * through the API and the rules they pass, showing one with ranges and a client's current copy,
+ * uploads straight to the store through a link and their confirmation, and covers going away with
+ * their post.
+ */
+
+use ecotest::expect;
+use nexus::testing::FormData;
+use Blog::Disks::CoverDisk;
+
+internal function png(const string& $rest) : string
+{
+    string $b = '';
+    $b->push(137);
+    $b->append("PNG\r\n\u{1a}\n");
+    $b->append($rest);
+    return $b;
+}
+
+internal function cover(const string& $bytes, const string& $type) : FormData
+{
+    return FormData()->file('image', 'cover.png', $type, $bytes);
+}
+
+internal function kept(World $world) : usize
+{
+    CoverDisk $disk = $world->app->kernel->services->get<CoverDisk>();
+    array<nexus::files::Stat> $all = guard $disk->list('') else {
+        return 0;
+    };
+    return $all->count();
+}
+
+#[group: "integration"]
+test a_cover_is_uploaded_shown_replaced_and_deleted
+{
+    $world = World();
+    $admin = $world->admin();
+    $bob = $world->author('Bob');
+    $id = $admin->post('/v1/posts', json: newPost('Covered'))->status(201)->capture('$.data.id');
+
+    ecotest::step('a post without a cover has none to show');
+    $world->api->get("/v1/posts/{$id}/cover")->problem(404)->has('a cover');
+    $world->api->get("/v1/posts/{$id}")->status(200)->lacks('cover_url');
+
+    ecotest::step('only its author or an admin may give it one');
+    $bob->put("/v1/posts/{$id}/cover", cover(png('one'), 'image/png')->body())->problem(403);
+    $world->api->put("/v1/posts/{$id}/cover", cover(png('one'), 'image/png')->body())->problem(401);
+
+    ecotest::step('what is no PNG, JPEG or WebP by its bytes is refused, whatever it says it is');
+    $admin->put("/v1/posts/{$id}/cover", cover('GIF89a......', 'image/png')->body())
+        ->problem(422)
+        ->json('$.errors[0].field', 'image')
+        ->json('$.errors[0].code', 'types');
+    $admin->put("/v1/posts/{$id}/cover", cover('<html><script>alert(1)</script></html>', 'image/png')->body())
+        ->problem(422)
+        ->json('$.errors[0].code', 'types');
+    $admin->put("/v1/posts/{$id}/cover", FormData()->field('image', 'not a file')->body())
+        ->problem(422)
+        ->json('$.errors[0].message', 'The image field must be a file.');
+    $admin->put("/v1/posts/{$id}/cover", json: '{"image":"x"}')->problem(422);
+    string $big = png(str::repeat('x', 2097152));
+    $admin->put("/v1/posts/{$id}/cover", cover($big, 'image/png')->body())
+        ->problem(422)
+        ->json('$.errors[0].code', 'maxBytes')
+        ->json('$.errors[0].message', 'The image file must not be larger than 2 MB.');
+    expect(kept($world))->is(0);
+
+    ecotest::step('a PNG becomes the cover, linked from the post');
+    $admin->put("/v1/posts/{$id}/cover", cover(png('first cover'), 'image/png')->body())
+        ->status(200)
+        ->json('$.data.cover_url', "/v1/posts/{$id}/cover");
+    expect(kept($world))->is(1);
+
+    ecotest::step('anyone sees it, in parts, and a current copy is not sent again');
+    $world->api->get("/v1/posts/{$id}/cover")
+        ->status(200)
+        ->body(png('first cover'))
+        ->type('image/png')
+        ->header('Content-Disposition', "inline; filename=\"post-{$id}-cover.png\"")
+        ->header('X-Content-Type-Options', 'nosniff');
+    $world->api->with('Range', 'bytes=1-3')->get("/v1/posts/{$id}/cover")->status(206)->body('PNG');
+    $world->api->with('Range', 'bytes=999-')->get("/v1/posts/{$id}/cover")->status(416);
+    array<nexus::files::Stat> $files = expect($world->app->kernel->services->get<CoverDisk>()->list("posts/{$id}/"))->ok();
+    $world->api->with('If-None-Match', $files[0]->etag)->get("/v1/posts/{$id}/cover")->status(304)->body('');
+
+    ecotest::step('a new cover replaces the old one, which is deleted');
+    $admin->put("/v1/posts/{$id}/cover", cover(png('second cover'), 'image/png')->body())->status(200);
+    $world->api->get("/v1/posts/{$id}/cover")->status(200)->body(png('second cover'));
+    expect(kept($world))->is(1);
+
+    ecotest::step('taking it off deletes it');
+    $admin->delete("/v1/posts/{$id}/cover")->status(200)->lacks('cover_url');
+    $world->api->get("/v1/posts/{$id}/cover")->problem(404);
+    expect(kept($world))->is(0);
+
+    ecotest::step('a post that goes takes its cover with it');
+    $admin->put("/v1/posts/{$id}/cover", cover(png('last'), 'image/png')->body())->status(200);
+    expect(kept($world))->is(1);
+    $admin->delete("/v1/posts/{$id}")->status(204);
+    expect(kept($world))->is(0);
+}
+
+#[group: "integration"]
+test a_cover_goes_straight_to_the_store_and_is_checked_after
+{
+    $world = World();
+    $admin = $world->admin();
+    $id = $admin->post('/v1/posts', json: newPost('Linked'))->status(201)->capture('$.data.id');
+    $other = $admin->post('/v1/posts', json: newPost('Other'))->status(201)->capture('$.data.id');
+
+    ecotest::step('the author asks for a link to upload a PNG to');
+    $link = $admin->post("/v1/posts/{$id}/cover/upload-url", json: '{"type":"image/png"}')
+        ->status(201)
+        ->json('$.method', 'PUT')
+        ->json('$.headers.Content-Type', 'image/png');
+    string $key = $link->capture('$.key');
+    string $url = $link->capture('$.url');
+    expect($key->starts("posts/{$id}/pending/cover-"))->yes(says: 'the key is pending under the post');
+    $admin->post("/v1/posts/{$id}/cover/upload-url", json: '{"type":"image/svg+xml"}')->problem(422);
+
+    ecotest::step('the client uploads to the link without a session; the link holds its type');
+    $world->bare->put($url, body: png('direct'), type: 'image/jpeg')->status(415);
+    $world->bare->put($url, body: png('direct'), type: 'image/png')->status(204);
+    $world->api->get("/v1/posts/{$id}")->status(200)->lacks('cover_url');
+
+    ecotest::step('a key of another post, or one nothing was uploaded to, is refused');
+    $admin->post("/v1/posts/{$other}/cover/confirm", json: json::object(['key' => $key]))->problem(422);
+    $admin->post("/v1/posts/{$id}/cover/confirm", json: '{"key":"posts/1/pending/none.png"}')->problem(422);
+
+    ecotest::step('confirming makes it the cover, moved out of pending');
+    $admin->post("/v1/posts/{$id}/cover/confirm", json: json::object(['key' => $key]))
+        ->status(200)
+        ->json('$.data.cover_url', "/v1/posts/{$id}/cover");
+    $world->api->get("/v1/posts/{$id}/cover")->status(200)->body(png('direct'));
+    CoverDisk $disk = $world->app->kernel->services->get<CoverDisk>();
+    expect($disk->exists($key))->ok(false);
+    expect(kept($world))->is(1);
+
+    ecotest::step('an upload that is no image by its bytes is refused and deleted');
+    string $bad = $admin->post("/v1/posts/{$id}/cover/upload-url", json: '{"type":"image/jpeg"}')->status(201)->capture('$.key');
+    string $badUrl = expect($disk->uploadUrl($bad, expires: .mins(5), type: 'image/jpeg', maxBytes: 2097152))->ok()->url->text();
+    $world->bare->put($badUrl, body: '<html>not an image</html>', type: 'image/jpeg')->status(204);
+    $admin->post("/v1/posts/{$id}/cover/confirm", json: json::object(['key' => $bad]))
+        ->problem(422)
+        ->has('no PNG, JPEG or WebP image');
+    expect($disk->exists($bad))->ok(false);
+    $world->api->get("/v1/posts/{$id}/cover")->status(200)->body(png('direct'));
+}

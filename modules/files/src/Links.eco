@@ -1,0 +1,112 @@
+namespace nexus::files;
+
+use std::time;
+
+/**
+ * What a link nexus-files serves itself says, signed: HMAC-SHA256 under `NEXUS_FILES_KEY` over
+ * the method, the disk, the key, the expiry and, for a GET, how the file is answered (name,
+ * inline), for a PUT what may be sent (type, size). Changing any of them breaks the signature.
+ */
+#[atomic]
+public class Links
+{
+    public const string $route;
+    public const time::duration $expires;
+    public calendar::Clock $clock;
+    private string $secret;
+    private nexus::Router $router;
+
+    public constructor(const string& $secret, const string& $route, time::duration $expires, nexus::Router $router, calendar::Clock $clock)
+    {
+        $this->secret = $secret;
+        $this->route = $route;
+        $this->expires = $expires;
+        $this->router = $router;
+        $this->clock = $clock;
+    }
+
+    /**
+     * Whether links can be signed: a key of at least 32 characters.
+     */
+    public const function signing() : bool
+    {
+        return $this->secret->size() >= 32;
+    }
+
+    /**
+     * A link to GET `$key` of disk `$disk` until `$until`.
+     */
+    public const function read(const string& $disk, const string& $key, time::timestamp $until, const string& $name, bool $inline) : nexus::Url
+    {
+        int64 $at = $until->unix_secs();
+        string $sig = $this->sign('GET', $disk, $key, $at, '', 0, $name, $inline);
+        nexus::Url $u = $this->base($disk, $key)->with('expires', "{$at}");
+        if (!$name->empty()) {
+            $u = $u->with('name', $name);
+        }
+        if ($inline) {
+            $u = $u->with('inline', '1');
+        }
+        return $this->published($u->with('sig', $sig));
+    }
+
+    /**
+     * A link to PUT `$key` of disk `$disk` until `$until`, as `$type` (empty: any) of at most
+     * `$maxBytes` (0: as much as a request may carry).
+     */
+    public const function write(const string& $disk, const string& $key, time::timestamp $until, const string& $type, uint64 $maxBytes) : nexus::Url
+    {
+        int64 $at = $until->unix_secs();
+        string $sig = $this->sign('PUT', $disk, $key, $at, $type, $maxBytes, '', false);
+        nexus::Url $u = $this->base($disk, $key)->with('expires', "{$at}");
+        if (!$type->empty()) {
+            $u = $u->with('type', $type);
+        }
+        if ($maxBytes > 0) {
+            $u = $u->with('max', "{$maxBytes}");
+        }
+        return $this->published($u->with('sig', $sig));
+    }
+
+    /**
+     * Whether `$sig` is the signature of what the link says.
+     */
+    public const function holds(const string& $sig, const string& $method, const string& $disk, const string& $key, int64 $expires, const string& $type, uint64 $maxBytes, const string& $name, bool $inline) : bool
+    {
+        if (!$this->signing()) {
+            return false;
+        }
+        return crypto::equal($this->sign($method, $disk, $key, $expires, $type, $maxBytes, $name, $inline), $sig);
+    }
+
+    // inside -----------------------------------------------------------------
+
+    private const function sign(const string& $method, const string& $disk, const string& $key, int64 $expires, const string& $type, uint64 $maxBytes, const string& $name, bool $inline) : string
+    {
+        string $shown = '0';
+        if ($inline) {
+            $shown = '1';
+        }
+        string $text = "nexus-files\n{$method}\n{$disk}\n{$key}\n{$expires}\n{$type}\n{$maxBytes}\n{$name}\n{$shown}";
+        return crypto::hex(crypto::hmacSha256($this->secret, $text));
+    }
+
+    private const function base(const string& $disk, const string& $key) : nexus::Url
+    {
+        string $d = nexus::Percent::encode($disk);
+        string $k = nexus::Percent::path($key);
+        nexus::Url $u = guard nexus::Url::parse("{$this->route}/{$d}/{$k}") else ($e) {
+            die("nexus-files: the link to {$disk}/{$key} is no URL: {$e->message()}");
+        };
+        return $u;
+    }
+
+    // on the public origin when the app has one (NEXUS_APP_URL), else a path on the app's own
+    private const function published(const nexus::Url& $u) : nexus::Url
+    {
+        nexus::Url $origin = guard $this->router->origin() else {
+            return $u;
+        };
+        return $u->on($origin);
+    }
+}

@@ -13,11 +13,16 @@ opensession() {
     printf '%s %s' "$(printf '%s' "${s}" | field id)" "$(printf '%s' "${s}" | field secret)"
 }
 
-# the Authorization header of a request signed with session $1: method, target, time, body
+# the Authorization header of a request signed with session $1: method, target, time, body (or,
+# when $5 names a file, the bytes of that file)
 authz() {
-    local sid="${1%% *}" secret="${1#* }" method="$2" target="$3" body="$4" ts digest sig
+    local sid="${1%% *}" secret="${1#* }" method="$2" target="$3" body="$4" file="${5:-}" ts digest sig
     ts="$(date +%s)"
-    digest="$(printf '%s' "${body}" | openssl dgst -sha256 -hex | awk '{print $NF}')"
+    if [ -n "${file}" ]; then
+        digest="$(openssl dgst -sha256 -hex <"${file}" | awk '{print $NF}')"
+    else
+        digest="$(printf '%s' "${body}" | openssl dgst -sha256 -hex | awk '{print $NF}')"
+    fi
     sig="$(printf '%s\n%s\n%s\n%s' "${method}" "${target}" "${ts}" "${digest}" | openssl dgst -sha256 -hmac "${secret}" -hex | awk '{print $NF}')"
     printf 'Authorization: Nexus-Sig id=%s,ts=%s,sig=%s' "${sid}" "${ts}" "${sig}"
 }
@@ -37,3 +42,11 @@ as() {
     curl "${args[@]}" "$@" "${base}${target}"
 }
 scode() { as "$@" -o /dev/null -w '%{http_code}'; }
+
+# curl signed with session $1: method $2, target $3, the body read from file $4 and sent as content
+# type $5 (a multipart form, an image), any more curl arguments after
+asfile() {
+    local sess="$1" method="$2" target="$3" file="$4" type="$5"
+    shift 5
+    curl -s -X "${method}" -H "$(authz "${sess}" "${method}" "${target}" '' "${file}")" -H "Content-Type: ${type}" --data-binary "@${file}" "$@" "${base}${target}"
+}

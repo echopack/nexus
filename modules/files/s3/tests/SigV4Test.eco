@@ -1,0 +1,100 @@
+/**
+ * Signature Version 4 against the examples of the AWS documentation, and the pieces around it.
+ */
+
+use nexus::files::s3::{SigV4, SignedHeader, Xml, Bucket, S3Config};
+use ecotest::expect;
+
+internal function signer() : SigV4
+{
+    return SigV4('AKIAIOSFODNN7EXAMPLE', 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', 'us-east-1');
+}
+
+internal function may24() : std::time::timestamp
+{
+    return std::time::timestamp::from_unix_secs(1369353600);
+}
+
+internal const string NOTHING = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
+internal function awsHeaders(const string& $payload) : array<SignedHeader>
+{
+    array<SignedHeader> $h = [];
+    $h[] = SignedHeader('x-amz-date', '20130524T000000Z');
+    $h[] = SignedHeader('x-amz-content-sha256', $payload);
+    $h[] = SignedHeader('host', 'examplebucket.s3.amazonaws.com');
+    return $h;
+}
+
+test the_get_object_example_signs_alike
+{
+    expect(SigV4::stamp(may24()))->is('20130524T000000Z');
+    array<SignedHeader> $h = awsHeaders(NOTHING);
+    $h[] = SignedHeader('range', 'bytes=0-9');
+    expect(signer()->authorization('GET', '/test.txt', '', $h, NOTHING, may24()))
+        ->is('AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41');
+}
+
+test the_put_object_example_signs_alike
+{
+    string $payload = crypto::hex(crypto::sha256('Welcome to Amazon S3.'));
+    array<SignedHeader> $h = awsHeaders($payload);
+    $h[] = SignedHeader('x-amz-storage-class', 'REDUCED_REDUNDANCY');
+    $h[] = SignedHeader('date', 'Fri, 24 May 2013 00:00:00 GMT');
+    string $uri = nexus::Percent::path('/test$file.text');
+    expect($uri)->is('/test%24file.text');
+    expect(signer()->authorization('PUT', $uri, '', $h, $payload, may24())->ends('Signature=98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd'))
+        ->yes(says: 'the PUT example signature');
+}
+
+test the_list_example_signs_its_canonical_query
+{
+    map<string, string> $q = ['prefix' => 'J', 'max-keys' => '2'];
+    string $query = SigV4::canonicalQuery($q);
+    expect($query)->is('max-keys=2&prefix=J');
+    expect(signer()->authorization('GET', '/', $query, awsHeaders(NOTHING), NOTHING, may24())->ends('Signature=34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7'))
+        ->yes(says: 'the list example signature');
+    expect(SigV4::canonicalQuery(['a b' => 'x/y', 'A' => '1']))->is('A=1&a%20b=x%2Fy');
+}
+
+test the_presigned_url_example_signs_alike
+{
+    array<SignedHeader> $h = [SignedHeader('host', 'examplebucket.s3.amazonaws.com')];
+    map<string, string> $none = [];
+    string $query = signer()->presign('GET', '/test.txt', $none, $h, .hours(24), may24(), '');
+    expect($query)->is('X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404');
+}
+
+test xml_reads_a_listing
+{
+    string $body = '<?xml version="1.0"?><ListBucketResult><IsTruncated>true</IsTruncated><Contents><Key>a/b &amp; c.txt</Key><Size>12</Size></Contents><Contents><Key>a/d/</Key><Size>0</Size></Contents><NextContinuationToken>tok/en=</NextContinuationToken></ListBucketResult>';
+    array<string> $contents = Xml::blocks($body, 'Contents');
+    expect($contents)->size(2);
+    expect(Xml::value($contents[0], 'Key'))->some('a/b & c.txt');
+    expect(Xml::value($body, 'NextContinuationToken'))->some('tok/en=');
+    expect(Xml::value($body, 'Missing'))->none();
+    expect(Xml::decode('&lt;&amp;lt;&nope;'))->is('<&lt;&nope;');
+}
+
+test a_disk_url_names_its_bucket_and_prefix
+{
+    S3Config $c = S3Config($accessKey: 'AK', $secretKey: 'SK', $region: 'eu-central-1');
+    Bucket $aws = expect(Bucket::of('s3://media/blog/covers/', $c))->ok();
+    expect($aws->describe())->is('s3://media/blog/covers');
+    expect($aws->hostFor())->is('media.s3.eu-central-1.amazonaws.com');
+    expect($aws->object('posts/1 a.png'))->is('blog/covers/posts/1 a.png');
+    expect($aws->path('blog/covers/posts/1 a.png'))->is('/blog/covers/posts/1%20a.png');
+    expect($aws->key('blog/covers/x.png'))->some('x.png');
+    expect($aws->key('blog/other/x.png'))->none();
+
+    S3Config $minio = S3Config($accessKey: 'AK', $secretKey: 'SK', $endpoint: 'http://127.0.0.1:9000/', $pathStyle: true);
+    Bucket $m = expect(Bucket::of('s3://media', $minio))->ok();
+    expect($m->hostFor())->is('127.0.0.1:9000');
+    expect($m->path('x.png'))->is('/media/x.png');
+    expect($m->path(''))->is('/media');
+
+    expect(Bucket::of('s3:///x', $c))->fails();
+    expect(Bucket::of('s3://b?region=x', $c))->fails();
+    expect(Bucket::of('s3://b', S3Config()))->fails();
+    expect(Bucket::of('s3://b', S3Config($accessKey: 'AK', $secretKey: 'SK', $endpoint: 'minio:9000')))->fails();
+}

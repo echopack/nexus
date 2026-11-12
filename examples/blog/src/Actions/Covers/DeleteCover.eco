@@ -1,0 +1,28 @@
+namespace Blog::Actions::Covers;
+
+use Blog::Services::CoverService;
+use Blog::Transformers::PostTransformer;
+use Blog::Types::Caller;
+
+/**
+ * Takes the cover off a post and deletes it. Only its author or an admin may.
+ */
+#[nexus::through: ["Blog::Middleware::RequireUser"]]
+public class DeleteCover : nexus::Action
+{
+    private CoverService $covers;
+    private PostTransformer $transformer;
+
+    public constructor(CoverService $covers, PostTransformer $transformer)
+    {
+        $this->covers = $covers;
+        $this->transformer = $transformer;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id) : result<nexus::Response, nexus::Problem>
+    {
+        $me = try $payload->state<Caller>();
+        $changed = try $this->covers->remove($me->user, $id);
+        return $this->transformer->createResponse($payload, $changed);
+    }
+}

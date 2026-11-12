@@ -1,11 +1,12 @@
 namespace Blog::Transformers;
 
+use Blog::Actions::Covers::ShowCover;
 use Blog::Actions::Posts::ShowPost;
 use Blog::DB::Model::{Post, PostMapping};
 
 /**
  * A post as the API shows it: what `Post` exposes (`PostMapping`, its author when the request
- * includes `author`), and the link to itself.
+ * includes `author`), the link to itself and, when it has one, to its cover image.
  */
 #[atomic]
 public class PostTransformer : nexus::rest::Transformer<Post>, PostMapping
@@ -20,5 +21,8 @@ public class PostTransformer : nexus::rest::Transformer<Post>, PostMapping
     public function transform(const Post& $p, nexus::rest::Item& $item, const nexus::rest::TransformerContext& $ctx) : void
     {
         $item->text('url', $this->router->url<ShowPost>(['id' => "{$p->id}"])->text());
+        if ($p->cover != null) {
+            $item->text('cover_url', $this->router->url<ShowCover>(['id' => "{$p->id}"])->text());
+        }
     }
 }

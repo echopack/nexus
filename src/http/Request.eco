@@ -88,12 +88,7 @@ public struct Request
      */
     public const function contentType() : string
     {
-        string $raw = $this->headers->get('Content-Type') ?? '';
-        usize $semi = $raw->find(';');
-        if ($semi < $raw->size()) {
-            return str::lower(str::trim($raw->sub(0, $semi)));
-        }
-        return str::lower(str::trim($raw));
+        return Download::mediaType($this->headers->get('Content-Type') ?? '');
     }
 
     /**

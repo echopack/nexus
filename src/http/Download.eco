@@ -1,0 +1,325 @@
+namespace nexus;
+
+use std::time;
+
+/**
+ * A file sent to a client: what it is (type, size, version) and how a browser should treat it. Its
+ * `respond` answers a request with the whole of it (200), the part a `Range` asks for (206), a 304
+ * when the client's copy is current, or a 416, from a file on disk or bytes in memory.
+ *
+ * ```echo
+ * Download $d = Download('image/png', $stat->size, etag: $stat->etag, modified: $stat->modified);
+ * $d->name = 'cover.png';
+ * return $d->respond($payload->request, file: $path);
+ * ```
+ *
+ * Every answer says `X-Content-Type-Options: nosniff`, and every type but PDF is served under
+ * `Content-Security-Policy: sandbox`, so a stored file never runs script on the app's origin. It
+ * is shown in the browser (`inline`) only when asked for and its type is one a browser shows
+ * without running anything (common images, PDF, plain text, audio and video); anything else,
+ * SVG and HTML included, is an attachment.
+ */
+public struct Download
+{
+    public string $type;
+    public uint64 $size;
+
+    /**
+     * The version, quoted as in a header: `"5a3-18f9c0"`. Empty when unknown: then no `ETag` is
+     * sent and `If-None-Match` and `If-Range` by tag never match.
+     */
+    public string $etag = '';
+
+    /**
+     * When it last changed, for `Last-Modified` and `If-Modified-Since`.
+     */
+    public time::timestamp? $modified = null;
+
+    /**
+     * The file name a browser saves it under; empty for none.
+     */
+    public string $name = '';
+
+    /**
+     * Whether a browser may show it rather than save it, when its type allows.
+     */
+    public bool $inline = false;
+
+    public constructor(const string& $type, uint64 $size, etag: const string& $etag = '', modified: time::timestamp? $modified = null)
+    {
+        $this->type = $type;
+        $this->size = $size;
+        $this->etag = $etag;
+        $this->modified = $modified;
+    }
+
+    /**
+     * The answer to `$request` with the file at `$path`, which is `$size` bytes long.
+     */
+    public const function respond(const Request& $request, file: const string& $path) : Response
+    {
+        RangeAsk $ask = $this->ask($request);
+        Response $res = $this->head($request, $ask);
+        if ($res->status != 200 && $res->status != 206) {
+            return $res;
+        }
+        ByteRange $part = $this->slice($ask);
+        $res->file = FileBody($path, $part->from, $part->length);
+        return $res;
+    }
+
+    /**
+     * The answer to `$request` with `$bytes`, which are the whole representation: their size
+     * stands over `$size`, which may have been stated before they were read.
+     */
+    public const function respond(const Request& $request, bytes: const string& $bytes) : Response
+    {
+        Download $d = $this;
+        $d->size = $bytes->size() as uint64;
+        RangeAsk $ask = $d->ask($request);
+        Response $res = $d->head($request, $ask);
+        if ($res->status != 200 && $res->status != 206) {
+            return $res;
+        }
+        ByteRange $part = $d->slice($ask);
+        if ($part->from == 0 && $part->length == ($bytes->size() as uint64)) {
+            $res->body = $bytes;
+        } else {
+            $res->body = $bytes->sub($part->from as usize, $part->length as usize);
+        }
+        return $res;
+    }
+
+    /**
+     * The status and headers of the answer to `$request`, whose range asks `$ask`, without the
+     * body: 304, 416, 206 or 200.
+     */
+    private const function head(const Request& $request, const RangeAsk& $ask) : Response
+    {
+        Response $res = Response(200);
+        $this->validators($res);
+        if ($this->fresh($request)) {
+            $res->status = 304;
+            return $res;
+        }
+        $res->header('Content-Type', $this->type);
+        $res->header('Accept-Ranges', 'bytes');
+        $res->header('X-Content-Type-Options', 'nosniff');
+        if (Download::mediaType($this->type) != 'application/pdf') {
+            $res->header('Content-Security-Policy', 'sandbox');
+        }
+        $res->header('Content-Disposition', $this->disposition());
+        match ($ask) {
+            RangeAsk::whole => {
+            },
+            RangeAsk::part($r) => {
+                $res->status = 206;
+                $res->header('Content-Range', "bytes {$r->from}-{$r->last()}/{$this->size}");
+            },
+            RangeAsk::unsatisfiable => {
+                $res->status = 416;
+                $res->header('Content-Range', "bytes */{$this->size}");
+            },
+        }
+        return $res;
+    }
+
+    /**
+     * The `Content-Disposition` value: `inline` or `attachment`, with the file name in ASCII and,
+     * when it has more, in UTF-8 (RFC 6266).
+     */
+    public const function disposition() : string
+    {
+        return Download::disposition($this->type, name: $this->name, inline: $this->inline);
+    }
+
+    /**
+     * The `Content-Disposition` value for a file of `$type` saved as `$name`, without a download
+     * at hand: a link to a file another server answers.
+     */
+    public static function disposition(const string& $type, name: const string& $name, inline: bool $inline) : string
+    {
+        string $how = 'attachment';
+        if ($inline && Download::showable($type)) {
+            $how = 'inline';
+        }
+        if ($name->empty()) {
+            return $how;
+        }
+        string $plain = Download::ascii($name);
+        string $out = "{$how}; filename=\"{$plain}\"";
+        if ($plain != $name) {
+            string $encoded = Percent::encode($name);
+            $out->append("; filename*=UTF-8''{$encoded}");
+        }
+        return $out;
+    }
+
+    /**
+     * Whether a browser shows `$type` without running anything in it.
+     */
+    public static function showable(const string& $type) : bool
+    {
+        string $t = Download::mediaType($type);
+        if ($t == 'image/png' || $t == 'image/jpeg' || $t == 'image/gif' || $t == 'image/webp' || $t == 'image/avif') {
+            return true;
+        }
+        if ($t == 'application/pdf' || $t == 'text/plain') {
+            return true;
+        }
+        if ($t == 'video/mp4' || $t == 'video/webm' || $t == 'audio/mpeg' || $t == 'audio/ogg' || $t == 'audio/wav' || $t == 'audio/webm') {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * `$type` without parameters, lowercased: `text/plain; charset=utf-8` is `text/plain`.
+     */
+    public static function mediaType(const string& $type) : string
+    {
+        usize $semi = $type->find(';');
+        if ($semi < $type->size()) {
+            return str::lower(str::trim($type->sub(0, $semi)));
+        }
+        return str::lower(str::trim($type));
+    }
+
+    // inside -----------------------------------------------------------------
+
+    /**
+     * What the range of `$request` asks, after `If-Range`: a range of an older version is the
+     * whole current one.
+     */
+    private const function ask(const Request& $request) : RangeAsk
+    {
+        if ($request->method != Method::get && $request->method != Method::head) {
+            return .whole;
+        }
+        string $range = guard $request->header('Range') else {
+            return .whole;
+        };
+        string? $ifRange = $request->header('If-Range');
+        if ($ifRange != null) {
+            string $given = guard $ifRange;
+            string $cond = string::from(str::trim($given));
+            if ($cond->starts('"') || $cond->starts('W/')) {
+                // a weak tag never matches here: a range needs the same bytes
+                if ($this->etag->empty() || $this->etag->starts('W/') || $cond != $this->etag) {
+                    return .whole;
+                }
+            } else {
+                time::timestamp $at = guard Download::date($cond) else {
+                    return .whole;
+                };
+                time::timestamp $mine = guard $this->modified else {
+                    return .whole;
+                };
+                if ($at->unix_secs() != $mine->unix_secs()) {
+                    return .whole;
+                }
+            }
+        }
+        return ByteRange::parse($range, $this->size);
+    }
+
+    /**
+     * The bytes the body carries: the range asked for, or all of them.
+     */
+    private const function slice(const RangeAsk& $ask) : ByteRange
+    {
+        return match ($ask) {
+            RangeAsk::part($r) => $r,
+            else => ByteRange(0, $this->size),
+        };
+    }
+
+    /**
+     * Whether the client's copy is current: `If-None-Match` names this version, or, without
+     * that header, `If-Modified-Since` is no older than it.
+     */
+    private const function fresh(const Request& $request) : bool
+    {
+        if ($request->method != Method::get && $request->method != Method::head) {
+            return false;
+        }
+        string? $none = $request->header('If-None-Match');
+        if ($none != null) {
+            string $list = guard $none;
+            if ($this->etag->empty()) {
+                return false;
+            }
+            string $mine = Download::opaque($this->etag);
+            foreach (str::split($list, ',')->owned() as const &$raw) {
+                string $tag = string::from(str::trim($raw));
+                if ($tag == '*' || Download::opaque($tag) == $mine) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        string $since = guard $request->header('If-Modified-Since') else {
+            return false;
+        };
+        time::timestamp $at = guard Download::date($since) else {
+            return false;
+        };
+        time::timestamp $mine = guard $this->modified else {
+            return false;
+        };
+        return $mine->unix_secs() <= $at->unix_secs();
+    }
+
+    private const function validators(Response& $res) : void
+    {
+        if (!$this->etag->empty()) {
+            $res->header('ETag', $this->etag);
+        }
+        if ($this->modified != null) {
+            time::timestamp $at = guard $this->modified;
+            $z = calendar::Zoned($at, calendar::Zone::utc());
+            $res->header('Last-Modified', $z->format(calendar::Format::http()));
+        }
+    }
+
+    /**
+     * A tag without its weak mark, for the weak comparison `If-None-Match` uses.
+     */
+    internal static function opaque(const string& $tag) : string
+    {
+        if ($tag->starts('W/')) {
+            return $tag->sub(2, $tag->size() - 2);
+        }
+        return $tag;
+    }
+
+    /**
+     * An HTTP date, `Wed, 28 Oct 2026 08:30:00 GMT`, or null.
+     */
+    public static function date(const string& $text) : time::timestamp?
+    {
+        calendar::Zoned $z = guard calendar::Zoned::parse($text, calendar::Format::http()) else {
+            return null;
+        };
+        return $z->instant;
+    }
+
+    /**
+     * `$name` with every byte a quoted header value cannot carry plainly replaced by `_`.
+     */
+    internal static function ascii(const string& $name) : string
+    {
+        string $out = '';
+        usize $i = 0;
+        while ($i < $name->size()) {
+            uint8 $c = $name->byte($i);
+            if ($c < 32 || $c > 126 || $c == 34 || $c == 92) {
+                $out->push(95);
+            } else {
+                $out->push($c);
+            }
+            $i = $i + 1;
+        }
+        return $out;
+    }
+}

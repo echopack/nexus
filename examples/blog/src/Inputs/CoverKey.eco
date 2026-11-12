@@ -1,0 +1,11 @@
+namespace Blog::Inputs;
+
+/**
+ * A cover uploaded through a link, to make it the post's: the key the link was made for.
+ */
+#[nexus::input]
+public struct CoverKey
+{
+    #[nexus::rule: { trim: true, max: 255 }]
+    public string $key;
+}

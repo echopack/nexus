@@ -522,6 +522,85 @@ public class Check
         return calendar::SystemClock()->now();
     }
 
+    // files ------------------------------------------------------------------
+
+    public function maxBytes(const Upload& $file, int64 $max) : void
+    {
+        if (($file->size() as int64) > $max) {
+            $this->rule('maxBytes', Check::two('max', str::from($max), 'shown', Check::bytes($max)));
+        }
+    }
+
+    public function minBytes(const Upload& $file, int64 $min) : void
+    {
+        if (($file->size() as int64) < $min) {
+            $this->rule('minBytes', Check::two('min', str::from($min), 'shown', Check::bytes($min)));
+        }
+    }
+
+    /**
+     * The file is one of `$types` (`image/png`, or `image/*` for any image). A type whose bytes
+     * `Upload::sniff` knows (images, PDF, ZIP, gzip) has to be what the bytes show, so HTML sent as
+     * `image/png` is refused; any other type (`text/csv`) goes by what the client said.
+     */
+    public function types(const Upload& $file, const array<string>& $types) : void
+    {
+        string? $sniffed = $file->sniffed();
+        foreach ($types as const &$t) {
+            string $kind = $file->type;
+            if (Upload::sniffable($t)) {
+                $kind = $sniffed ?? '';
+            }
+            if ($t == $kind) {
+                return;
+            }
+            if ($t->ends('/*') && !$kind->empty() && $kind->starts($t->sub(0, $t->size() - 1))) {
+                return;
+            }
+        }
+        $this->rule('types', Check::one('values', str::join($types, ', ')));
+    }
+
+    /**
+     * The file's name ends in one of `$extensions`, written without the dot.
+     */
+    public function extensions(const Upload& $file, const array<string>& $extensions) : void
+    {
+        string $mine = $file->extension();
+        foreach ($extensions as const &$e) {
+            if (str::lower($e) == $mine) {
+                return;
+            }
+        }
+        $this->rule('extensions', Check::one('values', str::join($extensions, ', ')));
+    }
+
+    /**
+     * `$n` bytes as people read them: `512 bytes`, `2 KB`, `1.5 MB`.
+     */
+    public static function bytes(int64 $n) : string
+    {
+        if ($n < 1024) {
+            return "{$n} bytes";
+        }
+        float64 $v = ($n as float64) / 1024.0;
+        string $unit = 'KB';
+        if ($v >= 1024.0) {
+            $v = $v / 1024.0;
+            $unit = 'MB';
+        }
+        if ($v >= 1024.0) {
+            $v = $v / 1024.0;
+            $unit = 'GB';
+        }
+        float64 $whole = (($v as int64) as float64);
+        if ($v - $whole < 0.05) {
+            int64 $w = $v as int64;
+            return "{$w} {$unit}";
+        }
+        return "{$v:.1f} {$unit}";
+    }
+
     // lists ------------------------------------------------------------------
 
     public function minCount(usize $count, int64 $min) : void

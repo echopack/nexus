@@ -21,13 +21,43 @@ public function kind(const string& $reader) : string
     if ($reader == 'float64') {
         return 'number';
     }
-    if ($reader == 'strings' || $reader == 'ints') {
+    if ($reader == 'strings' || $reader == 'ints' || $reader == 'uploads') {
         return 'list';
     }
     if ($reader == 'date' || $reader == 'timestamp' || $reader == 'json') {
         return $reader;
     }
+    if ($reader == 'upload') {
+        return 'file';
+    }
     return 'integer';
+}
+
+/**
+ * The reader of one item of list reader `$reader`: `int64` for `ints`, `upload` for `uploads`,
+ * else `string`.
+ */
+public function item(const string& $reader) : string
+{
+    if ($reader == 'ints') {
+        return 'int64';
+    }
+    if ($reader == 'uploads') {
+        return 'upload';
+    }
+    return 'string';
+}
+
+/**
+ * The Echo type of one item of list reader `$reader`: `int64`, `nexus::Upload` or `string`.
+ */
+public function itemType(const string& $reader) : string
+{
+    string $item = item($reader);
+    if ($item == 'upload') {
+        return 'nexus::Upload';
+    }
+    return $item;
 }
 
 /**
@@ -102,6 +132,36 @@ public function misfit(const string& $key, const json::Value& $value, const stri
             return null;
         }
         return "'{$key}' takes a number, like '{$key}: 3'";
+    }
+    if ($key == 'maxBytes' || $key == 'minBytes') {
+        if ($vk != 'int' || decl::int($value, 'integer') < 0) {
+            return "'{$key}' takes a number of bytes, like '{$key}: 2097152'";
+        }
+        return null;
+    }
+    if ($key == 'types') {
+        $given = decl::classes($value);
+        if ($given->empty()) {
+            return "'types' takes media types, like \"types: ['image/png', 'image/jpeg']\"";
+        }
+        foreach ($given as const &$t) {
+            if (!mediaType($t)) {
+                return "'{$t}' is not a media type like 'image/png' or 'image/*'";
+            }
+        }
+        return null;
+    }
+    if ($key == 'extensions') {
+        $given = decl::classes($value);
+        if ($given->empty()) {
+            return "'extensions' takes file name endings without the dot, like \"extensions: ['png', 'jpg']\"";
+        }
+        foreach ($given as const &$e) {
+            if ($e->empty() || $e->starts('.') || $e->find('/') < $e->size()) {
+                return "'{$e}' is not an extension; write it without the dot, like 'png'";
+            }
+        }
+        return null;
     }
     if ($key == 'between') {
         $two = decl::items($value, 'items');
@@ -210,14 +270,18 @@ public function fitting(const string& $kind, const string& $shape, bool $item) :
         $out = ['accepted', 'declined'];
     } else if ($kind == 'date' || $kind == 'timestamp') {
         $out = ['after', 'before', 'afterOrEqual', 'beforeOrEqual'];
+    } else if ($kind == 'file') {
+        $out = ['maxBytes', 'minBytes', 'types', 'extensions'];
     } else if ($kind == 'list') {
         $out = ['min', 'max', 'between', 'size'];
         if ($shape == 'scalar') {
             $out[] = 'distinct';
             $out[] = 'each';
+        } else if ($shape == 'files') {
+            $out[] = 'each';
         }
     }
-    if (!$item && $kind != 'list' && $kind != 'object' && $kind != 'json') {
+    if (!$item && $kind != 'list' && $kind != 'object' && $kind != 'json' && $kind != 'file') {
         $out[] = 'confirmed';
         $out[] = 'same';
         $out[] = 'different';
@@ -230,6 +294,30 @@ public function fitting(const string& $kind, const string& $shape, bool $item) :
     return $out;
 }
 
+/**
+ * Whether `$t` reads as a media type a `types` rule can match: `type/subtype` or `type/*`, in
+ * lowercase.
+ */
+internal function mediaType(const string& $t) : bool
+{
+    usize $slash = $t->find('/');
+    if ($slash == 0 || $slash >= $t->size() || $slash + 1 == $t->size()) {
+        return false;
+    }
+    if ($t->find('/', $slash + 1) < $t->size() || $t != str::lower($t)) {
+        return false;
+    }
+    usize $i = 0;
+    while ($i < $t->size()) {
+        uint8 $c = $t->byte($i);
+        if ($c <= 32 || $c == 59 || $c == 44) {
+            return false;
+        }
+        $i = $i + 1;
+    }
+    return true;
+}
+
 internal function article(const string& $kind) : string
 {
     if ($kind == 'integer' || $kind == 'enum' || $kind == 'object') {
@@ -240,7 +328,7 @@ internal function article(const string& $kind) : string
 
 internal function exists(const string& $key) : bool
 {
-    array<string> $all = ['trim', 'lower', 'upper', 'squish', 'nullIfBlank', 'min', 'max', 'between', 'size', 'notBlank', 'email', 'url', 'uuid', 'alpha', 'alphaNum', 'alphaDash', 'ascii', 'digits', 'startsWith', 'endsWith', 'oneOf', 'noneOf', 'multipleOf', 'gt', 'gte', 'lt', 'lte', 'accepted', 'declined', 'after', 'before', 'afterOrEqual', 'beforeOrEqual', 'distinct', 'each', 'confirmed', 'same', 'different', 'requiredWith', 'requiredWithout', 'check'];
+    array<string> $all = ['maxBytes', 'minBytes', 'types', 'extensions', 'trim', 'lower', 'upper', 'squish', 'nullIfBlank', 'min', 'max', 'between', 'size', 'notBlank', 'email', 'url', 'uuid', 'alpha', 'alphaNum', 'alphaDash', 'ascii', 'digits', 'startsWith', 'endsWith', 'oneOf', 'noneOf', 'multipleOf', 'gt', 'gte', 'lt', 'lte', 'accepted', 'declined', 'after', 'before', 'afterOrEqual', 'beforeOrEqual', 'distinct', 'each', 'confirmed', 'same', 'different', 'requiredWith', 'requiredWithout', 'check'];
     foreach ($all as const &$a) {
         if ($a == $key) {
             return true;

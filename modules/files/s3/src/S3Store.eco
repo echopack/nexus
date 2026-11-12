@@ -1,0 +1,294 @@
+namespace nexus::files::s3;
+
+use nexus::files::{Store, Stat, FilesError, Presign};
+use std::time;
+
+// the sha256 of nothing, what a request without a body signs
+internal const string EMPTY_SHA = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
+/**
+ * One S3 answer, with the error S3 put in the body.
+ */
+internal struct Answer
+{
+    internal int64 $status;
+    internal string $body;
+    internal curl::Headers $headers;
+
+    internal const function ok() : bool
+    {
+        return $this->status >= 200 && $this->status < 300;
+    }
+
+    internal const function fail(const string& $key) : FilesError
+    {
+        if ($this->status == 404) {
+            return .missing($key);
+        }
+        string $code = Xml::value($this->body, 'Code') ?? 'error';
+        string $message = Xml::value($this->body, 'Message') ?? '';
+        if ($this->status == 403) {
+            return .denied("{$code} {$message}");
+        }
+        return .remote($this->status, "{$code} {$message}");
+    }
+}
+
+/**
+ * A disk's files as objects in an S3 bucket, under the disk's prefix. Uploads from a file and
+ * downloads to one go through libcurl as they are read, never whole in memory; links are presigned
+ * by the store (`signs()`), so clients fetch from and upload to the bucket itself.
+ */
+#[atomic]
+public class S3Store : Store
+{
+    public const Bucket $bucket;
+    private SigV4 $signer;
+    private string $sessionToken;
+    private int32 $timeoutMs;
+    private calendar::Clock $clock;
+
+    public constructor(Bucket $bucket, const S3Config& $config, clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->bucket = $bucket;
+        $this->signer = SigV4($config->accessKey, $config->secretKey, $config->region);
+        $this->sessionToken = $config->sessionToken;
+        $this->timeoutMs = $config->timeout->as_millis() as int32;
+        $this->clock = $clock;
+    }
+
+    public const function describe() : string
+    {
+        return $this->bucket->describe();
+    }
+
+    public function put(const string& $key, const string& $bytes, const string& $type) : status<FilesError>
+    {
+        curl::Request $r = $this->request(.put, $key, '', crypto::hex(crypto::sha256($bytes)), $type);
+        $r->body = $bytes;
+        try $this->send($r, $key);
+        return .ok;
+    }
+
+    public function putFile(const string& $key, const string& $path, const string& $type) : status<FilesError>
+    {
+        curl::Request $r = $this->request(.put, $key, '', 'UNSIGNED-PAYLOAD', $type);
+        $r->uploadFile($path);
+        try $this->send($r, $key);
+        return .ok;
+    }
+
+    public function get(const string& $key) : result<string, FilesError>
+    {
+        curl::Request $r = $this->request(.get, $key, '', EMPTY_SHA, '');
+        Answer $a = try $this->send($r, $key);
+        return .ok($a->body);
+    }
+
+    public function read(const string& $key, uint64 $from, uint64 $length) : result<string, FilesError>
+    {
+        if ($length == 0) {
+            return .ok('');
+        }
+        uint64 $last = $from + $length - 1;
+        string $range = "bytes={$from}-{$last}";
+        curl::Request $r = $this->request(.get, $key, '', EMPTY_SHA, '', range: $range);
+        // a range past the end of the object is a 416: nothing there
+        Answer $a = try $this->send($r, $key, allow: 416);
+        if ($a->status == 416) {
+            return .ok('');
+        }
+        return .ok($a->body);
+    }
+
+    public function saveTo(const string& $key, const string& $path) : status<FilesError>
+    {
+        curl::Request $r = $this->request(.get, $key, '', EMPTY_SHA, '');
+        $r->saveTo($path);
+        guard $this->send($r, $key) else ($e) {
+            // the body went to the file: the error text is there, if anything
+            std::fs::remove($path);
+            return .error($e);
+        };
+        return .ok;
+    }
+
+    public function stat(const string& $key) : result<Stat?, FilesError>
+    {
+        curl::Request $r = $this->request(.head, $key, '', EMPTY_SHA, '');
+        Answer $a = try $this->send($r, $key, allow: 404);
+        if ($a->status == 404) {
+            return .ok(null);
+        }
+        uint64 $size = str::uint($a->headers->get('content-length') ?? '0') ?? 0;
+        string $type = $a->headers->get('content-type') ?? 'application/octet-stream';
+        string $etag = $a->headers->get('etag') ?? '';
+        time::timestamp? $modified = nexus::Download::date($a->headers->get('last-modified') ?? '');
+        return .ok(Stat($key, $size, $type, $etag, $modified));
+    }
+
+    public function delete(const string& $key) : status<FilesError>
+    {
+        curl::Request $r = $this->request(.delete, $key, '', EMPTY_SHA, '');
+        try $this->send($r, $key, allow: 404);
+        return .ok;
+    }
+
+    public function list(const string& $prefix) : result<array<Stat>, FilesError>
+    {
+        array<Stat> $out = [];
+        string $token = '';
+        while (true) {
+            map<string, string> $params = ['list-type' => '2', 'prefix' => $this->bucket->object($prefix)];
+            if (!$token->empty()) {
+                $params['continuation-token'] = $token;
+            }
+            curl::Request $r = $this->request(.get, '', SigV4::canonicalQuery($params), EMPTY_SHA, '');
+            Answer $a = try $this->send($r, $prefix);
+            foreach (Xml::blocks($a->body, 'Contents') as const &$c) {
+                string $object = Xml::value($c, 'Key') ?? '';
+                if ($object->ends('/')) {
+                    continue;
+                }
+                string $k = guard $this->bucket->key($object) else {
+                    continue;
+                };
+                uint64 $size = str::uint(Xml::value($c, 'Size') ?? '0') ?? 0;
+                string $etag = Xml::value($c, 'ETag') ?? '';
+                $parsed = calendar::Zoned::parse(Xml::value($c, 'LastModified') ?? '');
+                time::timestamp? $modified = null;
+                if ($parsed->has_value()) {
+                    $modified = $parsed->unwrap()->instant;
+                }
+                $out[] = Stat($k, $size, nexus::files::Keys::type($k), $etag, $modified);
+            }
+            if ((Xml::value($a->body, 'IsTruncated') ?? 'false') != 'true') {
+                return .ok($out);
+            }
+            $token = Xml::value($a->body, 'NextContinuationToken') ?? '';
+            if ($token->empty()) {
+                return .ok($out);
+            }
+        }
+        return .ok($out);
+    }
+
+    public function copy(const string& $from, const string& $to) : status<FilesError>
+    {
+        string $source = nexus::Percent::path("{$this->bucket->name}/{$this->bucket->object($from)}");
+        curl::Request $r = $this->request(.put, $to, '', EMPTY_SHA, '', copy: $source);
+        Answer $a = try $this->send($r, $from);
+        // a copy can fail after its 200: the error is in the body
+        if ($a->body->find('<Error>') < $a->body->size()) {
+            return .error($a->fail($from));
+        }
+        return .ok;
+    }
+
+    public const function signs() : bool
+    {
+        return true;
+    }
+
+    public function presign(const Presign& $ask) : result<nexus::Url, FilesError>
+    {
+        string $method = $ask->method->verb();
+        string $object = $this->bucket->object($ask->key);
+        string $host = $this->bucket->hostFor();
+        array<SignedHeader> $headers = [SignedHeader('host', $host)];
+        map<string, string> $params = [];
+        if ($ask->method == nexus::Method::put) {
+            if (!$ask->type->empty()) {
+                $headers[] = SignedHeader('content-type', $ask->type);
+            }
+        } else {
+            if (!$ask->type->empty()) {
+                $params['response-content-type'] = $ask->type;
+            }
+            if (!$ask->disposition->empty()) {
+                $params['response-content-disposition'] = $ask->disposition;
+            }
+        }
+        string $path = $this->bucket->path($object);
+        string $query = $this->signer->presign($method, $path, mv $params, mv $headers, $ask->expires, $this->clock->now(), $this->sessionToken);
+        nexus::Url $u = guard nexus::Url::parse("{$this->bucket->scheme}://{$host}{$path}?{$query}") else ($e) {
+            return .error(.io("the link to {$ask->key} is no URL: {$e->message()}"));
+        };
+        return .ok($u);
+    }
+
+    /**
+     * Whether the bucket answers: one listing of at most one key.
+     */
+    public function check() : status<FilesError>
+    {
+        map<string, string> $params = ['list-type' => '2', 'max-keys' => '1'];
+        curl::Request $r = $this->request(.get, '', SigV4::canonicalQuery($params), EMPTY_SHA, '');
+        try $this->send($r, '');
+        return .ok;
+    }
+
+    // inside -----------------------------------------------------------------
+
+    /**
+     * A signed request for `$key` (the bucket for an empty one) with the canonical `$query`.
+     */
+    private const function request(curl::Method $method, const string& $key, const string& $query, const string& $payload, const string& $type, range: const string& $range = '', copy: const string& $copy = '') : curl::Request
+    {
+        string $object = '';
+        if (!$key->empty()) {
+            $object = $this->bucket->object($key);
+        }
+        string $host = $this->bucket->hostFor();
+        string $path = $this->bucket->path($object);
+        time::timestamp $now = $this->clock->now();
+        array<SignedHeader> $headers = [];
+        $headers[] = SignedHeader('host', $host);
+        $headers[] = SignedHeader('x-amz-content-sha256', $payload);
+        $headers[] = SignedHeader('x-amz-date', SigV4::stamp($now));
+        if (!$type->empty()) {
+            $headers[] = SignedHeader('content-type', $type);
+        }
+        if (!$range->empty()) {
+            $headers[] = SignedHeader('range', $range);
+        }
+        if (!$copy->empty()) {
+            $headers[] = SignedHeader('x-amz-copy-source', $copy);
+        }
+        if (!$this->sessionToken->empty()) {
+            $headers[] = SignedHeader('x-amz-security-token', $this->sessionToken);
+        }
+        string $auth = $this->signer->authorization($method->value(), $path, $query, $headers, $payload, $now);
+        string $url = "{$this->bucket->scheme}://{$host}{$path}";
+        if (!$query->empty()) {
+            $url = "{$url}?{$query}";
+        }
+        curl::Request $r = curl::Request($method, $url);
+        $r->header('Authorization', $auth);
+        foreach ($headers as const &$h) {
+            if ($h->name != 'host') {
+                $r->header($h->name, $h->value);
+            }
+        }
+        // a signed request goes where it was signed for, never where a redirect says
+        $r->follow(false);
+        $r->connectTimeout(5000);
+        $r->timeout($this->timeoutMs);
+        return $r;
+    }
+
+    /**
+     * S3's answer to `$r`; one that is no success is its error, unless its status is `$allow`.
+     */
+    private const function send(const curl::Request& $r, const string& $key, allow: int64 $allow = 0) : result<Answer, FilesError>
+    {
+        curl::Response $res = guard curl::send($r) else ($e) {
+            return .error(.remote(0, "{$this->bucket->describe()} {$key}: {$e->message()}"));
+        };
+        Answer $a = Answer($res->status, $res->body, $res->headers);
+        if (!$a->ok() && $a->status != $allow) {
+            return .error($a->fail($key));
+        }
+        return .ok($a);
+    }
+}

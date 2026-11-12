@@ -3,8 +3,8 @@ namespace Blog::Config;
 use std::time;
 
 /**
- * The blog's settings. Read from BLOG_TITLE, BLOG_DEFAULT_PAGE_SIZE and BLOG_STATS_EVERY, in the
- * environment or a .env file.
+ * The blog's settings. Read from BLOG_TITLE, BLOG_DEFAULT_PAGE_SIZE, BLOG_STATS_EVERY and
+ * BLOG_COVERS_URL, in the environment or a .env file.
  */
 #[nexus::config: "BLOG"]
 public struct BlogConfig
@@ -26,4 +26,11 @@ public struct BlogConfig
      */
     #[nexus::env: 'STATS_EVERY']
     public time::duration $statsEvery = .secs(2);
+
+    /**
+     * Where the posts' cover images are kept: `file:storage/covers` (next to where the blog runs),
+     * `s3://bucket/covers` with nexus-files-s3's settings, or `memory:`.
+     */
+    #[nexus::env: 'COVERS_URL']
+    public string $coversUrl = 'file:storage/covers';
 }

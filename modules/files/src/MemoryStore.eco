@@ -1,0 +1,161 @@
+namespace nexus::files;
+
+use std::thread;
+use std::time;
+
+internal struct Held
+{
+    internal string $bytes;
+    internal string $type;
+    internal time::timestamp $modified;
+    internal uint64 $version;
+}
+
+/**
+ * Files kept in the process, `memory:`: for tests, gone when it stops.
+ */
+#[atomic]
+public class MemoryStore : Store
+{
+    private thread::mutex<map<string, Held>> $files;
+    private thread::mutex<uint64> $versions;
+    private calendar::Clock $clock;
+
+    public constructor(clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->files = thread::mutex<map<string, Held>>(map<string, Held>());
+        $this->versions = thread::mutex<uint64>(0);
+        $this->clock = $clock;
+    }
+
+    public const function describe() : string
+    {
+        return 'memory:';
+    }
+
+    public function put(const string& $key, const string& $bytes, const string& $type) : status<FilesError>
+    {
+        uint64 $version = $this->next();
+        thread::locked<map<string, Held>> $held = $this->files->lock();
+        $held->value[$key] = Held($bytes, $type, $this->clock->now(), $version);
+        return .ok;
+    }
+
+    public function putFile(const string& $key, const string& $path, const string& $type) : status<FilesError>
+    {
+        string $bytes = guard std::fs::readfile($path) else ($e) {
+            return .error(.io("{$path}: {$e}"));
+        };
+        return $this->put($key, $bytes, $type);
+    }
+
+    public function get(const string& $key) : result<string, FilesError>
+    {
+        thread::locked<map<string, Held>> $held = $this->files->lock();
+        if (!$held->value->has($key)) {
+            return .error(.missing($key));
+        }
+        return .ok($held->value->get($key)->bytes);
+    }
+
+    public function read(const string& $key, uint64 $from, uint64 $length) : result<string, FilesError>
+    {
+        string $all = try $this->get($key);
+        uint64 $size = $all->size() as uint64;
+        if ($from >= $size) {
+            return .ok('');
+        }
+        uint64 $n = $length;
+        if ($n > $size - $from) {
+            $n = $size - $from;
+        }
+        return .ok($all->sub($from as usize, $n as usize));
+    }
+
+    public function saveTo(const string& $key, const string& $path) : status<FilesError>
+    {
+        string $bytes = try $this->get($key);
+        guard std::fs::writefile($path, $bytes) else ($e) {
+            return .error(.io("{$path}: {$e}"));
+        };
+        return .ok;
+    }
+
+    public function stat(const string& $key) : result<Stat?, FilesError>
+    {
+        thread::locked<map<string, Held>> $held = $this->files->lock();
+        if (!$held->value->has($key)) {
+            return .ok(null);
+        }
+        return .ok(MemoryStore::stated($key, $held->value->get($key)));
+    }
+
+    public function delete(const string& $key) : status<FilesError>
+    {
+        thread::locked<map<string, Held>> $held = $this->files->lock();
+        $held->value->remove($key);
+        return .ok;
+    }
+
+    public function list(const string& $prefix) : result<array<Stat>, FilesError>
+    {
+        array<Stat> $out = [];
+        thread::locked<map<string, Held>> $held = $this->files->lock();
+        foreach ($held->value as $key => const &$h) {
+            if ($key->starts($prefix)) {
+                $out[] = MemoryStore::stated($key, $h);
+            }
+        }
+        $out->sort(key: function(const Stat& $s) : string { return $s->key; });
+        return .ok($out);
+    }
+
+    public function copy(const string& $from, const string& $to) : status<FilesError>
+    {
+        uint64 $version = $this->next();
+        thread::locked<map<string, Held>> $held = $this->files->lock();
+        if (!$held->value->has($from)) {
+            return .error(.missing($from));
+        }
+        Held $h = $held->value->get($from);
+        $h->modified = $this->clock->now();
+        $h->version = $version;
+        $held->value[$to] = $h;
+        return .ok;
+    }
+
+    public function move(const string& $from, const string& $to) : status<FilesError>
+    {
+        thread::locked<map<string, Held>> $held = $this->files->lock();
+        if (!$held->value->has($from)) {
+            return .error(.missing($from));
+        }
+        Held $h = $held->value->get($from);
+        $held->value->remove($from);
+        $held->value[$to] = mv $h;
+        return .ok;
+    }
+
+    /**
+     * How many files are kept.
+     */
+    public function count() : usize
+    {
+        thread::locked<map<string, Held>> $held = $this->files->lock();
+        return $held->value->count();
+    }
+
+    // a version number no write had before, for the etag
+    private function next() : uint64
+    {
+        thread::locked<uint64> $held = $this->versions->lock();
+        $held->value = $held->value + 1;
+        return $held->value;
+    }
+
+    internal static function stated(const string& $key, const Held& $h) : Stat
+    {
+        uint64 $size = $h->bytes->size() as uint64;
+        return Stat($key, $size, $h->type, "\"m{$h->version:x}-{$size:x}\"", $h->modified);
+    }
+}

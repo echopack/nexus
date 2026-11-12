@@ -1,0 +1,100 @@
+namespace nexus::files;
+
+/**
+ * Where a disk keeps its files: `LocalStore` (a directory), `MemoryStore`, or nexus-files-s3's
+ * `S3Store`. Keys reach a store already checked (`Keys::check`). One store serves every thread of
+ * the process.
+ */
+public interface Store
+{
+    /**
+     * A short name for logs, like `file:/srv/covers` or `s3://bucket/prefix`. Never a secret.
+     */
+    const function describe() : string;
+
+    /**
+     * Keeps `$bytes` under `$key` as `$type`, replacing what was there. A reader sees the old bytes
+     * or the new ones, never half.
+     */
+    function put(const string& $key, const string& $bytes, const string& $type) : status<FilesError>;
+
+    /**
+     * Keeps the file at `$path` on this machine under `$key`, without reading it into memory.
+     */
+    function putFile(const string& $key, const string& $path, const string& $type) : status<FilesError>;
+
+    /**
+     * The whole file.
+     */
+    function get(const string& $key) : result<string, FilesError>;
+
+    /**
+     * `$length` bytes from `$from`, fewer when the file ends first.
+     */
+    function read(const string& $key, uint64 $from, uint64 $length) : result<string, FilesError>;
+
+    /**
+     * Writes the file to `$path` on this machine, without reading it into memory.
+     */
+    function saveTo(const string& $key, const string& $path) : status<FilesError>;
+
+    /**
+     * What is kept under `$key`, or null when nothing is.
+     */
+    function stat(const string& $key) : result<Stat?, FilesError>;
+
+    /**
+     * Forgets the file; one that is not there is fine.
+     */
+    function delete(const string& $key) : status<FilesError>;
+
+    /**
+     * Every file whose key starts with `$prefix`, by key.
+     */
+    function list(const string& $prefix) : result<array<Stat>, FilesError>;
+
+    function copy(const string& $from, const string& $to) : status<FilesError>;
+
+    /**
+     * Moves the file to `$to`, replacing what was there. Unless the store does better, a copy and
+     * then a delete: a reader may see both for a moment, never neither.
+     */
+    function move(const string& $from, const string& $to) : status<FilesError>
+    {
+        try $this->copy($from, $to);
+        return $this->delete($from);
+    }
+
+    /**
+     * The path on this machine the file is kept at, for a transport to send it from; null for a
+     * store that keeps files elsewhere.
+     */
+    const function file(const string& $key) : string?
+    {
+        return null;
+    }
+
+    /**
+     * Whether the store signs links itself (`presign`); otherwise nexus-files' route serves them.
+     */
+    const function signs() : bool
+    {
+        return false;
+    }
+
+    /**
+     * A link the store itself serves for `$ask`. Only a store that `signs()` is asked.
+     */
+    function presign(const Presign& $ask) : result<nexus::Url, FilesError>
+    {
+        return .error(.unsupported('sign links itself'));
+    }
+
+    /**
+     * Whether the store can be reached, asked once at boot.
+     */
+    function check() : status<FilesError>
+    {
+        return .ok;
+    }
+}

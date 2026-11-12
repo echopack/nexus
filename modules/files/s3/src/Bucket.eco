@@ -1,0 +1,132 @@
+namespace nexus::files::s3;
+
+/**
+ * Where one disk's objects are: its bucket and prefix from the disk URL, the rest from
+ * `S3Config`.
+ */
+public struct Bucket
+{
+    public string $name;
+
+    /**
+     * Put in front of every key, without slashes around it; empty for none.
+     */
+    public string $prefix;
+    public string $scheme;
+
+    /**
+     * The endpoint's host and port, without the bucket.
+     */
+    public string $host;
+    public bool $pathStyle;
+
+    /**
+     * The bucket and prefix of `s3://bucket/prefix` on the endpoint `$config` names, or why not.
+     */
+    public static function of(const string& $url, const S3Config& $config) : result<Bucket, string>
+    {
+        if (!$url->starts('s3://')) {
+            return .error("'{$url}' is no s3:// URL");
+        }
+        string $rest = $url->sub(5, $url->size() - 5);
+        if ($rest->find('?') < $rest->size() || $rest->find('#') < $rest->size()) {
+            return .error("'{$url}' takes no query; the region and endpoint are NEXUS_FILES_S3_REGION and NEXUS_FILES_S3_ENDPOINT");
+        }
+        string $name = $rest;
+        string $prefix = '';
+        usize $slash = $rest->find('/');
+        if ($slash < $rest->size()) {
+            $name = $rest->sub(0, $slash);
+            $prefix = $rest->sub($slash + 1, $rest->size() - $slash - 1);
+        }
+        while ($prefix->ends('/')) {
+            $prefix = $prefix->sub(0, $prefix->size() - 1);
+        }
+        if ($name->empty()) {
+            return .error("'{$url}' names no bucket; write s3://bucket/prefix");
+        }
+        if ($config->accessKey->empty() || $config->secretKey->empty()) {
+            return .error('an s3:// disk needs NEXUS_FILES_S3_ACCESS_KEY and NEXUS_FILES_S3_SECRET_KEY');
+        }
+        string $endpoint = $config->endpoint;
+        if ($endpoint->empty()) {
+            $endpoint = "https://s3.{$config->region}.amazonaws.com";
+        }
+        usize $sep = $endpoint->find('://');
+        if ($sep >= $endpoint->size()) {
+            return .error("NEXUS_FILES_S3_ENDPOINT is '{$endpoint}'; expected https://host or http://host:port");
+        }
+        string $scheme = str::lower($endpoint->sub(0, $sep));
+        string $host = $endpoint->sub($sep + 3, $endpoint->size() - $sep - 3);
+        while ($host->ends('/')) {
+            $host = $host->sub(0, $host->size() - 1);
+        }
+        if (($scheme != 'https' && $scheme != 'http') || $host->empty() || $host->find('/') < $host->size()) {
+            return .error("NEXUS_FILES_S3_ENDPOINT is '{$endpoint}'; expected https://host or http://host:port");
+        }
+        return .ok(Bucket($name, $prefix, $scheme, $host, $config->pathStyle));
+    }
+
+    /**
+     * `s3://bucket/prefix`, for logs.
+     */
+    public const function describe() : string
+    {
+        if ($this->prefix->empty()) {
+            return "s3://{$this->name}";
+        }
+        return "s3://{$this->name}/{$this->prefix}";
+    }
+
+    /**
+     * The object key of a disk key: the prefix in front.
+     */
+    public const function object(const string& $key) : string
+    {
+        if ($this->prefix->empty()) {
+            return $key;
+        }
+        return "{$this->prefix}/{$key}";
+    }
+
+    /**
+     * The disk key of an object key, or null for one outside the prefix.
+     */
+    public const function key(const string& $object) : string?
+    {
+        if ($this->prefix->empty()) {
+            return $object;
+        }
+        string $open = "{$this->prefix}/";
+        if (!$object->starts($open)) {
+            return null;
+        }
+        return $object->sub($open->size(), $object->size() - $open->size());
+    }
+
+    /**
+     * The host a request goes to: the endpoint's, with the bucket in front unless path style.
+     */
+    public const function hostFor() : string
+    {
+        if ($this->pathStyle) {
+            return $this->host;
+        }
+        return "{$this->name}.{$this->host}";
+    }
+
+    /**
+     * The encoded path of `$object`, or of the bucket itself for an empty one.
+     */
+    public const function path(const string& $object) : string
+    {
+        string $encoded = nexus::Percent::path($object);
+        if ($this->pathStyle) {
+            if ($object->empty()) {
+                return "/{$this->name}";
+            }
+            return "/{$this->name}/{$encoded}";
+        }
+        return "/{$encoded}";
+    }
+}

@@ -49,6 +49,8 @@
 #[depends: "../../modules/work"]
 #[depends: "../../modules/work/carbon"]
 #[depends: "../../modules/mail"]
+#[depends: "../../modules/files"]
+#[depends: "../../modules/files/s3"]
 #[depends: "../../modules/mcp"]
 #[depends: "../../modules/oauth"]
 #[depends: "../../modules/oauth/carbon"]
@@ -65,6 +67,7 @@
 #[depends: "../../../RestTransformers"]
 #[depends: "../../../container"]
 #[depends: "../../../libjson"]
+#[depends: "../../../libcrypto"]
 
 #[hook: before_build { run: "nexus", args: ["gen"] }]
 

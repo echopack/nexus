@@ -66,6 +66,11 @@ public function extensions() : array<nexus::Extension>
         // mail through NEXUS_MAIL_URL: SMTP, the log, or kept in memory for tests
         nexus::mail::Extension(),
 
+        // files on disks the blog names (the posts' covers, BLOG_COVERS_URL): a directory, memory,
+        // or S3 with NEXUS_FILES_S3_*; signed links to the ones it serves itself under /files
+        nexus::files::Extension(),
+        nexus::files::s3::Extension(),
+
         // the blog itself: its routes, tools, commands, tasks, schedule and translations
         Blog::App(),
     ];

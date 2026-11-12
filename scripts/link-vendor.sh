@@ -27,7 +27,7 @@ link() {
     ln -s "${target}" "${at}"
     echo "linked ${vendor}/${lib} -> ${target}"
 }
-for dir in modules/testing modules/carbon/testing modules/app modules/auth modules/auth/carbon modules/carbon modules/crud modules/mcp modules/debug modules/debug/work modules/debug/realtime modules/oauth modules/oauth/carbon modules/connect modules/connect/carbon modules/rest modules/work modules/work/carbon modules/mail modules/cache modules/cache/redis modules/realtime modules/realtime/redis examples/blog; do
+for dir in modules/testing modules/carbon/testing modules/app modules/auth modules/auth/carbon modules/carbon modules/crud modules/mcp modules/debug modules/debug/work modules/debug/realtime modules/oauth modules/oauth/carbon modules/connect modules/connect/carbon modules/rest modules/work modules/work/carbon modules/mail modules/cache modules/cache/redis modules/files modules/files/s3 modules/realtime modules/realtime/redis examples/blog; do
     # libjson and libcurl always; calendar and libcrypto where the suite vendors them, since
     # nexus and carbon build against those siblings too
     wanted="echolang/libjson echolang/libcurl"

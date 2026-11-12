@@ -29,6 +29,12 @@ public class Post : carbon::Model<Post, PostRepository>
     #[nexus::expose: { item: 'tag' }]
     public array<string> $tags = [];
 
+    /**
+     * The key of its cover image on the `CoverDisk`, null without one. The API shows a link to it
+     * (`cover_url`), never the key.
+     */
+    public string? $cover = null;
+
     #[carbon::created]
     #[nexus::expose]
     public time::timestamp? $createdAt = null;

@@ -1,0 +1,33 @@
+namespace nexus::files;
+
+use std::time;
+
+/**
+ * A link a client uploads with, straight to the disk: send `method` to `url` with `headers` and
+ * the file as the body, before `expiresAt`.
+ */
+public struct Signed
+{
+    public nexus::Url $url;
+    public string $method;
+    public map<string, string> $headers;
+    public time::timestamp $expiresAt;
+
+    /**
+     * `{url, method, headers, expires_at}`, for an answer to the client.
+     */
+    public const function json() : json::Value
+    {
+        $o = json::object();
+        $o['url'] = json::str($this->url->text());
+        $o['method'] = json::str($this->method);
+        $h = json::object();
+        foreach ($this->headers as $name => const &$value) {
+            $h[$name] = json::str($value);
+        }
+        $o['headers'] = mv $h;
+        $z = calendar::Zoned($this->expiresAt, calendar::Zone::utc());
+        $o['expires_at'] = json::str($z->format(calendar::Format::rfc3339()));
+        return $o;
+    }
+}

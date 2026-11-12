@@ -15,6 +15,7 @@ const KIND: Record<MarkKind, { label: string; bar: string }> = {
   query: { label: 'Query', bar: 'bg-warning' },
   cache: { label: 'Cache', bar: 'bg-positive' },
   mail: { label: 'Mail', bar: 'bg-accent/50' },
+  files: { label: 'Files', bar: 'bg-positive/50' },
 }
 
 const LEVEL_BAR: Record<string, string> = { error: 'bg-negative', warn: 'bg-warning', info: 'bg-ink/70' }

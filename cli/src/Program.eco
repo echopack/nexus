@@ -350,6 +350,10 @@ public struct Program
             if ($named == 'nexus::Body') {
                 $p->kind = .body;
             } else {
+                if ($this->uploads($input)) {
+                    $this->fail($d, "nexus::QueryOf<{$input}> has a file upload, which only a multipart body carries; take it as nexus::Body<{$input}>");
+                    return null;
+                }
                 $p->kind = .queryInput;
             }
             return $p;
@@ -491,6 +495,26 @@ public struct Program
         return $this->findInput($qualified) ?? TypeDecl($qualified, '', 0);
     }
 
+    /**
+     * Whether input `$qualified`, or an input nested in it, has a `nexus::Upload` field.
+     */
+    internal const function uploads(const string& $qualified, int32 $depth = 0) : bool
+    {
+        // nested inputs cannot loop forever: a cycle is refused elsewhere, this only stops early
+        if ($depth > 16) {
+            return false;
+        }
+        foreach ($this->input($qualified)->fields as const &$f) {
+            if ($f->kind == 'file' || $f->shape == 'files') {
+                return true;
+            }
+            if (($f->shape == 'object' || $f->shape == 'objects') && $this->uploads($f->item, $depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     internal function readCommand(const json::Value& $d) : void
     {
         $q = decl::text($d, 'qualified');
@@ -541,6 +565,10 @@ public struct Program
             string $reader = $f->reader;
             if ($reader == 'json') {
                 $this->fail($d, "option ${$f->name} of {$t->qualified} is JSON, which a command line cannot give");
+                return false;
+            }
+            if ($reader == 'upload' || $reader == 'uploads') {
+                $this->fail($d, "option ${$f->name} of {$t->qualified} is a file upload, which a command line cannot give; take a path and read it");
                 return false;
             }
             if ($reader == 'bool' && $f->hasDefault && $f->defaultText != 'false') {
@@ -607,6 +635,10 @@ public struct Program
                 $this->fail($d, "{$q}::handle() takes its arguments as one #[nexus::input] struct, not two");
                 return;
             }
+            if ($this->uploads($named)) {
+                $this->fail($d, "{$q}::handle() takes {$named}, which has a file upload; a tool call carries JSON only");
+                return;
+            }
             $hasInput = true;
             $p->kind = .input;
             $p->input = $named;
@@ -630,6 +662,10 @@ public struct Program
             if ($p->kind == ParamKind::path) {
                 $names[] = $p->name;
             } else if ($p->kind == ParamKind::body || $p->kind == ParamKind::queryInput) {
+                // a tool call carries JSON, never a file
+                if ($this->uploads($p->input)) {
+                    return false;
+                }
                 foreach ($this->input($p->input)->fields as const &$f) {
                     $names[] = $f->wire;
                 }
@@ -769,12 +805,8 @@ public struct Program
                     $out->checks[] = $n;
                 }
             } else if ($e->key == 'each') {
-                string $itemKind = 'string';
-                string $itemType = 'string';
-                if ($out->reader == 'ints') {
-                    $itemKind = 'integer';
-                    $itemType = 'int64';
-                }
+                string $itemType = rules::itemType($out->reader);
+                string $itemKind = rules::kind(rules::item($out->reader));
                 foreach (decl::record($e->value) as const &$inner) {
                     string? $itemMisfit = rules::misfit($inner->key, $inner->value, $itemKind, 'scalar', true, false);
                     if ($itemMisfit != null) {
@@ -819,6 +851,11 @@ public struct Program
             $f->kind = 'date';
             return true;
         }
+        if ($named == 'nexus::Upload') {
+            $f->reader = 'upload';
+            $f->kind = 'file';
+            return true;
+        }
         if ($named == 'std::time::timestamp' || $named == 'time::timestamp') {
             $f->reader = 'timestamp';
             $f->kind = 'timestamp';
@@ -844,6 +881,12 @@ public struct Program
             return false;
         }
         $of = types::name(decl::field($bare, 'of'));
+        if ($of == 'nexus::Upload') {
+            $f->shape = 'files';
+            $f->kind = 'list';
+            $f->reader = 'uploads';
+            return true;
+        }
         if ($this->enumNamed($of)) {
             $f->shape = 'enums';
             $f->kind = 'list';

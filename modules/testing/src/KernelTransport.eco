@@ -60,6 +60,10 @@ public class KernelTransport : Transport
                 $fn($w);
                 $out->body = $w->body;
             }
+            if ($got->file != null) {
+                nexus::FileBody $f = guard $got->file;
+                $out->body = KernelTransport::slice($f);
+            }
         }
 
         foreach ($got->headers->items as const &$h) {
@@ -67,6 +71,26 @@ public class KernelTransport : Transport
         }
 
         return .ok(mv $out);
+    }
+
+    /**
+     * The bytes of a file body, read from disk as the transport would send them; what the file no
+     * longer has is missing from the end, as a socket client would see it cut short.
+     */
+    internal static function slice(const nexus::FileBody& $f) : string
+    {
+        string $all = guard std::fs::readfile($f->path) else {
+            return '';
+        };
+        if ($f->offset >= ($all->size() as uint64)) {
+            return '';
+        }
+        usize $from = $f->offset as usize;
+        usize $length = $f->length as usize;
+        if ($length > $all->size() - $from) {
+            $length = $all->size() - $from;
+        }
+        return $all->sub($from, $length);
     }
 
     /**

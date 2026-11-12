@@ -70,7 +70,7 @@ export interface TopicEvent {
 
 export type Row = Record<string, unknown>
 
-export type MarkKind = 'middleware' | 'action' | 'span' | 'query' | 'cache' | 'mail'
+export type MarkKind = 'middleware' | 'action' | 'span' | 'query' | 'cache' | 'mail' | 'files'
 
 /** one timed stretch of a request, times in ms from its start */
 export interface Mark {

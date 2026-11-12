@@ -1,0 +1,21 @@
+namespace Blog::Actions::Covers;
+
+use Blog::Services::CoverService;
+
+/**
+ * A post's cover image, for anyone: the image itself, or a redirect to the store that keeps it.
+ */
+public class ShowCover : nexus::Action
+{
+    private CoverService $covers;
+
+    public constructor(CoverService $covers)
+    {
+        $this->covers = $covers;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id) : result<nexus::Response, nexus::Problem>
+    {
+        return $this->covers->show($payload, $id);
+    }
+}

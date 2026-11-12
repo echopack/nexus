@@ -1,0 +1,67 @@
+/**
+ * The extension: an s3:// disk opens with the shared settings, and what stops the boot.
+ */
+
+use nexus::files::{Disk, Disks, Volume};
+use nexus::testing::TestApp;
+use ecotest::expect;
+
+internal struct SVolume : Volume {}
+
+internal class SApp : nexus::Extension
+{
+    public string $url;
+
+    public constructor(const string& $url)
+    {
+        $this->url = $url;
+    }
+
+    public function name() : string
+    {
+        return 'sapp';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        Disks::bind<SVolume>($s, 'media', url: $this->url);
+        return .ok;
+    }
+}
+
+test an_s3_disk_needs_credentials_and_a_bucket_that_answers
+{
+    array<nexus::Extension> $exts = [nexus::files::Extension(), nexus::files::s3::Extension(), SApp('s3://media/x')];
+    nexus::BootError $e1 = expect(TestApp::attempt($exts, []))->fails();
+    expect(str::join($e1->lines(), '; '))->has('NEXUS_FILES_S3_ACCESS_KEY');
+
+    // nothing listens there: the boot says which disk and where
+    map<string, string> $vars = ['NEXUS_FILES_S3_ACCESS_KEY' => 'AK', 'NEXUS_FILES_S3_SECRET_KEY' => 'SK', 'NEXUS_FILES_S3_ENDPOINT' => 'http://127.0.0.1:1', 'NEXUS_FILES_S3_PATH_STYLE' => 'true'];
+    nexus::BootError $e2 = expect(TestApp::attempt($exts, $vars))->fails();
+    expect(str::join($e2->lines(), '; '))->has('disk media (s3://media/x)');
+
+    array<nexus::Extension> $alone = [nexus::files::s3::Extension()];
+    expect(TestApp::attempt($alone, []))->fails();
+}
+
+test an_s3_disk_needs_no_files_key_and_signs_its_own_links
+{
+    // the link is made without asking the store anything, so no server is needed
+    calendar::ManualClock $c = calendar::ManualClock(std::time::timestamp::from_unix_secs(1369353600));
+    nexus::files::s3::S3Config $config = nexus::files::s3::S3Config($accessKey: 'AKIAIOSFODNN7EXAMPLE', $secretKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY');
+    nexus::files::s3::Bucket $b = expect(nexus::files::s3::Bucket::of('s3://examplebucket', $config))->ok();
+    $store = nexus::files::s3::S3Store($b, $config, clock: $c);
+    nexus::files::Presign $ask = nexus::files::Presign(.get, 'test.txt', .hours(24));
+    nexus::Url $u = expect($store->presign($ask))->ok();
+    expect($u->text())->has('https://examplebucket.s3.us-east-1.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256');
+    nexus::files::Presign $put = nexus::files::Presign(.put, 'up/a.png', .mins(5));
+    $put->type = 'image/png';
+    expect(expect($store->presign($put))->ok()->text())->has('X-Amz-SignedHeaders=content-type%3Bhost');
+
+    // a link to read goes by the type the key says, whatever was stored with the bytes
+    nexus::files::Links $links = nexus::files::Links('', '/files', .hours(1), nexus::Router(), $c);
+    Disk<SVolume> $d = Disk<SVolume>('media', $store, $links);
+    string $shown = expect($d->url('docs/a.png', expires: .mins(5), inline: true))->ok()->text();
+    expect($shown)->has('response-content-type=image%2Fpng');
+    expect($shown)->has('response-content-disposition=inline');
+}

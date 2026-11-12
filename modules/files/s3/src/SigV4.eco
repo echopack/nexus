@@ -1,0 +1,143 @@
+namespace nexus::files::s3;
+
+use std::time;
+
+/**
+ * A header a request signs: its name in lowercase.
+ */
+public struct SignedHeader
+{
+    public string $name;
+    public string $value;
+}
+
+/**
+ * AWS Signature Version 4 for S3: in the `Authorization` header with the payload hash signed, or
+ * in the query string of a presigned link. The same against AWS and any S3-compatible store.
+ */
+public struct SigV4
+{
+    public string $accessKey;
+    public string $secretKey;
+    public string $region;
+    public string $service = 's3';
+
+    internal static calendar::Format $stampFormat = calendar::Format("yyyyMMdd'T'HHmmss'Z'");
+
+    /**
+     * The `Authorization` value of a request. `$uri` is encoded already, `$query` canonical
+     * already (sorted, encoded); header names are lowercase.
+     */
+    public const function authorization(const string& $method, const string& $uri, const string& $query, array<SignedHeader> $headers, const string& $payloadHash, time::timestamp $at) : string
+    {
+        SigV4::sort($headers);
+        string $signed = SigV4::names($headers);
+        string $block = SigV4::block($headers);
+        string $canonical = "{$method}\n{$uri}\n{$query}\n{$block}\n{$signed}\n{$payloadHash}";
+        string $stamp = SigV4::stamp($at);
+        string $scope = $this->scope($stamp);
+        string $signature = $this->signature($canonical, $stamp, $scope);
+        return "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$scope}, SignedHeaders={$signed}, Signature={$signature}";
+    }
+
+    /**
+     * The query string of a presigned link: `$params` (unencoded, like `response-content-type`)
+     * and the signature's own, good for `$expires` from `$at`. `$headers` are the ones the client
+     * must send as signed, `host` among them.
+     */
+    public const function presign(const string& $method, const string& $uri, map<string, string> $params, array<SignedHeader> $headers, time::duration $expires, time::timestamp $at, const string& $sessionToken) : string
+    {
+        SigV4::sort($headers);
+        string $signed = SigV4::names($headers);
+        string $stamp = SigV4::stamp($at);
+        string $scope = $this->scope($stamp);
+        $params['X-Amz-Algorithm'] = 'AWS4-HMAC-SHA256';
+        $params['X-Amz-Credential'] = "{$this->accessKey}/{$scope}";
+        $params['X-Amz-Date'] = $stamp;
+        int64 $secs = $expires->as_secs();
+        $params['X-Amz-Expires'] = "{$secs}";
+        $params['X-Amz-SignedHeaders'] = $signed;
+        if (!$sessionToken->empty()) {
+            $params['X-Amz-Security-Token'] = $sessionToken;
+        }
+        string $query = SigV4::canonicalQuery($params);
+        string $block = SigV4::block($headers);
+        string $canonical = "{$method}\n{$uri}\n{$query}\n{$block}\n{$signed}\nUNSIGNED-PAYLOAD";
+        string $signature = $this->signature($canonical, $stamp, $scope);
+        return "{$query}&X-Amz-Signature={$signature}";
+    }
+
+    /**
+     * `20130524T000000Z`: the time a signature carries.
+     */
+    public static function stamp(time::timestamp $at) : string
+    {
+        return calendar::Zoned($at, calendar::Zone::utc())->format(SigV4::$stampFormat);
+    }
+
+    /**
+     * Query parameters as SigV4 signs them: names and values encoded, sorted by name bytewise.
+     */
+    public static function canonicalQuery(const map<string, string>& $params) : string
+    {
+        array<SignedHeader> $pairs = [];
+        foreach ($params as $name => const &$value) {
+            $pairs[] = SignedHeader(nexus::Percent::encode($name), nexus::Percent::encode($value));
+        }
+        SigV4::sort($pairs);
+        array<string> $out = [];
+        foreach ($pairs as const &$p) {
+            $out[] = "{$p->name}={$p->value}";
+        }
+        return str::join($out, '&');
+    }
+
+    /**
+     * Headers by name, bytewise, which is what SigV4 means by sorted.
+     */
+    public static function sort(array<SignedHeader>& $headers) : void
+    {
+        $headers->sort(key: function(const SignedHeader& $h) : string { return $h->name; });
+    }
+
+    // inside -----------------------------------------------------------------
+
+    // the credential scope of a signature made at `$stamp`
+    private const function scope(const string& $stamp) : string
+    {
+        string $day = $stamp->sub(0, 8);
+        return "{$day}/{$this->region}/{$this->service}/aws4_request";
+    }
+
+    private const function signature(const string& $canonical, const string& $stamp, const string& $scope) : string
+    {
+        string $day = $stamp->sub(0, 8);
+        string $hashed = crypto::hex(crypto::sha256($canonical));
+        string $toSign = "AWS4-HMAC-SHA256\n{$stamp}\n{$scope}\n{$hashed}";
+        string $kDate = crypto::hmacSha256("AWS4{$this->secretKey}", $day);
+        string $kRegion = crypto::hmacSha256($kDate, $this->region);
+        string $kService = crypto::hmacSha256($kRegion, $this->service);
+        string $kSigning = crypto::hmacSha256($kService, 'aws4_request');
+        return crypto::hex(crypto::hmacSha256($kSigning, $toSign));
+    }
+
+    // the canonical header block: `name:value` lines, values trimmed
+    internal static function block(const array<SignedHeader>& $sorted) : string
+    {
+        string $out = '';
+        foreach ($sorted as const &$h) {
+            string $value = string::from(str::trim($h->value));
+            $out->append("{$h->name}:{$value}\n");
+        }
+        return $out;
+    }
+
+    internal static function names(const array<SignedHeader>& $sorted) : string
+    {
+        array<string> $names = [];
+        foreach ($sorted as const &$h) {
+            $names[] = $h->name;
+        }
+        return str::join($names, ';');
+    }
+}

@@ -1,0 +1,23 @@
+namespace nexus::files;
+
+use std::time;
+
+/**
+ * A link a store signs itself (S3): who may do what with which key, until when.
+ */
+public struct Presign
+{
+    /**
+     * `GET` to read the file, `PUT` to write it.
+     */
+    public nexus::Method $method;
+    public string $key;
+    public time::duration $expires;
+
+    /**
+     * For a GET: the `Content-Type` and `Content-Disposition` the store answers with. For a PUT:
+     * the `Content-Type` the upload must send; empty for any.
+     */
+    public string $type = '';
+    public string $disposition = '';
+}

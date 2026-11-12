@@ -1,0 +1,71 @@
+namespace nexus::files;
+
+use std::io;
+
+/**
+ * `files:check --disk <name>`: writes a small file to the disk, reads it back, checks a range of it
+ * and forgets it; says what failed. For a new bucket or mount before the app relies on it.
+ */
+public class CheckCommand : nexus::Command
+{
+    public const function name() : string
+    {
+        return 'files:check';
+    }
+
+    public const function summary() : string
+    {
+        return 'write, read and delete a probe on a disk';
+    }
+
+    public const function options() : array<nexus::CommandOption>
+    {
+        array<nexus::CommandOption> $out = [];
+        $out[] = nexus::CommandOption(value: 'disk', '<name>', 'the disk, as the app bound it');
+        return $out;
+    }
+
+    public const function bound(container::Container $services) : bool
+    {
+        return $services->has<DiskTable>();
+    }
+
+    public function run(nexus::Invocation& $in) : int32
+    {
+        nexus::Kernel $k = guard $in->kernel() else {
+            return 1;
+        };
+        Shelf $shelf = guard Picked::shelf($k, $in, 'files:check') else {
+            return 1;
+        };
+        string $nonce = guard crypto::random(6) else {
+            io::eprintln('files:check: no randomness for a probe name');
+            return 1;
+        };
+        string $hex = crypto::hex($nonce);
+        string $key = "nexus-check/probe-{$hex}.txt";
+        string $text = "nexus files check {$hex}";
+        guard $shelf->store->put($key, $text, 'text/plain') else ($e) {
+            io::eprintln("files:check: write failed: {$e->message()}");
+            return 1;
+        };
+        string $back = guard $shelf->store->get($key) else ($e) {
+            io::eprintln("files:check: read failed: {$e->message()}");
+            return 1;
+        };
+        string $part = guard $shelf->store->read($key, 6, 5) else ($e) {
+            io::eprintln("files:check: ranged read failed: {$e->message()}");
+            return 1;
+        };
+        guard $shelf->store->delete($key) else ($e) {
+            io::eprintln("files:check: delete failed: {$e->message()}");
+            return 1;
+        };
+        if ($back != $text || $part != 'files') {
+            io::eprintln("files:check: {$key} came back different");
+            return 1;
+        }
+        $in->out->line("disk {$shelf->name} in {$shelf->store->describe()}: write, read, range and delete work");
+        return 0;
+    }
+}

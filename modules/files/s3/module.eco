@@ -1,0 +1,36 @@
+/*
+ * nexus-files-s3: nexus-files disks in S3 or anything that speaks it
+ * (MinIO, R2, Hetzner, Wasabi), over libcurl with AWS Signature Version 4.
+ *
+ * List it after nexus-files. A disk whose URL is `s3://bucket/prefix` keeps
+ * its files as objects under the prefix; `NEXUS_FILES_S3_*` hold the
+ * credentials, the region and, for a store that is not AWS, its endpoint.
+ * Uploads from a file and downloads to one stream through libcurl; links
+ * are presigned by the store itself, so a client fetches and uploads
+ * straight from and to the bucket.
+ */
+
+#[module: "nexus-files-s3"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "nexus-files disks in S3 and S3-compatible stores"]
+
+#[depends: "../../.."]
+#[depends: ".."]
+#[depends: "../../../../container"]
+#[depends: "../../../../libjson"]
+#[depends: "../../../../libcurl"]
+#[depends: "../../../../libcrypto"]
+#[depends: "../../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../../testing"]
+    #[sources: "tests/*.eco"]
+}

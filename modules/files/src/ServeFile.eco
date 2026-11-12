@@ -1,0 +1,85 @@
+namespace nexus::files;
+
+/**
+ * The signed route of the disks nexus-files serves itself, `GET|PUT /files/{disk}/{key*}`: a GET
+ * answers the file (ranges, 304) when the link holds; a PUT keeps the body under the key when it
+ * holds and the body fits the type and size the link names. A disk on S3 is never served here:
+ * its links go to the store.
+ */
+public class ServeFile : nexus::Action
+{
+    private DiskTable $disks;
+
+    public constructor(DiskTable $disks)
+    {
+        $this->disks = $disks;
+    }
+
+    public function handle(nexus::Payload& $payload, string $disk, string $key) : result<nexus::Response, nexus::Problem>
+    {
+        Shelf $shelf = guard $this->disks->find($disk) else {
+            return .error(.notFound('file'));
+        };
+        if ($shelf->store->signs() || Keys::check($key)->failed()) {
+            return .error(.notFound('file'));
+        }
+        nexus::Query $q = $payload->request->query;
+        int64 $expires = str::int($q->get('expires') ?? '') ?? 0;
+        string $sig = $q->get('sig') ?? '';
+        if ($payload->request->method == nexus::Method::put) {
+            string $type = $q->get('type') ?? '';
+            uint64 $max = str::uint($q->get('max') ?? '0') ?? 0;
+            try $this->holds($sig, 'PUT', $disk, $key, $expires, $type, $max, '', false);
+            return $this->keep($payload, $shelf->store, $key, $type, $max);
+        }
+        string $name = $q->get('name') ?? '';
+        bool $inline = ($q->get('inline') ?? '') == '1';
+        try $this->holds($sig, 'GET', $disk, $key, $expires, '', 0, $name, $inline);
+        nexus::Response $r = try Serving::answer($payload->request, $shelf->store, $key, $name, $inline);
+        int64 $left = $expires - $this->disks->links->clock->now()->unix_secs();
+        $r->header('Cache-Control', "private, max-age={$left}");
+        return .ok($r);
+    }
+
+    // a link that expired or that somebody changed is a 403, and says which
+    private const function holds(const string& $sig, const string& $method, const string& $disk, const string& $key, int64 $expires, const string& $type, uint64 $max, const string& $name, bool $inline) : status<nexus::Problem>
+    {
+        if (!$this->disks->links->holds($sig, $method, $disk, $key, $expires, $type, $max, $name, $inline)) {
+            return .error(.forbidden('this link is not valid'));
+        }
+        if ($this->disks->links->clock->now()->unix_secs() >= $expires) {
+            return .error(.forbidden('this link has expired'));
+        }
+        return .ok;
+    }
+
+    private function keep(nexus::Payload& $payload, Store $store, const string& $key, const string& $type, uint64 $max) : result<nexus::Response, nexus::Problem>
+    {
+        string $sent = $payload->request->contentType();
+        if (!$type->empty() && $sent != nexus::Download::mediaType($type)) {
+            return .error(.unsupportedMedia($sent));
+        }
+        if ($max > 0 && ($payload->request->body->size() as uint64) > $max) {
+            return .error(.tooLarge);
+        }
+        string $kept = $type;
+        if ($kept->empty()) {
+            $kept = $sent;
+        }
+        if ($kept->empty()) {
+            $kept = Keys::type($key);
+        }
+        guard $store->put($key, $payload->request->body, $kept) else ($e) {
+            return .error($e->problem());
+        };
+        nexus::Response $r = nexus::Response(204);
+        Stat? $now = guard $store->stat($key) else {
+            return .ok($r);
+        };
+        if ($now != null) {
+            Stat $s = guard $now;
+            $r->header('ETag', $s->etag);
+        }
+        return .ok($r);
+    }
+}

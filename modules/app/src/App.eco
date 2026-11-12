@@ -343,6 +343,23 @@ public class App
         return nexus::app::ChannelRef<C>($this->services);
     }
 
+    // disks --------------------------------------------------------------------
+
+    /**
+     * Binds `nexus::files::Disk<V>`, one for the whole process, named `$name` (in its links and in
+     * `files:*`), on the store `$url` names: `file:storage/covers`, `file:///srv/covers`,
+     * `memory:` or `s3://bucket/prefix`. Take the URL from the app's config, so each place it runs
+     * says where its files go.
+     *
+     * ```echo
+     * $app->bindDisk<CoverVolume>('covers', url: $app->get<BlogConfig>()->coversUrl);
+     * ```
+     */
+    public function bindDisk<V>(const string& $name, url: const string& $url) : void
+    {
+        nexus::files::Disks::bind<V>($this->services, $name, url: $url);
+    }
+
     // tools, queues and schedules ---------------------------------------------
 
     /**

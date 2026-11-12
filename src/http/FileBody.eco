@@ -1,0 +1,13 @@
+namespace nexus;
+
+/**
+ * A response body that is part of a file on disk: `$length` bytes from `$offset`. The transport
+ * sends it from the file (with sendfile where it can) and sets `Content-Length` to `$length`.
+ * Built by `Download`, which settles the range and the status first.
+ */
+public struct FileBody
+{
+    public string $path;
+    public uint64 $offset;
+    public uint64 $length;
+}

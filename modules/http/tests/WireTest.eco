@@ -49,6 +49,26 @@ test a_streamed_response_streams
     expect($r->headers->get('Content-Type'))->some('text/event-stream');
 }
 
+test a_file_body_goes_out_from_the_file
+{
+    $tmp = ecotest::TempDir();
+    string $path = $tmp->file('f.txt');
+    expect(std::fs::writefile($path, '0123456789')->has_value())->yes(says: 'wrote the fixture');
+    nexus::Download $d = nexus::Download('text/plain', 10, etag: '"v"');
+    nexus::Request $req = nexus::Request(.get, '/f');
+    $req->headers->set('Range', 'bytes=2-5');
+    $r = Wire::response($d->respond($req, file: $path));
+    expect($r->status)->is(206);
+    expect($r->streamed())->yes(says: 'the slice streams from the file');
+    expect($r->headers->all('Content-Type'))->size(1);
+    expect($r->headers->get('Content-Range'))->some('bytes 2-5/10');
+
+    // gone since it was looked at: what libhttp answers stands
+    expect(std::fs::remove($path)->has_value())->yes(says: 'removed the fixture');
+    $gone = Wire::response($d->respond($req, file: $path));
+    expect($gone->status)->is(404);
+}
+
 test an_event_stream_opens_an_outlet
 {
     $out = nexus::Response(events: function(nexus::EventStream $s) : void {

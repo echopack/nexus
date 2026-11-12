@@ -406,6 +406,7 @@ public class PostTable : hydrahon::Source, carbon::Schema<Blog::DB::Model::Post,
     public static hydrahon::Term<string> $title = carbon::select::column<string>('posts', 'title');
     public static hydrahon::Term<string> $body = carbon::select::column<string>('posts', 'body');
     public static hydrahon::Term<string> $tags = carbon::select::column<string>('posts', 'tags');
+    public static hydrahon::Term<string?> $cover = carbon::select::column<string?>('posts', 'cover');
     public static hydrahon::Term<hydrahon::DateTime?> $createdAt = carbon::select::column<hydrahon::DateTime?>('posts', 'created_at');
     public static hydrahon::Term<hydrahon::DateTime?> $updatedAt = carbon::select::column<hydrahon::DateTime?>('posts', 'updated_at');
     private hydrahon::Table $carbonTable;
@@ -432,7 +433,7 @@ public class PostTable : hydrahon::Source, carbon::Schema<Blog::DB::Model::Post,
 
     public const function fields() : array<hydrahon::Field>
     {
-        array<hydrahon::Field> $out = [PostTable::$id, PostTable::$authorId, PostTable::$title, PostTable::$body, PostTable::$tags, PostTable::$createdAt, PostTable::$updatedAt];
+        array<hydrahon::Field> $out = [PostTable::$id, PostTable::$authorId, PostTable::$title, PostTable::$body, PostTable::$tags, PostTable::$cover, PostTable::$createdAt, PostTable::$updatedAt];
         return $out;
     }
 
@@ -484,19 +485,24 @@ public class PostTable : hydrahon::Source, carbon::Schema<Blog::DB::Model::Post,
         string $c3 = guard $row->text(3) else { return .error(.column('body', carbon::Problem::of($row, 3))); }
         string $r4 = guard $row->text(4) else { return .error(.column('tags', carbon::Problem::of($row, 4))); }
         array<string> $c4 = guard carbon::codec::Csv()->decode($r4) else ($p) { return .error(.column('tags', $p)); }
-        std::time::timestamp? $c5 = null;
+        string? $c5 = null;
         if (!$row->isNull(5)) {
-            hydrahon::DateTime $r5 = guard $row->datetime(5) else { return .error(.column('created_at', carbon::Problem::of($row, 5))); }
-            std::time::timestamp $v5 = guard carbon::codec::Instant()->decode($r5) else ($p) { return .error(.column('created_at', $p)); }
+            string $v5 = guard $row->text(5) else { return .error(.column('cover', carbon::Problem::of($row, 5))); }
             $c5 = $v5;
         }
         std::time::timestamp? $c6 = null;
         if (!$row->isNull(6)) {
-            hydrahon::DateTime $r6 = guard $row->datetime(6) else { return .error(.column('updated_at', carbon::Problem::of($row, 6))); }
-            std::time::timestamp $v6 = guard carbon::codec::Instant()->decode($r6) else ($p) { return .error(.column('updated_at', $p)); }
+            hydrahon::DateTime $r6 = guard $row->datetime(6) else { return .error(.column('created_at', carbon::Problem::of($row, 6))); }
+            std::time::timestamp $v6 = guard carbon::codec::Instant()->decode($r6) else ($p) { return .error(.column('created_at', $p)); }
             $c6 = $v6;
         }
-        return .ok(Blog::DB::Model::Post($id: $c0, $authorId: $c1, $title: $c2, $body: $c3, $tags: $c4, $createdAt: $c5, $updatedAt: $c6));
+        std::time::timestamp? $c7 = null;
+        if (!$row->isNull(7)) {
+            hydrahon::DateTime $r7 = guard $row->datetime(7) else { return .error(.column('updated_at', carbon::Problem::of($row, 7))); }
+            std::time::timestamp $v7 = guard carbon::codec::Instant()->decode($r7) else ($p) { return .error(.column('updated_at', $p)); }
+            $c7 = $v7;
+        }
+        return .ok(Blog::DB::Model::Post($id: $c0, $authorId: $c1, $title: $c2, $body: $c3, $tags: $c4, $cover: $c5, $createdAt: $c6, $updatedAt: $c7));
     }
 
     public const function snapshot(const Blog::DB::Model::Post& $m) : carbon::change::Snapshot
@@ -512,18 +518,20 @@ public class PostTable : hydrahon::Source, carbon::Schema<Blog::DB::Model::Post,
         $out->values[] = hydrahon::Value::from($s3);
         string $s4 = carbon::codec::Csv()->encode($m->tags);
         $out->values[] = hydrahon::Value::from($s4);
-        hydrahon::DateTime? $s5 = null;
-        if ($m->createdAt != null) {
-            std::time::timestamp $x5 = guard $m->createdAt;
-            $s5 = carbon::codec::Instant()->encode($x5);
-        }
+        string? $s5 = $m->cover;
         $out->values[] = hydrahon::Value::from($s5);
         hydrahon::DateTime? $s6 = null;
-        if ($m->updatedAt != null) {
-            std::time::timestamp $x6 = guard $m->updatedAt;
+        if ($m->createdAt != null) {
+            std::time::timestamp $x6 = guard $m->createdAt;
             $s6 = carbon::codec::Instant()->encode($x6);
         }
         $out->values[] = hydrahon::Value::from($s6);
+        hydrahon::DateTime? $s7 = null;
+        if ($m->updatedAt != null) {
+            std::time::timestamp $x7 = guard $m->updatedAt;
+            $s7 = carbon::codec::Instant()->encode($x7);
+        }
+        $out->values[] = hydrahon::Value::from($s7);
         return $out;
     }
 
@@ -550,20 +558,24 @@ public class PostTable : hydrahon::Source, carbon::Schema<Blog::DB::Model::Post,
             $into[PostTable::$tags] = $s4;
         }
         if ($only->has(5)) {
-            hydrahon::DateTime? $s5 = null;
-            if ($m->createdAt != null) {
-                std::time::timestamp $x5 = guard $m->createdAt;
-                $s5 = carbon::codec::Instant()->encode($x5);
-            }
-            $into[PostTable::$createdAt] = $s5;
+            string? $s5 = $m->cover;
+            $into[PostTable::$cover] = $s5;
         }
         if ($only->has(6)) {
             hydrahon::DateTime? $s6 = null;
-            if ($m->updatedAt != null) {
-                std::time::timestamp $x6 = guard $m->updatedAt;
+            if ($m->createdAt != null) {
+                std::time::timestamp $x6 = guard $m->createdAt;
                 $s6 = carbon::codec::Instant()->encode($x6);
             }
-            $into[PostTable::$updatedAt] = $s6;
+            $into[PostTable::$createdAt] = $s6;
+        }
+        if ($only->has(7)) {
+            hydrahon::DateTime? $s7 = null;
+            if ($m->updatedAt != null) {
+                std::time::timestamp $x7 = guard $m->updatedAt;
+                $s7 = carbon::codec::Instant()->encode($x7);
+            }
+            $into[PostTable::$updatedAt] = $s7;
         }
     }
 
@@ -612,6 +624,7 @@ public class PostTableAlias : hydrahon::Source
     public const hydrahon::Term<string> $title;
     public const hydrahon::Term<string> $body;
     public const hydrahon::Term<string> $tags;
+    public const hydrahon::Term<string?> $cover;
     public const hydrahon::Term<hydrahon::DateTime?> $createdAt;
     public const hydrahon::Term<hydrahon::DateTime?> $updatedAt;
     private hydrahon::Table $carbonTable;
@@ -628,6 +641,7 @@ public class PostTableAlias : hydrahon::Source
         $this->title = $this->carbonTable->column<string>('title');
         $this->body = $this->carbonTable->column<string>('body');
         $this->tags = $this->carbonTable->column<string>('tags');
+        $this->cover = $this->carbonTable->column<string?>('cover');
         $this->createdAt = $this->carbonTable->column<hydrahon::DateTime?>('created_at');
         $this->updatedAt = $this->carbonTable->column<hydrahon::DateTime?>('updated_at');
     }
@@ -1254,6 +1268,7 @@ public struct Carbon
             carbon::migrate::Step('20261102100100_create_posts', Blog::DB::Migration::CreatePosts(), true),
             carbon::migrate::Step('20261102100150_create_comments', Blog::DB::Migration::CreateComments(), true),
             carbon::migrate::Step('20261102100200_seed_editor', Blog::DB::Migration::SeedEditor(), true),
+            carbon::migrate::Step('20261112100000_add_post_cover', Blog::DB::Migration::AddPostCover(), true),
         ];
         return $out;
     }

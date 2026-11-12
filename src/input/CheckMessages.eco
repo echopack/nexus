@@ -19,6 +19,7 @@ internal struct CheckMessages
             if ($kind == 'object') { return 'The {label} field must be an object.'; }
             if ($kind == 'date') { return 'The {label} field must be a date like 2026-10-28.'; }
             if ($kind == 'timestamp') { return 'The {label} field must be a date and time like 2026-10-28T09:30:00Z.'; }
+            if ($kind == 'file') { return 'The {label} field must be a file.'; }
             return 'The {label} field has the wrong type.';
         }
         if ($code == 'range') {
@@ -27,6 +28,10 @@ internal struct CheckMessages
         if ($code == 'min' || $code == 'max' || $code == 'between' || $code == 'size') {
             return CheckMessages::measured($code, $kind);
         }
+        if ($code == 'maxBytes') { return 'The {label} file must not be larger than {shown}.'; }
+        if ($code == 'minBytes') { return 'The {label} file must be at least {shown}.'; }
+        if ($code == 'types') { return 'The {label} file must be of type: {values}.'; }
+        if ($code == 'extensions') { return 'The {label} file must have one of the extensions: {values}.'; }
         if ($code == 'notBlank') { return 'The {label} field must not be blank.'; }
         if ($code == 'email') { return 'The {label} field must be a valid email address.'; }
         if ($code == 'url') { return 'The {label} field must be a valid URL.'; }

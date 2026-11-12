@@ -1,0 +1,28 @@
+namespace Blog::Actions::Covers;
+
+use Blog::Inputs::CoverRequest;
+use Blog::Services::CoverService;
+use Blog::Types::Caller;
+
+/**
+ * A link to upload a post's cover straight to the store, without it passing through the blog:
+ * `{key, url, method, headers, expires_at}`. Confirm the key afterwards. Only its author or an
+ * admin may ask.
+ */
+#[nexus::through: ["Blog::Middleware::RequireUser"]]
+public class CoverUploadLink : nexus::Action
+{
+    private CoverService $covers;
+
+    public constructor(CoverService $covers)
+    {
+        $this->covers = $covers;
+    }
+
+    public function handle(nexus::Payload& $payload, int64 $id, nexus::Body<CoverRequest> $in) : result<nexus::Response, nexus::Problem>
+    {
+        $me = try $payload->state<Caller>();
+        json::Value $link = try $this->covers->link($me->user, $id, $in->value->type);
+        return .ok(nexus::Response(json: $link, status: 201));
+    }
+}

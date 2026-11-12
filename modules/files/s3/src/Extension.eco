@@ -1,0 +1,43 @@
+namespace nexus::files::s3;
+
+/**
+ * Opens `s3://bucket/prefix` disks with the credentials, region and endpoint of
+ * `NEXUS_FILES_S3_*`. List it after nexus-files; a disk on S3 is checked at boot with one listing,
+ * so a bucket that cannot be reached stops the app before it serves.
+ *
+ * ```echo
+ * nexus::files::Extension(),
+ * nexus::files::s3::Extension(),
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public calendar::Clock $clock;
+
+    public constructor(clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->clock = $clock;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-files-s3';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        nexus::files::DiskTable $table = guard $s->find<nexus::files::DiskTable>() else {
+            return .error(.extension('nexus-files-s3', 'list nexus::files::Extension() before nexus::files::s3::Extension()'));
+        };
+        S3Config $config = $s->get<S3Config>();
+        if ($config->timeout <= std::time::duration::zero()) {
+            return .error(.extension('nexus-files-s3', "NEXUS_FILES_S3_TIMEOUT is {$config->timeout}; expected more than 0s"));
+        }
+        calendar::Clock $clock = $this->clock;
+        $table->opener('s3', function[$config, $clock](string $url) : result<nexus::files::Store, string> {
+            Bucket $b = try Bucket::of($url, $config);
+            return .ok(S3Store($b, $config, clock: $clock) as nexus::files::Store);
+        });
+        return .ok;
+    }
+}

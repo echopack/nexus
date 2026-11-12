@@ -1,0 +1,250 @@
+namespace nexus;
+
+// the most parts one body may have, and the most header bytes one part may have
+internal const usize MULTIPART_PARTS = 1000;
+internal const usize MULTIPART_HEAD = 8192;
+
+/**
+ * One part of a `multipart/form-data` body: a form field, or a file when it has a file name.
+ */
+public struct FormPart
+{
+    public string $name;
+
+    /**
+     * The file name the client gave, as sent; null for a plain field.
+     */
+    public string? $filename;
+
+    /**
+     * The part's `Content-Type`: `text/plain` when a field names none, `application/octet-stream`
+     * for a file that names none.
+     */
+    public string $type;
+    public string $bytes;
+
+    public const function file() : bool
+    {
+        return $this->filename != null;
+    }
+}
+
+/**
+ * Reads `multipart/form-data` bodies (RFC 7578). The whole body is in memory already, capped by
+ * the transport (`Serve.maxBody`, 8 MiB); this only cuts it into parts, with limits of its own on what
+ * the cutting could be made to do: at most 1000 parts and 8 KiB of headers per part.
+ */
+public struct Multipart
+{
+    /**
+     * The parts of `$body`, whose full `Content-Type` header is `$contentType` (with its
+     * `boundary`). A body that is not well formed is a 400.
+     */
+    public static function parse(const string& $contentType, const string& $body) : result<array<FormPart>, Problem>
+    {
+        string $boundary = guard Multipart::boundary($contentType) else {
+            return .error(.badRequest('the multipart body names no valid boundary'));
+        };
+        string $dash = "--{$boundary}";
+        string $delimiter = "\r\n--{$boundary}";
+        array<FormPart> $parts = [];
+
+        // the first delimiter opens the body or follows the preamble's line break
+        usize $at = 0;
+        if (!$body->starts($dash)) {
+            usize $first = $body->find($delimiter);
+            if ($first >= $body->size()) {
+                return .error(.badRequest('the multipart body has no parts'));
+            }
+            $at = $first + 2;
+        }
+
+        while (true) {
+            $at = $at + $dash->size();
+            if ($body->size() - $at >= 2 && $body->byte($at) == 45 && $body->byte($at + 1) == 45) {
+                return .ok($parts);
+            }
+            // padding after the delimiter, then its line break
+            while ($at < $body->size() && ($body->byte($at) == 32 || $body->byte($at) == 9)) {
+                $at = $at + 1;
+            }
+            if ($body->size() - $at < 2 || $body->byte($at) != 13 || $body->byte($at + 1) != 10) {
+                return .error(.badRequest('the multipart body has a broken delimiter'));
+            }
+            $at = $at + 2;
+            if ($parts->count() >= MULTIPART_PARTS) {
+                return .error(.badRequest('the multipart body has more than 1000 parts'));
+            }
+
+            usize $headEnd = $body->find("\r\n\r\n", $at);
+            usize $headSize = $headEnd - $at;
+            if ($headEnd >= $body->size()) {
+                // a part without headers starts with the blank line right away
+                if ($body->size() - $at >= 2 && $body->byte($at) == 13 && $body->byte($at + 1) == 10) {
+                    $headEnd = $at;
+                    $headSize = 0;
+                } else {
+                    return .error(.badRequest('a multipart part has no end to its headers'));
+                }
+            }
+            if ($headSize > MULTIPART_HEAD) {
+                return .error(.badRequest('a multipart part has too many headers'));
+            }
+            string $head = $body->sub($at, $headSize);
+            usize $content = $headEnd + 4;
+            if ($headSize == 0 && $headEnd == $at) {
+                $content = $at + 2;
+            }
+            usize $end = $body->find($delimiter, $content);
+            if ($end >= $body->size()) {
+                return .error(.badRequest('a multipart part does not end'));
+            }
+            FormPart $part = guard Multipart::part($head, $body->sub($content, $end - $content)) else ($p) {
+                return .error($p);
+            };
+            $parts[] = mv $part;
+            $at = $end + 2;
+        }
+        return .ok($parts);
+    }
+
+    /**
+     * The `boundary` parameter of a `multipart/form-data` content type, or null when it is missing
+     * or not 1 to 70 characters.
+     */
+    public static function boundary(const string& $contentType) : string?
+    {
+        array<string> $params = Multipart::params($contentType);
+        if ($params->count() == 0 || str::lower(str::trim($params[0])) != 'multipart/form-data') {
+            return null;
+        }
+        string $b = guard Multipart::param($params, 'boundary') else {
+            return null;
+        };
+        if ($b->empty() || $b->size() > 70) {
+            return null;
+        }
+        return $b;
+    }
+
+    // inside -----------------------------------------------------------------
+
+    /**
+     * A part from its header block and its content.
+     */
+    internal static function part(const string& $head, const string& $bytes) : result<FormPart, Problem>
+    {
+        string? $disposition = null;
+        string? $type = null;
+        foreach (str::split($head, "\r\n")->owned() as const &$line) {
+            if ($line->empty()) {
+                continue;
+            }
+            usize $colon = $line->find(':');
+            if ($colon >= $line->size()) {
+                return .error(.badRequest('a multipart part has a header without a colon'));
+            }
+            string $name = str::lower(str::trim($line->sub(0, $colon)));
+            string $value = string::from(str::trim($line->sub($colon + 1, $line->size() - $colon - 1)));
+            if ($name == 'content-disposition') {
+                $disposition = $value;
+            } else if ($name == 'content-type') {
+                $type = $value;
+            }
+        }
+        string $d = guard $disposition else {
+            return .error(.badRequest('a multipart part has no Content-Disposition'));
+        };
+        array<string> $params = Multipart::params($d);
+        if ($params->count() == 0 || str::lower(str::trim($params[0])) != 'form-data') {
+            return .error(.badRequest('a multipart part is not form-data'));
+        }
+        string $field = guard Multipart::param($params, 'name') else {
+            return .error(.badRequest('a multipart part has no name'));
+        };
+        string? $filename = Multipart::param($params, 'filename');
+        string $given = $type ?? '';
+        if ($given->empty()) {
+            $given = 'text/plain';
+            if ($filename != null) {
+                $given = 'application/octet-stream';
+            }
+        }
+        return .ok(FormPart($field, $filename, $given, $bytes));
+    }
+
+    /**
+     * A header value cut at the semicolons that are not inside a quoted string: the value first,
+     * then each `name=value` as written.
+     */
+    internal static function params(const string& $value) : array<string>
+    {
+        array<string> $out = [];
+        string $piece = '';
+        bool $quoted = false;
+        usize $i = 0;
+        while ($i < $value->size()) {
+            uint8 $c = $value->byte($i);
+            if ($quoted && $c == 92 && $i + 1 < $value->size()) {
+                $piece->push($c);
+                $piece->push($value->byte($i + 1));
+                $i = $i + 2;
+                continue;
+            }
+            if ($c == 34) {
+                $quoted = !$quoted;
+            }
+            if ($c == 59 && !$quoted) {
+                $out[] = mv $piece;
+                $piece = '';
+            } else {
+                $piece->push($c);
+            }
+            $i = $i + 1;
+        }
+        $out[] = mv $piece;
+        return $out;
+    }
+
+    /**
+     * The value of parameter `$name` (any case) among `$params`, unquoted, or null.
+     */
+    internal static function param(const array<string>& $params, const string& $name) : string?
+    {
+        usize $i = 1;
+        while ($i < $params->count()) {
+            string $p = string::from(str::trim($params[$i]));
+            $i = $i + 1;
+            usize $eq = $p->find('=');
+            if ($eq >= $p->size() || str::lower(str::trim($p->sub(0, $eq))) != $name) {
+                continue;
+            }
+            string $v = string::from(str::trim($p->sub($eq + 1, $p->size() - $eq - 1)));
+            if ($v->size() >= 2 && $v->byte(0) == 34 && $v->byte($v->size() - 1) == 34) {
+                return Multipart::unquote($v->sub(1, $v->size() - 2));
+            }
+            return $v;
+        }
+        return null;
+    }
+
+    /**
+     * A quoted string's content with its backslash escapes undone.
+     */
+    internal static function unquote(const string& $text) : string
+    {
+        string $out = '';
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c == 92 && $i + 1 < $text->size()) {
+                $out->push($text->byte($i + 1));
+                $i = $i + 2;
+                continue;
+            }
+            $out->push($c);
+            $i = $i + 1;
+        }
+        return $out;
+    }
+}

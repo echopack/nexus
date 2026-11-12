@@ -1,0 +1,87 @@
+namespace nexus::files;
+
+/**
+ * One disk as the signed route and the `files:*` commands find it: by name.
+ */
+public struct Shelf
+{
+    public string $name;
+    public Store $store;
+}
+
+/**
+ * Every disk the app bound, by name, and the openers of each URL scheme. Filled while the app is
+ * wired (one thread), only read once it serves.
+ */
+#[atomic]
+public class DiskTable
+{
+    public Links $links;
+    // in the order the disks were bound
+    private ordered_map<string, Shelf> $shelves = ordered_map<string, Shelf>();
+    private map<string, function<result<Store, string>(string)>> $openers = [];
+
+    public constructor(Links $links)
+    {
+        $this->links = $links;
+    }
+
+    /**
+     * Opens disks whose URL starts with `$scheme:` through `$open`, which gets the whole URL and
+     * answers the store or why not. nexus-files opens `file:` and `memory:`, nexus-files-s3 adds
+     * `s3:`.
+     */
+    public function opener(const string& $scheme, function<result<Store, string>(string)> $open) : void
+    {
+        $this->openers[$scheme] = $open;
+    }
+
+    /**
+     * Whether a disk URL of `$scheme` can be opened.
+     */
+    public const function opens(const string& $scheme) : bool
+    {
+        return $this->openers->has($scheme);
+    }
+
+    /**
+     * The store `$url` names, or why it cannot be opened.
+     */
+    public function open(const string& $url) : result<Store, string>
+    {
+        string $scheme = Disks::scheme($url);
+        if (!$this->openers->has($scheme)) {
+            if ($scheme == 's3') {
+                return .error('s3:// disks need nexus-files-s3: list nexus::files::s3::Extension() after nexus::files::Extension()');
+            }
+            return .error("'{$scheme}:' is no disk URL; expected file:path, memory: or s3://bucket/prefix");
+        }
+        function<result<Store, string>(string)> $open = $this->openers->get($scheme);
+        return $open($url);
+    }
+
+    public function add(const string& $name, Store $store) : void
+    {
+        $this->shelves[$name] = Shelf($name, $store);
+    }
+
+    public const function find(const string& $name) : Shelf?
+    {
+        if (!$this->shelves->has($name)) {
+            return null;
+        }
+        return $this->shelves->get($name);
+    }
+
+    /**
+     * The disks in the order they were bound.
+     */
+    public const function all() : array<Shelf>
+    {
+        array<Shelf> $out = [];
+        foreach ($this->shelves as $name => const &$shelf) {
+            $out[] = $shelf;
+        }
+        return $out;
+    }
+}

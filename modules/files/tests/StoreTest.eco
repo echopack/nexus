@@ -1,0 +1,148 @@
+/**
+ * The stores a disk keeps files in: in memory and in a directory, and the keys both take.
+ */
+
+use nexus::files::{Store, MemoryStore, LocalStore, Stat, Keys, FilesError};
+use ecotest::{expect, TempDir};
+
+// whether the stat found nothing, without failing
+internal function absent(result<Stat?, FilesError> $r) : bool
+{
+    Stat? $s = guard $r else {
+        return false;
+    };
+    return $s == null;
+}
+
+internal function keys(const array<Stat>& $all) : string
+{
+    array<string> $out = [];
+    foreach ($all as const &$s) {
+        $out[] = $s->key;
+    }
+    return str::join($out, ' ');
+}
+
+/**
+ * What every store does the same way.
+ */
+internal function behaves(Store $store) : void
+{
+    expect($store->put('posts/5/a.txt', 'hello world', 'text/plain'))->fine();
+    expect($store->put('posts/5/b.png', 'png', 'image/png'))->fine();
+    expect($store->put('posts/50/c.txt', 'c', 'text/plain'))->fine();
+    expect($store->put('top.txt', 'top', 'text/plain'))->fine();
+
+    expect($store->get('posts/5/a.txt'))->ok('hello world');
+    expect($store->read('posts/5/a.txt', 6, 5))->ok('world');
+    expect($store->read('posts/5/a.txt', 6, 500))->ok('world');
+    expect($store->read('posts/5/a.txt', 600, 5))->ok('');
+    FilesError $gone = expect($store->get('posts/5/none.txt'))->fails();
+    expect($gone->missing())->yes(says: 'a missing file is missing');
+
+    Stat $s = expect(expect($store->stat('posts/5/a.txt'))->ok())->some();
+    expect($s->size)->is(11);
+    expect($s->etag->starts('"'))->yes(says: 'the etag is quoted');
+    expect(absent($store->stat('posts/5')))->yes(says: 'nothing is kept there');
+
+    // a prefix is the start of a key, not a directory
+    expect(keys(expect($store->list('posts/5'))->ok()))->is('posts/5/a.txt posts/5/b.png posts/50/c.txt');
+    expect(keys(expect($store->list('posts/5/'))->ok()))->is('posts/5/a.txt posts/5/b.png');
+    expect(expect($store->list(''))->ok())->size(4);
+    expect(expect($store->list('nothing/'))->ok())->empty();
+
+    // a write replaces, and the version changes with it
+    expect($store->put('posts/5/a.txt', 'hello again', 'text/plain'))->fine();
+    Stat $again = expect(expect($store->stat('posts/5/a.txt'))->ok())->some();
+    expect($again->etag != $s->etag)->yes(says: 'a new version has a new etag');
+
+    expect($store->copy('posts/5/a.txt', 'copies/a.txt'))->fine();
+    expect($store->get('copies/a.txt'))->ok('hello again');
+    expect($store->delete('copies/a.txt'))->fine();
+    expect($store->delete('copies/a.txt'))->fine();
+    expect(absent($store->stat('copies/a.txt')))->yes(says: 'nothing is kept there');
+
+    // a move replaces what was there and leaves nothing behind
+    expect($store->put('moved/a.txt', 'old', 'text/plain'))->fine();
+    expect($store->copy('posts/5/a.txt', 'moving/a.txt'))->fine();
+    expect($store->move('moving/a.txt', 'moved/a.txt'))->fine();
+    expect($store->get('moved/a.txt'))->ok('hello again');
+    expect(absent($store->stat('moving/a.txt')))->yes(says: 'the original is gone');
+    FilesError $none = expect($store->move('moving/a.txt', 'moved/b.txt'))->fails();
+    expect($none->missing())->yes(says: 'a missing file is missing');
+    expect($store->delete('moved/a.txt'))->fine();
+
+    $tmp = TempDir();
+    string $out = $tmp->file('out');
+    expect($store->saveTo('posts/5/b.png', $out))->fine();
+    expect(std::fs::readfile($out))->ok('png');
+    expect($store->putFile('from/file.txt', $out, 'text/plain'))->fine();
+    expect($store->get('from/file.txt'))->ok('png');
+}
+
+test memory_keeps_files_in_the_process
+{
+    $m = MemoryStore();
+    behaves($m);
+    expect($m->describe())->is('memory:');
+    Stat $s = expect(expect($m->stat('posts/5/b.png'))->ok())->some();
+    expect($s->type)->is('image/png');
+}
+
+test a_directory_keeps_files_whole_and_typed_by_their_key
+{
+    $tmp = TempDir();
+    string $root = $tmp->file('local');
+    $l = LocalStore("{$root}/");
+    expect($l->describe())->is("file:{$root}");
+    expect($l->check())->fine();
+    behaves($l);
+    Stat $s = expect(expect($l->stat('posts/5/b.png'))->ok())->some();
+    expect($s->type)->is('image/png');
+    expect($l->file('posts/5/a.txt'))->some("{$root}/posts/5/a.txt");
+
+    // staged writes leave nothing behind, and staging is never listed
+    std::fs::dir $staged = expect(std::fs::opendir("{$root}/.nexus-staging"))->ok();
+    int32 $left = 0;
+    foreach ($staged as $entry) {
+        $left++;
+    }
+    expect($left)->is(0);
+    expect(std::fs::writefile("{$root}/.nexus-staging/stray", 'x'))->ok();
+    string $listed = keys(expect($l->list(''))->ok());
+    expect($listed->find('.nexus-staging') >= $listed->size())->yes(says: 'staging is not listed');
+
+    // a key that starts with a dot is a file like any other
+    expect($l->put('.env', 'x', 'text/plain'))->fine();
+    expect(keys(expect($l->list(''))->ok()))->has('.env');
+
+    // a link in the directory is no file of the disk
+    expect(std::fs::writefile("{$root}/secret.txt", 'secret'))->ok();
+    expect(std::fs::symlink("{$root}/secret.txt", "{$root}/posts/link.txt"))->fine();
+    expect(absent($l->stat('posts/link.txt')))->yes(says: 'nothing is kept there');
+    expect($l->get('posts/link.txt'))->fails();
+}
+
+test keys_name_nothing_outside_their_disk
+{
+    expect(Keys::check('posts/5/cover.png'))->fine();
+    expect(Keys::check('.well/known.txt'))->fine();
+    expect(Keys::check('posts/.nexus-staging/a'))->fine();
+    expect(Keys::check('.nexus-staging'))->fails();
+    expect(Keys::check('.nexus-staging/0a1b'))->fails();
+    expect(Keys::check(''))->fails();
+    expect(Keys::check('/etc/passwd'))->fails();
+    expect(Keys::check('posts/../../etc'))->fails();
+    expect(Keys::check('posts/./a'))->fails();
+    expect(Keys::check('posts//a'))->fails();
+    expect(Keys::check('posts/'))->fails();
+    expect(Keys::check('a\\b'))->fails();
+    expect(Keys::check("a\u{0}b"))->fails();
+    expect(Keys::check(str::repeat('a', 1025)))->fails();
+    expect(Keys::prefix(''))->fine();
+    expect(Keys::prefix('posts/'))->fine();
+    expect(Keys::prefix('../'))->fails();
+    expect(Keys::type('a/b.JPG'))->is('image/jpeg');
+    expect(Keys::type('a/b'))->is('application/octet-stream');
+    expect(Keys::name('a/b/c.pdf'))->is('c.pdf');
+}

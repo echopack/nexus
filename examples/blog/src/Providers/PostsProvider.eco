@@ -7,7 +7,7 @@ use Blog::Config::BlogConfig;
 use Blog::DB::Model::{Post, UserRepository};
 use Blog::DB::Query::PostQuery;
 use Blog::DB::Repository::PostRepository;
-use Blog::Services::PostService;
+use Blog::Services::{CoverService, PostService};
 use Blog::Tools::CreatePostTool;
 use Blog::Transformers::PostTransformer;
 
@@ -46,6 +46,13 @@ public class PostsProvider : nexus::Provider
         $app->bind<PostCRUD>(scoped: function(Container $c) : PostCRUD {
             $crud = PostCRUD($c->get<PostRepository>(), $c->get<PostTransformer>());
             $crud->name = 'post';
+            // a deleted post's cover goes with it
+            CoverService $covers = $c->get<CoverService>();
+            $crud->after = function[$covers](nexus::crud::Verb $v, const Post& $p) : void {
+                if ($v == nexus::crud::Verb::delete) {
+                    $covers->forget($p->cover);
+                }
+            };
             $crud->load = function(PostQuery $q, const EchoPack::Rest::Includes& $inc) : PostQuery {
                 if ($inc->has('author')) {
                     return $q->withAuthor();

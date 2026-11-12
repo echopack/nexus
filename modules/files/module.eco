@@ -1,0 +1,43 @@
+/*
+ * nexus-files: files for nexus apps, on a disk of this machine, in memory
+ * for tests, or in S3 (nexus-files-s3, `modules/files/s3`).
+ *
+ * An app names each place it keeps files with a volume, a marker struct,
+ * and gives the disk of that volume a short name for its type:
+ *
+ *   public struct CoverVolume : nexus::files::Volume {}
+ *   public type CoverDisk = nexus::files::Disk<CoverVolume>;
+ *
+ *   $app->bindDisk<CoverVolume>('covers', url: $config->coversUrl);
+ *
+ * The URL picks where the files go: `file:storage/covers` (a directory,
+ * relative to where the app runs, or `file:///srv/covers`), `memory:` or
+ * `s3://bucket/prefix`. Code that is built with the disk keeps files under
+ * keys the app makes (`posts/5/cover-1a2b.png`), answers a request with one
+ * (`respond`, with ranges and a 304 for a current copy) and hands clients
+ * links that expire (`url`, `uploadUrl`): S3 signs them itself, the other
+ * disks are served by this module's signed route, `GET|PUT /files/...`.
+ */
+
+#[module: "nexus-files"]
+#[version: "0.1.0"]
+#[epm::license: "MIT"]
+#[epm::description: "Files for nexus apps: typed disks on a local directory, in memory or in S3, with signed links"]
+
+#[depends: "../.."]
+#[depends: "../../../container"]
+#[depends: "../../../libjson"]
+#[depends: "../../../libcrypto"]
+#[depends: "../../../calendar"]
+
+#[hook: before_build { run: "nexus", args: ["gen"] }]
+
+#[sources: "src/*.eco"]
+#[if: !NEXUS_NOGEN]
+#[sources: ".nexus/*.eco"]
+#[end]
+
+#[target: test] {
+    #[depends: "../testing"]
+    #[sources: "tests/*.eco"]
+}

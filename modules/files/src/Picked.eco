@@ -1,0 +1,29 @@
+namespace nexus::files;
+
+use std::io;
+
+/**
+ * The disk a `files:*` command names with `--disk`.
+ */
+internal struct Picked
+{
+    internal static function shelf(nexus::Kernel $k, const nexus::Invocation& $in, const string& $command) : Shelf?
+    {
+        DiskTable $table = $k->services->get<DiskTable>();
+        string $name = $in->value('disk');
+        if ($name->empty()) {
+            array<string> $names = [];
+            foreach ($table->all() as const &$s) {
+                $names[] = $s->name;
+            }
+            string $known = str::join($names, ', ');
+            io::eprintln("{$command}: --disk names the disk; the app has: {$known}");
+            return null;
+        }
+        Shelf $shelf = guard $table->find($name) else {
+            io::eprintln("{$command}: the app has no disk '{$name}'");
+            return null;
+        };
+        return $shelf;
+    }
+}

@@ -581,3 +581,57 @@ test a_change_in_a_path_dependency_makes_the_stamp_stale
     expect(stamp::digest($root / 'app', 'echoc') == $before)->no(says: 'an enum changed in ../lib');
     std::fs::remove_all($root);
 }
+
+test uploads_decode_with_file_rules
+{
+    string $upload = '{"kind":"named","name":"nexus::Upload"}';
+    $cover = genField('cover', $upload, genRule('{"key":"maxBytes","value":{"kind":"int","integer":2048}},{"key":"types","value":{"kind":"list","items":[{"kind":"string","text":"image/png"},{"kind":"string","text":"image/*"}]}}'));
+    $photos = genField('photos', '{"kind":"array","of":{"kind":"named","name":"nexus::Upload"}}', genRule('{"key":"max","value":{"kind":"int","integer":3}},{"key":"each","value":{"kind":"record","fields":[{"key":"extensions","value":{"kind":"list","items":[{"kind":"string","text":"png"}]}}]}}'));
+    $note = genField('note', '{"kind":"optional","of":{"kind":"named","name":"nexus::Upload"}}', '');
+    $p = Program(genDecls(genInputNamed('Gallery', '', "{$cover},{$photos},{$note}")));
+    expect($p->problems)->empty();
+    $code = emitter::render($p);
+    expect($code)
+        ->has("$v->at('cover', 'file', '');")
+        ->has("$rCover = $f->upload('cover', required: true);")
+        ->has('$v->maxBytes($xCover, 2048);')
+        ->has("$v->types($xCover, ['image/png', 'image/*']);")
+        ->has("$rPhotos = $f->uploads('photos', required: true);")
+        ->has('$v->maxCount($xPhotos->count(), 3);')
+        ->has("$v->item('photos', $jPhotos, 'file');")
+        ->has("$v->extensions($yPhotos, ['png']);")
+        ->has("$f->upload('note', required: false);");
+}
+
+test upload_rules_and_doors_are_checked
+{
+    string $upload = '{"kind":"named","name":"nexus::Upload"}';
+    $p1 = genProblems(genInputNamed('A', '', genField('f', $upload, genRule('{"key":"min","value":{"kind":"int","integer":1}}'))));
+    expect($p1[0])->has("'min' does not apply to a file field, which takes maxBytes, minBytes, types, extensions");
+    $p2 = genProblems(genInputNamed('A', '', genField('f', $upload, genRule('{"key":"types","value":{"kind":"list","items":[{"kind":"string","text":"png"}]}}'))));
+    expect($p2[0])->has("'png' is not a media type like 'image/png' or 'image/*'");
+    $p3 = genProblems(genInputNamed('A', '', genField('f', $upload, genRule('{"key":"extensions","value":{"kind":"list","items":[{"kind":"string","text":".png"}]}}'))));
+    expect($p3[0])->has("'.png' is not an extension");
+    $p4 = genProblems(genInputNamed('A', '', genField('f', $upload, genRule('{"key":"maxBytes","value":{"kind":"string","text":"2MB"}}'))));
+    expect($p4[0])->has("'maxBytes' takes a number of bytes");
+    $p5 = genProblems(genInputNamed('A', '', genField('s', '{"kind":"string"}', genRule('{"key":"types","value":{"kind":"list","items":[{"kind":"string","text":"image/png"}]}}'))));
+    expect($p5[0])->has("'types' does not apply to a string field");
+    $p6 = genProblems(genInputNamed('A', '', genField('fs', '{"kind":"array","of":{"kind":"named","name":"nexus::Upload"}}', genRule('{"key":"distinct","value":{"kind":"bool","boolean":true}}'))));
+    expect($p6[0])->has("'distinct' does not apply to a list field, which takes min, max, between, size, each");
+
+    // a command line and a tool call carry no files
+    $file = genInputNamed('Attach', '', genField('file', $upload, ''));
+    $ctx = genPayload();
+    string $out = '{"name":"out","type":{"kind":"ptr","to":{"kind":"named","name":"command::CLIContext"},"borrow":true,"const":false},"default":false}';
+    string $in = '{"name":"in","type":{"kind":"named","name":"shop::Attach"},"default":false}';
+    string $status = '{"kind":"named","name":"status","args":[{"kind":"named","name":"nexus::Problem"}]}';
+    string $cmd = "\{\"kind\":\"class\",\"name\":\"Put\",\"qualified\":\"shop::Put\",\"visibility\":\"public\",\"file\":\"src/Put.eco\",\"line\":3,\"tools\":[],\"conforms\":[\{\"kind\":\"named\",\"name\":\"nexus::Cli\"}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$ctx},{$out},{$in}],\"return\":{$status}}]}";
+    $p7 = genProblems("{$file},{$cmd}");
+    expect($p7)->size(1);
+    expect($p7[0])->has('option $file of shop::Attach is a file upload, which a command line cannot give');
+    $returns = genResult('{"kind":"named","name":"json::Value"}');
+    string $tool = "\{\"kind\":\"class\",\"name\":\"PutTool\",\"qualified\":\"shop::PutTool\",\"visibility\":\"public\",\"file\":\"src/PutTool.eco\",\"line\":5,\"tools\":[],\"conforms\":[\{\"kind\":\"named\",\"name\":\"nexus::mcp::Tool\"}],\"fields\":[],\"constructors\":[],\"methods\":[\{\"kind\":\"method\",\"name\":\"handle\",\"visibility\":\"public\",\"params\":[{$ctx},{$in}],\"return\":{$returns}}]}";
+    $p8 = genProblems("{$file},{$tool}");
+    expect($p8)->size(1);
+    expect($p8[0])->has('takes shop::Attach, which has a file upload; a tool call carries JSON only');
+}

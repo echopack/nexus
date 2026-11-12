@@ -1,0 +1,298 @@
+namespace nexus::files;
+
+use std::io;
+use std::time;
+
+// where writes are staged before they are renamed into place: at the top, under a name
+// `Keys::check` refuses as a key's first segment
+internal const string STAGING = '.nexus-staging';
+
+/**
+ * Files in a directory of this machine, `file:storage/covers` or `file:///srv/covers`. A write
+ * goes to a file in the directory's own `.nexus-staging/` and is renamed over its key, so a reader
+ * sees the old bytes or the new ones, never half. The media type of a file is what its key's
+ * extension says (`Keys::type`); keep files under keys with the right one.
+ *
+ * Several servers share files only when they share the directory (a network mount). Symlinks in
+ * the directory are not followed when reading: a file is what is kept there.
+ */
+#[atomic]
+public class LocalStore : Store
+{
+    public const string $root;
+
+    public constructor(const string& $root)
+    {
+        string $clean = $root;
+        while ($clean->size() > 1 && $clean->ends('/')) {
+            $clean = string::from($clean->sub(0, $clean->size() - 1));
+        }
+        $this->root = $clean;
+    }
+
+    public const function describe() : string
+    {
+        return "file:{$this->root}";
+    }
+
+    public function put(const string& $key, const string& $bytes, const string& $type) : status<FilesError>
+    {
+        string $target = $this->path($key);
+        try $this->parents($key);
+        string $staged = try $this->staging();
+        guard std::fs::writefile($staged, $bytes) else ($e) {
+            return .error(LocalStore::fail($e, $key));
+        };
+        return $this->place($staged, $target, $key);
+    }
+
+    public function putFile(const string& $key, const string& $path, const string& $type) : status<FilesError>
+    {
+        string $target = $this->path($key);
+        try $this->parents($key);
+        string $staged = try $this->staging();
+        guard std::fs::copy($path, $staged) else ($e) {
+            return .error(.io("{$path}: {$e}"));
+        };
+        return $this->place($staged, $target, $key);
+    }
+
+    public function get(const string& $key) : result<string, FilesError>
+    {
+        try $this->regular($key);
+        string $bytes = guard std::fs::readfile($this->path($key)) else ($e) {
+            return .error(LocalStore::fail($e, $key));
+        };
+        return .ok($bytes);
+    }
+
+    public function read(const string& $key, uint64 $from, uint64 $length) : result<string, FilesError>
+    {
+        try $this->regular($key);
+        io::file $f = guard std::fs::open($this->path($key), .read) else ($e) {
+            return .error(LocalStore::fail($e, $key));
+        };
+        guard $f->seek($from as int64, .start) else ($e) {
+            return .error(LocalStore::fail($e, $key));
+        };
+        string $out = '';
+        while (($out->size() as uint64) < $length) {
+            usize $want = 65536;
+            uint64 $left = $length - ($out->size() as uint64);
+            if (($want as uint64) > $left) {
+                $want = $left as usize;
+            }
+            $out->reserve($out->size() + $want);
+            usize $got = guard $f->read($out->spare(), $want) else ($e) {
+                return .error(LocalStore::fail($e, $key));
+            };
+            if ($got == 0) {
+                break;
+            }
+            $out->commit($got);
+        }
+        return .ok($out);
+    }
+
+    public function saveTo(const string& $key, const string& $path) : status<FilesError>
+    {
+        try $this->regular($key);
+        guard std::fs::copy($this->path($key), $path) else ($e) {
+            return .error(LocalStore::fail($e, $key));
+        };
+        return .ok;
+    }
+
+    public function stat(const string& $key) : result<Stat?, FilesError>
+    {
+        std::fs::fileinfo $info = guard std::fs::linkinfo($this->path($key)) else ($e) {
+            if ($e->missing() || $e->not_a_directory()) {
+                return .ok(null);
+            }
+            return .error(LocalStore::fail($e, $key));
+        };
+        if ($info->kind != std::fs::filekind::file) {
+            return .ok(null);
+        }
+        return .ok(LocalStore::stated($key, $info));
+    }
+
+    public function delete(const string& $key) : status<FilesError>
+    {
+        guard std::fs::remove($this->path($key)) else ($e) {
+            if ($e->missing() || $e->not_a_directory()) {
+                return .ok;
+            }
+            return .error(LocalStore::fail($e, $key));
+        };
+        return .ok;
+    }
+
+    public function list(const string& $prefix) : result<array<Stat>, FilesError>
+    {
+        // walk from the directory the prefix ends in, then keep the keys that start with all of it
+        string $dir = Keys::dir($prefix);
+        array<Stat> $out = [];
+        try $this->walk($dir, $prefix, $out);
+        $out->sort(key: function(const Stat& $s) : string { return $s->key; });
+        return .ok($out);
+    }
+
+    public function copy(const string& $from, const string& $to) : status<FilesError>
+    {
+        try $this->regular($from);
+        string $target = $this->path($to);
+        try $this->parents($to);
+        string $staged = try $this->staging();
+        guard std::fs::copy($this->path($from), $staged) else ($e) {
+            return .error(LocalStore::fail($e, $from));
+        };
+        return $this->place($staged, $target, $to);
+    }
+
+    /**
+     * Renames the file over `$to`: no bytes are copied, and a reader sees it under one key or the
+     * other.
+     */
+    public function move(const string& $from, const string& $to) : status<FilesError>
+    {
+        try $this->regular($from);
+        try $this->parents($to);
+        guard std::fs::rename($this->path($from), $this->path($to)) else ($e) {
+            return .error(LocalStore::fail($e, $from));
+        };
+        return .ok;
+    }
+
+    public const function file(const string& $key) : string?
+    {
+        return $this->path($key);
+    }
+
+    /**
+     * Whether the directory is there, or can be made, and takes a write.
+     */
+    public function check() : status<FilesError>
+    {
+        guard std::fs::mkdir($this->root, recursive: true) else ($e) {
+            return .error(.io("{$this->root}: {$e}"));
+        };
+        string $staged = try $this->staging();
+        guard std::fs::writefile($staged, 'probe') else ($e) {
+            return .error(.io("{$this->root}: {$e}"));
+        };
+        std::fs::remove($staged);
+        return .ok;
+    }
+
+    // inside -----------------------------------------------------------------
+
+    private const function path(const string& $key) : string
+    {
+        return "{$this->root}/{$key}";
+    }
+
+    // ok when a regular file is kept under `$key`, never a link or a directory
+    private const function regular(const string& $key) : status<FilesError>
+    {
+        std::fs::fileinfo $info = guard std::fs::linkinfo($this->path($key)) else ($e) {
+            return .error(LocalStore::fail($e, $key));
+        };
+        if ($info->kind != std::fs::filekind::file) {
+            return .error(.missing($key));
+        }
+        return .ok;
+    }
+
+    private const function parents(const string& $key) : status<FilesError>
+    {
+        string $dir = $this->root;
+        string $under = Keys::dir($key);
+        if (!$under->empty()) {
+            $dir = $this->path($under);
+        }
+        guard std::fs::mkdir($dir, recursive: true) else ($e) {
+            return .error(LocalStore::fail($e, $key));
+        };
+        return .ok;
+    }
+
+    // a fresh name in the staging directory, on the same filesystem as every key so the rename is
+    // atomic
+    private const function staging() : result<string, FilesError>
+    {
+        string $staging = STAGING;
+        string $dir = "{$this->root}/{$staging}";
+        guard std::fs::mkdir($dir, recursive: true) else ($e) {
+            return .error(.io("{$dir}: {$e}"));
+        };
+        string $nonce = guard crypto::random(12) else {
+            return .error(.io('no randomness for a staging name'));
+        };
+        string $name = crypto::hex($nonce);
+        return .ok("{$dir}/{$name}");
+    }
+
+    private const function place(const string& $staged, const string& $target, const string& $key) : status<FilesError>
+    {
+        guard std::fs::rename($staged, $target) else ($e) {
+            std::fs::remove($staged);
+            return .error(LocalStore::fail($e, $key));
+        };
+        return .ok;
+    }
+
+    private const function walk(const string& $dir, const string& $prefix, array<Stat>& $out) : status<FilesError>
+    {
+        string $at = $this->root;
+        if (!$dir->empty()) {
+            $at = $this->path($dir);
+        }
+        std::fs::dir $listing = guard std::fs::opendir($at) else ($e) {
+            if ($e->missing() || $e->not_a_directory()) {
+                return .ok;
+            }
+            return .error(.io("{$at}: {$e}"));
+        };
+        foreach ($listing as $entry) {
+            string $name = $entry->name();
+            if ($name == '.' || $name == '..' || ($dir->empty() && $name == STAGING)) {
+                continue;
+            }
+            string $key = $name;
+            if (!$dir->empty()) {
+                $key = "{$dir}/{$name}";
+            }
+            std::fs::fileinfo $info = guard std::fs::linkinfo($this->path($key)) else {
+                continue;
+            };
+            if ($info->kind == std::fs::filekind::directory) {
+                // only into directories that can hold keys with the prefix
+                if ($key->starts($prefix) || $prefix->starts("{$key}/")) {
+                    try $this->walk($key, $prefix, $out);
+                }
+            } else if ($info->kind == std::fs::filekind::file && $key->starts($prefix)) {
+                $out[] = LocalStore::stated($key, $info);
+            }
+        }
+        return .ok;
+    }
+
+    internal static function stated(const string& $key, const std::fs::fileinfo& $info) : Stat
+    {
+        uint64 $size = $info->size as uint64;
+        int64 $nanos = $info->modified->unix_nanos();
+        return Stat($key, $size, Keys::type($key), "\"{$size:x}-{$nanos:x}\"", $info->modified);
+    }
+
+    internal static function fail(const io::ioerror& $e, const string& $key) : FilesError
+    {
+        if ($e->missing() || $e->not_a_directory()) {
+            return .missing($key);
+        }
+        if ($e->denied()) {
+            return .denied("{$e}");
+        }
+        return .io("{$key}: {$e}");
+    }
+}

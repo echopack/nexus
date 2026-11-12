@@ -1,0 +1,88 @@
+namespace nexus::files::s3;
+
+/**
+ * Just enough XML for S3's answers: the text of named elements, in order. S3 never nests an
+ * element inside one of the same name, so a scan for `<Tag>` ... `</Tag>` is exact for what is
+ * read here.
+ */
+public struct Xml
+{
+    /**
+     * The raw inner text of every `<tag>` element.
+     */
+    public static function blocks(const string& $text, const string& $tag) : array<string>
+    {
+        array<string> $out = [];
+        string $open = "<{$tag}>";
+        string $close = "</{$tag}>";
+        usize $at = 0;
+        while (true) {
+            usize $start = $text->find($open, $at);
+            if ($start >= $text->size()) {
+                return $out;
+            }
+            usize $from = $start + $open->size();
+            usize $end = $text->find($close, $from);
+            if ($end >= $text->size()) {
+                return $out;
+            }
+            $out[] = $text->sub($from, $end - $from);
+            $at = $end + $close->size();
+        }
+        return $out;
+    }
+
+    /**
+     * The text of the first `<tag>`, entities decoded; null when there is none.
+     */
+    public static function value(const string& $text, const string& $tag) : string?
+    {
+        array<string> $found = Xml::blocks($text, $tag);
+        if ($found->empty()) {
+            return null;
+        }
+        return Xml::decode($found[0]);
+    }
+
+    /**
+     * The five named entities undone, once; anything else kept as it is.
+     */
+    public static function decode(const string& $text) : string
+    {
+        if ($text->find('&') >= $text->size()) {
+            return $text;
+        }
+        string $out = '';
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $b = $text->byte($i);
+            if ($b != 38) {
+                $out->push($b);
+                $i = $i + 1;
+                continue;
+            }
+            usize $semi = $text->find(';', $i);
+            if ($semi >= $text->size()) {
+                $out->push($b);
+                $i = $i + 1;
+                continue;
+            }
+            string $name = $text->sub($i + 1, $semi - $i - 1);
+            if ($name == 'amp') {
+                $out->push(38);
+            } else if ($name == 'lt') {
+                $out->push(60);
+            } else if ($name == 'gt') {
+                $out->push(62);
+            } else if ($name == 'quot') {
+                $out->push(34);
+            } else if ($name == 'apos') {
+                $out->push(39);
+            } else {
+                $out->append($text->sub($i, $semi - $i + 1));
+            }
+            $i = $semi + 1;
+        }
+        return $out;
+    }
+}

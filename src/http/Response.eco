@@ -30,6 +30,12 @@ public struct Response
     public string $protocol = '';
 
     /**
+     * A body that is part of a file on disk, sent from the file by the transport, or null. Built by
+     * `Download::respond(request, file:)`, which settles the status and the range.
+     */
+    public FileBody? $file = null;
+
+    /**
      * A body of any content type.
      */
     public constructor(int32 $status, const string& $body, type: const string& $type)
@@ -147,7 +153,8 @@ public struct Response
 
     /**
      * Drops every body so a HEAD answer carries the headers and status only. RFC 7231: HEAD must
-     * not change the connection, so a websocket upgrade is cleared too.
+     * not change the connection, so a websocket upgrade is cleared too. A file body stays: the
+     * transport sends its length for HEAD and never its bytes.
      */
     public function asHead() : void
     {

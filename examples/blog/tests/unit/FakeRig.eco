@@ -38,8 +38,8 @@ internal class FakeRig
         $auth = nexus::auth::Extension('blog', clock: $clock, cost: crypto::PasswordCost(8, 1), guards: [nexus::auth::BuiltinGuard::signed]);
         array<nexus::connect::Connector> $providers = [nexus::connect::Google()];
         array<nexus::Extension> $exts = [$db, $auth, nexus::oauth::Extension(clock: $clock), nexus::connect::Extension(connectors: $providers, clock: $clock),
-            nexus::realtime::Extension(clock: $clock), nexus::mcp::Extension(), nexus::work::Extension(), Blog::App()];
-        $vars = ['NEXUS_AUTH_KEY' => 'a-test-key-of-at-least-thirty-two-chars'];
+            nexus::realtime::Extension(clock: $clock), nexus::mcp::Extension(), nexus::work::Extension(), nexus::files::Extension(clock: $clock), Blog::App()];
+        $vars = ['NEXUS_AUTH_KEY' => 'a-test-key-of-at-least-thirty-two-chars', 'NEXUS_FILES_KEY' => 'a-files-key-of-at-least-32-chars!!', 'BLOG_COVERS_URL' => 'memory:'];
         // nothing here signs in with Google, so its token endpoint answers nothing
         $this->app = TestApp($exts, mv $vars, replace: nexus::connect::ScriptedFetch()->replacing());
         $this->api = $this->session('');

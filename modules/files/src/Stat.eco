@@ -1,0 +1,24 @@
+namespace nexus::files;
+
+use std::time;
+
+/**
+ * What a disk knows about one file.
+ */
+public struct Stat
+{
+    public string $key;
+    public uint64 $size;
+
+    /**
+     * The media type it was kept as: what the store recorded, or for a local disk what the key's
+     * extension says.
+     */
+    public string $type;
+
+    /**
+     * Its version, quoted as in a header (`"5a3-18f9c0"`); it changes whenever the bytes do.
+     */
+    public string $etag;
+    public time::timestamp? $modified;
+}

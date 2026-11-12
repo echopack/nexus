@@ -1,0 +1,89 @@
+/**
+ * Against a real S3-compatible server, when `FILES_S3_LIVE_URL` names a bucket on it
+ * (`s3://nexus-test`) and `NEXUS_FILES_S3_*` the rest; `scripts/test-live.sh` runs it on MinIO.
+ * Skipped otherwise.
+ */
+
+use nexus::files::{Stat, Presign};
+use nexus::files::s3::{S3Store, S3Config, Bucket};
+use ecotest::expect;
+
+internal function live() : S3Store?
+{
+    string $url = str::from(std::env::var('FILES_S3_LIVE_URL', ''));
+    if ($url->empty()) {
+        return null;
+    }
+    S3Config $c = S3Config(
+        $accessKey: str::from(std::env::var('NEXUS_FILES_S3_ACCESS_KEY', '')),
+        $secretKey: str::from(std::env::var('NEXUS_FILES_S3_SECRET_KEY', '')),
+        $region: str::from(std::env::var('NEXUS_FILES_S3_REGION', 'us-east-1')),
+        $endpoint: str::from(std::env::var('NEXUS_FILES_S3_ENDPOINT', '')),
+        $pathStyle: str::from(std::env::var('NEXUS_FILES_S3_PATH_STYLE', '')) == 'true'
+    );
+    int64 $pid = std::env::pid() as int64;
+    Bucket $b = expect(Bucket::of("{$url}/live-{$pid}", $c))->ok();
+    return S3Store($b, $c);
+}
+
+test the_store_keeps_reads_ranges_lists_and_streams_on_a_real_server
+{
+    S3Store $s = guard live() else {
+        return;
+    };
+    expect($s->check())->fine();
+    expect($s->put('a/one.txt', 'hello world', 'text/plain'))->fine();
+    expect($s->get('a/one.txt'))->ok('hello world');
+    expect($s->read('a/one.txt', 6, 5))->ok('world');
+    expect($s->read('a/one.txt', 100, 5))->ok('');
+    Stat $st = expect(expect($s->stat('a/one.txt'))->ok())->some();
+    expect($st->size)->is(11);
+    expect($st->type)->is('text/plain');
+    expect($st->etag->starts('"'))->yes(says: 'S3 quotes its etag');
+
+    $tmp = ecotest::TempDir();
+    string $path = $tmp->file('big.bin');
+    string $big = str::repeat('0123456789abcdef', 70000);
+    expect(std::fs::writefile($path, $big))->ok();
+    expect($s->putFile('a/big.bin', $path, 'application/octet-stream'))->fine();
+    std::fs::remove($path);
+    expect($s->saveTo('a/big.bin', $path))->fine();
+    expect(std::fs::readfile($path))->ok($big);
+    std::fs::remove($path);
+
+    // more keys than one page lists
+    int32 $i = 0;
+    while ($i < 3) {
+        expect($s->put("b/{$i}.txt", 'x', 'text/plain'))->fine();
+        $i++;
+    }
+    expect(expect($s->list('b/'))->ok())->size(3);
+    expect(expect($s->list(''))->ok())->size(5);
+
+    expect($s->copy('a/one.txt', 'c/copy.txt'))->fine();
+    expect($s->get('c/copy.txt'))->ok('hello world');
+
+    // a presigned GET is fetched without credentials
+    nexus::Url $u = expect($s->presign(Presign(.get, 'a/one.txt', .mins(5))))->ok();
+    curl::Response $got = expect(curl::send(curl::Request(.get, $u->text())))->ok();
+    expect($got->status)->is(200);
+    expect($got->body)->is('hello world');
+
+    // and a presigned PUT takes a body of the type it names
+    Presign $ask = Presign(.put, 'd/up.txt', .mins(5));
+    $ask->type = 'text/plain';
+    nexus::Url $up = expect($s->presign($ask))->ok();
+    curl::Request $r = curl::Request(.put, $up->text());
+    $r->body = 'uploaded';
+    $r->header('Content-Type', 'text/plain');
+    curl::Response $put = expect(curl::send($r))->ok();
+    expect($put->status)->is(200);
+    expect($s->get('d/up.txt'))->ok('uploaded');
+
+    foreach (expect($s->list(''))->ok() as const &$f) {
+        expect($s->delete($f->key))->fine();
+    }
+    expect(expect($s->list(''))->ok())->empty();
+    expect($s->delete('a/none.txt'))->fine();
+    expect(expect($s->stat('a/one.txt'))->ok())->none();
+}

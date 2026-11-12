@@ -1,0 +1,32 @@
+namespace nexus::files;
+
+use std::time;
+
+/**
+ * The files settings, read from `NEXUS_FILES_KEY`, `NEXUS_FILES_EXPIRES` and `NEXUS_FILES_ROUTE`.
+ * Where each disk keeps its files is the app's own setting (`BLOG_COVERS_URL`), handed to
+ * `bindDisk`.
+ */
+#[nexus::config: "NEXUS_FILES"]
+public struct FilesConfig
+{
+    /**
+     * Signs the links of the disks nexus-files serves itself (a directory, memory); at least 32
+     * characters. Changing it ends every link handed out.
+     */
+    #[nexus::env: 'KEY']
+    #[nexus::secret]
+    public string $key = '';
+
+    /**
+     * How long a link lasts when the code names no time, like `15m`.
+     */
+    #[nexus::env: 'EXPIRES']
+    public time::duration $expires = std::time::duration::mins(15);
+
+    /**
+     * Where the signed route answers: `/files/<disk>/<key>`.
+     */
+    #[nexus::env: 'ROUTE']
+    public string $route = '/files';
+}

@@ -1,0 +1,9 @@
+namespace Blog::Disks;
+
+/**
+ * Where the posts' cover images are kept: `BLOG_COVERS_URL`, a directory by default, S3 in
+ * production, memory in the tests.
+ */
+public struct CoverVolume : nexus::files::Volume {}
+
+public type CoverDisk = nexus::files::Disk<CoverVolume>;

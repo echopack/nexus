@@ -1,0 +1,58 @@
+namespace nexus::files;
+
+use std::io;
+
+/**
+ * `files:list --disk <name> [--prefix <p>]`: every file of a disk, or those whose key starts with
+ * the prefix, with size and type.
+ */
+public class ListCommand : nexus::Command
+{
+    public const function name() : string
+    {
+        return 'files:list';
+    }
+
+    public const function summary() : string
+    {
+        return 'list the files of a disk';
+    }
+
+    public const function options() : array<nexus::CommandOption>
+    {
+        array<nexus::CommandOption> $out = [];
+        $out[] = nexus::CommandOption(value: 'disk', '<name>', 'the disk, as the app bound it');
+        $out[] = nexus::CommandOption(value: 'prefix', '<key>', 'only keys that start with this');
+        return $out;
+    }
+
+    public const function bound(container::Container $services) : bool
+    {
+        return $services->has<DiskTable>();
+    }
+
+    public function run(nexus::Invocation& $in) : int32
+    {
+        nexus::Kernel $k = guard $in->kernel() else {
+            return 1;
+        };
+        Shelf $shelf = guard Picked::shelf($k, $in, 'files:list') else {
+            return 1;
+        };
+        string $prefix = $in->value('prefix');
+        guard Keys::prefix($prefix) else ($e) {
+            io::eprintln("files:list: {$e->message()}");
+            return 1;
+        };
+        array<Stat> $all = guard $shelf->store->list($prefix) else ($e) {
+            io::eprintln("files:list: {$e->message()}");
+            return 1;
+        };
+        foreach ($all as const &$s) {
+            $in->out->line("{$s->size:>10}  {$s->type}  {$s->key}");
+        }
+        usize $n = $all->count();
+        $in->out->line("{$n} files in {$shelf->store->describe()}");
+        return 0;
+    }
+}

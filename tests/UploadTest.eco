@@ -1,0 +1,226 @@
+/**
+ * Multipart bodies and the files in them: cutting a body into parts, reading files as input fields,
+ * and the rules a file has to pass.
+ */
+
+use nexus::{Multipart, FormPart, Fields, Query, Upload, Check, Problem};
+use ecotest::expect;
+
+internal function form(const array<string>& $parts) : string
+{
+    string $out = '';
+    foreach ($parts as const &$p) {
+        $out->append("--XyZ\r\n");
+        $out->append($p);
+        $out->append("\r\n");
+    }
+    $out->append("--XyZ--\r\n");
+    return $out;
+}
+
+internal function parses(const string& $type, const string& $body) : bool
+{
+    return Multipart::parse($type, $body)->has_value();
+}
+
+internal function png() : string
+{
+    string $b = '';
+    $b->push(137);
+    $b->append("PNG\r\n\u{1a}\n");
+    $b->append('rest of it');
+    return $b;
+}
+
+test a_multipart_body_is_cut_into_fields_and_files
+{
+    string $image = png();
+    string $parts3 = form([
+        "Content-Disposition: form-data; name=\"title\"\r\n\r\nHello\r\nworld",
+        "Content-Disposition: form-data; name=\"cover\"; filename=\"C:\\\\x\\\\me.png\"\r\nContent-Type: image/png\r\n\r\n{$image}",
+        "content-disposition: form-data; name=\"note\"; filename=\"a \\\"b\\\".txt\"\r\n\r\n",
+    ]);
+    string $body = "preamble\r\n{$parts3}";
+    array<FormPart> $parts = guard Multipart::parse('multipart/form-data; boundary="XyZ"', $body) else {
+        die('the body parses');
+    };
+    expect($parts)->size(3);
+    expect($parts[0]->name)->is('title');
+    expect($parts[0]->file())->no();
+    expect($parts[0]->type)->is('text/plain');
+    expect($parts[0]->bytes)->is("Hello\r\nworld");
+    expect($parts[1]->filename ?? '')->is('C:\\x\\me.png');
+    expect($parts[1]->type)->is('image/png');
+    expect($parts[1]->bytes)->is(png());
+    expect($parts[2]->filename ?? '')->is('a "b".txt');
+    expect($parts[2]->type)->is('application/octet-stream');
+    expect($parts[2]->bytes)->is('');
+}
+
+test a_broken_multipart_body_is_a_400
+{
+    expect(Multipart::boundary('multipart/form-data'))->none();
+    expect(Multipart::boundary('text/plain; boundary=x'))->none();
+    string $long = str::repeat('a', 71);
+    expect(Multipart::boundary("multipart/form-data; boundary={$long}"))->none();
+    expect(Multipart::boundary('Multipart/Form-Data; charset=x; BOUNDARY=abc'))->some('abc');
+
+    string $type = 'multipart/form-data; boundary=XyZ';
+    expect(parses($type, 'nothing here'))->no();
+    expect(parses($type, "--XyZ\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nno end"))->no();
+    expect(parses($type, form(["Content-Type: text/plain\r\n\r\nx"])))->no();
+    expect(parses($type, form(["Content-Disposition: attachment; name=\"a\"\r\n\r\nx"])))->no();
+    expect(parses($type, form(["Content-Disposition: form-data\r\n\r\nx"])))->no();
+    expect(parses($type, "--XyZ\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nx\r\n--XyZ+\r\n"))->no();
+    expect(parses($type, "--XyZ--\r\n"))->yes();
+}
+
+test an_upload_keeps_a_clean_name_and_knows_its_bytes
+{
+    $u = Upload('cover', "../../etc/pass\u{7}wd.PNG", 'IMAGE/PNG; x=1', png());
+    expect($u->filename)->is('passwd.PNG');
+    expect($u->type)->is('image/png');
+    expect($u->extension())->is('png');
+    expect($u->sniffed())->some('image/png');
+    expect($u->size())->is(png()->size() as uint64);
+
+    expect(Upload::sniff('%PDF-1.7'))->some('application/pdf');
+    expect(Upload::sniff('GIF89a..'))->some('image/gif');
+    expect(Upload::sniff("RIFF\u{0}\u{0}\u{0}\u{0}WEBPVP8"))->some('image/webp');
+    expect(Upload::sniff('<svg xmlns=...'))->none();
+    expect(Upload('f', '..', 'text/plain', 'x')->filename)->is('');
+    expect(Upload('f', 'noext', 'text/plain', 'x')->extension())->is('');
+    expect(Upload('f', '.hidden', 'text/plain', 'x')->extension())->is('');
+}
+
+test uploads_read_as_fields_and_rules_check_them
+{
+    Query $pairs = Query();
+    $pairs->add('title', 'Hi');
+    array<Upload> $files = [
+        Upload('cover', 'me.png', 'image/png', png()),
+        Upload('photos[]', 'a.png', 'image/png', png()),
+        Upload('photos[]', 'b.gif', 'image/png', 'GIF89a.....'),
+        Upload('fake', 'x.png', 'image/png', '<script>'),
+        Upload('sheet', 'a.csv', 'text/csv', 'a,b'),
+    ];
+    $f = Fields(pairs: mv $pairs, files: mv $files);
+    Check $v = $f->check;
+
+    $v->at('cover', 'file', '');
+    Upload $cover = expect($f->upload('cover', required: true))->some();
+    $v->maxBytes($cover, 4);
+    $v->types($cover, ['image/*']);
+    $v->extensions($cover, ['PNG', 'jpg']);
+
+    $v->at('photos', 'list', '');
+    array<Upload> $photos = expect($f->uploads('photos', required: true))->some();
+    expect($photos)->size(2);
+    $v->types($photos[1], ['image/png']);
+
+    // an image has to be one by its bytes, whatever the client said
+    $v->at('fake', 'file', '');
+    Upload $fake = expect($f->upload('fake', required: true))->some();
+    $v->types($fake, ['image/png']);
+
+    // a type no bytes tell goes by what the client said
+    $v->at('sheet', 'file', '');
+    Upload $sheet = expect($f->upload('sheet', required: true))->some();
+    $v->types($sheet, ['text/csv', 'image/*']);
+
+    $v->at('title', 'file', '');
+    expect($f->upload('title', required: true))->none();
+    $v->at('missing', 'file', '');
+    expect($f->upload('missing', required: true))->none();
+
+    status<Problem> $s = $f->done();
+    expect($s)->fails();
+    array<nexus::FieldError> $errors = $s->failure()->fields();
+    expect($errors)->size(5);
+    expect($errors[0]->code)->is('maxBytes');
+    expect($errors[0]->message)->is('The cover file must not be larger than 4 bytes.');
+    expect($errors[1]->code)->is('types');
+    expect($errors[1]->message)->is('The photos file must be of type: image/png.');
+    expect($errors[2]->field)->is('fake');
+    expect($errors[2]->code)->is('types');
+    expect($errors[3]->message)->is('The title field must be a file.');
+    expect($errors[4]->code)->is('required');
+
+    $json = Fields(json: json::object());
+    expect($json->upload('x', required: false))->none();
+    expect(Check::bytes(2097152))->is('2 MB');
+    expect(Check::bytes(1536))->is('1.5 KB');
+    expect(Check::bytes(10))->is('10 bytes');
+}
+
+internal function posted(const string& $body) : result<Fields, Problem>
+{
+    nexus::Request $r = nexus::Request(.post, '/f');
+    $r->headers->set('Content-Type', 'multipart/form-data; boundary=XyZ');
+    $r->body = $body;
+    array<nexus::log::Sink> $sinks = [];
+    nexus::Payload $p = nexus::Payload(mv $r, container::Builder()->seal(), .testing, nexus::Logger(mv $sinks, .info));
+    return Fields::body($p);
+}
+
+test a_file_input_left_empty_is_no_field
+{
+    Fields $f = guard posted(form([
+        "Content-Disposition: form-data; name=\"title\"\r\n\r\nHi",
+        "Content-Disposition: form-data; name=\"cover\"; filename=\"\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+        "Content-Disposition: form-data; name=\"note\"; filename=\"\"\r\n\r\nsome bytes",
+    ])) else {
+        die('the body parses');
+    };
+    expect($f->has('cover'))->no();
+    expect($f->upload('cover', required: false))->none();
+    expect($f->upload('note', required: true))->some();
+    expect($f->upload('cover', required: true))->none();
+    array<nexus::FieldError> $errors = $f->done()->failure()->fields();
+    expect($errors)->size(1);
+    expect($errors[0]->code)->is('required');
+}
+
+test a_file_under_a_text_name_is_refused_as_the_wrong_type
+{
+    Query $pairs = Query();
+    $pairs->add('tags[x]', 'a');
+    array<Upload> $files = [
+        Upload('title', 'x', 'text/plain', 'Hi'),
+        Upload('on', 'x', 'text/plain', 'true'),
+        Upload('day', 'x', 'text/plain', '2026-10-28'),
+        Upload('names', 'x', 'text/plain', 'a'),
+        Upload('n[]', 'x', 'text/plain', '1'),
+    ];
+    $f = Fields(pairs: mv $pairs, files: mv $files);
+    expect($f->string('title', required: true))->none();
+    expect($f->bool('on', required: true))->none();
+    expect($f->date('day', required: true))->none();
+    expect($f->json('title', required: true))->none();
+    expect($f->strings('names', required: true))->none();
+    expect($f->strings('tags', required: true))->none();
+    expect($f->ints('n', required: true))->none();
+    array<nexus::FieldError> $errors = $f->done()->failure()->fields();
+    expect($errors)->size(7);
+    foreach ($errors as const &$e) {
+        expect($e->code)->is('type');
+    }
+}
+
+test nested_form_inputs_that_hold_only_files_are_read
+{
+    Query $pairs = Query();
+    $pairs->add('attachments[2][label]', 'third');
+    array<Upload> $files = [
+        Upload('attachments[1][file]', 'b.png', 'image/png', png()),
+        Upload('attachments[0][file]', 'a.png', 'image/png', png()),
+        Upload('attachments[2][file]', 'c.png', 'image/png', png()),
+    ];
+    $f = Fields(pairs: mv $pairs, files: mv $files);
+    array<Fields> $items = expect($f->objects('attachments', required: true))->some();
+    expect($items)->size(3);
+    expect(expect($items[0]->upload('file', required: true))->some()->filename)->is('a.png');
+    expect(expect($items[1]->upload('file', required: true))->some()->filename)->is('b.png');
+    expect($items[2]->string('label', required: true))->some('third');
+    expect($f->done()->has_value())->yes(says: 'the fields check out');
+}

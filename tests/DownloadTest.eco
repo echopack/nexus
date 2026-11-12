@@ -1,0 +1,176 @@
+/**
+ * Files sent to clients: one byte range, a client's copy that is current, and how a browser is told
+ * to treat what it gets.
+ */
+
+use nexus::{ByteRange, RangeAsk, Download, Request, Response, Method};
+use ecotest::expect;
+
+internal function asked(const string& $header, uint64 $size) : string
+{
+    return match (ByteRange::parse($header, $size)) {
+        RangeAsk::whole => 'whole',
+        RangeAsk::unsatisfiable => 'none',
+        RangeAsk::part($r) => "{$r->from}+{$r->length}",
+    };
+}
+
+internal function ranged(const string& $range) : Request
+{
+    Request $r = Request(.get, '/f');
+    $r->headers->set('Range', $range);
+    return $r;
+}
+
+test a_range_header_asks_for_one_part_or_the_whole
+{
+    expect(asked('bytes=0-9', 100))->is('0+10');
+    expect(asked('bytes=90-', 100))->is('90+10');
+    expect(asked('bytes=-5', 100))->is('95+5');
+    expect(asked('bytes=95-500', 100))->is('95+5');
+    expect(asked('bytes=-500', 100))->is('0+100');
+    expect(asked('BYTES=1-1', 100))->is('1+1');
+    expect(asked('bytes=100-', 100))->is('none');
+    expect(asked('bytes=-0', 100))->is('none');
+    expect(asked('bytes=0-', 0))->is('none');
+
+    // what is not served as a part is the whole
+    expect(asked('bytes=0-1,5-6', 100))->is('whole');
+    expect(asked('items=0-1', 100))->is('whole');
+    expect(asked('bytes=5-1', 100))->is('whole');
+    expect(asked('bytes=a-b', 100))->is('whole');
+    expect(asked('bytes=-', 100))->is('whole');
+}
+
+test bytes_are_answered_whole_in_part_or_not_at_all
+{
+    Download $d = Download('text/plain', 10, etag: '"v1"');
+    Response $whole = $d->respond(Request(.get, '/f'), bytes: '0123456789');
+    expect($whole->status)->is(200);
+    expect($whole->body)->is('0123456789');
+    expect($whole->header('Accept-Ranges') ?? '')->is('bytes');
+    expect($whole->header('ETag') ?? '')->is('"v1"');
+
+    Response $part = $d->respond(ranged('bytes=2-4'), bytes: '0123456789');
+    expect($part->status)->is(206);
+    expect($part->body)->is('234');
+    expect($part->header('Content-Range') ?? '')->is('bytes 2-4/10');
+
+    Response $past = $d->respond(ranged('bytes=20-'), bytes: '0123456789');
+    expect($past->status)->is(416);
+    expect($past->body)->is('');
+    expect($past->header('Content-Range') ?? '')->is('bytes */10');
+}
+
+test a_file_is_answered_with_the_slice_to_send
+{
+    Download $d = Download('application/pdf', 1000);
+    Response $part = $d->respond(ranged('bytes=-100'), file: '/srv/a.pdf');
+    expect($part->status)->is(206);
+    nexus::FileBody $f = expect($part->file)->some();
+    expect($f->path)->is('/srv/a.pdf');
+    expect($f->offset)->is(900);
+    expect($f->length)->is(100);
+
+    Response $whole = $d->respond(Request(.get, '/f'), file: '/srv/a.pdf');
+    nexus::FileBody $all = expect($whole->file)->some();
+    expect($all->offset)->is(0);
+    expect($all->length)->is(1000);
+
+    Response $past = $d->respond(ranged('bytes=1000-'), file: '/srv/a.pdf');
+    expect($past->status)->is(416);
+    expect($past->file)->none();
+}
+
+test a_current_copy_is_a_304
+{
+    std::time::timestamp $at = std::time::timestamp::from_unix_secs(1793000000);
+    Download $d = Download('image/png', 4, etag: '"v2"', modified: $at);
+
+    Request $tagged = Request(.get, '/f');
+    $tagged->headers->set('If-None-Match', 'W/"v1", "v2"');
+    Response $same = $d->respond($tagged, bytes: 'abcd');
+    expect($same->status)->is(304);
+    expect($same->body)->is('');
+    expect($same->header('ETag') ?? '')->is('"v2"');
+    expect($same->header('Content-Type'))->none();
+
+    Request $other = Request(.get, '/f');
+    $other->headers->set('If-None-Match', '"v1"');
+    $other->headers->set('If-Modified-Since', 'Sun, 25 Oct 2026 00:00:00 GMT');
+    expect($d->respond($other, bytes: 'abcd')->status)->is(200);
+
+    string $lastModified = expect($same->header('Last-Modified'))->some();
+    Request $since = Request(.get, '/f');
+    $since->headers->set('If-Modified-Since', $lastModified);
+    expect($d->respond($since, bytes: 'abcd')->status)->is(304);
+
+    Request $older = Request(.get, '/f');
+    $older->headers->set('If-Modified-Since', 'Thu, 01 Jan 2026 00:00:00 GMT');
+    expect($d->respond($older, bytes: 'abcd')->status)->is(200);
+
+    // only reads are answered from the client's copy
+    Request $put = Request(.put, '/f');
+    $put->headers->set('If-None-Match', '"v2"');
+    expect($d->respond($put, bytes: 'abcd')->status)->is(200);
+}
+
+test if_range_serves_a_part_only_of_the_same_version
+{
+    Download $d = Download('text/plain', 10, etag: '"v2"');
+    Request $same = ranged('bytes=0-1');
+    $same->headers->set('If-Range', '"v2"');
+    expect($d->respond($same, bytes: '0123456789')->status)->is(206);
+
+    Request $changed = ranged('bytes=0-1');
+    $changed->headers->set('If-Range', '"v1"');
+    Response $whole = $d->respond($changed, bytes: '0123456789');
+    expect($whole->status)->is(200);
+    expect($whole->body)->is('0123456789');
+
+    Download $weak = Download('text/plain', 10, etag: 'W/"v2"');
+    Request $weakAsk = ranged('bytes=0-1');
+    $weakAsk->headers->set('If-Range', 'W/"v2"');
+    expect($weak->respond($weakAsk, bytes: '0123456789')->status)->is(200);
+}
+
+test only_harmless_types_are_shown_and_everything_is_sandboxed
+{
+    Download $png = Download('image/png', 1);
+    $png->inline = true;
+    expect($png->disposition())->is('inline');
+    Response $r = $png->respond(Request(.get, '/f'), bytes: 'x');
+    expect($r->header('X-Content-Type-Options') ?? '')->is('nosniff');
+    expect($r->header('Content-Security-Policy') ?? '')->is('sandbox');
+
+    Download $svg = Download('image/svg+xml', 1);
+    $svg->inline = true;
+    expect($svg->disposition())->is('attachment');
+
+    Download $html = Download('text/html; charset=utf-8', 1);
+    $html->inline = true;
+    $html->name = 'page.html';
+    expect($html->disposition())->is('attachment; filename="page.html"');
+
+    Download $pdf = Download('application/pdf', 1);
+    $pdf->inline = true;
+    $pdf->name = 'Bericht für "Q3".pdf';
+    expect($pdf->disposition())->is('inline; filename="Bericht f__r _Q3_.pdf"; filename*=UTF-8\'\'Bericht%20f%C3%BCr%20%22Q3%22.pdf');
+    expect($pdf->respond(Request(.get, '/f'), bytes: 'x')->header('Content-Security-Policy'))->none();
+}
+
+test bytes_shorter_than_the_stated_size_are_answered_as_they_are
+{
+    // the file changed between the stat that sized the download and the read of its bytes
+    Download $d = Download('text/plain', 100);
+    Response $whole = $d->respond(Request(.get, '/f'), bytes: '0123');
+    expect($whole->status)->is(200);
+    expect($whole->body)->is('0123');
+
+    Response $part = $d->respond(ranged('bytes=2-50'), bytes: '0123');
+    expect($part->status)->is(206);
+    expect($part->body)->is('23');
+    expect($part->header('Content-Range') ?? '')->is('bytes 2-3/4');
+
+    expect($d->respond(ranged('bytes=50-'), bytes: '0123')->status)->is(416);
+}

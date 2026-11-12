@@ -1,0 +1,39 @@
+namespace nexus::files;
+
+/**
+ * Answers a request with a file a store keeps on this machine or in memory.
+ */
+internal struct Serving
+{
+    /**
+     * The file under `$key` as `nexus::Download` answers it: from disk with the transport's
+     * sendfile when the store has a path for it, else from its bytes.
+     */
+    internal static function answer(const nexus::Request& $request, Store $store, const string& $key, const string& $name, bool $inline) : result<nexus::Response, nexus::Problem>
+    {
+        guard Keys::check($key) else ($e) {
+            return .error($e->problem());
+        };
+        Stat? $found = guard $store->stat($key) else ($e) {
+            return .error($e->problem());
+        };
+        Stat $s = guard $found else {
+            return .error(.notFound('file'));
+        };
+        nexus::Download $d = nexus::Download($s->type, $s->size, etag: $s->etag, modified: $s->modified);
+        $d->name = $name;
+        if ($d->name->empty()) {
+            $d->name = Keys::name($key);
+        }
+        $d->inline = $inline;
+        string? $path = $store->file($key);
+        if ($path != null) {
+            string $at = guard $path;
+            return .ok($d->respond($request, file: $at));
+        }
+        string $bytes = guard $store->get($key) else ($e) {
+            return .error($e->problem());
+        };
+        return .ok($d->respond($request, bytes: $bytes));
+    }
+}

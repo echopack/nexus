@@ -114,8 +114,38 @@ internal class KApp : nexus::Extension
             return nexus::Response(websocket: $hooks);
         };
         $s->route(nexus::Route($g, '/ws', 'KSocket', $echo, $any, $w));
+
+        array<nexus::Method> $p = [.post];
+        $upload = function(nexus::Payload& $payload) : nexus::Response {
+            nexus::Fields $f = guard nexus::Fields::body($payload) else ($problem) {
+                return nexus::Response(text: $problem->title(), status: $problem->status());
+            };
+            string $title = $f->string('title', required: true) ?? '';
+            nexus::Upload $u = guard $f->upload('cover', required: true) else {
+                return nexus::Response(text: 'no cover', status: 422);
+            };
+            string $kind = $u->kind();
+            return nexus::Response(text: "{$title}|{$u->filename}|{$kind}|{$u->size()}");
+        };
+        $s->route(nexus::Route($p, '/upload', 'KUpload', $upload, $any, $w));
+
+        $file = function(nexus::Payload& $payload) : nexus::Response {
+            nexus::Download $download = nexus::Download('text/plain', 10, etag: '"k1"');
+            return $download->respond($payload->request, file: kernelFile());
+        };
+        $s->route(nexus::Route($g, '/file', 'KFile', $file, $any, $w));
         return .ok;
     }
+}
+
+/**
+ * A ten byte file the `/file` route serves.
+ */
+internal function kernelFile() : string
+{
+    string $dir = str::from(std::env::tmp());
+    int64 $pid = std::env::pid() as int64;
+    return "{$dir}/nexus-testing-{$pid}.txt";
 }
 
 /**
@@ -296,4 +326,25 @@ test a_signed_api_signs_each_request_on_its_own
     });
     $api->get('/echo?x=1')->ok()->json('$.auth', 'GET /echo?x=1 ');
     $api->post('/echo', json: '{"a":1}')->ok()->json('$.auth', 'POST /echo {"a":1}');
+}
+
+test a_multipart_form_reaches_the_app_with_its_file
+{
+    $app = kernelApp();
+    string $png = '';
+    $png->push(137);
+    $png->append("PNG\r\n\u{1a}\nbody");
+    $form = nexus::testing::FormData()->field('title', 'Hi there')->file('cover', 'me.png', 'image/png', $png);
+    $app->api()->post('/upload', $form->body())->status(200)->body('Hi there|me.png|image/png|12');
+}
+
+test a_file_body_is_read_from_disk_in_process
+{
+    $app = kernelApp();
+    expect(std::fs::writefile(kernelFile(), '0123456789')->has_value())->yes(says: 'wrote the fixture');
+    $app->api()->get('/file')->status(200)->body('0123456789');
+    $app->api()->with('Range', 'bytes=7-')->get('/file')->status(206)->body('789')->header('Content-Range', 'bytes 7-9/10');
+    $app->api()->with('If-None-Match', '"k1"')->get('/file')->status(304)->body('');
+    $app->api()->head('/file')->status(200)->body('');
+    expect(std::fs::remove(kernelFile())->has_value())->yes(says: 'removed the fixture');
 }

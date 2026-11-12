@@ -1,0 +1,96 @@
+namespace nexus::files;
+
+/**
+ * Binds disks while an extension wires the app; nexus-app's `bindDisk` calls this. List
+ * nexus-files (and nexus-files-s3 for `s3://` disks) before the extension that binds; a problem
+ * stops the boot.
+ *
+ * ```echo
+ * nexus::files::Disks::bind<CoverVolume>($s, 'covers', url: 'file:storage/covers');
+ * ```
+ */
+public struct Disks
+{
+    /**
+     * Binds `Disk<V>` named `$name` on the store `$url` names: `file:storage/covers` (relative to
+     * where the app runs), `file:///srv/covers`, `memory:` or `s3://bucket/prefix`.
+     */
+    public static function bind<V>(nexus::Services& $s, const string& $name, url: const string& $url) : void
+    {
+        DiskTable $table = guard $s->find<DiskTable>() else {
+            $s->fail(.extension('nexus-files', 'list nexus::files::Extension() before the extension that binds disks'));
+            return;
+        };
+        if (!Disks::named($name)) {
+            $s->fail(.extension('nexus-files', "'{$name}' is no disk name; use lowercase letters, digits and dashes, like 'covers'"));
+            return;
+        }
+        if ($table->find($name) != null) {
+            $s->fail(.extension('nexus-files', "two disks are called '{$name}'"));
+            return;
+        }
+        Store $store = guard $table->open($url) else ($why) {
+            $s->fail(.extension('nexus-files', "disk {$name}: {$why}"));
+            return;
+        };
+        if (!$store->signs() && !$table->links->signing()) {
+            $s->fail(.extension('nexus-files', "disk {$name}: NEXUS_FILES_KEY signs its links and must be at least 32 characters"));
+            return;
+        }
+        $table->add($name, $store);
+        $s->bind<Disk<V>>(put: Disk<V>($name, $store, $table->links, traces: $s->get<nexus::trace::Traces>()));
+    }
+
+    /**
+     * The scheme `$url` starts with, lowercased: `file`, `memory`, `s3`; empty when it has none.
+     */
+    public static function scheme(const string& $url) : string
+    {
+        usize $colon = $url->find(':');
+        if ($colon >= $url->size()) {
+            return '';
+        }
+        return str::lower($url->sub(0, $colon));
+    }
+
+    /**
+     * The directory a `file:` URL names: `file:storage/covers` is relative to where the app runs,
+     * `file:///srv/covers` and `file:/srv/covers` absolute. Null for a host or nothing.
+     */
+    public static function directory(const string& $url) : string?
+    {
+        if (Disks::scheme($url) != 'file') {
+            return null;
+        }
+        string $rest = string::from($url->sub(5, $url->size() - 5));
+        if ($rest->starts('//')) {
+            // file:///srv: no host, then the path
+            if (!$rest->starts('///')) {
+                return null;
+            }
+            $rest = string::from($rest->sub(2, $rest->size() - 2));
+        }
+        if ($rest->empty() || $rest->find('?') < $rest->size() || $rest->find('#') < $rest->size()) {
+            return null;
+        }
+        return $rest;
+    }
+
+    // a name that reads well in a link and a command: lowercase letters, digits and dashes
+    internal static function named(const string& $name) : bool
+    {
+        if ($name->empty() || $name->size() > 40 || $name->starts('-')) {
+            return false;
+        }
+        usize $i = 0;
+        while ($i < $name->size()) {
+            uint8 $c = $name->byte($i);
+            bool $ok = ($c >= 97 && $c <= 122) || ($c >= 48 && $c <= 57) || $c == 45;
+            if (!$ok) {
+                return false;
+            }
+            $i = $i + 1;
+        }
+        return true;
+    }
+}

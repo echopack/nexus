@@ -50,7 +50,7 @@ export interface Totals {
 }
 
 export function totals(placed: Placed[], total: number): Totals {
-  const zero = { middleware: 0, action: 0, span: 0, query: 0, cache: 0, mail: 0 }
+  const zero = { middleware: 0, action: 0, span: 0, query: 0, cache: 0, mail: 0, files: 0 }
   const t: Totals = { count: { ...zero }, ms: { ...zero }, actionSelf: 0, hits: 0, misses: 0, untraced: total }
   for (const p of placed) {
     const m = p.mark

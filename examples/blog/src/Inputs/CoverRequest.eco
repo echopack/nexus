@@ -1,0 +1,11 @@
+namespace Blog::Inputs;
+
+/**
+ * Asking for a link to upload a cover straight to the store: what the image will be.
+ */
+#[nexus::input]
+public struct CoverRequest
+{
+    #[nexus::rule: { oneOf: ['image/png', 'image/jpeg', 'image/webp'] }]
+    public string $type;
+}

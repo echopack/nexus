@@ -7,9 +7,10 @@ use std::time;
  * structs. A read that fails (missing, wrong type) is refused through `check`, next to every rule
  * that fails, and `done()` answers with all of them in one 422.
  *
- * The source is a JSON object, an urlencoded form or a query string; reads look the same for all
- * three. Nested inputs are JSON objects, or bracketed keys in a form: `shipping[city]`,
- * `lines[0][qty]`, `tags[]`.
+ * The source is a JSON object, an urlencoded form, a multipart form or a query string; reads look
+ * the same for all of them. Files come only in a multipart form, read with `upload`/`uploads`.
+ * Nested inputs are JSON objects, or bracketed keys in a form: `shipping[city]`, `lines[0][qty]`,
+ * `tags[]`.
  */
 public class Fields
 {
@@ -19,8 +20,12 @@ public class Fields
     public Check $check;
 
     private json::Value $doc;
-    private Query $pairs;
     private bool $json;
+
+    /**
+     * The pairs and files of a form, shared with every input nested in it.
+     */
+    private Form $form;
 
     /**
      * The bracketed key of this input in the pairs, empty at the top: `lines[0]`.
@@ -33,39 +38,40 @@ public class Fields
     public constructor(json: json::Value $doc)
     {
         $this->doc = mv $doc;
-        $this->pairs = Query();
+        $this->form = Form(Query(), []);
         $this->json = true;
         $this->check = Check();
     }
 
     /**
-     * Fields of decoded name/value pairs (a form or a query string).
+     * Fields of decoded name/value pairs (a form or a query string), and of a multipart form its
+     * files as uploads.
      */
-    public constructor(pairs: Query $pairs)
+    public constructor(pairs: Query $pairs, files: array<Upload> $files = [])
     {
         $this->doc = json::object();
-        $this->pairs = mv $pairs;
+        $this->form = Form(mv $pairs, mv $files);
         $this->json = false;
         $this->check = Check();
     }
 
     /**
-     * A nested input: the JSON object `$doc`, or the pairs under `$base`. `$fromJson` is the
-     * parent's source; do not infer it from `$base`.
+     * A nested input: the JSON object `$doc`, or the pairs and files of `$form` under `$base`.
+     * `$fromJson` is the parent's source; do not infer it from `$base`.
      */
-    internal constructor(json: json::Value $doc, pairs: const Query& $pairs, base: const string& $base, check: Check $check, fromJson: bool $fromJson)
+    internal constructor(json: json::Value $doc, form: Form $form, base: const string& $base, check: Check $check, fromJson: bool $fromJson)
     {
         $this->doc = mv $doc;
-        $this->pairs = $pairs;
+        $this->form = $form;
         $this->base = $base;
         $this->json = $fromJson;
         $this->check = $check;
     }
 
     /**
-     * The request body as fields: JSON when the content type says so, an urlencoded form when it
-     * says that, and an empty input for an empty body. Anything else is 415; JSON that is not an
-     * object is 400.
+     * The request body as fields: JSON when the content type says so, an urlencoded or multipart
+     * form when it says that, and an empty input for an empty body. Anything else is 415; JSON that
+     * is not an object and a multipart body that does not parse are 400.
      */
     public static function body(Payload& $payload) : result<Fields, Problem>
     {
@@ -85,6 +91,28 @@ public class Fields
         if ($type == 'application/x-www-form-urlencoded') {
             return .ok(Fields(pairs: Query(parse: $payload->request->body)));
         }
+        if ($type == 'multipart/form-data') {
+            string $header = $payload->request->header('Content-Type') ?? '';
+            array<FormPart> $parts = guard Multipart::parse($header, $payload->request->body) else ($p) {
+                return .error($p);
+            };
+            Query $pairs = Query();
+            array<Upload> $files = [];
+            foreach ($parts as const &$part) {
+                string? $filename = $part->filename;
+                if ($filename == null) {
+                    $pairs->add($part->name, $part->bytes);
+                } else {
+                    string $given = guard $filename;
+                    if ($given->empty() && $part->bytes->empty()) {
+                        // a file input left empty: a browser sends it without a file name or bytes
+                        continue;
+                    }
+                    $files[] = Upload($part->name, $given, $part->type, $part->bytes);
+                }
+            }
+            return .ok(Fields(pairs: mv $pairs, files: mv $files));
+        }
         return .error(.unsupportedMedia($type));
     }
 
@@ -100,12 +128,17 @@ public class Fields
             return !$there->isNull();
         }
         string $key = $this->key($name);
-        if ($this->pairs->has($key)) {
+        if ($this->form->pairs->has($key)) {
             return true;
         }
         string $open = "{$key}[";
-        foreach ($this->pairs->pairs as const &$p) {
+        foreach ($this->form->pairs->pairs as const &$p) {
             if ($p->name->starts($open)) {
+                return true;
+            }
+        }
+        foreach ($this->form->files as const &$f) {
+            if ($f->field == $key || $f->field->starts($open)) {
                 return true;
             }
         }
@@ -135,7 +168,7 @@ public class Fields
             }
             return $s;
         }
-        return $this->pairs->get($this->key($name));
+        return $this->pair($name, 'string');
     }
 
     public function bool(const string& $name, required: bool $required) : bool?
@@ -151,7 +184,10 @@ public class Fields
             }
             return $b;
         }
-        string $raw = str::lower($this->pairs->get($this->key($name)) ?? '');
+        string $given = guard $this->pair($name, 'boolean') else {
+            return null;
+        };
+        string $raw = str::lower($given);
         if ($raw == 'true' || $raw == '1' || $raw == 'on' || $raw == 'yes') {
             return true;
         }
@@ -172,7 +208,7 @@ public class Fields
             $v = $this->value($name);
             $n = $v->asInt();
         } else {
-            $n = str::int($this->pairs->get($this->key($name)) ?? '');
+            $n = str::int($this->form->pairs->get($this->key($name)) ?? '');
         }
         if ($n == null) {
             $this->refuse($name, 'type', 'integer');
@@ -199,7 +235,7 @@ public class Fields
             if (!$this->present($name, $required, 'integer')) {
                 return null;
             }
-            uint64? $u = str::uint($this->pairs->get($this->key($name)) ?? '');
+            uint64? $u = str::uint($this->form->pairs->get($this->key($name)) ?? '');
             if ($u == null) {
                 $this->refuse($name, 'type', 'integer');
             }
@@ -249,7 +285,7 @@ public class Fields
             $v = $this->value($name);
             $n = $v->asFloat();
         } else {
-            $n = str::float($this->pairs->get($this->key($name)) ?? '');
+            $n = str::float($this->form->pairs->get($this->key($name)) ?? '');
         }
         if ($n == null) {
             $this->refuse($name, 'type', 'number');
@@ -298,7 +334,9 @@ public class Fields
         if ($this->json) {
             return $this->value($name);
         }
-        string $s = $this->pairs->get($this->key($name)) ?? '';
+        string $s = guard $this->pair($name, 'json') else {
+            return null;
+        };
         return json::str($s);
     }
 
@@ -314,7 +352,7 @@ public class Fields
             return null;
         }
         if (!$this->json) {
-            return $this->repeated($name);
+            return $this->listed($name);
         }
         $v = $this->value($name);
         array<json::Value> $items = guard $v->asArray() else {
@@ -342,7 +380,10 @@ public class Fields
         }
         array<int64> $out = [];
         if (!$this->json) {
-            foreach ($this->repeated($name) as const &$raw) {
+            array<string> $all = guard $this->listed($name) else {
+                return null;
+            };
+            foreach ($all as const &$raw) {
                 int64 $n = guard str::int($raw) else {
                     $this->refuse($name, 'type', 'list');
                     return null;
@@ -366,6 +407,50 @@ public class Fields
         return $out;
     }
 
+    // files ------------------------------------------------------------------
+
+    /**
+     * The file sent as `$name` in a multipart form. Anything else under the name (text, a JSON
+     * value) is refused as not a file.
+     */
+    public function upload(const string& $name, required: bool $required) : Upload?
+    {
+        if (!$this->present($name, $required, 'file')) {
+            return null;
+        }
+        string $key = $this->key($name);
+        foreach ($this->form->files as const &$f) {
+            if ($f->field == $key) {
+                return $f;
+            }
+        }
+        $this->refuse($name, 'type', 'file');
+        return null;
+    }
+
+    /**
+     * Every file sent as `$name`, `$name[]` or `$name[0]`, ... in the order they came.
+     */
+    public function uploads(const string& $name, required: bool $required) : array<Upload>?
+    {
+        if (!$this->present($name, $required, 'list')) {
+            return null;
+        }
+        string $key = $this->key($name);
+        string $open = "{$key}[";
+        array<Upload> $out = [];
+        foreach ($this->form->files as const &$f) {
+            if ($f->field == $key || $f->field == "{$key}[]" || Fields::indexed($f->field, $open)) {
+                $out[] = $f;
+            }
+        }
+        if ($out->empty()) {
+            $this->refuse($name, 'type', 'file');
+            return null;
+        }
+        return $out;
+    }
+
     // nested inputs ----------------------------------------------------------
 
     /**
@@ -379,15 +464,14 @@ public class Fields
         }
         $inner = $this->check->child($name);
         if (!$this->json) {
-            return Fields(json: json::nil(), pairs: $this->pairs, base: $this->key($name), check: $inner, fromJson: false);
+            return Fields(json: json::nil(), form: $this->form, base: $this->key($name), check: $inner, fromJson: false);
         }
         $v = $this->value($name);
         if (!$v->isObject()) {
             $this->refuse($name, 'type', 'object');
             return null;
         }
-        $none = Query();
-        return Fields(json: $v, pairs: $none, base: '', check: $inner, fromJson: true);
+        return Fields(json: $v, form: $this->form, base: '', check: $inner, fromJson: true);
     }
 
     /**
@@ -404,7 +488,7 @@ public class Fields
             string $key = $this->key($name);
             foreach ($this->indices($key) as const &$i) {
                 $inner = $this->check->child("{$name}.{$i}");
-                $out[] = Fields(json: json::nil(), pairs: $this->pairs, base: "{$key}[{$i}]", check: $inner, fromJson: false);
+                $out[] = Fields(json: json::nil(), form: $this->form, base: "{$key}[{$i}]", check: $inner, fromJson: false);
             }
             return $out;
         }
@@ -413,7 +497,6 @@ public class Fields
             $this->refuse($name, 'type', 'list');
             return null;
         };
-        $none = Query();
         int64 $i = 0;
         foreach ($items as const &$item) {
             if (!$item->isObject()) {
@@ -421,13 +504,21 @@ public class Fields
                 return null;
             }
             $inner = $this->check->child("{$name}.{$i}");
-            $out[] = Fields(json: $item->clone(), pairs: $none, base: '', check: $inner, fromJson: true);
+            $out[] = Fields(json: $item->clone(), form: $this->form, base: '', check: $inner, fromJson: true);
             $i = $i + 1;
         }
         return $out;
     }
 
     // inside -----------------------------------------------------------------
+
+    /**
+     * Whether `$field` is `$open` followed by a number and `]`: `photos[3]`.
+     */
+    internal static function indexed(const string& $field, const string& $open) : bool
+    {
+        return Fields::index($field, $open) != null && $field->find(']', $open->size()) == $field->size() - 1;
+    }
 
     private function refuse(const string& $name, const string& $code, const string& $kind) : void
     {
@@ -455,7 +546,7 @@ public class Fields
             return null;
         }
         if (!$this->json) {
-            return $this->pairs->get($this->key($name));
+            return $this->pair($name, $kind);
         }
         $v = $this->value($name);
         string? $s = $v->asStr();
@@ -463,6 +554,33 @@ public class Fields
             $this->refuse($name, 'type', $kind);
         }
         return $s;
+    }
+
+    /**
+     * The text of form field `$name`. A name that holds only files or nested keys is refused as not
+     * `$kind`.
+     */
+    private function pair(const string& $name, const string& $kind) : string?
+    {
+        string? $s = $this->form->pairs->get($this->key($name));
+        if ($s == null) {
+            $this->refuse($name, 'type', $kind);
+        }
+        return $s;
+    }
+
+    /**
+     * The values of repeated form field `$name`. A name that holds only files or nested keys is
+     * refused as not a list.
+     */
+    private function listed(const string& $name) : array<string>?
+    {
+        array<string> $all = $this->repeated($name);
+        if ($all->empty()) {
+            $this->refuse($name, 'type', 'list');
+            return null;
+        }
+        return $all;
     }
 
     private const function value(const string& $name) : json::Value
@@ -490,12 +608,12 @@ public class Fields
     private const function repeated(const string& $name) : array<string>
     {
         string $key = $this->key($name);
-        $out = $this->pairs->all($key);
-        foreach ($this->pairs->all("{$key}[]") as const &$v) {
+        $out = $this->form->pairs->all($key);
+        foreach ($this->form->pairs->all("{$key}[]") as const &$v) {
             $out[] = $v;
         }
         foreach ($this->indices($key) as const &$i) {
-            string? $one = $this->pairs->get("{$key}[{$i}]");
+            string? $one = $this->form->pairs->get("{$key}[{$i}]");
             if ($one != null) {
                 string $v = guard $one;
                 $out[] = mv $v;
@@ -505,32 +623,74 @@ public class Fields
     }
 
     /**
-     * The numeric indices used under `key[`, ascending, each once.
+     * The numeric indices used under `key[` by text and file fields alike, ascending, each once.
      */
     private const function indices(const string& $key) : array<int64>
     {
         string $open = "{$key}[";
-        map<int64, bool> $seen = [];
-        array<int64> $out = [];
-        foreach ($this->pairs->pairs as const &$p) {
-            if (!$p->name->starts($open)) {
-                continue;
-            }
-            usize $from = $open->size();
-            usize $close = $p->name->find(']', $from);
-            if ($close >= $p->name->size() || $close == $from) {
-                continue;
-            }
-            int64 $i = guard str::int($p->name->sub($from, $close - $from)) else {
+        array<int64> $found = [];
+        foreach ($this->form->pairs->pairs as const &$p) {
+            int64 $i = guard Fields::index($p->name, $open) else {
                 continue;
             };
-            if ($i < 0 || $seen->has($i)) {
-                continue;
-            }
-            $seen[$i] = true;
-            $out[] = $i;
+            $found[] = $i;
         }
-        $out->sort();
+        foreach ($this->form->files as const &$f) {
+            int64 $i = guard Fields::index($f->field, $open) else {
+                continue;
+            };
+            $found[] = $i;
+        }
+        $found->sort();
+        array<int64> $out = [];
+        foreach ($found as $i) {
+            if ($out->empty() || $out[$out->count() - 1] != $i) {
+                $out[] = $i;
+            }
+        }
         return $out;
+    }
+
+    /**
+     * The index `$name` has right after `$open`: `lines[3][qty]` under `lines[` is 3. Null when
+     * there is none.
+     */
+    private static function index(const string& $name, const string& $open) : int64?
+    {
+        if (!$name->starts($open)) {
+            return null;
+        }
+        usize $from = $open->size();
+        usize $close = $name->find(']', $from);
+        if ($close >= $name->size() || $close == $from) {
+            return null;
+        }
+        int64 $i = guard str::int($name->sub($from, $close - $from)) else {
+            return null;
+        };
+        if ($i < 0) {
+            return null;
+        }
+        return $i;
+    }
+}
+
+/**
+ * The pairs and files of one form, read by its fields and every input nested in them without a
+ * copy.
+ */
+internal class Form
+{
+    internal Query $pairs;
+
+    /**
+     * The files of a multipart form, keyed by their field as sent: `cover`, `photos[]`.
+     */
+    internal array<Upload> $files;
+
+    internal constructor(Query $pairs, array<Upload> $files)
+    {
+        $this->pairs = mv $pairs;
+        $this->files = mv $files;
     }
 }

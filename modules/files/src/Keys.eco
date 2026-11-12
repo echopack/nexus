@@ -1,0 +1,136 @@
+namespace nexus::files;
+
+/**
+ * What a file key may be: `/`-separated segments under the disk's root, like
+ * `posts/5/cover-1a2b.png`. Never absolute, never `.` or `..`, no backslash, no control character,
+ * at most 1024 bytes; so a key can name nothing outside its disk, on any store. The first segment
+ * is never `.nexus-staging`, where a directory disk stages its writes.
+ */
+public struct Keys
+{
+    /**
+     * Ok when `$key` is a key a disk takes.
+     */
+    public static function check(const string& $key) : status<FilesError>
+    {
+        if ($key->empty() || $key->size() > 1024 || $key->starts('/') || $key->ends('/')) {
+            return .error(.invalid($key));
+        }
+        if (!Keys::clean($key)) {
+            return .error(.invalid($key));
+        }
+        foreach (str::split($key, '/')->owned() as const &$segment) {
+            if ($segment->empty() || $segment == '.' || $segment == '..') {
+                return .error(.invalid($key));
+            }
+        }
+        string $staging = STAGING;
+        if ($key == $staging || $key->starts("{$staging}/")) {
+            return .error(.invalid($key));
+        }
+        return .ok;
+    }
+
+    /**
+     * Ok when `$prefix` may start a listing: empty for everything, else a key or the start of one.
+     */
+    public static function prefix(const string& $prefix) : status<FilesError>
+    {
+        if ($prefix->empty()) {
+            return .ok;
+        }
+        if ($prefix->size() > 1024 || $prefix->starts('/') || !Keys::clean($prefix)) {
+            return .error(.invalid($prefix));
+        }
+        foreach (str::split($prefix, '/')->owned() as const &$segment) {
+            if ($segment == '.' || $segment == '..') {
+                return .error(.invalid($prefix));
+            }
+        }
+        return .ok;
+    }
+
+    /**
+     * The media type the extension of `$key` stands for; `application/octet-stream` for one it does
+     * not know.
+     */
+    public static function type(const string& $key) : string
+    {
+        string $ext = Keys::extension($key);
+        if ($ext == 'png') { return 'image/png'; }
+        if ($ext == 'jpg' || $ext == 'jpeg') { return 'image/jpeg'; }
+        if ($ext == 'gif') { return 'image/gif'; }
+        if ($ext == 'webp') { return 'image/webp'; }
+        if ($ext == 'avif') { return 'image/avif'; }
+        if ($ext == 'svg') { return 'image/svg+xml'; }
+        if ($ext == 'ico') { return 'image/x-icon'; }
+        if ($ext == 'pdf') { return 'application/pdf'; }
+        if ($ext == 'txt') { return 'text/plain; charset=utf-8'; }
+        if ($ext == 'csv') { return 'text/csv; charset=utf-8'; }
+        if ($ext == 'md') { return 'text/markdown; charset=utf-8'; }
+        if ($ext == 'html' || $ext == 'htm') { return 'text/html; charset=utf-8'; }
+        if ($ext == 'css') { return 'text/css; charset=utf-8'; }
+        if ($ext == 'js') { return 'text/javascript; charset=utf-8'; }
+        if ($ext == 'json') { return 'application/json'; }
+        if ($ext == 'xml') { return 'application/xml'; }
+        if ($ext == 'mp4') { return 'video/mp4'; }
+        if ($ext == 'webm') { return 'video/webm'; }
+        if ($ext == 'mp3') { return 'audio/mpeg'; }
+        if ($ext == 'ogg') { return 'audio/ogg'; }
+        if ($ext == 'wav') { return 'audio/wav'; }
+        if ($ext == 'zip') { return 'application/zip'; }
+        if ($ext == 'gz') { return 'application/gzip'; }
+        return 'application/octet-stream';
+    }
+
+    /**
+     * The last segment of `$key`: the file name a download is saved under.
+     */
+    public static function name(const string& $key) : string
+    {
+        usize $from = 0;
+        usize $i = 0;
+        while ($i < $key->size()) {
+            if ($key->byte($i) == 47) {
+                $from = $i + 1;
+            }
+            $i = $i + 1;
+        }
+        return $key->sub($from, $key->size() - $from);
+    }
+
+    /**
+     * The extension of the last segment, lowercased, without the dot; empty for none.
+     */
+    public static function extension(const string& $key) : string
+    {
+        return nexus::Upload::extension(of: Keys::name($key));
+    }
+
+    /**
+     * What comes before the last segment of `$key`, without the `/`: `a/b` for `a/b/c.pdf`; empty
+     * for a key with one segment.
+     */
+    internal static function dir(const string& $key) : string
+    {
+        usize $n = $key->size() - Keys::name($key)->size();
+        if ($n == 0) {
+            return '';
+        }
+        return $key->sub(0, $n - 1);
+    }
+
+    // no backslash and no control character
+    internal static function clean(const string& $text) : bool
+    {
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c < 32 || $c == 127 || $c == 92) {
+                return false;
+            }
+            $i = $i + 1;
+        }
+        return true;
+    }
+}

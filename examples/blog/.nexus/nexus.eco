@@ -647,6 +647,284 @@ public struct ListCommentsDispatch
 }
 
 
+namespace Blog::Actions::Covers;
+
+/**
+ * Runs Blog::Actions::Covers::ConfirmCover.
+ */
+public struct ConfirmCoverDispatch
+{
+    /**
+     * Reads what Blog::Actions::Covers::ConfirmCover::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $fieldsIn = guard nexus::Fields::body($payload) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $valueIn = guard Blog::Inputs::CoverKeyDecoder::decode($payload, $fieldsIn) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::CoverKey>(mv $valueIn);
+        $action = $payload->get<Blog::Actions::Covers::ConfirmCover>();
+        $result = $action->handle($payload, $argId, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Covers::ConfirmCover unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'Makes a cover uploaded through `CoverUploadLink`\'s link the post\'s, once it checks out.';
+    }
+
+    /**
+     * What Blog::Actions::Covers::ConfirmCover offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Covers::ConfirmCoverDispatch::call($payload, $args);
+        };
+        $offer = nexus::mcp::Offer('Blog::Actions::Covers::ConfirmCover', nexus::mcp::Schema::of('{"type":"object","properties":{"id":{"type":"integer"},"key":{"type":"string","maxLength":255}},"required":["id","key"],"additionalProperties":false}'), Blog::Actions::Covers::ConfirmCoverDispatch::about(), mv $call);
+        $offer->through = [nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')];
+        return $offer;
+    }
+
+    /**
+     * Reads what Blog::Actions::Covers::ConfirmCover::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        int64? $vAId = $args->int64('id', required: true);
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $okAId = guard $vAId;
+        $valueIn = guard Blog::Inputs::CoverKeyDecoder::decode($payload, $args) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::CoverKey>(mv $valueIn);
+        $target = $payload->get<Blog::Actions::Covers::ConfirmCover>();
+        $result = $target->handle($payload, $okAId, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+/**
+ * Runs Blog::Actions::Covers::CoverUploadLink.
+ */
+public struct CoverUploadLinkDispatch
+{
+    /**
+     * Reads what Blog::Actions::Covers::CoverUploadLink::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $fieldsIn = guard nexus::Fields::body($payload) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $valueIn = guard Blog::Inputs::CoverRequestDecoder::decode($payload, $fieldsIn) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::CoverRequest>(mv $valueIn);
+        $action = $payload->get<Blog::Actions::Covers::CoverUploadLink>();
+        $result = $action->handle($payload, $argId, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Covers::CoverUploadLink unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'A link to upload a post\'s cover straight to the store, without it passing through the blog: `{key, url, method, headers, expires_at}`. Confirm the key afterwards. Only its author or an admin may ask.';
+    }
+
+    /**
+     * What Blog::Actions::Covers::CoverUploadLink offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Covers::CoverUploadLinkDispatch::call($payload, $args);
+        };
+        $offer = nexus::mcp::Offer('Blog::Actions::Covers::CoverUploadLink', nexus::mcp::Schema::of('{"type":"object","properties":{"id":{"type":"integer"},"type":{"type":"string","enum":["image/png","image/jpeg","image/webp"]}},"required":["id","type"],"additionalProperties":false}'), Blog::Actions::Covers::CoverUploadLinkDispatch::about(), mv $call);
+        $offer->through = [nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')];
+        return $offer;
+    }
+
+    /**
+     * Reads what Blog::Actions::Covers::CoverUploadLink::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        int64? $vAId = $args->int64('id', required: true);
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $okAId = guard $vAId;
+        $valueIn = guard Blog::Inputs::CoverRequestDecoder::decode($payload, $args) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::CoverRequest>(mv $valueIn);
+        $target = $payload->get<Blog::Actions::Covers::CoverUploadLink>();
+        $result = $target->handle($payload, $okAId, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+/**
+ * Runs Blog::Actions::Covers::DeleteCover.
+ */
+public struct DeleteCoverDispatch
+{
+    /**
+     * Reads what Blog::Actions::Covers::DeleteCover::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $action = $payload->get<Blog::Actions::Covers::DeleteCover>();
+        $result = $action->handle($payload, $argId);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Covers::DeleteCover unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'Takes the cover off a post and deletes it. Only its author or an admin may.';
+    }
+
+    /**
+     * What Blog::Actions::Covers::DeleteCover offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Covers::DeleteCoverDispatch::call($payload, $args);
+        };
+        $offer = nexus::mcp::Offer('Blog::Actions::Covers::DeleteCover', nexus::mcp::Schema::of('{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"],"additionalProperties":false}'), Blog::Actions::Covers::DeleteCoverDispatch::about(), mv $call);
+        $offer->through = [nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')];
+        return $offer;
+    }
+
+    /**
+     * Reads what Blog::Actions::Covers::DeleteCover::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        int64? $vAId = $args->int64('id', required: true);
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $okAId = guard $vAId;
+        $target = $payload->get<Blog::Actions::Covers::DeleteCover>();
+        $result = $target->handle($payload, $okAId);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+/**
+ * Runs Blog::Actions::Covers::ShowCover.
+ */
+public struct ShowCoverDispatch
+{
+    /**
+     * Reads what Blog::Actions::Covers::ShowCover::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $action = $payload->get<Blog::Actions::Covers::ShowCover>();
+        $result = $action->handle($payload, $argId);
+        return nexus::Reply::of($payload, $result);
+    }
+
+    /**
+     * What MCP clients read of Blog::Actions::Covers::ShowCover unless the app says more.
+     */
+    public static function about() : string
+    {
+        return 'A post\'s cover image, for anyone: the image itself, or a redirect to the store that keeps it.';
+    }
+
+    /**
+     * What Blog::Actions::Covers::ShowCover offers MCP clients, and how it runs.
+     */
+    public static function offer() : nexus::mcp::Offer
+    {
+        $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
+            return Blog::Actions::Covers::ShowCoverDispatch::call($payload, $args);
+        };
+        return nexus::mcp::Offer('Blog::Actions::Covers::ShowCover', nexus::mcp::Schema::of('{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"],"additionalProperties":false}'), Blog::Actions::Covers::ShowCoverDispatch::about(), mv $call);
+    }
+
+    /**
+     * Reads what Blog::Actions::Covers::ShowCover::handle() asks for from tool arguments,
+     * calls it and turns the result into a response.
+     */
+    public static function call(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response
+    {
+        int64? $vAId = $args->int64('id', required: true);
+        guard $args->done() else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        int64 $okAId = guard $vAId;
+        $target = $payload->get<Blog::Actions::Covers::ShowCover>();
+        $result = $target->handle($payload, $okAId);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+/**
+ * Runs Blog::Actions::Covers::UploadCover.
+ */
+public struct UploadCoverDispatch
+{
+    /**
+     * Reads what Blog::Actions::Covers::UploadCover::handle() asks for, calls it and turns
+     * the result into a response.
+     */
+    internal static function dispatch(nexus::Payload& $payload) : nexus::Response
+    {
+        int64 $argId = guard nexus::Param::int64($payload, 'id') else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $fieldsIn = guard nexus::Fields::body($payload) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $valueIn = guard Blog::Inputs::CoverUploadDecoder::decode($payload, $fieldsIn) else ($p) {
+            return nexus::Reply::problem($payload, $p);
+        };
+        $argIn = nexus::Body<Blog::Inputs::CoverUpload>(mv $valueIn);
+        $action = $payload->get<Blog::Actions::Covers::UploadCover>();
+        $result = $action->handle($payload, $argId, mv $argIn);
+        return nexus::Reply::of($payload, $result);
+    }
+}
+
+
 namespace Blog::Actions::Posts;
 
 /**
@@ -1481,6 +1759,131 @@ public struct AuthoredPostDecoder
 }
 
 /**
+ * Reads and checks a Blog::Inputs::CoverKey from request fields.
+ */
+public struct CoverKeyDecoder
+{
+    /**
+     * A Blog::Inputs::CoverKey from `$f`, or the problem holding everything refused.
+     */
+    public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<Blog::Inputs::CoverKey, nexus::Problem>
+    {
+        $value = CoverKeyDecoder::read($payload, $f);
+        try $f->done();
+        $out = guard $value;
+        return .ok(mv $out);
+    }
+
+    /**
+     * A Blog::Inputs::CoverKey from `$f`, or null when anything was refused.
+     */
+    public static function read(nexus::Payload& $payload, nexus::Fields& $f) : Blog::Inputs::CoverKey?
+    {
+        $v = $f->check;
+        $v->input = 'Blog::Inputs::CoverKey';
+        usize $before = $v->count();
+        // key
+        $v->at('key', 'string', '');
+        string? $vKey = null;
+        $rKey = $f->string('key', required: true);
+        if ($rKey != null) {
+            $xKey = guard $rKey;
+            $xKey = nexus::Check::trim($xKey);
+            $v->maxLength($xKey, 255);
+            $vKey = mv $xKey;
+        }
+        if ($v->count() != $before) {
+            return null;
+        }
+        $okKey = guard $vKey;
+        return Blog::Inputs::CoverKey($key: mv $okKey);
+    }
+}
+
+/**
+ * Reads and checks a Blog::Inputs::CoverRequest from request fields.
+ */
+public struct CoverRequestDecoder
+{
+    /**
+     * A Blog::Inputs::CoverRequest from `$f`, or the problem holding everything refused.
+     */
+    public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<Blog::Inputs::CoverRequest, nexus::Problem>
+    {
+        $value = CoverRequestDecoder::read($payload, $f);
+        try $f->done();
+        $out = guard $value;
+        return .ok(mv $out);
+    }
+
+    /**
+     * A Blog::Inputs::CoverRequest from `$f`, or null when anything was refused.
+     */
+    public static function read(nexus::Payload& $payload, nexus::Fields& $f) : Blog::Inputs::CoverRequest?
+    {
+        $v = $f->check;
+        $v->input = 'Blog::Inputs::CoverRequest';
+        usize $before = $v->count();
+        // type
+        $v->at('type', 'string', '');
+        string? $vType = null;
+        $rType = $f->string('type', required: true);
+        if ($rType != null) {
+            $xType = guard $rType;
+            $v->oneOf($xType, ['image/png', 'image/jpeg', 'image/webp']);
+            $vType = mv $xType;
+        }
+        if ($v->count() != $before) {
+            return null;
+        }
+        $okType = guard $vType;
+        return Blog::Inputs::CoverRequest($type: mv $okType);
+    }
+}
+
+/**
+ * Reads and checks a Blog::Inputs::CoverUpload from request fields.
+ */
+public struct CoverUploadDecoder
+{
+    /**
+     * A Blog::Inputs::CoverUpload from `$f`, or the problem holding everything refused.
+     */
+    public static function decode(nexus::Payload& $payload, nexus::Fields& $f) : result<Blog::Inputs::CoverUpload, nexus::Problem>
+    {
+        $value = CoverUploadDecoder::read($payload, $f);
+        try $f->done();
+        $out = guard $value;
+        return .ok(mv $out);
+    }
+
+    /**
+     * A Blog::Inputs::CoverUpload from `$f`, or null when anything was refused.
+     */
+    public static function read(nexus::Payload& $payload, nexus::Fields& $f) : Blog::Inputs::CoverUpload?
+    {
+        $v = $f->check;
+        $v->input = 'Blog::Inputs::CoverUpload';
+        usize $before = $v->count();
+        // image
+        $v->at('image', 'file', '');
+        nexus::Upload? $vImage = null;
+        $rImage = $f->upload('image', required: true);
+        if ($rImage != null) {
+            $xImage = guard $rImage;
+            $v->maxBytes($xImage, 2097152);
+            $v->types($xImage, ['image/png', 'image/jpeg', 'image/webp']);
+            $vImage = mv $xImage;
+        }
+        if ($v->count() != $before) {
+            return null;
+        }
+        $okImage = guard $vImage;
+        return Blog::Inputs::CoverUpload($image: mv $okImage);
+    }
+}
+
+/**
  * Reads and checks a Blog::Inputs::Credentials from request fields.
  */
 public struct CredentialsDecoder
@@ -2202,6 +2605,25 @@ public function generated(nexus::Generated $g) : void
     $g->action<Blog::Actions::Comments::ListComments>('Blog::Actions::Comments::ListComments', [nexus::PathParam('id', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::Comments::ListCommentsDispatch::dispatch($payload);
     });
+    $g->action<Blog::Actions::Covers::ConfirmCover>('Blog::Actions::Covers::ConfirmCover', [nexus::PathParam('id', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Covers::ConfirmCoverDispatch::dispatch($payload);
+    });
+    $g->through<Blog::Actions::Covers::ConfirmCover>([nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')]);
+    $g->action<Blog::Actions::Covers::CoverUploadLink>('Blog::Actions::Covers::CoverUploadLink', [nexus::PathParam('id', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Covers::CoverUploadLinkDispatch::dispatch($payload);
+    });
+    $g->through<Blog::Actions::Covers::CoverUploadLink>([nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')]);
+    $g->action<Blog::Actions::Covers::DeleteCover>('Blog::Actions::Covers::DeleteCover', [nexus::PathParam('id', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Covers::DeleteCoverDispatch::dispatch($payload);
+    });
+    $g->through<Blog::Actions::Covers::DeleteCover>([nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')]);
+    $g->action<Blog::Actions::Covers::ShowCover>('Blog::Actions::Covers::ShowCover', [nexus::PathParam('id', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Covers::ShowCoverDispatch::dispatch($payload);
+    });
+    $g->action<Blog::Actions::Covers::UploadCover>('Blog::Actions::Covers::UploadCover', [nexus::PathParam('id', 'integer', false)], function(nexus::Payload& $payload) : nexus::Response {
+        return Blog::Actions::Covers::UploadCoverDispatch::dispatch($payload);
+    });
+    $g->through<Blog::Actions::Covers::UploadCover>([nexus::MiddlewareRef::of<Blog::Middleware::RequireUser>('Blog::Middleware::RequireUser')]);
     $g->action<Blog::Actions::Health>('Blog::Actions::Health', [], function(nexus::Payload& $payload) : nexus::Response {
         return Blog::Actions::HealthDispatch::dispatch($payload);
     });
@@ -2249,6 +2671,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Channels::UserChannel>('Blog::Channels::UserChannel');
     $g->name<Blog::Commands::SetPassword>('Blog::Commands::SetPassword');
     $g->name<Blog::Config::BlogConfig>('Blog::Config::BlogConfig');
+    $g->name<Blog::DB::Migration::AddPostCover>('Blog::DB::Migration::AddPostCover');
     $g->name<Blog::DB::Migration::CreateComments>('Blog::DB::Migration::CreateComments');
     $g->name<Blog::DB::Migration::CreatePosts>('Blog::DB::Migration::CreatePosts');
     $g->name<Blog::DB::Migration::CreateUsers>('Blog::DB::Migration::CreateUsers');
@@ -2260,9 +2683,13 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::DB::Query::PostQuery>('Blog::DB::Query::PostQuery');
     $g->name<Blog::DB::Repository::CommentRepository>('Blog::DB::Repository::CommentRepository');
     $g->name<Blog::DB::Repository::PostRepository>('Blog::DB::Repository::PostRepository');
+    $g->name<Blog::Disks::CoverVolume>('Blog::Disks::CoverVolume');
     $g->name<Blog::Feeds::StatsFeed>('Blog::Feeds::StatsFeed');
     $g->name<Blog::Feeds::Watching>('Blog::Feeds::Watching');
     $g->name<Blog::Inputs::AuthoredPost>('Blog::Inputs::AuthoredPost');
+    $g->name<Blog::Inputs::CoverKey>('Blog::Inputs::CoverKey');
+    $g->name<Blog::Inputs::CoverRequest>('Blog::Inputs::CoverRequest');
+    $g->name<Blog::Inputs::CoverUpload>('Blog::Inputs::CoverUpload');
     $g->name<Blog::Inputs::Credentials>('Blog::Inputs::Credentials');
     $g->name<Blog::Inputs::NewComment>('Blog::Inputs::NewComment');
     $g->name<Blog::Inputs::NewPost>('Blog::Inputs::NewPost');
@@ -2279,12 +2706,14 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Middleware::ServerTiming>('Blog::Middleware::ServerTiming');
     $g->name<Blog::Providers::AuthProvider>('Blog::Providers::AuthProvider');
     $g->name<Blog::Providers::CommentsProvider>('Blog::Providers::CommentsProvider');
+    $g->name<Blog::Providers::CoversProvider>('Blog::Providers::CoversProvider');
     $g->name<Blog::Providers::PostsProvider>('Blog::Providers::PostsProvider');
     $g->name<Blog::Queues::JobLane>('Blog::Queues::JobLane');
     $g->name<Blog::Queues::WorkerLane>('Blog::Queues::WorkerLane');
     $g->name<Blog::Rules::UniqueEmail>('Blog::Rules::UniqueEmail');
     $g->name<Blog::Services::BlogUsers>('Blog::Services::BlogUsers');
     $g->name<Blog::Services::CommentService>('Blog::Services::CommentService');
+    $g->name<Blog::Services::CoverService>('Blog::Services::CoverService');
     $g->name<Blog::Services::PostService>('Blog::Services::PostService');
     $g->name<Blog::Services::SignIn>('Blog::Services::SignIn');
     $g->name<Blog::Signals::BroadcastComment>('Blog::Signals::BroadcastComment');
@@ -2302,6 +2731,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Types::Caller>('Blog::Types::Caller');
     $g->name<Blog::Types::UserContext>('Blog::Types::UserContext');
     $g->name<Blog::Actions::Posts::PostCRUD>('Blog::Actions::Posts::PostCRUD');
+    $g->name<Blog::Disks::CoverDisk>('Blog::Disks::CoverDisk');
     $g->name<Blog::Queues::JobQueue>('Blog::Queues::JobQueue');
     $g->name<Blog::Queues::WorkerQueue>('Blog::Queues::WorkerQueue');
 }
@@ -2331,8 +2761,14 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
         $xC0StatsEvery = guard $vC0StatsEvery;
         $okC0StatsEvery = mv $xC0StatsEvery;
     }
+    string $okC0CoversUrl = 'file:storage/covers';
+    $vC0CoversUrl = $s->string('BLOG_COVERS_URL', required: false);
+    if ($vC0CoversUrl != null) {
+        $xC0CoversUrl = guard $vC0CoversUrl;
+        $okC0CoversUrl = mv $xC0CoversUrl;
+    }
     try $s->done();
-    $b->param<Blog::Config::BlogConfig>(Blog::Config::BlogConfig($title: mv $okC0Title, $pageSize: $okC0PageSize, $statsEvery: mv $okC0StatsEvery));
+    $b->param<Blog::Config::BlogConfig>(Blog::Config::BlogConfig($title: mv $okC0Title, $pageSize: $okC0PageSize, $statsEvery: mv $okC0StatsEvery, $coversUrl: mv $okC0CoversUrl));
     return .ok;
 }
 
@@ -2349,6 +2785,8 @@ public function envs() : array<nexus::EnvVar>
     $all[] = nexus::EnvVar($name: 'BLOG_DEFAULT_PAGE_SIZE', $type: 'uint32', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How many posts a page lists.', $owner: 'Blog::Config::BlogConfig');
     std::time::duration $d2 = .secs(2);
     $all[] = nexus::EnvVar($name: 'BLOG_STATS_EVERY', $type: 'duration', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'How often the admin\'s live stats stream sends a fresh snapshot while somebody watches.', $owner: 'Blog::Config::BlogConfig');
+    string $d3 = 'file:storage/covers';
+    $all[] = nexus::EnvVar($name: 'BLOG_COVERS_URL', $type: 'string', $fallback: nexus::EnvVar::text($d3), $required: false, $secret: false, $doc: 'Where the posts\' cover images are kept: `file:storage/covers` (next to where the blog runs), `s3://bucket/covers` with nexus-files-s3\'s settings, or `memory:`.', $owner: 'Blog::Config::BlogConfig');
     return $all;
 }
 
@@ -2384,6 +2822,10 @@ public function tools(nexus::mcp::Offers $o) : void
     $o->add<Blog::Actions::Comments::CreateComment>(Blog::Actions::Comments::CreateCommentDispatch::offer());
     $o->add<Blog::Actions::Comments::DeleteComment>(Blog::Actions::Comments::DeleteCommentDispatch::offer());
     $o->add<Blog::Actions::Comments::ListComments>(Blog::Actions::Comments::ListCommentsDispatch::offer());
+    $o->add<Blog::Actions::Covers::ConfirmCover>(Blog::Actions::Covers::ConfirmCoverDispatch::offer());
+    $o->add<Blog::Actions::Covers::CoverUploadLink>(Blog::Actions::Covers::CoverUploadLinkDispatch::offer());
+    $o->add<Blog::Actions::Covers::DeleteCover>(Blog::Actions::Covers::DeleteCoverDispatch::offer());
+    $o->add<Blog::Actions::Covers::ShowCover>(Blog::Actions::Covers::ShowCoverDispatch::offer());
     $o->add<Blog::Actions::Health>(Blog::Actions::HealthDispatch::offer());
     $o->add<Blog::Actions::Home>(Blog::Actions::HomeDispatch::offer());
     $o->add<Blog::Actions::Posts::CreatePost>(Blog::Actions::Posts::CreatePostDispatch::offer());

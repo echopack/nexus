@@ -1,0 +1,42 @@
+namespace nexus::files;
+
+/**
+ * Marks a disk's calls put on a watched request's timeline. Outside the generic `Disk<V>`, whose
+ * statics echoc cannot call without the type argument.
+ */
+internal struct Marks
+{
+    /**
+     * A mark of `$what` on `$disk`'s `$key`, whose label is only built when a request is watched.
+     */
+    internal static function open(nexus::trace::Traces $traces, const string& $what, const string& $disk, const string& $key) : nexus::trace::Timed
+    {
+        $trace = $traces->here();
+        if ($trace == null) {
+            return nexus::trace::Timed(null, .files, $what, '');
+        }
+        return nexus::trace::Timed($trace, .files, $what, "{$disk}:{$key}");
+    }
+
+    /**
+     * `$done`, with `$m` marked failed when it failed, so the timeline shows it.
+     */
+    internal static function done(nexus::trace::Timed& $m, status<FilesError> $done) : status<FilesError>
+    {
+        if ($done->failed()) {
+            $m->fail();
+        }
+        return $done;
+    }
+
+    /**
+     * `$done`, with `$m` marked failed when it failed, so the timeline shows it.
+     */
+    internal static function done<T>(nexus::trace::Timed& $m, result<T, FilesError> $done) : result<T, FilesError>
+    {
+        if ($done->failed()) {
+            $m->fail();
+        }
+        return $done;
+    }
+}

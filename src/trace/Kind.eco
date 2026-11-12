@@ -35,6 +35,11 @@ public enum Kind : uint8
      */
     case mail = 6;
 
+    /**
+     * A read or write of a file disk.
+     */
+    case files = 7;
+
     public const function name() : string
     {
         return match ($this) {
@@ -44,6 +49,7 @@ public enum Kind : uint8
             Kind::query => 'query',
             Kind::cache => 'cache',
             Kind::mail => 'mail',
+            Kind::files => 'files',
         };
     }
 }

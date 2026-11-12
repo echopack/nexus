@@ -1,0 +1,51 @@
+namespace nexus::testing;
+
+/**
+ * A `multipart/form-data` body for a test request, with fields and files:
+ *
+ * ```echo
+ * $form = FormData()->field('title', 'Hi')->file('cover', 'me.png', 'image/png', $bytes);
+ * $reply = $app->api()->put('/v1/posts/5/cover', $form->body());
+ * ```
+ */
+public struct FormData
+{
+    public string $boundary = 'nexus-test-7c1e0f3a9b';
+    private string $text = '';
+
+    /**
+     * Adds a text field.
+     */
+    public function field(const string& $name, const string& $value) : FormData
+    {
+        $this->part("Content-Disposition: form-data; name=\"{$name}\"", $value);
+        return $this;
+    }
+
+    /**
+     * Adds a file sent as `$filename` of type `$type`.
+     */
+    public function file(const string& $name, const string& $filename, const string& $type, const string& $bytes) : FormData
+    {
+        $this->part("Content-Disposition: form-data; name=\"{$name}\"; filename=\"{$filename}\"\r\nContent-Type: {$type}", $bytes);
+        return $this;
+    }
+
+    /**
+     * The body to send, closed.
+     */
+    public const function body() : ecotest::http::Body
+    {
+        string $closed = $this->text;
+        $closed->append("--{$this->boundary}--\r\n");
+        return ecotest::http::Body(body: $closed, type: "multipart/form-data; boundary={$this->boundary}");
+    }
+
+    // one part: its boundary, `$headers`, a blank line and `$content`
+    private function part(const string& $headers, const string& $content) : void
+    {
+        $this->text->append("--{$this->boundary}\r\n{$headers}\r\n\r\n");
+        $this->text->append($content);
+        $this->text->append("\r\n");
+    }
+}

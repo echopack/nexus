@@ -16,7 +16,7 @@ public function digest(const std::fs::path& $root, const string& $echoc) : strin
 {
     $h = crypto::Sha256();
     $h->update($echoc);
-    $h->update('nexus-gen 5');
+    $h->update('nexus-gen 6');
     array<string> $files = [];
     walk($root, '.eco', $files);
     array<string> $seen = [];

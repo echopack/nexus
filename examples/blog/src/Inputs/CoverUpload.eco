@@ -1,0 +1,12 @@
+namespace Blog::Inputs;
+
+/**
+ * A post's cover image, sent as `image` in a multipart form: a PNG, JPEG or WebP by its bytes, up
+ * to 2 MB.
+ */
+#[nexus::input]
+public struct CoverUpload
+{
+    #[nexus::rule: { maxBytes: 2097152, types: ['image/png', 'image/jpeg', 'image/webp'] }]
+    public nexus::Upload $image;
+}

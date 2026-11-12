@@ -124,7 +124,7 @@ internal function field(Code& $code, const Program& $p, const FieldDecl& $f) : R
     $out->holder = $holder;
 
     // the raw value, typed
-    if ($f->shape == 'scalar') {
+    if ($f->shape == 'scalar' || $f->shape == 'files') {
         $r = types::binding("{$bare}?", "$r{$u}");
         $code->line("{$r} = $f->{$f->reader}({$wireQ}, required: {$req});");
     } else if ($f->shape == 'enum') {
@@ -196,12 +196,8 @@ internal function field(Code& $code, const Program& $p, const FieldDecl& $f) : R
         $code->begin("if (!nexus::Check::blank($x{$u}))");
     }
     if (!$f->each->empty() || !$f->eachChecks->empty()) {
-        string $itemType = 'string';
-        string $itemKind = 'string';
-        if ($f->reader == 'ints') {
-            $itemType = 'int64';
-            $itemKind = 'integer';
-        }
+        string $itemType = rules::itemType($f->reader);
+        string $itemKind = rules::kind(rules::item($f->reader));
         $itemKindQ = names::quote($itemKind);
         $code->line("{$bare} $n{$u} = [];");
         $code->line("usize $j{$u} = 0;");
@@ -257,6 +253,8 @@ internal function builtins(Code& $code, const string& $kind, const array<Rule>& 
             $code->line("$v->{$k}({$x});");
         } else if ($kind == 'date' || $kind == 'timestamp') {
             date($code, $kind, $r, $x, "{$tag}{$n}");
+        } else if ($kind == 'file') {
+            file($code, $r, $x);
         } else if ($kind == 'list') {
             if ($k == 'distinct') {
                 $code->line("$v->distinct({$x});");
@@ -293,6 +291,22 @@ internal function text(Code& $code, const Rule& $r, const string& $x, const stri
     } else {
         $code->line("$v->{$k}({$x});");
     }
+}
+
+internal function file(Code& $code, const Rule& $r, const string& $x) : void
+{
+    string $k = $r->key;
+    if ($k == 'maxBytes' || $k == 'minBytes') {
+        $n = int($r->value);
+        $code->line("$v->{$k}({$x}, {$n});");
+        return;
+    }
+    array<string> $quoted = [];
+    foreach (decl::classes($r->value) as const &$s) {
+        $quoted[] = names::quote($s);
+    }
+    $list = str::join($quoted, ', ');
+    $code->line("$v->{$k}({$x}, [{$list}]);");
 }
 
 internal function number(Code& $code, const string& $kind, const Rule& $r, const string& $x, const string& $tag) : void

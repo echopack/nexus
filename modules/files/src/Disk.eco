@@ -1,0 +1,253 @@
+namespace nexus::files;
+
+use std::time;
+
+/**
+ * The files of one volume, bound once for the whole process by `bindDisk<V>` and taken by what
+ * needs them through its constructor:
+ *
+ * ```echo
+ * public struct CoverVolume : nexus::files::Volume {}
+ * public type CoverDisk = nexus::files::Disk<CoverVolume>;
+ *
+ * // in a service built with the disk
+ * guard $this->covers->put("posts/{$id}/cover-{$tag}.png", $upload) else ($e) {
+ *     return .error($e->problem());
+ * };
+ * return $this->covers->respond($payload, $post->cover);
+ * ```
+ *
+ * Keys are the app's: `/`-separated, relative, never a file name a client sent. Every call on a
+ * request that is watched (the debug console) marks the request's timeline.
+ */
+#[atomic]
+public class Disk<V>
+{
+    /**
+     * The disk's name, in its links and in `files:*` commands.
+     */
+    public const string $name;
+
+    internal Store $store;
+    internal Links $links;
+    private nexus::trace::Traces $traces;
+
+    public constructor(const string& $name, Store $store, Links $links, traces: nexus::trace::Traces $traces = nexus::trace::Traces())
+    {
+        $this->name = $name;
+        $this->store = $store;
+        $this->links = $links;
+        $this->traces = $traces;
+    }
+
+    /**
+     * Where the files are kept, like `file:storage/covers`.
+     */
+    public const function describe() : string
+    {
+        return $this->store->describe();
+    }
+
+    /**
+     * Keeps `$bytes` under `$key` as `$type`, replacing what was there.
+     */
+    public function put(const string& $key, const string& $bytes, type: const string& $type) : status<FilesError>
+    {
+        try Keys::check($key);
+        nexus::trace::Timed $m = $this->mark('files put', $key);
+        return Marks::done($m, $this->store->put($key, $bytes, $type));
+    }
+
+    /**
+     * Keeps an uploaded file under `$key`, as the type its bytes show (else the one it was sent
+     * as).
+     */
+    public function put(const string& $key, const nexus::Upload& $upload) : status<FilesError>
+    {
+        return $this->put($key, $upload->bytes, type: $upload->kind());
+    }
+
+    /**
+     * Keeps the file at `$path` on this machine under `$key`, without reading it into memory.
+     */
+    public function putFile(const string& $key, const string& $path, type: const string& $type) : status<FilesError>
+    {
+        try Keys::check($key);
+        nexus::trace::Timed $m = $this->mark('files put', $key);
+        return Marks::done($m, $this->store->putFile($key, $path, $type));
+    }
+
+    /**
+     * The whole file under `$key`; `missing` when there is none.
+     */
+    public function get(const string& $key) : result<string, FilesError>
+    {
+        try Keys::check($key);
+        nexus::trace::Timed $m = $this->mark('files get', $key);
+        return Marks::done($m, $this->store->get($key));
+    }
+
+    /**
+     * `$length` bytes of the file from `$from`, fewer when it ends first: enough to look at what a
+     * file starts like (`nexus::Upload::sniff`) without reading all of it.
+     */
+    public function read(const string& $key, uint64 $from, uint64 $length) : result<string, FilesError>
+    {
+        try Keys::check($key);
+        nexus::trace::Timed $m = $this->mark('files read', $key);
+        return Marks::done($m, $this->store->read($key, $from, $length));
+    }
+
+    /**
+     * Writes the file under `$key` to `$path` on this machine, without reading it into memory.
+     */
+    public function saveTo(const string& $key, const string& $path) : status<FilesError>
+    {
+        try Keys::check($key);
+        nexus::trace::Timed $m = $this->mark('files get', $key);
+        return Marks::done($m, $this->store->saveTo($key, $path));
+    }
+
+    /**
+     * What is kept under `$key`, or null.
+     */
+    public function stat(const string& $key) : result<Stat?, FilesError>
+    {
+        try Keys::check($key);
+        nexus::trace::Timed $m = $this->mark('files stat', $key);
+        return Marks::done($m, $this->store->stat($key));
+    }
+
+    public function exists(const string& $key) : result<bool, FilesError>
+    {
+        Stat? $s = try $this->stat($key);
+        return .ok($s != null);
+    }
+
+    /**
+     * Forgets the file under `$key`; one that is not there is fine.
+     */
+    public function delete(const string& $key) : status<FilesError>
+    {
+        try Keys::check($key);
+        nexus::trace::Timed $m = $this->mark('files delete', $key);
+        return Marks::done($m, $this->store->delete($key));
+    }
+
+    /**
+     * Every file whose key starts with `$prefix`, by key; all of them for an empty prefix.
+     */
+    public function list(const string& $prefix) : result<array<Stat>, FilesError>
+    {
+        try Keys::prefix($prefix);
+        nexus::trace::Timed $m = $this->mark('files list', $prefix);
+        return Marks::done($m, $this->store->list($prefix));
+    }
+
+    public function copy(const string& $from, const string& $to) : status<FilesError>
+    {
+        try Keys::check($from);
+        try Keys::check($to);
+        nexus::trace::Timed $m = $this->mark('files copy', $from);
+        return Marks::done($m, $this->store->copy($from, $to));
+    }
+
+    /**
+     * Moves the file to `$to`, replacing what was there: a rename on a directory, else a copy and
+     * then a delete, so a reader may see both for a moment, never neither.
+     */
+    public function move(const string& $from, const string& $to) : status<FilesError>
+    {
+        try Keys::check($from);
+        try Keys::check($to);
+        nexus::trace::Timed $m = $this->mark('files move', $from);
+        return Marks::done($m, $this->store->move($from, $to));
+    }
+
+    /**
+     * A link anyone holding it can read the file with, for `NEXUS_FILES_EXPIRES`.
+     */
+    public function url(const string& $key) : result<nexus::Url, FilesError>
+    {
+        time::duration $expires = $this->links->expires;
+        return $this->url($key, expires: $expires);
+    }
+
+    /**
+     * A link anyone holding it can read the file with, until `$expires` from now. A browser saves
+     * it as `$name` (the key's last segment when empty), and shows it instead when `$inline` and
+     * its type is one a browser shows without running anything.
+     */
+    public function url(const string& $key, expires: time::duration $expires, name: const string& $name = '', inline: bool $inline = false) : result<nexus::Url, FilesError>
+    {
+        try Keys::check($key);
+        string $saved = $name;
+        if ($saved->empty()) {
+            $saved = Keys::name($key);
+        }
+        if ($this->store->signs()) {
+            // the type the key says, as a directory disk serves it, never one stored with the bytes
+            Presign $ask = Presign(.get, $key, $expires);
+            $ask->type = Keys::type($key);
+            $ask->disposition = nexus::Download::disposition($ask->type, name: $saved, inline: $inline);
+            return $this->store->presign($ask);
+        }
+        if (!$this->links->signing()) {
+            return .error(.unsupported('sign links without NEXUS_FILES_KEY'));
+        }
+        time::timestamp $until = $this->links->clock->now() + $expires;
+        return .ok($this->links->read($this->name, $key, $until, $saved, $inline));
+    }
+
+    /**
+     * A link a client uploads the file under `$key` with, straight to the disk: a PUT of the bytes
+     * as `$type`, until `$expires` from now. On a disk nexus-files serves, the upload may be at
+     * most `$maxBytes`; S3 cannot hold a presigned upload to a size, so `stat` the key before
+     * trusting it.
+     */
+    public function uploadUrl(const string& $key, expires: time::duration $expires, type: const string& $type, maxBytes: uint64 $maxBytes) : result<Signed, FilesError>
+    {
+        try Keys::check($key);
+        time::timestamp $until = $this->links->clock->now() + $expires;
+        map<string, string> $headers = [];
+        if (!$type->empty()) {
+            $headers['Content-Type'] = $type;
+        }
+        if ($this->store->signs()) {
+            Presign $ask = Presign(.put, $key, $expires);
+            $ask->type = $type;
+            nexus::Url $u = try $this->store->presign($ask);
+            return .ok(Signed($u, 'PUT', $headers, $until));
+        }
+        if (!$this->links->signing()) {
+            return .error(.unsupported('sign links without NEXUS_FILES_KEY'));
+        }
+        return .ok(Signed($this->links->write($this->name, $key, $until, $type, $maxBytes), 'PUT', $headers, $until));
+    }
+
+    /**
+     * The answer to a request for the file under `$key`: on a disk nexus-files serves, the file
+     * itself (or the range asked for, or a 304); on S3, a redirect to a link the store signed, good
+     * for five minutes. A missing file is a 404.
+     */
+    public function respond(nexus::Payload& $payload, const string& $key, name: const string& $name = '', inline: bool $inline = false) : result<nexus::Response, nexus::Problem>
+    {
+        if ($this->store->signs()) {
+            nexus::Url $there = guard $this->url($key, expires: .mins(5), name: $name, inline: $inline) else ($e) {
+                return .error($e->problem());
+            };
+            nexus::Response $r = nexus::Response(redirect: $there);
+            $r->header('Cache-Control', 'private, no-store');
+            return .ok($r);
+        }
+        return Serving::answer($payload->request, $this->store, $key, $name, $inline);
+    }
+
+    // inside -----------------------------------------------------------------
+
+    // a mark on the watched request's timeline, open until it goes out of scope
+    private const function mark(const string& $what, const string& $key) : nexus::trace::Timed
+    {
+        return Marks::open($this->traces, $what, $this->name, $key);
+    }
+}

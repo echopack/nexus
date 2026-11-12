@@ -1,0 +1,179 @@
+/**
+ * Disks bound by an app: their links, the signed route that serves them, and what stops the boot.
+ */
+
+use nexus::files::{Disk, Disks, Volume, FilesError, Signed, Stat};
+use nexus::testing::TestApp;
+use ecotest::expect;
+
+internal struct TVolume : Volume {}
+internal struct TOther : Volume {}
+
+internal class TApp : nexus::Extension
+{
+    public string $url;
+    public string $name;
+
+    public constructor(const string& $url, name: const string& $name = 'covers')
+    {
+        $this->url = $url;
+        $this->name = $name;
+    }
+
+    public function name() : string
+    {
+        return 'tapp';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        Disks::bind<TVolume>($s, $this->name, url: $this->url);
+        return .ok;
+    }
+}
+
+internal function key32() : string
+{
+    return 'a-files-key-of-at-least-32-chars!!';
+}
+
+internal function clock() : calendar::ManualClock
+{
+    return calendar::ManualClock(std::time::timestamp::from_unix_secs(1793000000));
+}
+
+internal function booted(calendar::ManualClock $c) : TestApp
+{
+    array<nexus::Extension> $exts = [nexus::files::Extension(clock: $c), TApp('memory:')];
+    return TestApp($exts, ['NEXUS_FILES_KEY' => key32()]);
+}
+
+internal function disk(TestApp $app) : Disk<TVolume>
+{
+    return $app->kernel->services->get<Disk<TVolume>>();
+}
+
+test a_disk_keeps_files_under_checked_keys
+{
+    $app = booted(clock());
+    Disk<TVolume> $d = disk($app);
+    expect($d->name)->is('covers');
+    expect($d->describe())->is('memory:');
+    expect($d->put('posts/1/a.txt', 'hello', type: 'text/plain'))->fine();
+    expect($d->get('posts/1/a.txt'))->ok('hello');
+    expect($d->exists('posts/1/a.txt'))->ok(true);
+    expect($d->move('posts/1/a.txt', 'posts/2/a.txt'))->fine();
+    expect($d->exists('posts/1/a.txt'))->ok(false);
+    expect($d->list('posts/'))->ok();
+    FilesError $bad = expect($d->put('../a', 'x', type: 'text/plain'))->fails();
+    expect($bad->message())->is("'../a' is not a file key");
+
+    string $png = '';
+    $png->push(137);
+    $png->append("PNG\r\n\u{1a}\nrest");
+    // an upload is kept as what its bytes are, not what it was sent as
+    expect($d->put('u.png', nexus::Upload('f', 'x.gif', 'image/gif', $png)))->fine();
+    Stat $s = expect(expect($d->stat('u.png'))->ok())->some();
+    expect($s->type)->is('image/png');
+}
+
+test a_signed_link_serves_the_file_until_it_expires
+{
+    calendar::ManualClock $c = clock();
+    $app = booted($c);
+    Disk<TVolume> $d = disk($app);
+    expect($d->put('posts/1/cover image.png', '0123456789', type: 'image/png'))->fine();
+    nexus::Url $u = expect($d->url('posts/1/cover image.png', expires: .mins(10), inline: true))->ok();
+    string $link = $u->text();
+    expect($link->starts('/files/covers/posts/1/cover%20image.png?expires=1793000600'))->yes(says: 'the link names the disk and the key');
+
+    $app->api()->get($link)->status(200)->body('0123456789')
+        ->header('Content-Disposition', 'inline; filename="cover image.png"')
+        ->header('X-Content-Type-Options', 'nosniff')
+        ->header('Cache-Control', 'private, max-age=600');
+    $app->api()->with('Range', 'bytes=2-3')->get($link)->status(206)->body('23');
+    Stat $s = expect(expect($d->stat('posts/1/cover image.png'))->ok())->some();
+    $app->api()->with('If-None-Match', $s->etag)->get($link)->status(304)->body('');
+    $app->api()->head($link)->status(200)->body('');
+
+    // changing anything the link says breaks it
+    $app->api()->get(str::replace($link, 'inline=1', 'inline=0'))->status(403);
+    $app->api()->get(str::replace($link, 'cover%20image', 'other'))->status(403);
+    $app->api()->get(str::replace($link, '/covers/', '/nope/'))->status(404);
+
+    $c->advance(.mins(11));
+    $app->api()->get($link)->status(403)->has('expired');
+}
+
+test an_upload_link_takes_only_what_it_names
+{
+    calendar::ManualClock $c = clock();
+    $app = booted($c);
+    Disk<TVolume> $d = disk($app);
+    Signed $up = expect($d->uploadUrl('in/photo.jpg', expires: .mins(5), type: 'image/jpeg', maxBytes: 8))->ok();
+    expect($up->method)->is('PUT');
+    expect($up->headers->get('Content-Type'))->is('image/jpeg');
+    string $link = $up->url->text();
+    expect(json::dump($up->json()))->has('"expires_at":"2026-10-26T07:38:20');
+
+    $app->api()->put($link, body: 'x', type: 'image/png')->status(415);
+    $app->api()->put($link, body: '0123456789', type: 'image/jpeg')->status(413);
+    $app->api()->put(str::replace($link, 'max=8', 'max=80'), body: '0123456789', type: 'image/jpeg')->status(403);
+    $app->api()->put($link, body: 'jpegdata', type: 'image/jpeg')->status(204);
+    expect($d->get('in/photo.jpg'))->ok('jpegdata');
+
+    // a read link cannot write, and a write link cannot read
+    nexus::Url $read = expect($d->url('in/photo.jpg'))->ok();
+    $app->api()->put($read->text(), body: 'evil', type: 'image/jpeg')->status(403);
+    $app->api()->get($link)->status(403);
+}
+
+test respond_answers_from_the_disk
+{
+    $app = booted(clock());
+    Disk<TVolume> $d = disk($app);
+    expect($d->put('a.pdf', '%PDF-1.7 body', type: 'application/pdf'))->fine();
+    nexus::Request $req = nexus::Request(.get, '/whatever');
+    nexus::Payload $p = $app->kernel->background('test', 'respond');
+    $p->request = $req;
+    nexus::Response $r = guard $d->respond($p, 'a.pdf', name: 'Report.pdf') else {
+        die('the file is answered');
+    };
+    expect($r->status)->is(200);
+    expect($r->body)->is('%PDF-1.7 body');
+    expect($r->header('Content-Disposition') ?? '')->is('attachment; filename="Report.pdf"');
+    nexus::Response? $none = guard $d->respond($p, 'none.pdf') else ($gone) {
+        expect($gone->status())->is(404);
+        return;
+    };
+    die('a missing file is a 404');
+    nexus::Kernel::finish($p);
+}
+
+test what_stops_the_boot
+{
+    array<nexus::Extension> $noKey = [nexus::files::Extension(), TApp('memory:')];
+    nexus::BootError $e1 = expect(TestApp::attempt($noKey, []))->fails();
+    expect(str::join($e1->lines(), '; '))->has('NEXUS_FILES_KEY signs its links');
+
+    array<nexus::Extension> $s3 = [nexus::files::Extension(), TApp('s3://bucket/x')];
+    nexus::BootError $e2 = expect(TestApp::attempt($s3, ['NEXUS_FILES_KEY' => key32()]))->fails();
+    expect(str::join($e2->lines(), '; '))->has('list nexus::files::s3::Extension()');
+
+    array<nexus::Extension> $odd = [nexus::files::Extension(), TApp('ftp://x')];
+    expect(TestApp::attempt($odd, ['NEXUS_FILES_KEY' => key32()]))->fails();
+    array<nexus::Extension> $host = [nexus::files::Extension(), TApp('file://host/x')];
+    expect(TestApp::attempt($host, ['NEXUS_FILES_KEY' => key32()]))->fails();
+    array<nexus::Extension> $named = [nexus::files::Extension(), TApp('memory:', name: 'Covers')];
+    expect(TestApp::attempt($named, ['NEXUS_FILES_KEY' => key32()]))->fails();
+    array<nexus::Extension> $without = [TApp('memory:')];
+    expect(TestApp::attempt($without, ['NEXUS_FILES_KEY' => key32()]))->fails();
+    array<nexus::Extension> $short = [nexus::files::Extension(), TApp('memory:')];
+    expect(TestApp::attempt($short, ['NEXUS_FILES_KEY' => 'short']))->fails();
+    expect(TestApp::attempt($short, ['NEXUS_FILES_KEY' => key32(), 'NEXUS_FILES_ROUTE' => 'files']))->fails();
+
+    // a directory that cannot be made fails at boot, not at the first upload
+    array<nexus::Extension> $blocked = [nexus::files::Extension(), TApp('file:/dev/null/covers')];
+    nexus::BootError $e3 = expect(TestApp::attempt($blocked, ['NEXUS_FILES_KEY' => key32()]))->fails();
+    expect(str::join($e3->lines(), '; '))->has('disk covers (file:/dev/null/covers)');
+}

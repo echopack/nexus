@@ -105,6 +105,8 @@ internal class World
             'NEXUS_MAIL_FROM' => 'hello@blog.test',
             'NEXUS_CONNECT_GOOGLE_CLIENT_ID' => 'blog-google',
             'NEXUS_CONNECT_GOOGLE_CLIENT_SECRET' => 'a-google-secret',
+            'NEXUS_FILES_KEY' => 'a-files-key-of-at-least-32-chars!!',
+            'BLOG_COVERS_URL' => 'memory:',
         ];
     }
 

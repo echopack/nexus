@@ -30,7 +30,7 @@
 #[module: "nexus-app"]
 #[version: "0.1.0"]
 #[epm::license: "MIT"]
-#[epm::description: "nexus::App and providers for wiring a nexus app: services, routes, transformers, repositories, MCP tools, task queues, realtime channels"]
+#[epm::description: "nexus::App and providers for wiring a nexus app: services, routes, transformers, repositories, MCP tools, task queues, realtime channels, file disks"]
 
 #[depends: "../.."]
 #[depends: "../rest"]
@@ -38,6 +38,7 @@
 #[depends: "../mcp"]
 #[depends: "../work"]
 #[depends: "../realtime"]
+#[depends: "../files"]
 #[depends: "../../../container"]
 #[depends: "../../../libjson"]
 

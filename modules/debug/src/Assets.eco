@@ -12,11 +12,11 @@ public struct Assets
      */
     public static function find(const string& $path) : Asset?
     {
-        if ($path == 'assets/index-CMgsqoPK.js') {
-            return Asset('assets/index-CMgsqoPK.js', 'text/javascript; charset=utf-8', std::embed::bytes('../ui/dist/assets/index-CMgsqoPK.js'), std::embed::bytes('../ui/dist/assets/index-CMgsqoPK.js.gz'), '"cc7d46827357cdf1"');
+        if ($path == 'assets/index-B9npwtPk.css') {
+            return Asset('assets/index-B9npwtPk.css', 'text/css; charset=utf-8', std::embed::bytes('../ui/dist/assets/index-B9npwtPk.css'), std::embed::bytes('../ui/dist/assets/index-B9npwtPk.css.gz'), '"9e8c5a7575a96ecc"');
         }
-        if ($path == 'assets/index-ujtqaoyM.css') {
-            return Asset('assets/index-ujtqaoyM.css', 'text/css; charset=utf-8', std::embed::bytes('../ui/dist/assets/index-ujtqaoyM.css'), std::embed::bytes('../ui/dist/assets/index-ujtqaoyM.css.gz'), '"88fa43f626e435ab"');
+        if ($path == 'assets/index-S7iplVQz.js') {
+            return Asset('assets/index-S7iplVQz.js', 'text/javascript; charset=utf-8', std::embed::bytes('../ui/dist/assets/index-S7iplVQz.js'), std::embed::bytes('../ui/dist/assets/index-S7iplVQz.js.gz'), '"2fe959e34a03be82"');
         }
         if ($path == 'assets/jetbrains-mono-cyrillic-ext-wght-normal-EocZY2iu.woff2') {
             return Asset('assets/jetbrains-mono-cyrillic-ext-wght-normal-EocZY2iu.woff2', 'font/woff2', std::embed::bytes('../ui/dist/assets/jetbrains-mono-cyrillic-ext-wght-normal-EocZY2iu.woff2'), '', '"593ccd6fe36e299e"');
@@ -49,7 +49,7 @@ public struct Assets
             return Asset('favicon.svg', 'image/svg+xml', std::embed::bytes('../ui/dist/favicon.svg'), std::embed::bytes('../ui/dist/favicon.svg.gz'), '"f6332c47effde57d"');
         }
         if ($path == 'index.html') {
-            return Asset('index.html', 'text/html; charset=utf-8', std::embed::bytes('../ui/dist/index.html'), '', '"b546ba1e4284f56f"');
+            return Asset('index.html', 'text/html; charset=utf-8', std::embed::bytes('../ui/dist/index.html'), '', '"759f874108c7963b"');
         }
         return null;
     }

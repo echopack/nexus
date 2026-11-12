@@ -1,0 +1,17 @@
+namespace nexus::files;
+
+/**
+ * Names a disk. A volume is an empty struct; the disk of the volume is its type, given a short
+ * name with an alias:
+ *
+ * ```echo
+ * public struct CoverVolume : nexus::files::Volume {}
+ * public type CoverDisk = nexus::files::Disk<CoverVolume>;
+ *
+ * $app->bindDisk<CoverVolume>('covers', url: $config->coversUrl);
+ * $app->bind<CoverService>(scoped: (Container $c) => CoverService($c->get<CoverDisk>()));
+ * ```
+ */
+public interface Volume
+{
+}

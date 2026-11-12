@@ -1,0 +1,119 @@
+namespace nexus;
+
+/**
+ * One satisfiable byte range of a representation: `$length` bytes from `$from`.
+ */
+public struct ByteRange
+{
+    public uint64 $from;
+    public uint64 $length;
+
+    /**
+     * The last byte the range covers, as `Content-Range` writes it.
+     */
+    public const function last() : uint64
+    {
+        return $this->from + $this->length - 1;
+    }
+
+    /**
+     * What a `Range` header asks of a representation of `$size` bytes. Only one range in `bytes`
+     * is served: a list of several, another unit or a header that does not parse ask for the whole
+     * representation, as RFC 9110 lets a server answer.
+     */
+    public static function parse(const string& $header, uint64 $size) : RangeAsk
+    {
+        string $h = string::from(str::trim($header));
+        if ($h->size() < 6 || str::lower($h->sub(0, 6)) != 'bytes=') {
+            return .whole;
+        }
+        string $spec = string::from(str::trim($h->sub(6, $h->size() - 6)));
+        if ($spec->empty() || $spec->find(',') < $spec->size()) {
+            return .whole;
+        }
+        usize $dash = $spec->find('-');
+        if ($dash >= $spec->size()) {
+            return .whole;
+        }
+        string $first = string::from(str::trim($spec->sub(0, $dash)));
+        string $second = string::from(str::trim($spec->sub($dash + 1, $spec->size() - $dash - 1)));
+
+        // a suffix: the last n bytes
+        if ($first->empty()) {
+            uint64 $n = guard ByteRange::digits($second) else {
+                return .whole;
+            };
+            if ($n == 0) {
+                return .unsatisfiable;
+            }
+            if ($n >= $size) {
+                if ($size == 0) {
+                    return .unsatisfiable;
+                }
+                return .part(ByteRange(0, $size));
+            }
+            return .part(ByteRange($size - $n, $n));
+        }
+
+        uint64 $from = guard ByteRange::digits($first) else {
+            return .whole;
+        };
+        uint64 $last = $size;
+        if (!$second->empty()) {
+            uint64 $asked = guard ByteRange::digits($second) else {
+                return .whole;
+            };
+            if ($asked < $from) {
+                return .whole;
+            }
+            $last = $asked;
+        }
+        if ($from >= $size) {
+            return .unsatisfiable;
+        }
+        if ($last >= $size) {
+            $last = $size - 1;
+        }
+        return .part(ByteRange($from, $last - $from + 1));
+    }
+
+    /**
+     * A run of ASCII digits as a number, or null for anything else.
+     */
+    internal static function digits(const string& $text) : uint64?
+    {
+        if ($text->empty() || $text->size() > 19) {
+            return null;
+        }
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c < 48 || $c > 57) {
+                return null;
+            }
+            $i = $i + 1;
+        }
+        return str::uint($text);
+    }
+}
+
+/**
+ * What a `Range` header asks for.
+ */
+public enum RangeAsk
+{
+    /**
+     * The whole representation: no range, or one the server does not serve.
+     */
+    case whole;
+
+    /**
+     * One part of it.
+     */
+    case part(ByteRange $range);
+
+    /**
+     * A range that starts past the end: a 416.
+     */
+    case unsatisfiable;
+}

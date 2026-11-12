@@ -1,0 +1,199 @@
+namespace Blog::Services;
+
+use Blog::DB::Model::{Post, User};
+use Blog::DB::Repository::PostRepository;
+use Blog::Disks::CoverDisk;
+
+/**
+ * Posts' cover images on the `CoverDisk`: uploaded through the API, or straight to the store
+ * through a link and confirmed after; shown to anyone; replaced and deleted with their post. Each
+ * cover is kept under a key of its own (`posts/5/cover-1a2b3c4d.png`), so a browser's copy of an
+ * old one is never mistaken for the new one.
+ */
+public class CoverService
+{
+    /**
+     * The largest cover kept, in bytes.
+     */
+    public const uint64 MAX_BYTES = 2097152;
+
+    private PostRepository $posts;
+    private CoverDisk $covers;
+    private nexus::Logger $log;
+
+    public constructor(PostRepository $posts, CoverDisk $covers, nexus::Logger $log)
+    {
+        $this->posts = $posts;
+        $this->covers = $covers;
+        $this->log = $log;
+    }
+
+    /**
+     * Makes `$image` the cover of post `$id`, replacing the one it had. Only its author or an
+     * admin may.
+     */
+    public function upload(const User& $me, int64 $id, const nexus::Upload& $image) : result<Post, nexus::Problem>
+    {
+        Post $p = try $this->changeable($me, $id);
+        string $key = try CoverService::keyFor("posts/{$id}", $image->kind());
+        guard $this->covers->put($key, $image) else ($e) {
+            return .error($this->failed($e));
+        };
+        return $this->replace($p, $key);
+    }
+
+    /**
+     * A link the client uploads a cover of `$type` to, straight to the store, for ten minutes;
+     * `confirm` with the key makes it the cover.
+     */
+    public function link(const User& $me, int64 $id, const string& $type) : result<json::Value, nexus::Problem>
+    {
+        try $this->changeable($me, $id);
+        string $key = try CoverService::keyFor("posts/{$id}/pending", $type);
+        nexus::files::Signed $up = guard $this->covers->uploadUrl($key, expires: .mins(10), type: $type, maxBytes: CoverService::MAX_BYTES) else ($e) {
+            return .error($this->failed($e));
+        };
+        json::Value $out = $up->json();
+        $out['key'] = json::str($key);
+        return .ok($out);
+    }
+
+    /**
+     * Makes the cover uploaded through a link under `$key` the cover of post `$id`, once it is
+     * there, small enough, and an image by its bytes; otherwise it is deleted and refused.
+     */
+    public function confirm(const User& $me, int64 $id, const string& $key) : result<Post, nexus::Problem>
+    {
+        Post $p = try $this->changeable($me, $id);
+        if (!$key->starts("posts/{$id}/pending/")) {
+            return .error(nexus::Problem::field('key', 'cover', 'that is no upload of this post'));
+        }
+        nexus::files::Stat? $found = guard $this->covers->stat($key) else ($e) {
+            return .error($this->failed($e));
+        };
+        nexus::files::Stat $s = guard $found else {
+            return .error(nexus::Problem::field('key', 'cover', 'nothing was uploaded under that key'));
+        };
+        // a store link cannot hold an upload to a size, so the size is checked here
+        if ($s->size > CoverService::MAX_BYTES) {
+            $this->covers->delete($key);
+            string $limit = nexus::Check::bytes(CoverService::MAX_BYTES as int64);
+            return .error(nexus::Problem::field('key', 'cover', "the cover is larger than {$limit}"));
+        }
+        string $head = guard $this->covers->read($key, 0, 16) else ($e) {
+            return .error($this->failed($e));
+        };
+        string $kind = nexus::Upload::sniff($head) ?? '';
+        if (!CoverService::image($kind)) {
+            $this->covers->delete($key);
+            return .error(nexus::Problem::field('key', 'cover', 'the cover is no PNG, JPEG or WebP image'));
+        }
+        string $final = try CoverService::keyFor("posts/{$id}", $kind);
+        guard $this->covers->move($key, $final) else ($e) {
+            return .error($this->failed($e));
+        };
+        return $this->replace($p, $final);
+    }
+
+    /**
+     * Takes the cover off post `$id` and deletes it.
+     */
+    public function remove(const User& $me, int64 $id) : result<Post, nexus::Problem>
+    {
+        Post $p = try $this->changeable($me, $id);
+        string? $old = $p->cover;
+        $p->cover = null;
+        try $this->posts->save($p);
+        $this->forget($old);
+        return .ok($p);
+    }
+
+    /**
+     * Post `$id`'s cover image, as the disk answers it: from the blog for a directory, a redirect to
+     * the store for S3. A 404 for a post without one.
+     */
+    public function show(nexus::Payload& $payload, int64 $id) : result<nexus::Response, nexus::Problem>
+    {
+        Post $p = try $this->post($id);
+        string $key = guard $p->cover else {
+            return .error(.notFound('a cover'));
+        };
+        // saved under a name that says whose it is, not under its key
+        string $ext = nexus::files::Keys::extension($key);
+        return $this->covers->respond($payload, $key, name: "post-{$id}-cover.{$ext}", inline: true);
+    }
+
+    /**
+     * Deletes a cover that is no post's any more; a failure is logged, never an error, since the
+     * post changed already.
+     */
+    public function forget(string? $key) : void
+    {
+        string $k = guard $key else {
+            return;
+        };
+        guard $this->covers->delete($k) else ($e) {
+            $this->log->warn('cover not deleted', ['key' => $k, 'error' => $e->message()]);
+            return;
+        };
+    }
+
+    // inside -----------------------------------------------------------------
+
+    private function post(int64 $id) : result<Post, nexus::Problem>
+    {
+        $found = try $this->posts->find()->get($id);
+        Post $p = guard $found else {
+            return .error(.notFound('the post'));
+        };
+        return .ok($p);
+    }
+
+    private function changeable(const User& $me, int64 $id) : result<Post, nexus::Problem>
+    {
+        Post $p = try $this->post($id);
+        try $p->changeableBy($me);
+        return .ok($p);
+    }
+
+    private function replace(Post& $p, const string& $key) : result<Post, nexus::Problem>
+    {
+        string? $old = $p->cover;
+        $p->cover = $key;
+        guard $this->posts->save($p) else ($e) {
+            // the post keeps its old cover, so the new one belongs to nothing
+            $this->forget($key);
+            return .error(nexus::carbon::Problems::of($e));
+        };
+        $this->forget($old);
+        return .ok($p);
+    }
+
+    private function failed(const nexus::files::FilesError& $e) : nexus::Problem
+    {
+        $this->log->warn('cover store failed', ['error' => $e->message()]);
+        return $e->problem();
+    }
+
+    /**
+     * A key under `$dir` no cover had before: `posts/5/cover-1a2b3c4d.png`.
+     */
+    internal static function keyFor(const string& $dir, const string& $type) : result<string, nexus::Problem>
+    {
+        string $ext = nexus::Upload::extensionOf($type);
+        string $nonce = guard crypto::random(4) else {
+            return .error(.unavailable('no randomness for a cover name'));
+        };
+        string $tag = crypto::hex($nonce);
+        return .ok("{$dir}/cover-{$tag}.{$ext}");
+    }
+
+    /**
+     * Whether `$kind` is a type a cover may be, the same ones `CoverUpload` and `CoverRequest`
+     * accept.
+     */
+    private static function image(const string& $kind) : bool
+    {
+        return $kind == 'image/png' || $kind == 'image/jpeg' || $kind == 'image/webp';
+    }
+}

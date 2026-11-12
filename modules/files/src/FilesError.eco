@@ -1,0 +1,122 @@
+namespace nexus::files;
+
+/**
+ * Why a disk could not do what it was asked.
+ */
+public enum FilesError
+{
+    /**
+     * Nothing is kept under the key.
+     */
+    case missing(string $key);
+
+    /**
+     * The key is no key a disk takes: empty, absolute, with `.` or `..` segments, a backslash or a
+     * control character, or longer than 1024 bytes.
+     */
+    case invalid(string $key);
+
+    /**
+     * The store refused access.
+     */
+    case denied(string $why);
+
+    /**
+     * More bytes than may be kept.
+     */
+    case tooLarge(uint64 $max);
+
+    /**
+     * The disk does not do this, like an upload link on a disk without a signing key.
+     */
+    case unsupported(string $what);
+
+    /**
+     * Reading or writing failed on this machine.
+     */
+    case io(string $why);
+
+    /**
+     * The remote store answered with an error, or did not answer (status 0).
+     */
+    case remote(int64 $status, string $why);
+
+    /**
+     * What went wrong, for the operator: it may name paths and buckets.
+     */
+    public const function message() : string
+    {
+        return match ($this) {
+            FilesError::missing($key) => "no file under '{$key}'",
+            FilesError::invalid($key) => "'{$key}' is not a file key",
+            FilesError::denied($why) => "the store refused access: {$why}",
+            FilesError::tooLarge($max) => "the file is larger than {$max} bytes",
+            FilesError::unsupported($what) => "the disk cannot {$what}",
+            FilesError::io($why) => "the disk failed: {$why}",
+            FilesError::remote($status, $why) => FilesError::remoteText($status, $why),
+        };
+    }
+
+    /**
+     * What a client is told: the kind of failure, without the paths, buckets or upstream text that
+     * `message` carries.
+     */
+    public const function summary() : string
+    {
+        return match ($this) {
+            FilesError::missing($key) => 'the file was not found',
+            FilesError::invalid($key) => 'that is not a file key',
+            FilesError::tooLarge($max) => "the file is larger than {$max} bytes",
+            FilesError::unsupported($what) => "the disk cannot {$what}",
+            else => 'the file store failed; the server log has the details',
+        };
+    }
+
+    /**
+     * The problem an action answers with: 404 for a missing file, 400 for a bad key, 413 for too
+     * large, 503 for a store that failed (a task retries it), 500 otherwise. The detail is the
+     * summary; the message is for the log.
+     */
+    public const function problem() : nexus::Problem
+    {
+        return match ($this) {
+            FilesError::missing($key) => .notFound('file'),
+            FilesError::invalid($key) => .badRequest($this->summary()),
+            FilesError::tooLarge($max) => .tooLarge,
+            FilesError::io($why) => .unavailable($this->summary()),
+            FilesError::remote($status, $why) => FilesError::remoteProblem($status),
+            else => .server($this->message()),
+        };
+    }
+
+    public const function missing() : bool
+    {
+        return match ($this) {
+            FilesError::missing($key) => true,
+            else => false,
+        };
+    }
+
+    internal static function remoteText(int64 $status, const string& $why) : string
+    {
+        if ($status == 0) {
+            return "the store did not answer: {$why}";
+        }
+        return "the store answered {$status}: {$why}";
+    }
+
+    internal static function remoteProblem(int64 $status) : nexus::Problem
+    {
+        if ($status == 0 || $status >= 500 || $status == 429) {
+            return .unavailable('the file store failed; the server log has the details');
+        }
+        return .server("the file store answered {$status}");
+    }
+}
+
+namespace str;
+
+public function from(const nexus::files::FilesError& $e) : string
+{
+    return $e->message();
+}

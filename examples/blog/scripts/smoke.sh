@@ -17,6 +17,10 @@
 # command line reach it through a throwaway Redis in Docker; a ticket opens
 # the editor's own channel once; the admin's stats arrive as server-sent
 # events, and sixteen of those streams open on two workers hold none of them.
+# Files: posts' covers live in a throwaway MinIO in Docker (uploaded through
+# the API, read through a redirect to a presigned link, uploaded straight to
+# the bucket and confirmed), then in a directory, served with ranges over the
+# socket from a second server; nexus-files-s3's live test runs against MinIO.
 #
 #   scripts/smoke.sh                     # mysql:8.0
 #   IMAGE=mariadb:11 scripts/smoke.sh
@@ -28,31 +32,40 @@ base="http://127.0.0.1:${port}"
 echoc="${ECHOC:-echoc}"
 cd "${here}"
 "${echoc}" build >/dev/null || { echo "build failed"; exit 1; }
+freeport() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 (cd scripts/wsprobe && "${echoc}" build -o "${here}/ecobuild/wsprobe" >/dev/null) || { echo "wsprobe build failed"; exit 1; }
 
-db_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+db_port=$(freeport)
 name="nexus-blog-smoke-$$"
 docker run -d --rm --name "${name}" \
     -e MYSQL_ROOT_PASSWORD=rootpw -e MYSQL_DATABASE=blog -e MYSQL_USER=app -e MYSQL_PASSWORD=secret \
     -e MARIADB_ROOT_PASSWORD=rootpw -e MARIADB_DATABASE=blog -e MARIADB_USER=app -e MARIADB_PASSWORD=secret \
     -p "127.0.0.1:${db_port}:3306" "${image}" >/dev/null || { echo "docker run failed"; exit 1; }
-mail_smtp=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-mail_http=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+mail_smtp=$(freeport)
+mail_http=$(freeport)
 mail_name="nexus-blog-mail-$$"
 docker run -d --rm --name "${mail_name}" \
     -p "127.0.0.1:${mail_smtp}:1025" -p "127.0.0.1:${mail_http}:8025" "${MAIL_IMAGE:-axllent/mailpit}" >/dev/null \
     || { docker rm -f -v "${name}" >/dev/null 2>&1; echo "docker run (mailpit) failed"; exit 1; }
-redis_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+redis_port=$(freeport)
 redis_name="nexus-blog-redis-$$"
 docker run -d --rm --name "${redis_name}" -p "127.0.0.1:${redis_port}:6379" "${REDIS_IMAGE:-redis:7}" >/dev/null \
     || { docker rm -f -v "${name}" "${mail_name}" >/dev/null 2>&1; echo "docker run (redis) failed"; exit 1; }
-trap 'docker rm -f -v "${name}" "${mail_name}" "${redis_name}" >/dev/null 2>&1 || true' EXIT
+s3_port=$(freeport)
+s3_name="nexus-blog-s3-$$"
+docker run -d --rm --name "${s3_name}" -p "127.0.0.1:${s3_port}:9000" \
+    -e MINIO_ROOT_USER=blog-smoke -e MINIO_ROOT_PASSWORD=blog-smoke-secret "${S3_IMAGE:-minio/minio:latest}" server /data >/dev/null \
+    || { docker rm -f -v "${name}" "${mail_name}" "${redis_name}" >/dev/null 2>&1; echo "docker run (minio) failed"; exit 1; }
+trap 'docker rm -f -v "${name}" "${mail_name}" "${redis_name}" "${s3_name}" >/dev/null 2>&1 || true' EXIT
 mailapi="http://127.0.0.1:${mail_http}/api/v1"
 
 export NEXUS_DATABASE_URL="mysql://app:secret@127.0.0.1:${db_port}/blog?fetchServerKey=true"
 export NEXUS_AUTH_KEY=smoke-auth-key-of-at-least-32-characters
 export NEXUS_MAIL_URL="smtp://127.0.0.1:${mail_smtp}" NEXUS_MAIL_TLS=none NEXUS_MAIL_FROM=hello@blog.test NEXUS_MAIL_FROM_NAME="A nexus blog"
 export NEXUS_REALTIME_URL="redis://127.0.0.1:${redis_port}/0" NEXUS_REALTIME_MAX_SOCKETS=3 BLOG_STATS_EVERY=1s
+export NEXUS_FILES_KEY=smoke-files-key-of-at-least-32-chars BLOG_COVERS_URL=s3://blog-covers/covers
+export NEXUS_FILES_S3_ACCESS_KEY=blog-smoke NEXUS_FILES_S3_SECRET_KEY=blog-smoke-secret
+export NEXUS_FILES_S3_ENDPOINT="http://127.0.0.1:${s3_port}" NEXUS_FILES_S3_PATH_STYLE=true
 
 failed=0
 check() {
@@ -64,6 +77,13 @@ check() {
         failed=1
     fi
 }
+
+# the covers' bucket has to be there first: every command that boots the blog lists it once
+for _ in $(seq 1 60); do
+    docker exec "${s3_name}" mc alias set smoke http://127.0.0.1:9000 blog-smoke blog-smoke-secret >/dev/null 2>&1 && break
+    sleep 0.5
+done
+docker exec "${s3_name}" mc mb smoke/blog-covers >/dev/null
 
 # the server takes a while to take connections; migrate until it does
 migrated=""
@@ -105,6 +125,13 @@ for _ in $(seq 1 50); do
     docker exec "${redis_name}" redis-cli ping 2>/dev/null | grep -q PONG && break
     sleep 0.2
 done
+
+check "files:check, s3"   1 "$(./ecobuild/blog files:check --disk covers 2>&1 | grep -c '^disk covers in s3://blog-covers/covers: write, read, range and delete work')"
+
+# nexus-files-s3's live test on the same MinIO: streamed, ranged, listed, presigned
+docker exec "${s3_name}" mc mb smoke/files-live >/dev/null
+live="$(cd "${here}/../../modules/files/s3" && FILES_S3_LIVE_URL=s3://files-live epm run -m "${here}/../.." ecotest --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
+check "files s3, live"    1 "$(printf '%s\n' "${live}" | grep -c '^ok .*LiveTest.eco::the_store_keeps_reads_ranges_lists_and_streams_on_a_real_server')"
 
 log="$(mktemp)"
 # two workers: the event streams opened below must hold none of them
@@ -166,6 +193,77 @@ check "update, missing"   404 "$(scode "${editor}" PATCH /v1/posts/99 '{}')"
 check "delete"            204 "$(scode "${editor}" DELETE /v1/posts/2 '')"
 check "deleted"           404 "$(scode "${visitor}" GET /v1/posts/2 '')"
 check "delete, nobody"    401 "$(scode "${visitor}" DELETE /v1/posts/1 '')"
+
+# covers on S3: a multipart upload, a redirect to a presigned link, a link straight to the bucket
+files="$(mktemp -d)"
+printf '\x89PNG\r\n\x1a\nsmoke cover one' >"${files}/one.png"
+printf '\x89PNG\r\n\x1a\nsmoke cover two' >"${files}/two.png"
+printf '<html>no image</html>' >"${files}/fake.png"
+# a multipart form with the image $1 as `image`, written to $2
+form() {
+    { printf -- '--smokeform\r\nContent-Disposition: form-data; name="image"; filename="cover.png"\r\nContent-Type: image/png\r\n\r\n'
+      cat "$1"
+      printf -- '\r\n--smokeform--\r\n'; } >"$2"
+}
+# the url and key of an upload link's answer
+linkurl() { printf '%s' "$1" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p' | sed 's#\\/#/#g'; }
+form "${files}/one.png" "${files}/one.form"
+form "${files}/fake.png" "${files}/fake.form"
+multipart='multipart/form-data; boundary=smokeform'
+check "cover, nobody"     401 "$(asfile "${visitor}" PUT /v1/posts/1/cover "${files}/one.form" "${multipart}" -o /dev/null -w '%{http_code}')"
+check "cover, no image"   '"code":"types"' "$(asfile "${editor}" PUT /v1/posts/1/cover "${files}/fake.form" "${multipart}" | grep -o '"code":"types"')"
+check "cover"             '"cover_url":"/v1/posts/1/cover"' "$(asfile "${editor}" PUT /v1/posts/1/cover "${files}/one.form" "${multipart}" | grep -o '"cover_url":"/v1/posts/1/cover"')"
+check "cover, redirect"   302 "$(scode "${visitor}" GET /v1/posts/1/cover '')"
+where="$(as "${visitor}" GET /v1/posts/1/cover '' -o /dev/null -w '%{redirect_url}')"
+check "cover, presigned"  "http://127.0.0.1:${s3_port}/blog-covers/covers/posts/1/cover-" "$(printf '%s' "${where}" | grep -o "^http://127.0.0.1:${s3_port}/blog-covers/covers/posts/1/cover-")"
+check "cover, from s3"    "smoke cover one" "$(curl -s "${where}" | tail -c 15)"
+check "cover, s3 inline"  1 "$(curl -s -D - -o /dev/null "${where}" | grep -ci '^content-disposition: inline; filename="post-1-cover.png"')"
+link="$(as "${editor}" POST /v1/posts/1/cover/upload-url '{"type":"image/png"}')"
+key="$(printf '%s' "${link}" | field key)"
+url="$(linkurl "${link}")"
+check "link, to bucket"   1 "$(printf '%s' "${url}" | grep -c "^http://127.0.0.1:${s3_port}/blog-covers/covers/posts/1/pending/cover-.*X-Amz-Signature=")"
+check "link, upload"      200 "$(code -X PUT -H 'Content-Type: image/png' --data-binary "@${files}/two.png" "${url}")"
+check "link, confirm"     '"cover_url":"/v1/posts/1/cover"' "$(as "${editor}" POST /v1/posts/1/cover/confirm "{\"key\":\"${key}\"}" | grep -o '"cover_url":"/v1/posts/1/cover"')"
+where="$(as "${visitor}" GET /v1/posts/1/cover '' -o /dev/null -w '%{redirect_url}')"
+check "link, the cover"   "smoke cover two" "$(curl -s "${where}" | tail -c 15)"
+check "files:list, s3"    1 "$(./ecobuild/blog files:list --disk covers 2>&1 | grep -c '^1 files in s3://blog-covers/covers')"
+check "cover off, s3"     200 "$(scode "${editor}" DELETE /v1/posts/1/cover '')"
+check "files:list, none"  1 "$(./ecobuild/blog files:list --disk covers 2>&1 | grep -c '^0 files in s3://blog-covers/covers')"
+
+# the same covers in a directory, from a second server: the blog sends the file itself, in ranges
+dport=$(freeport)
+BLOG_COVERS_URL="file:${files}/covers" ./ecobuild/blog serve --listen "127.0.0.1:${dport}" --no-work --no-schedule >/dev/null 2>&1 &
+dpid=$!
+saved="${base}"
+base="http://127.0.0.1:${dport}"
+for _ in $(seq 1 50); do
+    curl -s -o /dev/null "${base}/health" && break
+    sleep 0.1
+done
+check "cover, directory"  '"cover_url":"/v1/posts/1/cover"' "$(asfile "${editor}" PUT /v1/posts/1/cover "${files}/one.form" "${multipart}" | grep -o '"cover_url":"/v1/posts/1/cover"')"
+check "cover, on disk"    1 "$(ls "${files}"/covers/posts/1/cover-*.png | wc -l | tr -d ' ')"
+check "cover, sent"       "smoke cover one" "$(as "${visitor}" GET /v1/posts/1/cover '' | tail -c 15)"
+check "cover, range"      "smoke" "$(as "${visitor}" GET /v1/posts/1/cover '' -H 'Range: bytes=8-12')"
+check "cover, 206"        1 "$(as "${visitor}" GET /v1/posts/1/cover '' -H 'Range: bytes=8-12' -D - -o /dev/null | grep -c '^Content-Range: bytes 8-12/23')"
+etag="$(as "${visitor}" GET /v1/posts/1/cover '' -D - -o /dev/null | sed -n 's/^ETag: \(.*\)\r$/\1/p')"
+check "cover, 304"        304 "$(scode "${visitor}" GET /v1/posts/1/cover '' -H "If-None-Match: ${etag}")"
+link="$(as "${editor}" POST /v1/posts/1/cover/upload-url '{"type":"image/png"}')"
+key="$(printf '%s' "${link}" | field key)"
+url="$(linkurl "${link}")"
+check "link, signed"      1 "$(printf '%s' "${url}" | grep -c '^/files/covers/posts/1/pending/cover-.*&sig=')"
+check "link, wrong type"  415 "$(code -X PUT -H 'Content-Type: image/jpeg' --data-binary "@${files}/two.png" "${base}${url}")"
+check "link, tampered"    403 "$(code -X PUT -H 'Content-Type: image/png' --data-binary "@${files}/two.png" "${base}${url/max=/max=9}")"
+check "link, kept"        204 "$(code -X PUT -H 'Content-Type: image/png' --data-binary "@${files}/two.png" "${base}${url}")"
+check "link, confirmed"   200 "$(scode "${editor}" POST /v1/posts/1/cover/confirm "{\"key\":\"${key}\"}")"
+check "link, served"      "smoke cover two" "$(as "${visitor}" GET /v1/posts/1/cover '' | tail -c 15)"
+check "cover off"         200 "$(scode "${editor}" DELETE /v1/posts/1/cover '')"
+check "directory, empty"  0 "$(find "${files}/covers/posts" -type f | wc -l | tr -d ' ')"
+kill -TERM "${dpid}"
+wait "${dpid}" 2>/dev/null
+base="${saved}"
+
+# a cover on S3 again, which goes when its post does, at the end
+check "cover, again"      200 "$(asfile "${editor}" PUT /v1/posts/1/cover "${files}/one.form" "${multipart}" -o /dev/null -w '%{http_code}')"
 
 # comments, and the same comments live over the realtime websocket
 probe() { "${here}/ecobuild/wsprobe" "${port}" "$@"; }
@@ -453,6 +551,8 @@ check "welcome mailed, de" '"Subject":"Willkommen bei A nexus blog"' "$(mailed s
 kill -TERM "${pid}"
 wait "${pid}"
 
+check "cover went too"    1 "$(./ecobuild/blog files:list --disk covers 2>&1 | grep -c '^0 files in s3://blog-covers/covers')"
+rm -rf "${files}"
 check "auth:prune"        "pruned  0 tokens|pruned  0 sessions|pruned  0 oauth requests, codes and grants|pruned  0 sign-in attempts" "$(./ecobuild/blog auth:prune 2>&1 | paste -sd '|' -)"
 check "reset wants force" 1 "$(./ecobuild/blog migrate:reset --mode prod >/dev/null 2>&1; echo $?)"
 check "work:failed, end"  "no failed tasks" "$(./ecobuild/blog work:failed 2>&1)"

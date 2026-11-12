@@ -1,0 +1,83 @@
+namespace nexus::files;
+
+use container::Container;
+
+/**
+ * Files for the app: reads `NEXUS_FILES_*`, opens `file:` and `memory:` disks (nexus-files-s3,
+ * listed after it, adds `s3:`), routes the signed links of the disks it serves itself
+ * (`GET|PUT /files/{disk}/{key*}`, `NEXUS_FILES_ROUTE`) and adds `files:list` and `files:check`.
+ * The app binds its disks with `bindDisk<V>(name, url:)`; boot asks each one's store whether it
+ * can be reached.
+ *
+ * ```echo
+ * nexus::files::Extension(),
+ * nexus::files::s3::Extension(),   // only when a disk may be on S3
+ * ```
+ */
+public class Extension : nexus::Extension
+{
+    public calendar::Clock $clock;
+
+    public constructor(clock: calendar::Clock $clock = calendar::SystemClock())
+    {
+        $this->clock = $clock;
+    }
+
+    public function name() : string
+    {
+        return 'nexus-files';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        FilesConfig $config = $s->get<FilesConfig>();
+        if ($config->expires <= std::time::duration::zero()) {
+            return .error(.extension('nexus-files', "NEXUS_FILES_EXPIRES is {$config->expires}; expected more than 0s"));
+        }
+        string $route = $config->route;
+        if (!$route->starts('/') || $route->ends('/') || $route->find('{') < $route->size()) {
+            return .error(.extension('nexus-files', "NEXUS_FILES_ROUTE is '{$route}'; expected a path like /files"));
+        }
+        if (!$config->key->empty() && $config->key->size() < 32) {
+            return .error(.extension('nexus-files', 'NEXUS_FILES_KEY must be at least 32 characters'));
+        }
+        calendar::Clock $clock = $this->clock;
+        DiskTable $table = DiskTable(Links($config->key, $route, $config->expires, $s->get<nexus::Router>(), $clock));
+        $table->opener('file', function(string $url) : result<Store, string> {
+            string $dir = guard Disks::directory($url) else {
+                return .error("'{$url}' names no directory; write file:storage/covers or file:///srv/covers");
+            };
+            return .ok(LocalStore($dir) as Store);
+        });
+        $table->opener('memory', function[$clock](string $url) : result<Store, string> {
+            if ($url != 'memory:') {
+                return .error("'{$url}' is no memory disk; write memory:");
+            }
+            return .ok(MemoryStore(clock: $clock) as Store);
+        });
+        $s->bind<DiskTable>(put: $table);
+        $s->bindAction<ServeFile>(method: .get, path: "{$route}/\{disk}/\{key*}", function(Container $c) : ServeFile {
+            return ServeFile($c->get<DiskTable>());
+        });
+        $s->route<ServeFile>(method: .put, path: "{$route}/\{disk}/\{key*}");
+        return .ok;
+    }
+
+    public function commands(nexus::Commands& $cmds) : void
+    {
+        $cmds->add(ListCommand());
+        $cmds->add(CheckCommand());
+    }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        DiskTable $table = $kernel->services->get<DiskTable>();
+        foreach ($table->all() as $shelf) {
+            guard $shelf->store->check() else ($e) {
+                return .error(.extension('nexus-files', "disk {$shelf->name} ({$shelf->store->describe()}): {$e->message()}"));
+            };
+            $kernel->log->debug("disk {$shelf->name} in {$shelf->store->describe()}");
+        }
+        return .ok;
+    }
+}

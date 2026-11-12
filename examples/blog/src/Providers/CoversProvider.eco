@@ -1,0 +1,32 @@
+namespace Blog::Providers;
+
+use container::Container;
+use Blog::Actions::Covers::{ConfirmCover, CoverUploadLink, DeleteCover, ShowCover, UploadCover};
+use Blog::Config::BlogConfig;
+use Blog::DB::Repository::PostRepository;
+use Blog::Disks::{CoverDisk, CoverVolume};
+use Blog::Services::CoverService;
+use Blog::Transformers::PostTransformer;
+
+/**
+ * Posts' cover images: the disk they are kept on, the service, and its HTTP actions.
+ */
+public class CoversProvider : nexus::Provider
+{
+    public function register(nexus::App $app) : void
+    {
+        $app->bindDisk<CoverVolume>('covers', url: $app->get<BlogConfig>()->coversUrl);
+        $app->bind<CoverService>(scoped: (Container $c) => CoverService($c->get<PostRepository>(), $c->get<CoverDisk>(), $c->get<nexus::Logger>()));
+
+        $app->bindAction<ShowCover>((Container $c) => ShowCover($c->get<CoverService>()))
+            ->route([.get], '/v1/posts/{id}/cover');
+        $app->bindAction<UploadCover>((Container $c) => UploadCover($c->get<CoverService>(), $c->get<PostTransformer>()))
+            ->route([.put], '/v1/posts/{id}/cover');
+        $app->bindAction<DeleteCover>((Container $c) => DeleteCover($c->get<CoverService>(), $c->get<PostTransformer>()))
+            ->route([.delete], '/v1/posts/{id}/cover');
+        $app->bindAction<CoverUploadLink>((Container $c) => CoverUploadLink($c->get<CoverService>()))
+            ->route([.post], '/v1/posts/{id}/cover/upload-url');
+        $app->bindAction<ConfirmCover>((Container $c) => ConfirmCover($c->get<CoverService>(), $c->get<PostTransformer>()))
+            ->route([.post], '/v1/posts/{id}/cover/confirm');
+    }
+}

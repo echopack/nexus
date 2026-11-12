@@ -1,0 +1,49 @@
+namespace nexus::files::s3;
+
+use std::time;
+
+/**
+ * The S3 settings, read from `NEXUS_FILES_S3_*`. The bucket and the prefix are each disk's own,
+ * in its URL (`s3://bucket/prefix`); these are shared by every S3 disk of the app.
+ */
+#[nexus::config: "NEXUS_FILES_S3"]
+public struct S3Config
+{
+    #[nexus::env: 'ACCESS_KEY']
+    #[nexus::secret]
+    public string $accessKey = '';
+
+    #[nexus::env: 'SECRET_KEY']
+    #[nexus::secret]
+    public string $secretKey = '';
+
+    /**
+     * For temporary credentials only.
+     */
+    #[nexus::env: 'SESSION_TOKEN']
+    #[nexus::secret]
+    public string $sessionToken = '';
+
+    #[nexus::env: 'REGION']
+    public string $region = 'us-east-1';
+
+    /**
+     * The store's address when it is not AWS, like `http://127.0.0.1:9000` for MinIO; empty for
+     * AWS in the region.
+     */
+    #[nexus::env: 'ENDPOINT']
+    public string $endpoint = '';
+
+    /**
+     * Whether the bucket goes in the path (`host/bucket/key`, what MinIO wants) instead of the host
+     * name (`bucket.host/key`, AWS).
+     */
+    #[nexus::env: 'PATH_STYLE']
+    public bool $pathStyle = false;
+
+    /**
+     * How long one request may take; a whole upload or download of a big file included.
+     */
+    #[nexus::env: 'TIMEOUT']
+    public time::duration $timeout = std::time::duration::mins(10);
+}
