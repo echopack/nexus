@@ -2,7 +2,7 @@
 # Runs this suite with the live tests on, against a throwaway MinIO in
 # Docker (IMAGE picks another build); the server and its bucket go with the run.
 set -euo pipefail
-IMAGE=${IMAGE:-minio/minio:latest}
+IMAGE=${IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}
 NAME=nexus-files-live-$$
 PORT=${PORT:-$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}
 cd "$(dirname "$0")/.."

@@ -60,7 +60,7 @@ docker run -d --rm --name "${redis_name}" -p "127.0.0.1:${redis_port}:6379" "${R
 s3_port=$(freeport)
 s3_name="nexus-blog-s3-$$"
 docker run -d --rm --name "${s3_name}" -p "127.0.0.1:${s3_port}:9000" \
-    -e MINIO_ROOT_USER=blog-smoke -e MINIO_ROOT_PASSWORD=blog-smoke-secret "${S3_IMAGE:-minio/minio:latest}" server /data >/dev/null \
+    -e MINIO_ROOT_USER=blog-smoke -e MINIO_ROOT_PASSWORD=blog-smoke-secret "${S3_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}" server /data >/dev/null \
     || { docker rm -f -v "${name}" "${mail_name}" "${redis_name}" >/dev/null 2>&1; echo "docker run (minio) failed"; exit 1; }
 trap 'docker rm -f -v "${name}" "${mail_name}" "${redis_name}" "${s3_name}" >/dev/null 2>&1 || true' EXIT
 mailapi="http://127.0.0.1:${mail_http}/api/v1"
