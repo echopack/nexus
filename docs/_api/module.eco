@@ -1,0 +1,38 @@
+/*
+ * The library the API reference reads: the nexus core and every module and
+ * adapter, so one `echoc -p decls` sees them all. Nothing here is built or
+ * shipped; docs/docs.eco points `#[docs::api:]` at this file.
+ */
+
+#[module: "nexus-api"]
+#[version: "0.1.0"]
+
+#[depends: "../.."]
+#[depends: "../../modules/app"]
+#[depends: "../../modules/http"]
+#[depends: "../../modules/carbon"]
+#[depends: "../../modules/carbon/testing"]
+#[depends: "../../modules/rest"]
+#[depends: "../../modules/crud"]
+#[depends: "../../modules/auth"]
+#[depends: "../../modules/auth/carbon"]
+#[depends: "../../modules/oauth"]
+#[depends: "../../modules/oauth/carbon"]
+#[depends: "../../modules/connect"]
+#[depends: "../../modules/connect/carbon"]
+#[depends: "../../modules/work"]
+#[depends: "../../modules/work/carbon"]
+#[depends: "../../modules/mail"]
+#[depends: "../../modules/files"]
+#[depends: "../../modules/files/s3"]
+#[depends: "../../modules/cache"]
+#[depends: "../../modules/cache/redis"]
+#[depends: "../../modules/realtime"]
+#[depends: "../../modules/realtime/redis"]
+#[depends: "../../modules/mcp"]
+#[depends: "../../modules/debug"]
+#[depends: "../../modules/debug/work"]
+#[depends: "../../modules/debug/realtime"]
+#[depends: "../../modules/testing"]
+
+#[sources: "*.eco"]

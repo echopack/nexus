@@ -1,0 +1,42 @@
+name: docs
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: echolang/setup-echo@v1
+
+      # the API reference compiles docs/_api, which depends on the core and every module
+      - name: Install packages
+        run: (cd docs/_api && epm install)
+
+      - uses: echolang/ecodoc@v0
+        with:
+          setup-echo: false
+          epm-install: false
+          base: /${{ github.event.repository.name }}/
+          strict: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

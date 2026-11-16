@@ -39,7 +39,7 @@ fi
 cd "${here}"
 "${echoc}" build >/dev/null || { echo "build failed"; exit 1; }
 freeport() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
-(cd scripts/wsprobe && "${echoc}" build -o "${here}/ecobuild/wsprobe" >/dev/null) || { echo "wsprobe build failed"; exit 1; }
+(cd scripts/wsprobe && epm install >/dev/null && "${echoc}" build -o "${here}/ecobuild/wsprobe" >/dev/null) || { echo "wsprobe build failed"; exit 1; }
 
 db_port=$(freeport)
 name="nexus-blog-smoke-$$"

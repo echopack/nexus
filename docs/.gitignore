@@ -1,0 +1,4 @@
+dist/
+.ecodoc/
+_api/vendor/
+_api/ecobuild/
