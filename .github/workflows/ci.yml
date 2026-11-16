@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # every suite, `nexus gen --check` and the blog's smoke test; the runner has Docker for the MySQL,
+  # Redis, MinIO and Mailpit they start
+  linux:
+    name: ubuntu-24.04
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: echolang/setup-echo@v1
+
+      - name: Test
+        run: scripts/test.sh
+
+  # the suites that need no Docker
+  macos:
+    name: macos-15
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: echolang/setup-echo@v1
+
+      - name: Test
+        run: DOCKER=0 scripts/test.sh

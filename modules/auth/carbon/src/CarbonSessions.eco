@@ -1,6 +1,7 @@
 namespace nexus::auth::carbon;
 
 use std::time;
+use carbon;
 
 /**
  * Signed sessions in `auth_sessions`, through a request's carbon session.

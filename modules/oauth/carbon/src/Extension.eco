@@ -1,6 +1,7 @@
 namespace nexus::oauth::carbon;
 
 use container::{Builder, Container};
+use carbon;
 
 /**
  * Keeps nexus-oauth's clients, requests, codes and grants in the app's carbon database: binds `OAuthStore` on

@@ -1,0 +1,101 @@
+/**
+ * Confined paths: the text never leaves its directory, and neither does a symlink inside it.
+ */
+
+use nexus::{Confined, Problem};
+use ecotest::{expect, TempDir};
+
+// a directory `root` with `a/b.txt` in it, and `outside/secret.txt` next to it
+internal function tree(const TempDir& $tmp) : std::fs::path
+{
+    std::fs::path $root = $tmp->file('root');
+    guard std::fs::mkdir($root / 'a', recursive: true);
+    guard std::fs::mkdir($tmp->file('outside'), recursive: true);
+    guard std::fs::writefile($root / 'a' / 'b.txt', 'inside');
+    guard std::fs::writefile(std::fs::path($tmp->file('outside')) / 'secret.txt', 'secret');
+    return $root;
+}
+
+internal function status(result<std::fs::path, Problem> $r) : int64
+{
+    guard $r else ($p) {
+        return $p->status() as int64;
+    };
+    return 200;
+}
+
+// the path a confined lookup answered, or its status
+internal function at(result<std::fs::path, Problem> $r) : string
+{
+    std::fs::path $p = guard $r else ($problem) {
+        return "status {$problem->status()}";
+    };
+    return $p->string();
+}
+
+internal function contents(result<std::fs::path, Problem> $r) : string
+{
+    std::fs::path $p = guard $r else ($problem) {
+        return "status {$problem->status()}";
+    };
+    return std::fs::readfile($p)->or('unreadable');
+}
+
+test the_text_stays_inside
+{
+    std::fs::path $root = '/srv/files';
+    expect(at(Confined::path($root, 'a/b.txt')))->is('/srv/files/a/b.txt');
+    expect(at(Confined::path($root, '/a/./b.txt/')))->is('/srv/files/a/b.txt');
+    expect(at(Confined::path($root, '')))->is('/srv/files');
+    expect(at(Confined::path($root, 'a/../b')))->is('/srv/files/b');
+    expect(status(Confined::path($root, '../x')))->is(400 as int64);
+    expect(status(Confined::path($root, 'a/../../x')))->is(400 as int64);
+    expect(status(Confined::path($root, "a\0b")))->is(400 as int64);
+}
+
+test real_reads_what_is_inside
+{
+    $tmp = TempDir();
+    std::fs::path $root = tree($tmp);
+    expect(contents(Confined::real($root, 'a/b.txt')))->is('inside');
+    expect(status(Confined::real($root, 'a/none.txt')))->is(404 as int64);
+}
+
+test real_refuses_a_link_out
+{
+    $tmp = TempDir();
+    std::fs::path $root = tree($tmp);
+    guard std::fs::symlink(std::fs::path($tmp->file('outside')) / 'secret.txt', $root / 'leak.txt');
+    guard std::fs::symlink(std::fs::path($tmp->file('outside')), $root / 'out');
+    expect(status(Confined::real($root, 'leak.txt')))->is(403 as int64);
+    expect(status(Confined::real($root, 'out/secret.txt')))->is(403 as int64);
+    expect(status(Confined::real($root, 'out')))->is(403 as int64);
+}
+
+test real_follows_a_link_that_stays_inside
+{
+    $tmp = TempDir();
+    std::fs::path $root = tree($tmp);
+    guard std::fs::symlink($root / 'a' / 'b.txt', $root / 'alias.txt');
+    expect(contents(Confined::real($root, 'alias.txt')))->is('inside');
+}
+
+test linked_sees_a_link_on_the_way
+{
+    $tmp = TempDir();
+    std::fs::path $root = tree($tmp);
+    guard std::fs::symlink(std::fs::path($tmp->file('outside')), $root / 'out');
+    expect(Confined::linked($root, 'a/b.txt'))->no();
+    expect(Confined::linked($root, 'a/new/deeper.txt'))->no();
+    expect(Confined::linked($root, 'out'))->yes();
+    expect(Confined::linked($root, 'out/secret.txt'))->yes();
+    expect(Confined::linked($root, 'out/new.txt'))->yes();
+}
+
+test under_needs_a_whole_segment
+{
+    expect(Confined::under(std::fs::path('/srv/a'), std::fs::path('/srv/a/b')))->yes();
+    expect(Confined::under(std::fs::path('/srv/a'), std::fs::path('/srv/a')))->yes();
+    expect(Confined::under(std::fs::path('/srv/a'), std::fs::path('/srv/ab')))->no();
+    expect(Confined::under(std::fs::path('/'), std::fs::path('/x')))->yes();
+}

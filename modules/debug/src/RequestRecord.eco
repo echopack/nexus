@@ -26,7 +26,7 @@ public class RequestRecord : Record
     {
         $this->id = $req->id;
         $this->method = $req->method->verb();
-        $this->target = $req->target;
+        $this->target = RequestRecord::scrubbed($req->target);
         $this->path = $req->path;
         $this->peer = $req->peer;
         $this->action = $action;
@@ -106,6 +106,50 @@ public class RequestRecord : Record
             $o[$item->name] = json::str($value);
         }
         return $o;
+    }
+
+    /**
+     * `$target` with the value of every query parameter that carries a credential replaced by
+     * `***`: signed file links, sign in codes and states, socket tickets.
+     */
+    public static function scrubbed(const string& $target) : string
+    {
+        usize $q = $target->find('?');
+        if ($q == $target->size()) {
+            return $target;
+        }
+        string $out = $target->sub(0, $q + 1)->clone();
+        $pieces = str::split($target->sub($q + 1, $target->size() - $q - 1), '&')->owned();
+        usize $i = 0;
+        foreach ($pieces as const &$piece) {
+            if ($i > 0) {
+                $out->push(38);
+            }
+            $i = $i + 1;
+            usize $eq = $piece->find('=');
+            if ($eq < $piece->size() && RequestRecord::secretParam($piece->sub(0, $eq)->clone())) {
+                $out->append($piece->sub(0, $eq + 1));
+                $out->append('***');
+            } else {
+                $out->append($piece);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Whether a query parameter carries a credential.
+     */
+    public static function secretParam(const string& $name) : bool
+    {
+        string $n = str::lower($name);
+        array<string> $secret = ['sig', 'signature', 'token', 'access_token', 'refresh_token', 'id_token', 'ticket', 'code', 'state', 'key', 'password', 'secret', 'x-amz-signature', 'x-amz-credential', 'x-amz-security-token'];
+        foreach ($secret as const &$s) {
+            if ($n == $s) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

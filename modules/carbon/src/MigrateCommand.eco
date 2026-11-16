@@ -1,6 +1,7 @@
 namespace nexus::carbon;
 
 use std::io;
+use carbon;
 
 /**
  * `migrate`, `migrate:status`, `migrate:down` and `migrate:reset`: the app's migrations run by a

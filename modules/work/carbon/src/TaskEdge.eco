@@ -1,5 +1,7 @@
 namespace nexus::work::carbon;
 
+use carbon;
+
 /**
  * A row of `nexus_task_edges`: task `taskId` waits for task `afterId`.
  */

@@ -11,6 +11,7 @@ public struct Item
     public Policy $policy;
     public function<status<Failure>(nexus::Payload&)> $handle;
     public function<RunLog(const Run&)> $log;
+    public function<void(nexus::Payload&, const string&)> $failed;
 
     /**
      * `$task` as an item tried `$tries` times, or as often as it says when `$tries` is 0.
@@ -31,6 +32,7 @@ public struct Item
     {
         // handle may change the task, so its run gets a copy of its own; the log shares the box
         T $copy = $task;
+        T $last = $task;
         $policy = Policy::of<T>($task);
         Held<T> $held = Held<T>($task);
         return Item(
@@ -42,7 +44,27 @@ public struct Item
             },
             function[$held](const Run& $run) : RunLog {
                 return $held->value->log($run);
+            },
+            function[$last](nexus::Payload& $payload, const string& $why) : void {
+                $last->failed($payload, $why);
             }
         );
+    }
+
+    /**
+     * Tells the task it failed for good when `$s` says so, on the payload of the run that did.
+     */
+    public const function settled(nexus::Payload& $payload, const Settle& $s) : void
+    {
+        match ($s) {
+            Settle::fail($why) => {
+                function<void(nexus::Payload&, const string&)> $failed = $this->failed;
+                $failed($payload, $why);
+            },
+            Settle::done => {
+            },
+            Settle::retry($at, $why) => {
+            },
+        };
     }
 }

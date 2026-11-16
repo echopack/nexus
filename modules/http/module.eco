@@ -12,9 +12,9 @@
 #[epm::description: "HTTP/1.1 transport for nexus apps, on libhttp"]
 
 #[depends: "../.."]
-#[depends: "../../../libhttp"]
-#[depends: "../../../container"]
-#[depends: "../../../libjson"]
+#[requires: "echolang/libhttp" { version: "^0.2.11", source: git "https://github.com/echolang/libhttp" }]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
 
 #[hook: before_build { run: "nexus", args: ["gen"] }]
 
@@ -25,5 +25,5 @@
 
 #[target: test] {
     #[sources: "tests/*.eco"]
-    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+    #[requires: "echolang/ecotest" { version: "^0.3.3", source: git "https://github.com/echolang/ecotest" }]
 }

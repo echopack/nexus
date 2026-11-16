@@ -146,3 +146,26 @@ test keys_name_nothing_outside_their_disk
     expect(Keys::type('a/b'))->is('application/octet-stream');
     expect(Keys::name('a/b/c.pdf'))->is('c.pdf');
 }
+
+test a_linked_directory_on_the_way_to_a_key_is_never_followed
+{
+    $tmp = ecotest::TempDir();
+    string $root = $tmp->file('local');
+    string $outside = $tmp->file('outside');
+    expect(std::fs::mkdir($outside, recursive: true))->ok();
+    expect(std::fs::writefile("{$outside}/secret.txt", 'secret'))->ok();
+    $l = LocalStore($root);
+    expect($l->check())->fine();
+    expect(std::fs::symlink($outside, "{$root}/posts"))->fine();
+
+    expect($l->get('posts/secret.txt'))->fails();
+    expect($l->read('posts/secret.txt', 0, 3))->fails();
+    expect(absent($l->stat('posts/secret.txt')))->yes(says: 'nothing is kept there');
+    expect($l->list('posts/'))->fails();
+    expect($l->put('posts/new.txt', 'x', 'text/plain'))->fails();
+    expect(std::fs::readfile("{$outside}/new.txt"))->fails();
+    expect($l->delete('posts/secret.txt'))->fails();
+    expect(std::fs::readfile("{$outside}/secret.txt"))->ok();
+    expect($l->copy('posts/secret.txt', 'kept.txt'))->fails();
+    expect($l->move('posts/secret.txt', 'kept.txt'))->fails();
+}

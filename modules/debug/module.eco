@@ -22,9 +22,9 @@
 
 #[depends: "../.."]
 #[depends: "../auth"]
-#[depends: "../../../container"]
-#[depends: "../../../libjson"]
-#[depends: "../../../libcrypto"]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
+#[requires: "echolang/libcrypto" { version: "^0.3.3", source: git "https://github.com/echolang/libcrypto" }]
 
 #[hook: before_build { run: "nexus", args: ["gen"] }]
 

@@ -9,9 +9,9 @@ use std::time;
 public struct HttpConfig
 {
     /**
-     * The addresses of the reverse proxies in front of the app, comma separated. A request from
-     * one of them comes from the client its `X-Forwarded-For` names; from anywhere else the header
-     * is ignored.
+     * The addresses of the reverse proxies in front of the app, comma separated, each an address
+     * or a range (`10.0.0.0/8`). A request from one of them comes from the client its
+     * `X-Forwarded-For` names; from anywhere else the header is ignored.
      */
     #[nexus::env: 'TRUSTED_PROXIES']
     public string $trustedProxies = '';
@@ -36,4 +36,43 @@ public struct HttpConfig
      */
     #[nexus::env: 'SSE_BEAT']
     public time::duration $sseBeat = .secs(15);
+
+    /**
+     * The largest request body accepted, in bytes; a bigger one is a 413 before it is read.
+     */
+    #[nexus::env: 'MAX_BODY']
+    public uint64 $maxBody = 8388608;
+
+    /**
+     * How long a connection may wait between requests, and before the first byte of its first
+     * one. Longer than the keep-alive of the load balancer in front (60 s on most), or it reuses
+     * a connection the app has just closed and answers 502.
+     */
+    #[nexus::env: 'IDLE_TIMEOUT']
+    public time::duration $idleTimeout = .secs(75);
+
+    /**
+     * How long a client has to send the request line and headers; a 408 after that.
+     */
+    #[nexus::env: 'HEADER_TIMEOUT']
+    public time::duration $headerTimeout = .secs(10);
+
+    /**
+     * How long a client has to send the body once the headers are in; a 408 after that.
+     */
+    #[nexus::env: 'BODY_TIMEOUT']
+    public time::duration $bodyTimeout = .secs(60);
+
+    /**
+     * Open connections, idle ones, event streams and websockets included; past it a new one gets
+     * a 503. Each is a file descriptor, so keep it under `ulimit -n`.
+     */
+    #[nexus::env: 'MAX_CONNECTIONS']
+    public uint32 $maxConnections = 1024;
+
+    /**
+     * Requests one connection may make before it is closed.
+     */
+    #[nexus::env: 'MAX_REQUESTS']
+    public uint32 $maxRequests = 1000;
 }

@@ -25,6 +25,13 @@ public class Oidc : Connector
      * The values a token's `iss` may have: the issuer, and any other spelling the provider uses.
      */
     public array<string> $issuers;
+
+    /**
+     * Whether the provider is trusted to vouch for an email: only then does its `email_verified`
+     * let a sign in take over an existing account with that email (`Accounts`). A provider whose
+     * users set any address they like (most self-hosted ones, many multi-tenant ones) must not be.
+     */
+    public bool $trustsEmail;
     private thread::mutex<Endpoints?> $endpoints;
 
     public constructor(
@@ -34,7 +41,8 @@ public class Oidc : Connector
         secret: const string& $secret,
         scopes: array<string> $scopes = ['openid', 'email', 'profile'],
         authorize: const string& $authorize = '',
-        token: const string& $token = ''
+        token: const string& $token = '',
+        trustsEmail: bool $trustsEmail = false
     )
     {
         $this->named = $name;
@@ -43,6 +51,7 @@ public class Oidc : Connector
         $this->secret = $secret;
         $this->scopes = mv $scopes;
         $this->issuers = [$issuer];
+        $this->trustsEmail = $trustsEmail;
         Endpoints? $known = null;
         if (!$authorize->empty() && !$token->empty()) {
             $known = Endpoints($authorize, $token);
@@ -112,7 +121,11 @@ public class Oidc : Connector
             return .error(.unavailable("{$this->named} sent no ID token; ask for the openid scope"));
         }
         json::Value $claims = try IdToken::check($raw, $this->issuers, $this->client, $a->nonce, $now);
-        return .ok(IdToken::identity($this->named, $claims));
+        ExternalIdentity $who = IdToken::identity($this->named, $claims);
+        if (!$this->trustsEmail) {
+            $who->emailVerified = false;
+        }
+        return .ok($who);
     }
 
     /**

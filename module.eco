@@ -15,16 +15,15 @@
 
 #[module: "nexus"]
 #[version: "0.1.0"]
-#[epm::echoc: ">=0.14.0"]
+#[epm::echoc: ">=0.15.0"]
 #[epm::license: "MIT"]
 #[epm::description: "The HTTP application framework for Echo"]
 
-#[depends: "../container"]
-#[depends: "../libjson"]
-#[depends: "../libcommand"]
-#[depends: "../libcrypto"]
-#[depends: "../libsignal"]
-#[depends: "../calendar"]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
+#[requires: "echolang/libcommand" { version: "^0.1.6", source: git "https://github.com/echolang/libcommand" }]
+#[requires: "echolang/libcrypto" { version: "^0.3.3", source: git "https://github.com/echolang/libcrypto" }]
+#[requires: "echopack/calendar" { version: "^0.1.2", source: git "https://github.com/echopack/calendar" }]
 
 #[sources: "src/**/*.eco"]
 
@@ -35,5 +34,5 @@
 
 #[target: test] {
     #[sources: ["tests/*.eco", "cli/src/*.eco", "cli/tests/*.eco"]]
-    #[requires: "echolang/ecotest" { version: "^0.3", source: git "https://github.com/echolang/ecotest" }]
+    #[requires: "echolang/ecotest" { version: "^0.3.3", source: git "https://github.com/echolang/ecotest" }]
 }

@@ -3,11 +3,13 @@ namespace nexus::http;
 /**
  * The reverse proxies whose `X-Forwarded-For` is believed. Everything after the app's own proxies
  * is the client's to write, so the header is read from the right and the first address that is not
- * a trusted proxy is the client.
+ * a trusted proxy is the client. An entry is an address or a range (`10.0.0.0/8`, `fd00::/8`), for
+ * load balancers whose addresses change.
  */
 public struct Proxies
 {
     public array<string> $trusted = [];
+    private array<AddressRange> $ranges = [];
 
     /**
      * No proxy: every request comes from its socket peer.
@@ -26,6 +28,11 @@ public struct Proxies
             if ($address->empty()) {
                 continue;
             }
+            AddressRange? $range = AddressRange::parse($address);
+            if ($range != null) {
+                AddressRange $r = guard $range;
+                $this->ranges[] = $r;
+            }
             $this->trusted[] = mv $address;
         }
     }
@@ -34,6 +41,11 @@ public struct Proxies
     {
         foreach ($this->trusted as const &$t) {
             if ($t == $address) {
+                return true;
+            }
+        }
+        foreach ($this->ranges as const &$r) {
+            if ($r->holds($address)) {
                 return true;
             }
         }

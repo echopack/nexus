@@ -1,5 +1,7 @@
 namespace nexus::http;
 
+use http;
+
 /**
  * A nexus socket over libhttp's websocket, which waits on the reactor and holds no worker.
  */

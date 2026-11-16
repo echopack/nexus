@@ -1,5 +1,7 @@
 namespace nexus::http;
 
+use http;
+
 /**
  * Converts between libhttp's request and response and nexus's own.
  */
@@ -53,9 +55,20 @@ public struct Wire
         $r->body = $in->body;
         string $address = Proxies::address($in->peer);
         bool $trusted = $proxies->trusts($address);
-        $r->peer = $proxies->client(address: $address, trusted: $trusted, $r->header('X-Forwarded-For') ?? '');
-        $r->scheme = Proxies::scheme(trusted: $trusted, $r->header('X-Forwarded-Proto') ?? '');
+        $r->peer = $proxies->client(address: $address, trusted: $trusted, Wire::forwarded($r->headers, 'X-Forwarded-For'));
+        $r->scheme = Proxies::scheme(trusted: $trusted, Wire::forwarded($r->headers, 'X-Forwarded-Proto'));
         return $r;
+    }
+
+    /**
+     * Every line of a forwarding header as one list, in the order they came. A proxy that adds a
+     * line of its own instead of extending the client's leaves the client's first, so reading the
+     * first line alone would believe the client.
+     */
+    internal static function forwarded(const nexus::Headers& $headers, const string& $name) : string
+    {
+        array<string> $lines = $headers->all($name);
+        return str::join($lines, ', ');
     }
 
     /**
@@ -81,7 +94,9 @@ public struct Wire
                 return $r;
             }
             $r->status = $out->status;
+            // the nexus response says these itself; libhttp's own would go out twice
             $r->headers->remove('Content-Type');
+            $r->headers->remove('Content-Range');
         } else if ($out->stream != null) {
             function<void(nexus::Writer)> $fn = guard $out->stream;
             $r = http::Response(stream: function[$fn](http::Writer $w) : void {

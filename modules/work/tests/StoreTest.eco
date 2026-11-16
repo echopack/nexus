@@ -329,6 +329,7 @@ test a_failing_stored_task_retries_then_fails_and_holds_its_dependents
     expect($failed)->size(1);
     expect($failed[0]->error)->is('flaky fails');
     expect($failed[0]->attempts)->is(2);
+    expect($r->app->logged('heard flaky failed: flaky fails'))->yes(says: 'a stored task hears its last try failed');
 }
 
 test two_servers_on_one_store_run_each_task_once

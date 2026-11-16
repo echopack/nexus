@@ -2,7 +2,8 @@ namespace nexus::debug;
 
 /**
  * Lets in whoever asks from this machine, with no sign in: for the developer at their desk. Refused
- * at boot in prod, and a request from any other address gets a 403.
+ * at boot in prod; a request from any other address, through a proxy, or for a host name that is
+ * not this machine's gets a 403.
  */
 #[atomic]
 public class OpenGate : Gate
@@ -16,6 +17,14 @@ public class OpenGate : Gate
     {
         if (!Gates::loopback($payload->request->peer)) {
             return .error($payload->fail(.forbidden('the open debug console answers localhost only')));
+        }
+        // a proxy on this machine makes every client look local; a page on another site whose
+        // name now points here (DNS rebinding) still says its own name
+        if ($payload->request->header('X-Forwarded-For') != null || $payload->request->header('Forwarded') != null) {
+            return .error($payload->fail(.forbidden('the open debug console answers localhost only, not through a proxy')));
+        }
+        if (!Gates::localName($payload->request->header('Host') ?? '')) {
+            return .error($payload->fail(.forbidden('the open debug console answers localhost only; open it as localhost')));
         }
         return .ok(Viewer('open', 'localhost'));
     }

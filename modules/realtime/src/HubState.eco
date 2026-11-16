@@ -231,7 +231,11 @@ internal struct HubData
         array<Envelope> $out = [];
         uint64 $seq = $this->next - ($this->ring->count() as uint64);
         while ($seq < $this->next) {
-            $out[] = $this->ring[$this->slot($seq)]->e;
+            // the data's JSON is counted without atomics, and the hub thread keeps holding it: what
+            // leaves the lock is a copy of its own
+            Envelope $e = $this->ring[$this->slot($seq)]->e;
+            $e->data = $e->data->clone();
+            $out[] = mv $e;
             $seq = $seq + 1;
         }
         return $out;

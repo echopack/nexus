@@ -1,6 +1,7 @@
 namespace nexus::carbon::testing;
 
 use std::time;
+use carbon;
 
 /**
  * A MySQL database of its own for one test: created on a server, migrated, and dropped when the

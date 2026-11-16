@@ -224,3 +224,35 @@ test nested_form_inputs_that_hold_only_files_are_read
     expect($items[2]->string('label', required: true))->some('third');
     expect($f->done()->has_value())->yes(says: 'the fields check out');
 }
+
+internal function urlencoded(const string& $body) : result<Fields, Problem>
+{
+    nexus::Request $r = nexus::Request(.post, '/f');
+    $r->headers->set('Content-Type', 'application/x-www-form-urlencoded');
+    $r->body = $body;
+    array<nexus::log::Sink> $sinks = [];
+    nexus::Payload $p = nexus::Payload(mv $r, container::Builder()->seal(), .testing, nexus::Logger(mv $sinks, .info));
+    return Fields::body($p);
+}
+
+test a_form_with_too_many_fields_is_refused
+{
+    string $body = 'a=1';
+    usize $i = 1;
+    while ($i < 1000) {
+        $body->append('&a=1');
+        $i = $i + 1;
+    }
+    Fields $most = guard urlencoded($body) else {
+        expect(false)->yes(says: 'a form of 1000 fields is read');
+        return;
+    };
+    expect($most->string('a', required: false))->some('1');
+    $body->append('&b=2');
+    result<Fields, Problem> $over = urlencoded($body);
+    guard $over else ($p) {
+        expect($p->status())->is(400);
+        return;
+    };
+    expect(false)->yes(says: 'a form of 1001 fields is refused');
+}

@@ -132,6 +132,7 @@ public class Extension : nexus::Extension
         if ($kernel->services->get<nexus::auth::Resources>()->all()->empty()) {
             return .error(.extension('nexus-oauth', 'there is no resource to issue tokens for; add nexus::mcp::Extension() or declare one on nexus::auth::Resources'));
         }
+        try $kernel->needsOrigin('nexus-oauth', 'the issuer and the metadata clients trust');
         $kernel->services->get<nexus::auth::Endings>()->listen(function[$kernel](nexus::auth::Ending $e) : void {
             match ($e) {
                 nexus::auth::Ending::subject($via, $subject) => {

@@ -1,5 +1,7 @@
 namespace nexus::http;
 
+use http;
+
 /**
  * A nexus event stream over libhttp's outlet, which waits on the reactor and holds no worker.
  */

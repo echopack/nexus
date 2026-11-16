@@ -1,5 +1,7 @@
 namespace nexus::oauth::carbon;
 
+use carbon;
+
 /**
  * `oauth_clients`, `oauth_requests`, `oauth_codes` and `oauth_grants`. Add it to the app's migrations with
  * `nexus::oauth::carbon::Tables::migrations()`.

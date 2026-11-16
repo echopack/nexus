@@ -1,0 +1,220 @@
+/**
+ * Event rooms: a watcher gets its backlog, then what is written after, once and in order; rooms of
+ * other keys stay apart; a room goes once nobody watches or writes to it.
+ */
+
+use nexus::{EventRooms, EventStream, ServerEvent, Problem};
+use ecotest::expect;
+use std::thread;
+
+/**
+ * A stream that keeps the data of what it was sent.
+ */
+#[atomic]
+internal class RStream : EventStream
+{
+    private int64 $number;
+    private thread::mutex<array<string>> $got = thread::mutex<array<string>>(array<string>());
+    private atomic<bool> $live = atomic<bool>(true);
+
+    public constructor(int64 $number)
+    {
+        $this->number = $number;
+    }
+
+    public function id() : int64
+    {
+        return $this->number;
+    }
+
+    public function send(const ServerEvent& $e) : bool
+    {
+        if (!$this->live->load()) {
+            return false;
+        }
+        thread::locked<array<string>> $held = $this->got->lock();
+        $held->value->push($e->data);
+        return true;
+    }
+
+    public function comment(const string& $text) : bool
+    {
+        return $this->live->load();
+    }
+
+    public function close() : void
+    {
+        $this->live->store(false);
+    }
+
+    public function open() : bool
+    {
+        return $this->live->load();
+    }
+
+    public const function seen() : array<string>
+    {
+        thread::locked<array<string>> $held = $this->got->lock();
+        return $held->value->clone();
+    }
+}
+
+internal function said(array<string> $data) : function<result<array<ServerEvent>, Problem>()>
+{
+    return function[$data]() : result<array<ServerEvent>, Problem> {
+        array<ServerEvent> $out = [];
+        foreach ($data as const &$d) {
+            $out[] = ServerEvent($d);
+        }
+        return .ok($out);
+    };
+}
+
+test a_watcher_gets_its_backlog_then_what_is_written
+{
+    $rooms = EventRooms();
+    $s = RStream(1);
+    guard $rooms->watch('a', $s, said(['old']));
+    guard $rooms->write('a', said(['new', 'newer']));
+    $rooms->settle();
+    expect($s->seen())->is(['old', 'new', 'newer']);
+}
+
+test rooms_of_other_keys_stay_apart
+{
+    $rooms = EventRooms();
+    $a = RStream(1);
+    $b = RStream(2);
+    guard $rooms->watch('a', $a, said([]));
+    guard $rooms->watch('b', $b, said([]));
+    guard $rooms->write('a', said(['for a']));
+    $rooms->tell('b', ServerEvent('for b'));
+    $rooms->settle();
+    expect($a->seen())->is(['for a']);
+    expect($b->seen())->is(['for b']);
+}
+
+test a_write_nobody_watches_leaves_no_room
+{
+    $rooms = EventRooms();
+    guard $rooms->write('a', said(['x']));
+    $rooms->tell('b', ServerEvent('y'));
+    expect($rooms->count())->is(0 as usize);
+}
+
+test a_room_goes_with_its_last_watcher
+{
+    $rooms = EventRooms();
+    $s = RStream(1);
+    $t = RStream(2);
+    guard $rooms->watch('a', $s, said([]));
+    guard $rooms->watch('a', $t, said([]));
+    expect($rooms->watching('a'))->is(2 as usize);
+    $rooms->forget('a', $s);
+    expect($rooms->count())->is(1 as usize);
+    $rooms->forget('a', $t);
+    expect($rooms->count())->is(0 as usize);
+}
+
+test forgetting_a_stream_twice_or_one_never_joined_is_fine
+{
+    $rooms = EventRooms();
+    $s = RStream(1);
+    $stranger = RStream(9);
+    guard $rooms->watch('a', $s, said([]));
+    $rooms->forget('a', $stranger);
+    expect($rooms->watching('a'))->is(1 as usize);
+    $rooms->forget('a', $s);
+    $rooms->forget('a', $s);
+    expect($rooms->count())->is(0 as usize);
+}
+
+test a_failed_backlog_leaves_the_stream_out
+{
+    $rooms = EventRooms();
+    $s = RStream(1);
+    status<Problem> $joined = $rooms->watch('a', $s, function() : result<array<ServerEvent>, Problem> {
+        return .error(.unavailable('no backlog'));
+    });
+    expect($joined->failed())->yes();
+    expect($rooms->count())->is(0 as usize);
+}
+
+test a_failed_write_publishes_nothing_and_keeps_no_room
+{
+    $rooms = EventRooms();
+    $s = RStream(1);
+    guard $rooms->watch('a', $s, said([]));
+    status<Problem> $wrote = $rooms->write('a', function() : result<array<ServerEvent>, Problem> {
+        return .error(.conflict('no'));
+    });
+    expect($wrote->failed())->yes();
+    $rooms->forget('a', $s);
+    $rooms->settle();
+    expect($s->seen())->is(array<string>());
+    expect($rooms->count())->is(0 as usize);
+}
+
+test writers_and_watchers_on_threads_miss_nothing
+{
+    $rooms = EventRooms();
+    // the "database": what the writers persisted, read as the backlog
+    $log = thread::mutex<array<string>>(array<string>());
+    array<thread::handle> $writers = [];
+    int32 $w = 0;
+    while ($w < 4) {
+        int32 $me = $w;
+        thread::handle $h = guard thread::spawn(function[$rooms, $log, $me]() : void {
+            int32 $i = 0;
+            while ($i < 50) {
+                string $line = "{$me}-{$i}";
+                guard $rooms->write('a', function[$log, $line]() : result<array<ServerEvent>, Problem> {
+                    thread::locked<array<string>> $held = $log->lock();
+                    $held->value->push($line);
+                    return .ok([ServerEvent($line)]);
+                });
+                $i++;
+            }
+        });
+        $writers[] = $h;
+        $w++;
+    }
+    array<RStream> $watchers = [];
+    int64 $n = 0;
+    while ($n < 8) {
+        $s = RStream($n);
+        guard $rooms->watch('a', $s, function[$log]() : result<array<ServerEvent>, Problem> {
+            thread::locked<array<string>> $held = $log->lock();
+            array<ServerEvent> $out = [];
+            foreach ($held->value as const &$line) {
+                $out[] = ServerEvent($line);
+            }
+            return .ok($out);
+        });
+        $watchers[] = $s;
+        $n++;
+    }
+    foreach ($writers as &$t) {
+        $t->join();
+    }
+    $rooms->settle();
+    foreach ($watchers as const &$s) {
+        array<string> $seen = $s->seen();
+        expect($seen->count())->is(200 as usize);
+        array<string> $sorted = $seen->clone();
+        $sorted->sort();
+        usize $i = 1;
+        bool $unique = true;
+        while ($i < $sorted->count()) {
+            if ($sorted[$i] == $sorted[$i - 1]) {
+                $unique = false;
+            }
+            $i++;
+        }
+        expect($unique)->yes(says: "no event twice");
+    }
+    foreach ($watchers as $s) {
+        $rooms->forget('a', $s);
+    }
+    expect($rooms->count())->is(0 as usize);
+}

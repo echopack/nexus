@@ -1,5 +1,7 @@
 namespace nexus::cache::redis;
 
+use redis;
+
 /**
  * Keeps nexus-cache's entries in Redis when `NEXUS_CACHE_URL` says `redis://`: opens a pool with
  * `NEXUS_CACHE_TIMEOUT` on every command, connecting included, pings the server once (a server

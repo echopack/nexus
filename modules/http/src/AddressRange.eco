@@ -1,0 +1,261 @@
+namespace nexus::http;
+
+/**
+ * A range of IP addresses: `10.0.0.0/8`, `fd00::/8`, or one address on its own. Addresses compare
+ * as their 16 bytes, an IPv4 one mapped into IPv6 (`::ffff:10.0.0.2`), so `::1` and `0::1` are the
+ * same address and an IPv4 range holds the mapped spelling of its addresses too.
+ */
+public struct AddressRange
+{
+    private array<uint8> $bytes;
+    private uint32 $bits;
+
+    internal constructor(mv array<uint8> $bytes, uint32 $bits)
+    {
+        $this->bytes = mv $bytes;
+        $this->bits = $bits;
+    }
+
+    /**
+     * The range `$text` names, or null when it is no address or its prefix is longer than the
+     * address.
+     */
+    public static function parse(const string& $text) : AddressRange?
+    {
+        string $t = string::from(str::trim($text));
+        string $ip = $t;
+        usize $slash = $t->find('/');
+        if ($slash < $t->size()) {
+            $ip = $t->sub(0, $slash)->clone();
+        }
+        array<uint8> $bytes = guard AddressRange::bytes($ip) else {
+            return null;
+        };
+        bool $four = $ip->find(':') == $ip->size();
+        uint32 $bits = 128;
+        if ($slash < $t->size()) {
+            string $prefix = $t->sub($slash + 1, $t->size() - $slash - 1)->clone();
+            uint64 $n = guard AddressRange::decimal($prefix) else {
+                return null;
+            };
+            uint64 $most = 128;
+            if ($four) {
+                $most = 32;
+            }
+            if ($n > $most) {
+                return null;
+            }
+            $bits = $n as uint32;
+            if ($four) {
+                $bits = $bits + 96;
+            }
+        }
+        return AddressRange(mv $bytes, $bits);
+    }
+
+    /**
+     * Whether `$address` (no port, no brackets) is in the range. Anything that is no address is
+     * not.
+     */
+    public const function holds(const string& $address) : bool
+    {
+        array<uint8> $b = guard AddressRange::bytes($address) else {
+            return false;
+        };
+        uint32 $left = $this->bits;
+        usize $i = 0;
+        while ($left >= 8) {
+            if ($b[$i] != $this->bytes[$i]) {
+                return false;
+            }
+            $i = $i + 1;
+            $left = $left - 8;
+        }
+        if ($left == 0) {
+            return true;
+        }
+        uint32 $mask = (255 << (8 - $left)) & 255;
+        return (($b[$i] as uint32) & $mask) == (($this->bytes[$i] as uint32) & $mask);
+    }
+
+    /**
+     * The 16 bytes of an IPv4 or IPv6 address, an IPv4 one mapped; null for anything else. An
+     * IPv6 zone (`%en0`) is left off.
+     */
+    public static function bytes(const string& $address) : array<uint8>?
+    {
+        string $a = $address;
+        usize $zone = $a->find('%');
+        if ($zone < $a->size()) {
+            $a = $a->sub(0, $zone)->clone();
+        }
+        if ($a->find(':') == $a->size()) {
+            array<uint8> $quad = guard AddressRange::quad($a) else {
+                return null;
+            };
+            array<uint8> $mapped = [];
+            usize $i = 0;
+            while ($i < 10) {
+                $mapped[] = 0;
+                $i = $i + 1;
+            }
+            $mapped[] = 255;
+            $mapped[] = 255;
+            foreach ($quad as $x) {
+                $mapped[] = $x;
+            }
+            return mv $mapped;
+        }
+        return AddressRange::six($a);
+    }
+
+    // the four bytes of a dotted quad, every part plain decimal
+    internal static function quad(const string& $text) : array<uint8>?
+    {
+        $parts = str::split($text, '.')->owned();
+        if ($parts->count() != 4) {
+            return null;
+        }
+        array<uint8> $out = [];
+        foreach ($parts as const &$p) {
+            if ($p->size() > 3) {
+                return null;
+            }
+            uint64 $n = guard AddressRange::decimal($p) else {
+                return null;
+            };
+            if ($n > 255) {
+                return null;
+            }
+            $out[] = $n as uint8;
+        }
+        return mv $out;
+    }
+
+    // eight groups, one `::` standing for the zero groups left out; an IPv4 tail counts as two
+    internal static function six(const string& $text) : array<uint8>?
+    {
+        string $t = $text;
+        if ($t->find('.') < $t->size()) {
+            usize $colon = $t->size();
+            usize $i = $t->size();
+            while ($i > 0) {
+                $i = $i - 1;
+                if ($t->byte($i) == 58) {
+                    $colon = $i;
+                    break;
+                }
+            }
+            if ($colon == $t->size()) {
+                return null;
+            }
+            string $tail = $t->sub($colon + 1, $t->size() - $colon - 1)->clone();
+            array<uint8> $quad = guard AddressRange::quad($tail) else {
+                return null;
+            };
+            uint32 $hi = (($quad[0] as uint32) << 8) | ($quad[1] as uint32);
+            uint32 $lo = (($quad[2] as uint32) << 8) | ($quad[3] as uint32);
+            string $head = $t->sub(0, $colon + 1)->clone();
+            $t = "{$head}{$hi:x}:{$lo:x}";
+        }
+        array<uint32> $all = guard AddressRange::spread($t) else {
+            return null;
+        };
+        array<uint8> $out = [];
+        foreach ($all as $g) {
+            $out[] = ($g >> 8) as uint8;
+            $out[] = ($g & 255) as uint8;
+        }
+        return mv $out;
+    }
+
+    // the eight groups of an address without an IPv4 tail, the ones a `::` leaves out as zeros
+    internal static function spread(const string& $t) : array<uint32>?
+    {
+        usize $gap = $t->find('::');
+        if ($gap == $t->size()) {
+            array<uint32> $whole = guard AddressRange::groups($t) else {
+                return null;
+            };
+            if ($whole->count() != 8) {
+                return null;
+            }
+            return mv $whole;
+        }
+        if ($t->find('::', $gap + 1) < $t->size()) {
+            return null;
+        }
+        string $before = $t->sub(0, $gap)->clone();
+        string $after = $t->sub($gap + 2, $t->size() - $gap - 2)->clone();
+        array<uint32> $front = guard AddressRange::groups($before) else {
+            return null;
+        };
+        array<uint32> $back = guard AddressRange::groups($after) else {
+            return null;
+        };
+        if ($front->count() + $back->count() > 7) {
+            return null;
+        }
+        usize $missing = 8 - $front->count() - $back->count();
+        while ($missing > 0) {
+            $front[] = 0;
+            $missing = $missing - 1;
+        }
+        foreach ($back as $g) {
+            $front[] = $g;
+        }
+        return mv $front;
+    }
+
+    // the groups of a `:` separated run of one to four hex digits each; an empty run has none
+    internal static function groups(const string& $text) : array<uint32>?
+    {
+        array<uint32> $out = [];
+        if ($text->empty()) {
+            return mv $out;
+        }
+        $parts = str::split($text, ':')->owned();
+        foreach ($parts as const &$g) {
+            if ($g->empty() || $g->size() > 4) {
+                return null;
+            }
+            uint32 $v = 0;
+            usize $i = 0;
+            while ($i < $g->size()) {
+                int32 $n = AddressRange::nibble($g->byte($i));
+                if ($n < 0) {
+                    return null;
+                }
+                $v = ($v << 4) | ($n as uint32);
+                $i = $i + 1;
+            }
+            $out[] = $v;
+        }
+        return mv $out;
+    }
+
+    // plain decimal digits only: no sign, no hex, no space
+    internal static function decimal(const string& $text) : uint64?
+    {
+        if ($text->empty()) {
+            return null;
+        }
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c < 48 || $c > 57) {
+                return null;
+            }
+            $i = $i + 1;
+        }
+        return str::uint($text);
+    }
+
+    internal static function nibble(uint8 $c) : int32
+    {
+        if ($c >= 48 && $c <= 57) { return ($c as int32) - 48; }
+        if ($c >= 65 && $c <= 70) { return ($c as int32) - 55; }
+        if ($c >= 97 && $c <= 102) { return ($c as int32) - 87; }
+        return -1;
+    }
+}

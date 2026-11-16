@@ -1,5 +1,7 @@
 namespace nexus::auth::carbon;
 
+use carbon;
+
 /**
  * Bearer tokens in `auth_tokens`, through a request's carbon session.
  */

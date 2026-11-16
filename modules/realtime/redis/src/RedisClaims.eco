@@ -1,6 +1,7 @@
 namespace nexus::realtime::redis;
 
 use std::time;
+use redis;
 
 /**
  * Ticket nonces in Redis, `<prefix>ticket:<nonce>`, so several servers share one-use tickets.

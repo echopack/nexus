@@ -1,16 +1,23 @@
 namespace nexus;
 
+use std::time;
+
 /**
- * How `serve` runs: address, port, worker threads (0 means one per core), the largest request body
- * accepted, and whether the background work of the extensions runs too (`--no-work`,
- * `--no-schedule`).
+ * How `serve` runs: address, port, worker threads (0 means one per core), and whether the
+ * background work of the extensions runs too (`--no-work`, `--no-schedule`). What a transport
+ * accepts (body size, timeouts) is its own config.
  */
 public struct Serve
 {
     public string $host = '127.0.0.1';
     public uint16 $port = 3246;
     public uint32 $workers = 0;
-    public usize $maxBody = 8388608;
+
+    /**
+     * How long the requests in flight get to finish once `serve` is told to stop
+     * (`NEXUS_SHUTDOWN_GRACE`); then, or at a second signal, the process quits without them.
+     */
+    public time::duration $grace = .secs(30);
 
     /**
      * Whether task workers run in this process.

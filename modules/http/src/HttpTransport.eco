@@ -1,5 +1,7 @@
 namespace nexus::http;
 
+use http;
+
 /**
  * Serves the kernel over HTTP/1.1. Every request goes through one libhttp wrap straight into
  * `Kernel::handle`, on libhttp's worker threads.
@@ -19,8 +21,13 @@ public class HttpTransport : nexus::Transport
         if ($options->workers > 0) {
             $this->server->workers($options->workers as int32);
         }
-        $this->server->maxBody($options->maxBody);
         HttpConfig $config = $kernel->services->get<HttpConfig>();
+        $this->server->maxBody($config->maxBody as usize);
+        $this->server->idleTimeout($config->idleTimeout);
+        $this->server->headerTimeout($config->headerTimeout);
+        $this->server->bodyTimeout($config->bodyTimeout);
+        $this->server->maxConnections($config->maxConnections as int32);
+        $this->server->maxRequests($config->maxRequests as int32);
         $this->server->pingInterval($config->wsPing);
         $this->server->maxMessage($config->wsMaxMessage as usize);
         $this->server->beatInterval($config->sseBeat);

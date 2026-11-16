@@ -31,8 +31,8 @@ public struct FormPart
 
 /**
  * Reads `multipart/form-data` bodies (RFC 7578). The whole body is in memory already, capped by
- * the transport (`Serve.maxBody`, 8 MiB); this only cuts it into parts, with limits of its own on what
- * the cutting could be made to do: at most 1000 parts and 8 KiB of headers per part.
+ * the transport (`NEXUS_HTTP_MAX_BODY`, 8 MiB); this only cuts it into parts, with limits of its
+ * own on what the cutting could be made to do: at most 1000 parts and 8 KiB of headers per part.
  */
 public struct Multipart
 {

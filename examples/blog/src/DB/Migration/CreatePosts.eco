@@ -11,6 +11,8 @@ public class CreatePosts : carbon::Migration
             ->string('title', 120)
             ->text('body')
             ->string('tags', $default: '')
+            // the key of the post's cover on the cover disk, null while it has none
+            ->string('cover', 255, $nullable: true)
             ->timestamps()
             ->foreign('author_id', 'users'));
     }

@@ -239,6 +239,7 @@ public class Pool
         time::instant $start = time::instant::now();
         function<status<Failure>(nexus::Payload&)> $handle = $n->item->handle;
         status<Failure> $status = $handle($payload);
+        $n->item->settled($payload, Settle::of($status, $run->attempt, $run->tries, $this->clock->now()));
         float64 $ms = ($start->elapsed()->as_micros() as float64) / 1000.0;
         $o = Outcome($status, $flow->children, $ms, $log);
         if ($fed != null) {

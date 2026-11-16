@@ -18,6 +18,7 @@ public struct EnvList
      */
     public const string MODE = 'dev';
     public const string LISTEN = '127.0.0.1:3246';
+    public const string SHUTDOWN_GRACE = '30s';
     public const string LOG = 'info';
     public const string LOG_ROTATE = 'never';
     public const string LOG_KEEP = '5';
@@ -33,6 +34,7 @@ public struct EnvList
         array<EnvVar> $all = [
             EnvVar($name: 'NEXUS_MODE', $type: 'string', $fallback: EnvList::MODE, $doc: 'What the process is for: dev, test or prod; --mode wins.', $owner: 'nexus'),
             EnvVar($name: 'NEXUS_LISTEN', $type: 'string', $fallback: EnvList::LISTEN, $doc: 'Where serve listens; --listen wins.', $owner: 'nexus'),
+            EnvVar($name: 'NEXUS_SHUTDOWN_GRACE', $type: 'duration', $fallback: EnvList::SHUTDOWN_GRACE, $doc: 'How long serve lets requests in flight finish once stopped; a second signal quits at once.', $owner: 'nexus'),
             EnvVar($name: 'NEXUS_APP_URL', $type: 'string', $doc: 'The public origin absolute links are built on, like https://blog.example.com.', $owner: 'nexus'),
             EnvVar($name: 'NEXUS_LOG', $type: 'string', $fallback: EnvList::LOG, $doc: 'The lowest log level written.', $owner: 'nexus'),
             EnvVar($name: 'NEXUS_LOG_FORMAT', $type: 'string', $doc: 'pretty, logfmt or json; pretty in dev, json in prod and in a log file.', $owner: 'nexus'),

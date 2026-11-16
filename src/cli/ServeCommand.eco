@@ -2,6 +2,7 @@ namespace nexus;
 
 use std::env;
 use std::io;
+use std::time;
 
 /**
  * `serve`: boots the app and serves it through its transport until SIGINT or SIGTERM, working the
@@ -21,7 +22,7 @@ public class ServeCommand : Command
 
     public const function help() : string
     {
-        return 'Boots the app and serves it through its transport. SIGINT or SIGTERM stops it cleanly.';
+        return 'Boots the app and serves it through its transport. SIGINT or SIGTERM stops it cleanly: requests in flight get NEXUS_SHUTDOWN_GRACE to finish, and a second signal quits at once.';
     }
 
     public const function options() : array<CommandOption>
@@ -46,6 +47,12 @@ public class ServeCommand : Command
         $options->workers = $w as uint32;
         $options->work = !$in->flag('no-work');
         $options->schedule = !$in->flag('no-schedule');
+        string $grace = $in->env->get('NEXUS_SHUTDOWN_GRACE') ?? EnvList::SHUTDOWN_GRACE;
+        time::duration $span = guard Settings::span($grace) else {
+            io::eprintln("{$in->program}: NEXUS_SHUTDOWN_GRACE '{$grace}' is not a duration like 30s or 2m");
+            return 1;
+        };
+        $options->grace = $span;
         // a request never waits on the terminal: the log gets a writer thread unless told otherwise
         if ($in->env->get('NEXUS_LOG_ASYNC') == null) {
             $in->env->set('NEXUS_LOG_ASYNC', EnvList::LOG_ASYNC);

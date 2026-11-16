@@ -223,6 +223,8 @@ test inline_runs_once_on_the_callers_payload
     status<Failure> $flaky = Inline::run($payload, TSay('flaky'));
     Failure $f = expect($flaky)->fails();
     expect($f->why())->is('flaky fails');
+    expect($r->app->logged('heard flaky failed: flaky fails'))->yes(says: 'an inline failure is the last try');
+    expect($r->app->logged('heard now failed: '))->no();
     expect($r->tally->all())->size(2);
     Run $run = got($payload->state<Run>());
     expect($run->name)->is('TSay');
@@ -277,12 +279,14 @@ test async_retries_with_backoff_then_fails
     thread::sleep(50);
     expect($r->tally->all())->size(1);
     expect($r->app->logged('task will retry'))->yes(says: 'the first try retries');
+    expect($r->app->logged('heard flaky failed: flaky fails'))->no(says: 'a retry is not the end');
     $r->clock->advance(time::duration::secs(11));
     $r->wait(2);
     thread::sleep(50);
     $r->stop();
     expect($r->tally->all())->size(2);
     expect($r->app->logged(.error, 'task failed'))->yes(says: 'the last try fails');
+    expect($r->app->logged('heard flaky failed: flaky fails'))->yes(says: 'the task hears its last try failed');
     expect($r->workers()->waiting())->is(0);
 }
 

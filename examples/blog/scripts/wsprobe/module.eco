@@ -5,7 +5,7 @@
 #[module: "wsprobe"]
 #[version: "0.1.0"]
 
-#[depends: "../../../../../libtcp"]
+#[requires: "echolang/libtcp" { version: "^0.2.3", source: git "https://github.com/echolang/libtcp" }]
 
 #[sources: "main.eco"]
 

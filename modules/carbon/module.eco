@@ -15,9 +15,9 @@
 #[epm::description: "carbon databases for nexus apps: a session per request, migrations from the app binary"]
 
 #[depends: "../.."]
-#[depends: "../../../carbon"]
-#[depends: "../../../container"]
-#[depends: "../../../libjson"]
+#[requires: "echopack/carbon" { version: "^0.2.1", source: git "https://github.com/echopack/carbon" }]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
 
 #[hook: before_build { run: "nexus", args: ["gen"] }]
 
@@ -27,7 +27,7 @@
 #[end]
 
 #[target: test] {
-    #[depends: "../../../carbon/fake"]
+    #[requires: "echopack/carbon/fake" { version: "^0.2.1", source: git "https://github.com/echopack/carbon" }]
     #[depends: "../testing"]
     #[sources: "tests/*.eco"]
 }

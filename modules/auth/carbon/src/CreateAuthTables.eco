@@ -1,5 +1,7 @@
 namespace nexus::auth::carbon;
 
+use carbon;
+
 /**
  * `auth_tokens` and `auth_sessions`. Add it to the app's migrations with
  * `nexus::auth::carbon::Carbon::migrations()`.

@@ -1,6 +1,7 @@
 namespace nexus::connect::carbon;
 
 use std::time;
+use carbon;
 
 /**
  * A row of `connect_attempts`: a sign in attempt, and once the callback has run, who signed in or

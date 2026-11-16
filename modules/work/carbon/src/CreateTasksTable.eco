@@ -1,5 +1,7 @@
 namespace nexus::work::carbon;
 
+use carbon;
+
 /**
  * `nexus_tasks`, `nexus_task_edges` and `nexus_task_locks`. Add them to the app's migrations with
  * `nexus::work::carbon::Tables::migrations()`.

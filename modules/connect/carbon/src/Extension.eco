@@ -1,6 +1,7 @@
 namespace nexus::connect::carbon;
 
 use container::{Builder, Container};
+use carbon;
 
 /**
  * Keeps nexus-connect's attempts and links in the app's carbon database: binds `AttemptStore` and

@@ -3,12 +3,8 @@
  * requests through ecotest-http's `Api` straight into the kernel (no socket, and coverage counts
  * the app's code), check the replies and what was logged.
  *
- * ecotest-http comes by path, and with it ecotest itself, so a test target that depends on this
- * module needs no `requires` of its own for either. ecotest-http `requires` libjson and libcurl:
- * scripts/link-vendor.sh links vendor/echolang/libjson and vendor/echolang/libcurl to the sibling
- * checkouts in every suite that uses this module, because echoc refuses two modules with one name
- * and nexus core already depends on the sibling libjson. The lasting fix is for nexus core to
- * `requires` libjson and libcommand instead of depending on sibling paths.
+ * ecotest-http is required here, and with it ecotest itself, so a test target that depends on this
+ * module needs no `requires` of its own for either.
  */
 
 #[module: "nexus-testing"]
@@ -17,9 +13,10 @@
 #[epm::description: "In-process API tests and log checks for nexus apps, on ecotest-http"]
 
 #[depends: "../.."]
-#[depends: "../../../container"]
-#[depends: "../../../libjson"]
-#[depends: "../../../ecotest/modules/http"]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
+#[requires: "echolang/ecotest" { version: "^0.3.3", source: git "https://github.com/echolang/ecotest" }]
+#[requires: "echolang/ecotest/modules/http" { version: "^0.3.3", source: git "https://github.com/echolang/ecotest" }]
 
 #[sources: "src/*.eco"]
 

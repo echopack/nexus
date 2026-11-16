@@ -1,5 +1,7 @@
 namespace nexus::realtime::redis;
 
+use redis;
+
 /**
  * Carries nexus-realtime's broadcasts between servers through Redis when `NEXUS_REALTIME_URL`
  * says `redis://`: opens a pool for publishing (pinged once; a server that does not answer stops

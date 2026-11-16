@@ -1,5 +1,7 @@
 namespace nexus::connect::carbon;
 
+use carbon;
+
 /**
  * `connect_attempts` and `connect_links`. Add it to the app's migrations with
  * `nexus::connect::carbon::Tables::migrations()`.

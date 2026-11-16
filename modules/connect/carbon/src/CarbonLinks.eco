@@ -1,5 +1,7 @@
 namespace nexus::connect::carbon;
 
+use carbon;
+
 /**
  * Links in `connect_links`, through a request's carbon session.
  */

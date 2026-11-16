@@ -1,6 +1,7 @@
 namespace nexus::realtime::redis;
 
 use std::time;
+use redis;
 
 /**
  * The presence channels of every server, in Redis: one hash per channel,

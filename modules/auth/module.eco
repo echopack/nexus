@@ -29,10 +29,10 @@
 #[epm::description: "Bearer tokens, signed sessions, passwords and login throttling for nexus apps"]
 
 #[depends: "../.."]
-#[depends: "../../../container"]
-#[depends: "../../../libjson"]
-#[depends: "../../../libcrypto"]
-#[depends: "../../../calendar"]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
+#[requires: "echolang/libcrypto" { version: "^0.3.3", source: git "https://github.com/echolang/libcrypto" }]
+#[requires: "echopack/calendar" { version: "^0.1.2", source: git "https://github.com/echopack/calendar" }]
 
 #[hook: before_build { run: "nexus", args: ["gen"] }]
 

@@ -102,6 +102,7 @@ public class Extension : nexus::Extension
         if (!$kernel->services->has<AttemptStore>() || !$kernel->services->has<LinkStore>()) {
             return .error(.extension('nexus-connect', 'no store is bound; use stores: .memory or add nexus::connect::carbon::Extension()'));
         }
+        try $kernel->needsOrigin('nexus-connect', 'the callback a provider sends the browser back to');
         return .ok;
     }
 }

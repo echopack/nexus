@@ -1,6 +1,7 @@
 namespace nexus::oauth::carbon;
 
 use std::time;
+use carbon;
 
 /**
  * A row of `oauth_codes`: an authorization code by its hash.

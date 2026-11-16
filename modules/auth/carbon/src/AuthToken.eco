@@ -1,6 +1,7 @@
 namespace nexus::auth::carbon;
 
 use std::time;
+use carbon;
 
 /**
  * A row of `auth_tokens`: a bearer token by its id, with the hash of its secret.

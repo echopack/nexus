@@ -71,7 +71,8 @@ public class Register : nexus::Action
         guard $this->store->register($client) else ($p) {
             return OAuthError::from($p)->response();
         };
-        $this->throttle->refund($payload->request->peer);
+        // no refund: a registration that went through is what a flood is made of, and a real
+        // client registers once
         $res = nexus::Response(json: $client->json(), status: 201);
         $res->header('Cache-Control', 'no-store');
         return $res;

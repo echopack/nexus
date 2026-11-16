@@ -1,6 +1,7 @@
 namespace nexus::carbon;
 
 use container::{Builder, Container};
+use carbon;
 
 /**
  * A carbon database for the app. The app hands over how it opens, from the `DatabaseConfig`, with

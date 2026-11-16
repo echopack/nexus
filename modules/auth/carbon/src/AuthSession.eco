@@ -1,6 +1,7 @@
 namespace nexus::auth::carbon;
 
 use std::time;
+use carbon;
 
 /**
  * A row of `auth_sessions`: a signed session by its id. Its secret is derived from the id, never

@@ -3,6 +3,7 @@ namespace nexus;
 use std::env;
 use std::io;
 use std::thread;
+use std::time;
 use nexus::log;
 
 /**
@@ -167,7 +168,7 @@ public struct Console
             io::eprintln("{$name}: no extension brings a transport; add nexus::http::Extension() to main.eco");
             return 1;
         };
-        guard signal::Signals::trap() else {
+        guard env::signal::trap() else {
             io::eprintln("{$name}: cannot trap signals");
             return 1;
         };
@@ -179,17 +180,16 @@ public struct Console
         };
         $done = Flag();
         Logger $log = $k->log;
-        thread::handle $ticker = guard thread::spawn(function[$done, $t, $log]() : void {
-            while (!$done->raised()) {
-                thread::sleep(100);
-                if (signal::Signals::caught()) {
-                    $log->info('stopping');
-                    $t->stop();
-                    return;
-                }
-            }
+        time::duration $grace = $options->grace;
+        thread::handle $ticker = guard thread::spawn(function[$done, $t, $log, $grace]() : void {
+            Console::watch($done, $t, $log, $grace, () : bool => env::signal::take() != null, function() : void {
+                env::exit(1);
+            });
         });
         $log->info("listening on {$options->address()}");
+        foreach (Console::risks($k, $options->host) as const &$risk) {
+            $log->warn($risk);
+        }
         if (Build::checked()) {
             $log->warn('serving a debug build: asserts and runtime checks are on, so it answers several times slower than a release build');
         }
@@ -207,12 +207,72 @@ public struct Console
     }
 
     /**
+     * Settings that are fine on a developer's machine and risky anywhere else, for `serve` and
+     * `doctor` to warn about: dev mode where other machines reach the app (it shows clients the
+     * cause of every error), and no `NEXUS_APP_URL` outside dev.
+     */
+    public static function risks(Kernel $k, const string& $listen) : array<string>
+    {
+        array<string> $out = [];
+        string $host = $listen;
+        Serve $s = Serve();
+        if (!$s->listen($listen)->failed()) {
+            $host = $s->host;
+        }
+        if ($k->mode == Mode::dev && !Console::local($host)) {
+            $out[] = "dev mode, listening on {$host}: clients see the cause of every error; set NEXUS_MODE=prod where others reach the app";
+        }
+        if ($k->mode != Mode::dev && $k->router->origin() == null) {
+            $out[] = 'NEXUS_APP_URL is not set: absolute links are built on the Host header a client sends';
+        }
+        return $out;
+    }
+
+    /**
+     * Whether `$host` is reached from this machine only.
+     */
+    public static function local(const string& $host) : bool
+    {
+        return $host == 'localhost' || $host == '::1' || $host->starts('127.');
+    }
+
+    /**
+     * What `serve`'s ticker does until `$done`: on the first signal it stops the transport, which
+     * lets the requests in flight finish; a second signal, or `$grace` passing before they do,
+     * logs and calls `$quit`, so one stuck request cannot hold the process forever.
+     */
+    public static function watch(Flag $done, Transport $t, Logger $log, time::duration $grace, function<bool()> $signalled, function<void()> $quit) : void
+    {
+        bool $stopping = false;
+        while (!$done->raised() && !$stopping) {
+            thread::sleep(100);
+            if ($signalled()) {
+                $log->info('stopping');
+                $t->stop();
+                $stopping = true;
+            }
+        }
+        time::instant $since = .now();
+        while (!$done->raised()) {
+            thread::sleep(100);
+            bool $again = $signalled();
+            if ($again || $since->elapsed() >= $grace) {
+                int64 $ms = $since->elapsed()->as_micros() / 1000;
+                $log->error('stopping took too long: quitting with requests still running', ['ms' => $ms, 'signal' => $again]);
+                $log->flush();
+                $quit();
+                return;
+            }
+        }
+    }
+
+    /**
      * Runs the extensions' background work without a transport until a signal arrives, then drains
      * it: what a `work` command does. The command line shuts the kernel down after the command.
      */
     public static function background(Kernel $k, const Serve& $options, const string& $name) : int32
     {
-        guard signal::Signals::trap() else {
+        guard env::signal::trap() else {
             io::eprintln("{$name}: cannot trap signals");
             return 1;
         };
@@ -222,7 +282,7 @@ public struct Console
             }
             return 1;
         };
-        while (!signal::Signals::caught()) {
+        while (!env::signal::caught()) {
             thread::sleep(100);
         }
         $k->log->info('stopping');

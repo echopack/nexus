@@ -22,4 +22,42 @@ public struct Gates
     {
         return $peer == '::1' || $peer == '[::1]' || $peer->starts('127.') || $peer == 'localhost';
     }
+
+    /**
+     * Whether a `Host` header names this machine: `localhost`, a loopback address, either with a
+     * port. An empty one is a client that sent none, not a browser.
+     */
+    public static function localName(const string& $host) : bool
+    {
+        string $h = str::lower(str::trim($host));
+        if ($h->empty()) {
+            return true;
+        }
+        if ($h->starts('[')) {
+            usize $close = $h->find(']');
+            if ($close == $h->size()) {
+                return false;
+            }
+            return $h->sub(1, $close - 1) == '::1';
+        }
+        usize $colon = $h->find(':');
+        if ($colon < $h->size()) {
+            $h = $h->sub(0, $colon)->clone();
+        }
+        return $h == 'localhost' || $h->ends('.localhost') || ($h->starts('127.') && Gates::dotted($h));
+    }
+
+    // digits and dots only, so `127.evil.example` is no loopback address
+    internal static function dotted(const string& $h) : bool
+    {
+        usize $i = 0;
+        while ($i < $h->size()) {
+            uint8 $c = $h->byte($i);
+            if ($c != 46 && ($c < 48 || $c > 57)) {
+                return false;
+            }
+            $i = $i + 1;
+        }
+        return true;
+    }
 }

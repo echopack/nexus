@@ -4,7 +4,7 @@ use std::io;
 
 /**
  * `doctor`: boots the app, checks every command of `$all` has its binding, and warns about actions
- * no route reaches.
+ * no route reaches and settings that are risky outside a developer's machine.
  */
 public class DoctorCommand : Command
 {
@@ -47,6 +47,9 @@ public class DoctorCommand : Command
         }
         foreach (Console::unrouted($k) as const &$action) {
             io::eprintln("{$in->program}: warning: {$action} is an action no route reaches; route it with bindAction or drop it");
+        }
+        foreach (Console::risks($k, $in->env->get('NEXUS_LISTEN') ?? EnvList::LISTEN) as const &$risk) {
+            io::eprintln("{$in->program}: warning: {$risk}");
         }
         io::println("ok: {$k->router->count()} routes, {$commands->count()} commands, mode {$in->mode->name()}");
         return 0;

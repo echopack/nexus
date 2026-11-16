@@ -1,5 +1,7 @@
 namespace nexus::auth::carbon;
 
+use carbon;
+
 /**
  * The auth tables on the app's database: one call in the function that opens it, before it is
  * sealed.

@@ -1,0 +1,255 @@
+namespace nexus;
+
+use std::thread;
+
+/**
+ * Event streams grouped by a key, one room per key: the watchers of one order, one chat, one
+ * agent session. What a writer persists reaches every watcher once and in order, and somebody who
+ * joins gets what was written before (their backlog) and then everything new, never an event
+ * twice and never one missing:
+ *
+ *     $rooms->write("{$id}", function() : result<array<nexus::ServerEvent>, nexus::Problem> {
+ *         // save the change, answer the events that tell about it
+ *     });
+ *     return nexus::Response(events: function[$rooms, $id](nexus::EventStream $s) : void {
+ *         $rooms->watch("{$id}", $s, function() : result<array<nexus::ServerEvent>, nexus::Problem> {
+ *             // read what came after the client's Last-Event-ID
+ *         });
+ *     }, closed: function[$rooms, $id](nexus::EventStream $s) : void {
+ *         $rooms->forget("{$id}", $s);
+ *     });
+ *
+ * A write and a watch of one key take that room's gate, so an event is in the backlog a watcher
+ * reads or published to it after it joined. Different keys never wait on each other. A room is
+ * kept while somebody watches it or writes to it and dropped after.
+ */
+#[atomic]
+public class EventRooms
+{
+    // the lock of the map alone: never held while a gate is waited for or a stream closes
+    private thread::mutex<map<string, EventRoom>> $rooms = thread::mutex<map<string, EventRoom>>(map<string, EventRoom>());
+
+    public constructor()
+    {
+    }
+
+    /**
+     * Runs `$work`, which persists something and answers the events that tell about it, under the
+     * gate of room `$key`, and publishes those events to everybody watching it.
+     */
+    public function write(const string& $key, function<result<array<ServerEvent>, Problem>()> $work) : status<Problem>
+    {
+        EventRoom $room = $this->hold($key);
+        status<Problem> $done = EventRooms::published($room, $work);
+        $this->release($key);
+        return $done;
+    }
+
+    /**
+     * Publishes `$e`, which nothing persists, to the watchers of room `$key`; nothing when nobody
+     * watches it.
+     */
+    public function tell(const string& $key, const ServerEvent& $e) : void
+    {
+        EventRoom? $found = $this->find($key);
+        EventRoom $room = guard $found else {
+            return;
+        };
+        thread::locked<int32> $held = $room->gate->lock();
+        $room->streams->publish($e);
+    }
+
+    /**
+     * Joins `$s` to room `$key`: what `$backlog` answers (read under the room's gate) goes first,
+     * then every event written after. A backlog that fails leaves `$s` out.
+     */
+    public function watch(const string& $key, EventStream $s, function<result<array<ServerEvent>, Problem>()> $backlog) : status<Problem>
+    {
+        EventRoom $room = $this->enter($key, $s->id());
+        status<Problem> $joined = EventRooms::joined($room, $s, $backlog);
+        guard $joined else ($p) {
+            $this->forget($key, $s);
+            return .error($p);
+        };
+        return .ok;
+    }
+
+    /**
+     * Stops sending room `$key` to `$s`; its stream's close hook calls this. A stream that never
+     * joined is fine.
+     */
+    public function forget(const string& $key, EventStream $s) : void
+    {
+        thread::locked<map<string, EventRoom>> $held = $this->rooms->lock();
+        if (!$held->value->has($key)) {
+            return;
+        }
+        EventRoom $room = $held->value[$key];
+        if (!$room->leave($s->id())) {
+            return;
+        }
+        $room->streams->remove($s);
+        if ($room->idle()) {
+            $held->value->remove($key);
+        }
+    }
+
+    /**
+     * How many rooms are kept now: one per key somebody watches or writes to.
+     */
+    public function count() : usize
+    {
+        thread::locked<map<string, EventRoom>> $held = $this->rooms->lock();
+        return $held->value->count();
+    }
+
+    /**
+     * How many streams watch room `$key`.
+     */
+    public function watching(const string& $key) : usize
+    {
+        thread::locked<map<string, EventRoom>> $held = $this->rooms->lock();
+        if (!$held->value->has($key)) {
+            return 0;
+        }
+        return $held->value[$key]->members->count();
+    }
+
+    /**
+     * Waits until everything published so far reached the streams.
+     */
+    public function settle() : void
+    {
+        foreach ($this->all() as $room) {
+            $room->streams->settle();
+        }
+    }
+
+    /**
+     * Ends every stream of every room, when the app stops. Their close hooks forget them.
+     */
+    public function closeAll() : void
+    {
+        foreach ($this->all() as $room) {
+            $room->streams->closeAll();
+        }
+    }
+
+    // inside -----------------------------------------------------------------
+
+    internal static function published(EventRoom $room, function<result<array<ServerEvent>, Problem>()> $work) : status<Problem>
+    {
+        thread::locked<int32> $held = $room->gate->lock();
+        array<ServerEvent> $events = try $work();
+        foreach ($events as const &$e) {
+            $room->streams->publish($e);
+        }
+        return .ok;
+    }
+
+    internal static function joined(EventRoom $room, EventStream $s, function<result<array<ServerEvent>, Problem>()> $backlog) : status<Problem>
+    {
+        thread::locked<int32> $held = $room->gate->lock();
+        array<ServerEvent> $events = try $backlog();
+        $room->streams->join($s, mv $events);
+        return .ok;
+    }
+
+    // room `$key`, made when missing, kept until the matching `release`
+    private function hold(const string& $key) : EventRoom
+    {
+        thread::locked<map<string, EventRoom>> $held = $this->rooms->lock();
+        if (!$held->value->has($key)) {
+            $held->value[$key] = EventRoom();
+        }
+        EventRoom $room = $held->value[$key];
+        $room->writing++;
+        return $room;
+    }
+
+    private function release(const string& $key) : void
+    {
+        thread::locked<map<string, EventRoom>> $held = $this->rooms->lock();
+        if (!$held->value->has($key)) {
+            return;
+        }
+        EventRoom $room = $held->value[$key];
+        $room->writing--;
+        if ($room->idle()) {
+            $held->value->remove($key);
+        }
+    }
+
+    // room `$key` with stream `$id` counted in, made when missing
+    private function enter(const string& $key, int64 $id) : EventRoom
+    {
+        thread::locked<map<string, EventRoom>> $held = $this->rooms->lock();
+        if (!$held->value->has($key)) {
+            $held->value[$key] = EventRoom();
+        }
+        EventRoom $room = $held->value[$key];
+        $room->members->push($id);
+        return $room;
+    }
+
+    private function find(const string& $key) : EventRoom?
+    {
+        thread::locked<map<string, EventRoom>> $held = $this->rooms->lock();
+        if (!$held->value->has($key)) {
+            return null;
+        }
+        return $held->value[$key];
+    }
+
+    private function all() : array<EventRoom>
+    {
+        array<EventRoom> $out = [];
+        thread::locked<map<string, EventRoom>> $held = $this->rooms->lock();
+        foreach ($held->value as $key => $room) {
+            $out[] = $room;
+        }
+        return $out;
+    }
+}
+
+/**
+ * One key's watchers. Its gate orders writes against joins; `writing` and `members` change only
+ * under the lock of the rooms' map.
+ */
+#[atomic]
+internal class EventRoom
+{
+    public thread::mutex<int32> $gate = thread::mutex<int32>(0);
+    public EventStreams $streams = EventStreams();
+    public int64 $writing = 0;
+    public array<int64> $members = [];
+
+    public constructor()
+    {
+    }
+
+    /**
+     * Takes stream `$id` out, false when it was not in.
+     */
+    public function leave(int64 $id) : bool
+    {
+        usize $n = $this->members->count();
+        usize $i = 0;
+        while ($i < $n) {
+            if ($this->members[$i] == $id) {
+                $this->members->remove($i);
+                return true;
+            }
+            $i++;
+        }
+        return false;
+    }
+
+    /**
+     * Whether nobody watches the room and nobody writes to it.
+     */
+    public const function idle() : bool
+    {
+        return $this->writing == 0 && $this->members->empty();
+    }
+}

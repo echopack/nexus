@@ -1,5 +1,7 @@
 namespace nexus::work::carbon;
 
+use carbon;
+
 /**
  * Checks at boot that the tables of the carbon task store are wired on the app's database. The app
  * wires them where it opens the database, runs the migration with its own, and binds a distributed

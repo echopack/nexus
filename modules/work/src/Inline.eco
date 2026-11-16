@@ -70,6 +70,7 @@ public struct Inline
         $payload->useLog($log);
         function<status<Failure>(nexus::Payload&)> $handle = $item->handle;
         status<Failure> $status = $handle($payload);
+        $item->settled($payload, Settle::of($status, 1, 1, std::time::timestamp::now()));
         $chosen->flush();
         $payload->useLog($before);
         guard $status else ($f) {

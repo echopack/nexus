@@ -315,6 +315,23 @@ public class Kernel
     }
 
     /**
+     * For an extension whose links leave the app (an OAuth issuer, a sign in callback): ok when
+     * `NEXUS_APP_URL` sets the public origin, or outside prod. Without it those links are built on
+     * the `Host` header a client sends, so in prod the boot fails; elsewhere `serve` and `doctor`
+     * warn about it, not every command.
+     */
+    public function needsOrigin(const string& $extension, const string& $what) : status<BootError>
+    {
+        if ($this->router->origin() != null) {
+            return .ok;
+        }
+        if ($this->mode != Mode::prod) {
+            return .ok;
+        }
+        return .error(.extension($extension, "NEXUS_APP_URL is not set, so {$what} would be built on the Host header a client sends; set it to the app's public origin"));
+    }
+
+    /**
      * Every extension's `drain` hook, last started first.
      */
     public function drain() : void

@@ -1,5 +1,7 @@
 namespace nexus::http;
 
+use http;
+
 /**
  * A nexus writer over libhttp's, for a streamed response on a real connection.
  */

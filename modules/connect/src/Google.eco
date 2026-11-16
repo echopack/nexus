@@ -19,7 +19,8 @@ public class Google : Connector
 
     public constructor()
     {
-        $this->oidc = Oidc('google', issuer: Google::ISSUER, client: '', secret: '', authorize: Google::AUTHORIZE, token: Google::TOKEN);
+        // google owns the addresses it verifies, so its word on an email is trusted
+        $this->oidc = Oidc('google', issuer: Google::ISSUER, client: '', secret: '', authorize: Google::AUTHORIZE, token: Google::TOKEN, trustsEmail: true);
         // google's tokens name the issuer with and without the scheme
         $this->oidc->issuers = [Google::ISSUER, 'accounts.google.com'];
     }

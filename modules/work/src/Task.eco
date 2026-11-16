@@ -47,6 +47,15 @@ public interface Task
     }
 
     /**
+     * Runs once when the task failed for good: its last try failed, or it gave up. It gets the
+     * payload of that run and why, to put right what the task leaves half done (mark a record
+     * failed, tell somebody). A task dropped unrun (expired, cancelled, undecodable) never runs.
+     */
+    function failed(nexus::Payload& $payload, const string& $why) : void
+    {
+    }
+
+    /**
      * Whether the tasks after it in a pipeline still run when it fails for good.
      */
     const function allowFailure() : bool

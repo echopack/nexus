@@ -1,6 +1,7 @@
 namespace nexus::cache::redis;
 
 use nexus::cache::{CacheError, Lifetime};
+use redis;
 
 /**
  * Entries kept in Redis, each under `prefix` plus its key, with Redis's own expiry. A pool lends

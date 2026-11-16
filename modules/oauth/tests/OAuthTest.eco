@@ -8,7 +8,7 @@
  * Requests reach the app as host `app`, so the issuer is `http://app`.
  */
 
-use nexus::oauth::{Pkce, Register};
+use nexus::oauth::{Pkce, Register, RedirectUri};
 use nexus::mcp::{ToolSpec, Schema};
 use nexus::testing::TestApp;
 use ecotest::http::{Api, Reply};
@@ -660,4 +660,69 @@ test boot_needs_nexus_auth_first
     array<nexus::Extension> $exts = [nexus::oauth::Extension(), nexus::auth::Extension('test')];
     result<TestApp, nexus::BootError> $r = TestApp::attempt($exts, $vars);
     expect($r)->fails();
+}
+
+test registrations_that_went_through_count_against_the_address
+{
+    $r = Rig();
+    foreach (0 .. 10 as $i) {
+        $r->register();
+    }
+    $r->app->api()->post('/oauth/register', json: '{"redirect_uris":["http://127.0.0.1:33418/callback"]}')
+        ->status(429)
+        ->json('$.error', 'slow_down');
+    $r->clock->advance(.mins(15));
+    $r->register();
+}
+
+test registration_stops_at_the_client_cap
+{
+    calendar::ManualClock $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_OAUTH_CLIENTS' => '2'];
+    $app = TestApp(Rig::extensions($clock, '/consent'), $vars);
+    foreach (0 .. 2 as $i) {
+        $app->api()->post('/oauth/register', json: '{"redirect_uris":["http://127.0.0.1:33418/callback"]}')->status(201);
+    }
+    $app->api()->post('/oauth/register', json: '{"redirect_uris":["http://127.0.0.1:33418/callback"]}')
+        ->status(503)
+        ->json('$.error', 'temporarily_unavailable');
+}
+
+test pkce_is_s256_only
+{
+    $r = Rig();
+    string $client = $r->register();
+    string $plain = str::replace($r->query($client), 'code_challenge_method=S256', 'code_challenge_method=plain');
+    string $back = $r->app->api()->get("/oauth/authorize?{$plain}")->status(302)->capture(header: 'Location');
+    expect($back)->starts(REDIRECT);
+    expect(Rig::param($back, 'error'))->is('invalid_request');
+    string $none = str::replace($r->query($client), '&code_challenge_method=S256', '');
+    string $bare = $r->app->api()->get("/oauth/authorize?{$none}")->status(302)->capture(header: 'Location');
+    expect(Rig::param($bare, 'error'))->is('invalid_request');
+}
+
+test redirect_uris_that_could_go_elsewhere_are_refused
+{
+    expect(RedirectUri::parse('http://localhost:1@evil.example/cb'))->fails();
+    expect(RedirectUri::parse('http://127.0.0.1\\@evil.example/cb'))->fails();
+    expect(RedirectUri::parse('javascript:alert(1)'))->fails();
+    expect(RedirectUri::parse('JavaScript:alert(1)'))->fails();
+    expect(RedirectUri::parse('data:text/html,x'))->fails();
+    expect(RedirectUri::parse('//evil.example/cb'))->fails();
+    expect(RedirectUri::parse('https://app.example/cb#x'))->fails();
+    expect(RedirectUri::parse('http://evil.example/cb'))->fails();
+    expect(RedirectUri::parse('https://app.example/c b'))->fails();
+    expect(RedirectUri::parse('http://127.0.0.1:4000/cb'))->ok();
+    expect(RedirectUri::parse('https://app.example/cb'))->ok();
+    expect(RedirectUri::parse('cursor://callback'))->ok();
+}
+
+test the_issuer_needs_the_public_origin_in_prod
+{
+    calendar::ManualClock $clock = calendar::ManualClock(time::timestamp::from_unix_secs(START));
+    map<string, string> $bare = ['NEXUS_AUTH_KEY' => KEY];
+    nexus::BootError $e = expect(TestApp::attempt(Rig::extensions($clock, '/consent'), $bare, mode: .prod))->fails();
+    expect($e->lines()[0])->has('NEXUS_APP_URL');
+    map<string, string> $set = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_APP_URL' => 'https://blog.example.com'];
+    expect(TestApp::attempt(Rig::extensions($clock, '/consent'), $set, mode: .prod)->failed())->no(says: 'it boots with the origin set');
 }

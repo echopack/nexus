@@ -1,0 +1,16 @@
+{
+  "lockVersion": 2,
+  "packages": [
+    {
+      "name": "echolang/libtcp",
+      "version": "0.2.3",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libtcp"
+      },
+      "rev": "f8449f7048514fc6cd1287db1353b3437e6f62b2",
+      "sha256": "6ce318e853ee8fd05d36820383e6f737ccb07adba0ae6f1c35d7c0b15140e558",
+      "requires": []
+    }
+  ]
+}

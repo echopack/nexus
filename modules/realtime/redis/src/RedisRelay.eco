@@ -2,6 +2,7 @@ namespace nexus::realtime::redis;
 
 use std::thread;
 use std::time;
+use redis;
 
 /**
  * Notes through one Redis channel, `<NEXUS_REALTIME_PREFIX>realtime`: every process publishes on

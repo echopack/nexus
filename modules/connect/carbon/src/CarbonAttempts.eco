@@ -1,6 +1,7 @@
 namespace nexus::connect::carbon;
 
 use std::time;
+use carbon;
 
 /**
  * Sign in attempts in `connect_attempts`, through a request's carbon session.

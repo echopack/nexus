@@ -1,6 +1,7 @@
 namespace nexus::auth::carbon;
 
 use container::{Builder, Container};
+use carbon;
 
 /**
  * Keeps nexus-auth's tokens and sessions in the app's carbon database: binds `TokenStore` and

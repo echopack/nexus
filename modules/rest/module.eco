@@ -22,9 +22,9 @@
 #[epm::description: "transformers for nexus apps: models answered as negotiated JSON and XML, includes per request"]
 
 #[depends: "../.."]
-#[depends: "../../../RestTransformers"]
-#[depends: "../../../container"]
-#[depends: "../../../libjson"]
+#[requires: "echopack/rest" { version: "^0.2.1", source: git "https://github.com/echopack/rest" }]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
 
 #[sources: "src/*.eco"]
 

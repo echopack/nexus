@@ -2671,7 +2671,6 @@ public function generated(nexus::Generated $g) : void
     $g->name<Blog::Channels::UserChannel>('Blog::Channels::UserChannel');
     $g->name<Blog::Commands::SetPassword>('Blog::Commands::SetPassword');
     $g->name<Blog::Config::BlogConfig>('Blog::Config::BlogConfig');
-    $g->name<Blog::DB::Migration::AddPostCover>('Blog::DB::Migration::AddPostCover');
     $g->name<Blog::DB::Migration::CreateComments>('Blog::DB::Migration::CreateComments');
     $g->name<Blog::DB::Migration::CreatePosts>('Blog::DB::Migration::CreatePosts');
     $g->name<Blog::DB::Migration::CreateUsers>('Blog::DB::Migration::CreateUsers');

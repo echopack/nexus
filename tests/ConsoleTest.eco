@@ -83,3 +83,39 @@ test a_command_name_is_taken_once
     array<Extension> $exts = [$taken];
     expect(Console::run($exts, ['shop', 'serve', '--env-file', 'no-such.env']))->is(1);
 }
+
+internal function cKernel(nexus::Mode $mode, map<string, string> $vars) : nexus::Kernel
+{
+    array<Extension> $exts = [];
+    array<nexus::ConfigTable> $configs = [];
+    $tables = nexus::Tables($configs: $configs);
+    nexus::Kernel $k = guard nexus::Kernel::boot(mv $exts, $mode, .silent(), nexus::Env(fixed: $vars), tables: $tables);
+    return $k;
+}
+
+test risky_settings_are_named
+{
+    map<string, string> $none = [];
+    nexus::Kernel $dev = cKernel(.dev, $none);
+    expect(Console::risks($dev, '127.0.0.1:3246'))->size(0);
+    expect(Console::risks($dev, '[::1]:3246'))->size(0);
+    array<string> $open = Console::risks($dev, '0.0.0.0:3246');
+    expect($open)->size(1);
+    expect($open[0])->has('NEXUS_MODE=prod');
+
+    nexus::Kernel $prod = cKernel(.prod, $none);
+    array<string> $bare = Console::risks($prod, '0.0.0.0:3246');
+    expect($bare)->size(1);
+    expect($bare[0])->has('NEXUS_APP_URL');
+    map<string, string> $set = ['NEXUS_APP_URL' => 'https://blog.example.com'];
+    expect(Console::risks(cKernel(.prod, $set), '0.0.0.0:3246'))->size(0);
+}
+
+test links_that_leave_the_app_need_the_origin_in_prod
+{
+    map<string, string> $none = [];
+    expect(cKernel(.dev, $none)->needsOrigin('x', 'the issuer')->failed())->no(says: 'fine outside prod');
+    expect(cKernel(.prod, $none)->needsOrigin('x', 'the issuer')->failed())->yes(says: 'the boot fails in prod');
+    map<string, string> $set = ['NEXUS_APP_URL' => 'https://blog.example.com'];
+    expect(cKernel(.prod, $set)->needsOrigin('x', 'the issuer')->failed())->no(says: 'fine with the origin set');
+}

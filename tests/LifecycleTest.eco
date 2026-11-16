@@ -84,3 +84,81 @@ internal function lStarted(status<BootError> $s) : bool
     };
     return true;
 }
+
+#[atomic]
+internal class LStuck : nexus::Transport
+{
+    public atomic<int32> $stops = atomic<int32>(0);
+
+    public function serve(Kernel $kernel, const Serve& $options) : status<BootError>
+    {
+        return .ok;
+    }
+
+    public function stop() : void
+    {
+        $this->stops->add(1);
+    }
+}
+
+#[atomic]
+internal class LSignals
+{
+    // how many polls answer "a signal came"; the ones listed by number do
+    public atomic<int32> $polls = atomic<int32>(0);
+    public atomic<int32> $first = atomic<int32>(1);
+    public atomic<int32> $second = atomic<int32>(-1);
+    public atomic<int32> $quits = atomic<int32>(0);
+
+    public function poll() : bool
+    {
+        $this->polls->add(1);
+        int32 $n = $this->polls->load();
+        return $n == $this->first->load() || $n == $this->second->load();
+    }
+}
+
+test a_stuck_stop_quits_after_the_grace
+{
+    $t = LStuck();
+    $s = LSignals();
+    $done = nexus::Flag();
+    std::time::instant $at = .now();
+    nexus::Console::watch($done, $t, nexus::Logger::silent(), std::time::duration::millis(400), () : bool => $s->poll(), function() : void {
+        $s->quits->add(1);
+    });
+    expect($t->stops->load())->is(1);
+    expect($s->quits->load())->is(1);
+    expect($at->elapsed()->as_micros() >= 400000)->yes(says: 'it waited out the grace first');
+}
+
+test a_second_signal_quits_at_once
+{
+    $t = LStuck();
+    $s = LSignals();
+    $s->second->store(3);
+    $done = nexus::Flag();
+    std::time::instant $at = .now();
+    nexus::Console::watch($done, $t, nexus::Logger::silent(), std::time::duration::secs(60), () : bool => $s->poll(), function() : void {
+        $s->quits->add(1);
+    });
+    expect($s->quits->load())->is(1);
+    expect($at->elapsed()->as_micros() < 5000000)->yes(says: 'well before the grace');
+}
+
+test a_stop_that_finishes_never_quits
+{
+    $t = LStuck();
+    $s = LSignals();
+    $done = nexus::Flag();
+    std::thread::handle $finisher = guard std::thread::spawn(function[$done]() : void {
+        std::thread::sleep(300);
+        $done->raise();
+    });
+    nexus::Console::watch($done, $t, nexus::Logger::silent(), std::time::duration::secs(60), () : bool => $s->poll(), function() : void {
+        $s->quits->add(1);
+    });
+    $finisher->join();
+    expect($t->stops->load())->is(1);
+    expect($s->quits->load())->is(0);
+}

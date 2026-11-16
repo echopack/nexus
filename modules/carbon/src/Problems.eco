@@ -1,5 +1,7 @@
 namespace nexus::carbon;
 
+use carbon;
+
 /**
  * What a database error means to an HTTP client.
  */

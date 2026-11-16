@@ -14,7 +14,8 @@ internal const string STAGING = '.nexus-staging';
  * extension says (`Keys::type`); keep files under keys with the right one.
  *
  * Several servers share files only when they share the directory (a network mount). Symlinks in
- * the directory are not followed when reading: a file is what is kept there.
+ * the directory are never followed, a link to a directory on the way to a key included: a file is
+ * what is kept there.
  */
 #[atomic]
 public class LocalStore : Store
@@ -105,6 +106,9 @@ public class LocalStore : Store
 
     public function stat(const string& $key) : result<Stat?, FilesError>
     {
+        if (nexus::Confined::linked($this->root, $key)) {
+            return .ok(null);
+        }
         std::fs::fileinfo $info = guard std::fs::linkinfo($this->path($key)) else ($e) {
             if ($e->missing() || $e->not_a_directory()) {
                 return .ok(null);
@@ -119,6 +123,7 @@ public class LocalStore : Store
 
     public function delete(const string& $key) : status<FilesError>
     {
+        try $this->unlinked($key);
         guard std::fs::remove($this->path($key)) else ($e) {
             if ($e->missing() || $e->not_a_directory()) {
                 return .ok;
@@ -132,6 +137,7 @@ public class LocalStore : Store
     {
         // walk from the directory the prefix ends in, then keep the keys that start with all of it
         string $dir = Keys::dir($prefix);
+        try $this->unlinked($dir);
         array<Stat> $out = [];
         try $this->walk($dir, $prefix, $out);
         $out->sort(key: function(const Stat& $s) : string { return $s->key; });
@@ -192,9 +198,19 @@ public class LocalStore : Store
         return "{$this->root}/{$key}";
     }
 
+    // ok unless a part of `$key` that exists is a link
+    private const function unlinked(const string& $key) : status<FilesError>
+    {
+        if (nexus::Confined::linked($this->root, $key)) {
+            return .error(.denied("{$key} goes through a link"));
+        }
+        return .ok;
+    }
+
     // ok when a regular file is kept under `$key`, never a link or a directory
     private const function regular(const string& $key) : status<FilesError>
     {
+        try $this->unlinked($key);
         std::fs::fileinfo $info = guard std::fs::linkinfo($this->path($key)) else ($e) {
             return .error(LocalStore::fail($e, $key));
         };
@@ -208,6 +224,8 @@ public class LocalStore : Store
     {
         string $dir = $this->root;
         string $under = Keys::dir($key);
+        // a link on the way would make the write land wherever it points
+        try $this->unlinked($under);
         if (!$under->empty()) {
             $dir = $this->path($under);
         }

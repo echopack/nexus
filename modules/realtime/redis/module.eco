@@ -19,9 +19,9 @@
 #[depends: "../../.."]
 #[depends: ".."]
 #[depends: "../../auth"]
-#[depends: "../../../../container"]
-#[depends: "../../../../libjson"]
-#[depends: "../../../../libredis"]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
+#[requires: "echolang/libredis" { version: "^0.1.1", source: git "https://github.com/echolang/libredis" }]
 
 #[hook: before_build { run: "nexus", args: ["gen"] }]
 

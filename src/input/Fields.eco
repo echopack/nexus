@@ -2,6 +2,8 @@ namespace nexus;
 
 use std::time;
 
+internal const usize FORM_PAIRS = 1000;
+
 /**
  * The fields of one input, read with types by the decoders `nexus gen` writes for `#[nexus::input]`
  * structs. A read that fails (missing, wrong type) is refused through `check`, next to every rule
@@ -89,6 +91,11 @@ public class Fields
             return .ok(Fields(json: mv $doc));
         }
         if ($type == 'application/x-www-form-urlencoded') {
+            // a form's fields are looked up by scanning them, so their number is capped like a
+            // multipart form's parts
+            if (Fields::pieces($payload->request->body) > FORM_PAIRS) {
+                return .error(.badRequest('the form has more than 1000 fields'));
+            }
             return .ok(Fields(pairs: Query(parse: $payload->request->body)));
         }
         if ($type == 'multipart/form-data') {
@@ -672,6 +679,20 @@ public class Fields
             return null;
         }
         return $i;
+    }
+
+    // how many `&` separated pieces `$body` has, empty ones included
+    internal static function pieces(const string& $body) : usize
+    {
+        usize $n = 1;
+        usize $i = 0;
+        while ($i < $body->size()) {
+            if ($body->byte($i) == 38) {
+                $n = $n + 1;
+            }
+            $i = $i + 1;
+        }
+        return $n;
     }
 }
 

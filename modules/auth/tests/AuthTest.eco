@@ -846,3 +846,38 @@ test require_session_covers_its_prefix_but_where_sessions_open
     expect($id->anonymous())->yes(says: 'the session it left names nobody');
     expect(through($r->signed(.get, '/v1/posts', '', 'Nexus-Sig id=abc'), $m))->is(401);
 }
+
+test a_stranger_cannot_lock_an_account_out_from_elsewhere
+{
+    Rig $r = rig();
+    nexus::Payload $owner = $r->get('/');
+    Logins $l = $owner->get<Logins>();
+    string $h = guard $l->passwords->hash('the right one');
+    nexus::Payload $stranger = $r->get('/');
+    $stranger->request->peer = '203.0.113.9';
+    foreach (0 .. 10 as $i) {
+        guard $l->attempt($stranger, 'admin@example.com');
+        expect($l->verify($stranger, 'admin@example.com', 'a guess', $h))->fails();
+    }
+    expect(refused($l->attempt($stranger, 'admin@example.com'))->status())->is(429);
+    // the owner, from their own address, still gets in
+    guard $l->attempt($owner, 'admin@example.com');
+    guard $l->verify($owner, 'admin@example.com', 'the right one', $h);
+}
+
+test an_account_has_a_ceiling_across_addresses
+{
+    Rig $r = rig();
+    nexus::Payload $payload = $r->get('/');
+    Logins $l = $payload->get<Logins>();
+    foreach (0 .. 100 as $i) {
+        // a fresh address every ten guesses, under each address's own limits
+        $payload->request->peer = "198.51.100.{$i / 10}";
+        guard $l->attempt($payload, 'admin@example.com');
+    }
+    $payload->request->peer = '192.0.2.1';
+    nexus::Problem $p = refused($l->attempt($payload, 'admin@example.com'));
+    expect($p->status())->is(429);
+    $r->clock->advance(.hours(1));
+    guard $l->attempt($payload, 'admin@example.com');
+}

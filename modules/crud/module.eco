@@ -19,17 +19,17 @@
 #[depends: "../.."]
 #[depends: "../carbon"]
 #[depends: "../rest"]
-#[depends: "../../../carbon"]
-#[depends: "../../../RestTransformers"]
-#[depends: "../../../container"]
-#[depends: "../../../libjson"]
+#[requires: "echopack/carbon" { version: "^0.2.1", source: git "https://github.com/echopack/carbon" }]
+#[requires: "echopack/rest" { version: "^0.2.1", source: git "https://github.com/echopack/rest" }]
+#[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
+#[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
 
 #[sources: "src/*.eco"]
 
 #[target: test] {
     // carbon's own example models, generated tables included
-    #[depends: "../../../carbon/examples/blog"]
-    #[depends: "../../../carbon/fake"]
+    #[requires: "echopack/carbon/examples/blog" { version: "^0.2.1", source: git "https://github.com/echopack/carbon" }]
+    #[requires: "echopack/carbon/fake" { version: "^0.2.1", source: git "https://github.com/echopack/carbon" }]
     #[depends: "../testing"]
     #[sources: "tests/*.eco"]
 }

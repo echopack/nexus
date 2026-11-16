@@ -3,8 +3,10 @@ namespace nexus::auth;
 use std::time;
 
 /**
- * Password logins with their throttles: per client address and per account, failures only. Ask for
- * it in the login action.
+ * Password logins with their throttles, failures only: per client address (30 in 15 minutes), per
+ * account from one address (10 in 15 minutes) and per account from everywhere (100 an hour). An
+ * account is locked from one address long before a stranger elsewhere can lock its owner out.
+ * Ask for it in the login action.
  *
  * ```echo
  * try $this->logins->attempt($payload, $in->email);
@@ -20,6 +22,7 @@ public class Logins
 {
     public const Passwords $passwords;
     public Throttle $peers;
+    public Throttle $pairs;
     public Throttle $accounts;
     public calendar::Clock $clock;
 
@@ -28,23 +31,30 @@ public class Logins
         $this->passwords = $passwords;
         $this->clock = $clock;
         $this->peers = Throttle(30, .mins(15));
-        $this->accounts = Throttle(10, .mins(15));
+        $this->pairs = Throttle(10, .mins(15));
+        $this->accounts = Throttle(100, .hours(1));
     }
 
     /**
-     * Counts a login for `$account` from this request's address: a 429 when either has failed too
-     * often. Call it before looking the account up, so a flood never reaches the database.
+     * Counts a login for `$account` from this request's address: a 429 when the address, the
+     * account from it, or the account from everywhere has failed too often. Call it before looking the account up, so a flood never reaches the database.
      */
     public function attempt(nexus::Payload& $payload, const string& $account) : status<nexus::Problem>
     {
         time::timestamp $now = $this->clock->now();
         string $peer = $payload->request->peer;
         string $key = str::lower($account);
+        string $pair = "{$key}\n{$peer}";
         if (!$this->peers->take($peer, $now)) {
             return .error(.tooMany($this->peers->wait($peer, $now)));
         }
+        if (!$this->pairs->take($pair, $now)) {
+            $this->peers->refund($peer);
+            return .error(.tooMany($this->pairs->wait($pair, $now)));
+        }
         if (!$this->accounts->take($key, $now)) {
             $this->peers->refund($peer);
+            $this->pairs->refund($pair);
             return .error(.tooMany($this->accounts->wait($key, $now)));
         }
         return .ok;
@@ -59,8 +69,11 @@ public class Logins
         if (!$this->passwords->verify($plain, $encoded)) {
             return .error(Logins::refused());
         }
-        $this->peers->refund($payload->request->peer);
-        $this->accounts->refund(str::lower($account));
+        string $peer = $payload->request->peer;
+        string $key = str::lower($account);
+        $this->peers->refund($peer);
+        $this->pairs->refund("{$key}\n{$peer}");
+        $this->accounts->refund($key);
         return .ok;
     }
 

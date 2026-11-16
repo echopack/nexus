@@ -1,0 +1,124 @@
+namespace nexus;
+
+/**
+ * A path somebody asked for, kept inside the directory it belongs to. The text is checked first
+ * (no `..` out, no absolute path, no NUL byte); `real` then asks the disk, so a symlink inside the
+ * directory cannot lead out of it either. Use `real` for anything read from a directory that
+ * somebody else can write to: an upload area, a workspace an agent works in.
+ *
+ *     std::fs::path $file = try nexus::Confined::real($root, $asked);
+ *     string $body = guard std::fs::readfile($file) else { ... };
+ */
+public struct Confined
+{
+    /**
+     * `$relative` under `$root`, cleaned, or a 400 when its text would leave `$root`. An empty
+     * `$relative` is `$root` itself. Nothing is asked of the disk, so symlinks are not looked at.
+     */
+    public static function path(const std::fs::path& $root, const string& $relative) : result<std::fs::path, Problem>
+    {
+        string $rel = Confined::trimmed($relative);
+        if ($rel->empty()) {
+            return .ok($root);
+        }
+        if ($rel->find('\0') < $rel->size()) {
+            return .error(.badRequest('a path may not hold a NUL byte'));
+        }
+        std::fs::path $asked = $rel;
+        if ($asked->is_absolute()) {
+            return .error(.badRequest('a path is relative to its directory'));
+        }
+        std::fs::path $clean = $asked->clean();
+        string $text = $clean->string();
+        if ($text == '..' || $text->starts('../')) {
+            return .error(.badRequest('a path may not leave its directory'));
+        }
+        return .ok($root / $clean);
+    }
+
+    /**
+     * The existing `$relative` under `$root` with every symlink resolved: a 404 when nothing is
+     * there, a 403 when it resolves outside `$root`. Read the answer, not the path you asked with.
+     */
+    public static function real(const std::fs::path& $root, const string& $relative) : result<std::fs::path, Problem>
+    {
+        std::fs::path $asked = try Confined::path($root, $relative);
+        std::fs::path $base = guard std::fs::realpath($root) else ($e) {
+            return .error(Confined::unreadable($e));
+        };
+        std::fs::path $full = guard std::fs::realpath($asked) else ($e) {
+            return .error(Confined::unreadable($e));
+        };
+        if (!Confined::under($base, $full)) {
+            return .error(.forbidden('the path leads out of its directory'));
+        }
+        return .ok($full);
+    }
+
+    /**
+     * Whether `$full` is `$base` or inside it; both resolved already.
+     */
+    public static function under(const std::fs::path& $base, const std::fs::path& $full) : bool
+    {
+        string $b = $base->string();
+        string $f = $full->string();
+        if ($f == $b) {
+            return true;
+        }
+        if (!$b->ends('/')) {
+            $b->append('/');
+        }
+        return $f->starts($b);
+    }
+
+    /**
+     * Whether a part of `$relative` under `$root` that exists is a symlink, the last part
+     * included. What a store that never follows links asks before it touches a path.
+     */
+    public static function linked(const std::fs::path& $root, const string& $relative) : bool
+    {
+        string $rel = Confined::trimmed($relative);
+        if ($rel->empty()) {
+            return false;
+        }
+        std::fs::path $at = $root;
+        foreach (str::split($rel, '/')->owned() as const &$part) {
+            if ($part->empty() || $part == '.') {
+                continue;
+            }
+            $at = $at / $part;
+            std::fs::fileinfo $info = guard std::fs::linkinfo($at) else {
+                // nothing further down exists, so nothing further down is a link
+                return false;
+            };
+            if ($info->kind == std::fs::filekind::symlink) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * `$relative` without leading and trailing slashes, as clients send it.
+     */
+    public static function trimmed(const string& $relative) : string
+    {
+        string $s = $relative;
+        while ($s->starts('/')) {
+            $s = $s->sub(1, $s->size() - 1);
+        }
+        while ($s->ends('/')) {
+            $s = $s->sub(0, $s->size() - 1);
+        }
+        return $s;
+    }
+
+    // a 404 for nothing there, a 400 for anything else; never the path, which is the server's
+    internal static function unreadable(const std::io::ioerror& $e) : Problem
+    {
+        if ($e->missing() || $e->not_a_directory()) {
+            return .notFound('the file');
+        }
+        return .badRequest('the path cannot be read');
+    }
+}

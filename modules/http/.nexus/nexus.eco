@@ -11,6 +11,7 @@ namespace nexusgen::nexus_http;
 #[nexus::generated: 'nexus-http']
 public function generated(nexus::Generated $g) : void
 {
+    $g->name<nexus::http::AddressRange>('nexus::http::AddressRange');
     $g->name<nexus::http::Cors>('nexus::http::Cors');
     $g->name<nexus::http::Extension>('nexus::http::Extension');
     $g->name<nexus::http::HttpConfig>('nexus::http::HttpConfig');
@@ -54,8 +55,44 @@ public function configs(nexus::Env $env, container::Builder& $b) : status<nexus:
         $xC0SseBeat = guard $vC0SseBeat;
         $okC0SseBeat = mv $xC0SseBeat;
     }
+    uint64 $okC0MaxBody = 8388608;
+    uint64? $vC0MaxBody = $s->uint64('NEXUS_HTTP_MAX_BODY', required: false);
+    if ($vC0MaxBody != null) {
+        uint64 $xC0MaxBody = guard $vC0MaxBody;
+        $okC0MaxBody = $xC0MaxBody;
+    }
+    std::time::duration $okC0IdleTimeout = .secs(75);
+    $vC0IdleTimeout = $s->duration('NEXUS_HTTP_IDLE_TIMEOUT', required: false);
+    if ($vC0IdleTimeout != null) {
+        $xC0IdleTimeout = guard $vC0IdleTimeout;
+        $okC0IdleTimeout = mv $xC0IdleTimeout;
+    }
+    std::time::duration $okC0HeaderTimeout = .secs(10);
+    $vC0HeaderTimeout = $s->duration('NEXUS_HTTP_HEADER_TIMEOUT', required: false);
+    if ($vC0HeaderTimeout != null) {
+        $xC0HeaderTimeout = guard $vC0HeaderTimeout;
+        $okC0HeaderTimeout = mv $xC0HeaderTimeout;
+    }
+    std::time::duration $okC0BodyTimeout = .secs(60);
+    $vC0BodyTimeout = $s->duration('NEXUS_HTTP_BODY_TIMEOUT', required: false);
+    if ($vC0BodyTimeout != null) {
+        $xC0BodyTimeout = guard $vC0BodyTimeout;
+        $okC0BodyTimeout = mv $xC0BodyTimeout;
+    }
+    uint32 $okC0MaxConnections = 1024;
+    uint32? $vC0MaxConnections = $s->uint32('NEXUS_HTTP_MAX_CONNECTIONS', required: false);
+    if ($vC0MaxConnections != null) {
+        uint32 $xC0MaxConnections = guard $vC0MaxConnections;
+        $okC0MaxConnections = $xC0MaxConnections;
+    }
+    uint32 $okC0MaxRequests = 1000;
+    uint32? $vC0MaxRequests = $s->uint32('NEXUS_HTTP_MAX_REQUESTS', required: false);
+    if ($vC0MaxRequests != null) {
+        uint32 $xC0MaxRequests = guard $vC0MaxRequests;
+        $okC0MaxRequests = $xC0MaxRequests;
+    }
     try $s->done();
-    $b->param<nexus::http::HttpConfig>(nexus::http::HttpConfig($trustedProxies: mv $okC0TrustedProxies, $wsPing: mv $okC0WsPing, $wsMaxMessage: $okC0WsMaxMessage, $sseBeat: mv $okC0SseBeat));
+    $b->param<nexus::http::HttpConfig>(nexus::http::HttpConfig($trustedProxies: mv $okC0TrustedProxies, $wsPing: mv $okC0WsPing, $wsMaxMessage: $okC0WsMaxMessage, $sseBeat: mv $okC0SseBeat, $maxBody: $okC0MaxBody, $idleTimeout: mv $okC0IdleTimeout, $headerTimeout: mv $okC0HeaderTimeout, $bodyTimeout: mv $okC0BodyTimeout, $maxConnections: $okC0MaxConnections, $maxRequests: $okC0MaxRequests));
     return .ok;
 }
 
@@ -67,12 +104,24 @@ public function envs() : array<nexus::EnvVar>
 {
     array<nexus::EnvVar> $all = [];
     string $d0 = '';
-    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_TRUSTED_PROXIES', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'The addresses of the reverse proxies in front of the app, comma separated. A request from one of them comes from the client its `X-Forwarded-For` names; from anywhere else the header is ignored.', $owner: 'nexus::http::HttpConfig');
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_TRUSTED_PROXIES', $type: 'string', $fallback: nexus::EnvVar::text($d0), $required: false, $secret: false, $doc: 'The addresses of the reverse proxies in front of the app, comma separated, each an address or a range (`10.0.0.0/8`). A request from one of them comes from the client its `X-Forwarded-For` names; from anywhere else the header is ignored.', $owner: 'nexus::http::HttpConfig');
     std::time::duration $d1 = .secs(30);
     $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_WS_PING', $type: 'duration', $fallback: nexus::EnvVar::text($d1), $required: false, $secret: false, $doc: 'How long an open websocket may stay quiet before it is pinged; another interval of silence closes it. Zero never pings.', $owner: 'nexus::http::HttpConfig');
     uint64 $d2 = 65536;
     $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_WS_MAX_MESSAGE', $type: 'uint64', $fallback: nexus::EnvVar::text($d2), $required: false, $secret: false, $doc: 'The largest websocket message a client may send, in bytes; a bigger one closes the socket with 1009.', $owner: 'nexus::http::HttpConfig');
     std::time::duration $d3 = .secs(15);
     $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_SSE_BEAT', $type: 'duration', $fallback: nexus::EnvVar::text($d3), $required: false, $secret: false, $doc: 'How often an open event stream gets a heartbeat comment, which keeps proxies from timing a quiet one out. Zero sends none.', $owner: 'nexus::http::HttpConfig');
+    uint64 $d4 = 8388608;
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_MAX_BODY', $type: 'uint64', $fallback: nexus::EnvVar::text($d4), $required: false, $secret: false, $doc: 'The largest request body accepted, in bytes; a bigger one is a 413 before it is read.', $owner: 'nexus::http::HttpConfig');
+    std::time::duration $d5 = .secs(75);
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_IDLE_TIMEOUT', $type: 'duration', $fallback: nexus::EnvVar::text($d5), $required: false, $secret: false, $doc: 'How long a connection may wait between requests, and before the first byte of its first one. Longer than the keep-alive of the load balancer in front (60 s on most), or it reuses a connection the app has just closed and answers 502.', $owner: 'nexus::http::HttpConfig');
+    std::time::duration $d6 = .secs(10);
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_HEADER_TIMEOUT', $type: 'duration', $fallback: nexus::EnvVar::text($d6), $required: false, $secret: false, $doc: 'How long a client has to send the request line and headers; a 408 after that.', $owner: 'nexus::http::HttpConfig');
+    std::time::duration $d7 = .secs(60);
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_BODY_TIMEOUT', $type: 'duration', $fallback: nexus::EnvVar::text($d7), $required: false, $secret: false, $doc: 'How long a client has to send the body once the headers are in; a 408 after that.', $owner: 'nexus::http::HttpConfig');
+    uint32 $d8 = 1024;
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_MAX_CONNECTIONS', $type: 'uint32', $fallback: nexus::EnvVar::text($d8), $required: false, $secret: false, $doc: 'Open connections, idle ones, event streams and websockets included; past it a new one gets a 503. Each is a file descriptor, so keep it under `ulimit -n`.', $owner: 'nexus::http::HttpConfig');
+    uint32 $d9 = 1000;
+    $all[] = nexus::EnvVar($name: 'NEXUS_HTTP_MAX_REQUESTS', $type: 'uint32', $fallback: nexus::EnvVar::text($d9), $required: false, $secret: false, $doc: 'Requests one connection may make before it is closed.', $owner: 'nexus::http::HttpConfig');
     return $all;
 }

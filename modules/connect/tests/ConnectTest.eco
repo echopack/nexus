@@ -95,7 +95,7 @@ internal function rig() : Rig
 
 internal function acme() : Oidc
 {
-    return Oidc('acme', issuer: ISSUER, client: 'cid', secret: 'shh', authorize: 'https://id.acme.test/auth', token: TOKEN);
+    return Oidc('acme', issuer: ISSUER, client: 'cid', secret: 'shh', authorize: 'https://id.acme.test/auth', token: TOKEN, trustsEmail: true);
 }
 
 /**
@@ -461,4 +461,31 @@ test a_link_to_a_user_that_is_gone_is_replaced
     Link $l = expect($linked)->some();
     expect($l->subject)->is($again);
     nexus::Kernel::finish($payload);
+}
+
+test a_provider_not_trusted_with_emails_verifies_none
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
+    $r = Rig(mv $vars, Oidc('acme', issuer: ISSUER, client: 'cid', secret: 'shh', authorize: 'https://id.acme.test/auth', token: TOKEN));
+    Reply $started = $r->start()->status(201);
+    string $url = $started->capture('$.url');
+    string $attempt = $started->capture('$.attempt');
+    string $binding = $started->capture('$.binding');
+    $r->token($url, claims());
+    $r->back($url);
+    ExternalIdentity $who = guard $r->claim($attempt, $binding);
+    expect($who->email)->is('ann@example.com');
+    expect($who->emailVerified)->no(says: 'its email_verified is not taken on its word');
+    expect(Google()->oidc->trustsEmail)->yes(says: 'the Google preset is trusted');
+}
+
+test sign_ins_are_throttled_per_address
+{
+    $r = rig();
+    foreach (0 .. 30 as $i) {
+        $r->start()->status(201);
+    }
+    $r->start()->status(429);
+    $r->clock->advance(.mins(15));
+    $r->start()->status(201);
 }

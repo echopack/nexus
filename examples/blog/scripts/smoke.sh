@@ -30,6 +30,12 @@ port="${SMOKE_PORT:-18471}"
 image="${IMAGE:-mysql:8.0}"
 base="http://127.0.0.1:${port}"
 echoc="${ECHOC:-echoc}"
+# the runner scripts/test.sh built, or the one nexus vendors
+if [ -n "${ECOTEST:-}" ]; then
+    ecotest=("${ECOTEST}")
+else
+    ecotest=(epm run -m "${here}/../.." ecotest)
+fi
 cd "${here}"
 "${echoc}" build >/dev/null || { echo "build failed"; exit 1; }
 freeport() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
@@ -106,7 +112,7 @@ check "doctor"            1 "$(./ecobuild/blog doctor 2>&1 | grep -c '^ok: .* ro
 
 # nexus-work-carbon's live test on this server: two servers settling at once both count down the
 # task that waits for them (it only runs when WORK_LIVE_URL is set)
-live="$(cd "${here}/../../modules/work/carbon" && WORK_LIVE_URL="${NEXUS_DATABASE_URL}" epm run -m "${here}/../.." ecotest --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
+live="$(cd "${here}/../../modules/work/carbon" && WORK_LIVE_URL="${NEXUS_DATABASE_URL}" "${ecotest[@]}" --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
 check "work store, live"  1 "$(printf '%s\n' "${live}" | grep -c '^ok .*LiveTest.eco::dependencies_finishing_at_once_on_two_servers_all_count')"
 
 # nexus-mail's live test on the Mailpit: a mail over SMTP, read back from its API
@@ -114,7 +120,7 @@ for _ in $(seq 1 50); do
     curl -s -o /dev/null "${mailapi}/messages" && break
     sleep 0.2
 done
-live="$(cd "${here}/../../modules/mail" && MAIL_LIVE_URL="${NEXUS_MAIL_URL}" MAIL_LIVE_API="http://127.0.0.1:${mail_http}" epm run -m "${here}/../.." ecotest --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
+live="$(cd "${here}/../../modules/mail" && MAIL_LIVE_URL="${NEXUS_MAIL_URL}" MAIL_LIVE_API="http://127.0.0.1:${mail_http}" "${ecotest[@]}" --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
 check "mail, live"        1 "$(printf '%s\n' "${live}" | grep -c '^ok .*LiveTest.eco::a_mail_reaches_a_real_server')"
 
 # the subjects of every mail to `$1` Mailpit holds
@@ -130,7 +136,7 @@ check "files:check, s3"   1 "$(./ecobuild/blog files:check --disk covers 2>&1 | 
 
 # nexus-files-s3's live test on the same MinIO: streamed, ranged, listed, presigned
 docker exec "${s3_name}" mc mb smoke/files-live >/dev/null
-live="$(cd "${here}/../../modules/files/s3" && FILES_S3_LIVE_URL=s3://files-live epm run -m "${here}/../.." ecotest --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
+live="$(cd "${here}/../../modules/files/s3" && FILES_S3_LIVE_URL=s3://files-live "${ecotest[@]}" --style simple --timeout 120000 --echoc "${echoc}" 2>&1)"
 check "files s3, live"    1 "$(printf '%s\n' "${live}" | grep -c '^ok .*LiveTest.eco::the_store_keeps_reads_ranges_lists_and_streams_on_a_real_server')"
 
 log="$(mktemp)"
@@ -554,7 +560,7 @@ wait "${pid}"
 check "cover went too"    1 "$(./ecobuild/blog files:list --disk covers 2>&1 | grep -c '^0 files in s3://blog-covers/covers')"
 rm -rf "${files}"
 check "auth:prune"        "pruned  0 tokens|pruned  0 sessions|pruned  0 oauth requests, codes and grants|pruned  0 sign-in attempts" "$(./ecobuild/blog auth:prune 2>&1 | paste -sd '|' -)"
-check "reset wants force" 1 "$(./ecobuild/blog migrate:reset --mode prod >/dev/null 2>&1; echo $?)"
+check "reset wants force" 1 "$(./ecobuild/blog migrate:reset --mode prod 2>&1 | grep -c 'add --force')"
 check "work:failed, end"  "no failed tasks" "$(./ecobuild/blog work:failed 2>&1)"
 check "migrate:reset"     8 "$(./ecobuild/blog migrate:reset 2>&1 | grep -c '^undone')"
 check "all pending"       8 "$(./ecobuild/blog migrate:status 2>&1 | grep -c '^pending')"

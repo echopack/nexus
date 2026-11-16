@@ -1,6 +1,7 @@
 namespace nexus::connect::carbon;
 
 use std::time;
+use carbon;
 
 /**
  * A row of `connect_links`: an outside identity and the user it belongs to, keyed by

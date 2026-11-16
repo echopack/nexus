@@ -186,7 +186,7 @@ test the_open_gate_is_for_localhost_and_never_for_prod
     map<string, string> $vars = ['NEXUS_DEBUG_ENABLED' => 'true'];
     array<nexus::Extension> $exts = [nexus::debug::Extension(), TExt()];
     $app = TestApp($exts, $vars);
-    $app->api()->get('/__nexus/api')->ok()->json('$.viewer.via', 'open')->json('$.signIn.kind', 'open');
+    $app->api()->with('Host', 'localhost:3246')->get('/__nexus/api')->ok()->json('$.viewer.via', 'open')->json('$.signIn.kind', 'open');
 
     array<nexus::Extension> $again = [nexus::debug::Extension(), TExt()];
     expect(TestApp::attempt($again, $vars, mode: .prod))->fails();
@@ -520,4 +520,31 @@ test the_built_web_app_is_served_with_its_base_and_cached_by_hash
     $app->api()->with('Accept-Encoding', 'gzip, br')->get("/__nexus/{$js}")->ok()->header('Content-Encoding', 'gzip');
     nexus::debug::Asset $a = expect(nexus::debug::Assets::find($js))->some();
     $app->api()->with('If-None-Match', $a->etag)->get("/__nexus/{$js}")->status(304);
+}
+
+test the_open_gate_refuses_a_proxy_and_a_foreign_host_name
+{
+    map<string, string> $vars = ['NEXUS_DEBUG_ENABLED' => 'true'];
+    array<nexus::Extension> $exts = [nexus::debug::Extension(), TExt()];
+    $app = TestApp($exts, $vars);
+    $app->api()->with('Host', 'localhost:3246')->get('/__nexus/api')->ok();
+    $app->api()->with('Host', '127.0.0.1:3246')->get('/__nexus/api')->ok();
+    $app->api()->with('Host', '[::1]:3246')->get('/__nexus/api')->ok();
+    $app->api()->with('Host', 'attacker.example')->get('/__nexus/api')->status(403);
+    $app->api()->with('Host', '127.attacker.example')->get('/__nexus/api')->status(403);
+    $app->api()->with('X-Forwarded-For', '203.0.113.9')->get('/__nexus/api')->status(403);
+}
+
+test recorded_targets_hide_credentials_in_the_query
+{
+    expect(nexus::debug::RequestRecord::scrubbed('/files/covers/a.png?expires=9&sig=abc&name=a.png'))->is('/files/covers/a.png?expires=9&sig=***&name=a.png');
+    expect(nexus::debug::RequestRecord::scrubbed('/cb?code=x&STATE=y'))->is('/cb?code=***&STATE=***');
+    expect(nexus::debug::RequestRecord::scrubbed('/realtime?ticket=t1'))->is('/realtime?ticket=***');
+    expect(nexus::debug::RequestRecord::scrubbed('/plain'))->is('/plain');
+    expect(nexus::debug::RequestRecord::scrubbed('/q?x=1&&flag'))->is('/q?x=1&&flag');
+    $app = tokenApp();
+    $app->api()->get('/hello?sig=a-signature-of-the-app')->ok();
+    $app->api()->bearer(TOKEN)->get('/__nexus/api/panels/requests/recent')->ok()
+        ->json('$.rows[0].target', '/hello?sig=***')
+        ->lacks('a-signature-of-the-app');
 }

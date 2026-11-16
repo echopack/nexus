@@ -61,6 +61,7 @@ test a_file_body_goes_out_from_the_file
     expect($r->status)->is(206);
     expect($r->streamed())->yes(says: 'the slice streams from the file');
     expect($r->headers->all('Content-Type'))->size(1);
+    expect($r->headers->all('Content-Range'))->size(1);
     expect($r->headers->get('Content-Range'))->some('bytes 2-5/10');
 
     // gone since it was looked at: what libhttp answers stands
@@ -151,4 +152,57 @@ test an_ipv6_peer_compares_without_its_brackets
     $p = nexus::http::Proxies(parse: '::1');
     $r = expect(Wire::request(forwarded('[::1]:5000', '203.0.113.9'), $p))->some();
     expect($r->peer)->is('203.0.113.9');
+}
+
+test a_proxy_that_adds_a_line_cannot_be_outwritten
+{
+    $p = nexus::http::Proxies(parse: '10.0.0.2');
+    $h = http::Headers();
+    // the client's own line first, the proxy's line after it
+    $h->add('X-Forwarded-For', '6.6.6.6');
+    $h->add('X-Forwarded-For', '203.0.113.9');
+    $h->add('X-Forwarded-Proto', 'https');
+    $h->add('X-Forwarded-Proto', 'http');
+    $in = http::Request(http::Method::get, '/', '/', '', http::Query(), 'HTTP/1.1', mv $h, '', '10.0.0.2:40000');
+    $r = expect(Wire::request($in, $p))->some();
+    expect($r->peer)->is('203.0.113.9');
+    expect($r->scheme)->is('http');
+}
+
+test a_range_trusts_every_address_in_it
+{
+    $p = nexus::http::Proxies(parse: '10.0.0.0/8, 192.168.4.0/22, fd00::/8');
+    expect($p->trusts('10.200.3.4'))->yes(says: 'inside /8');
+    expect($p->trusts('11.0.0.1'))->no(says: 'outside /8');
+    expect($p->trusts('192.168.7.255'))->yes(says: 'last of the /22');
+    expect($p->trusts('192.168.8.0'))->no(says: 'just past the /22');
+    expect($p->trusts('fd12:3456::1'))->yes(says: 'inside fd00::/8');
+    expect($p->trusts('fe80::1'))->no(says: 'outside fd00::/8');
+    expect($p->trusts('::ffff:10.1.2.3'))->yes(says: 'the mapped spelling of an IPv4 address');
+    $r = expect(Wire::request(forwarded('10.9.8.7:40000', '203.0.113.9, 10.1.1.1'), $p))->some();
+    expect($r->peer)->is('203.0.113.9');
+}
+
+test an_address_compares_by_its_bytes
+{
+    $p = nexus::http::Proxies(parse: '0:0::1, 2001:db8::5');
+    expect($p->trusts('::1'))->yes(says: 'the same loopback written short');
+    expect($p->trusts('2001:0db8:0000:0000:0000:0000:0000:0005'))->yes(says: 'written in full');
+    expect($p->trusts('2001:db8::6'))->no(says: 'the next address');
+}
+
+test what_is_no_address_trusts_nothing
+{
+    expect(nexus::http::AddressRange::parse('10.0.0.0/33'))->none();
+    expect(nexus::http::AddressRange::parse('256.0.0.1'))->none();
+    expect(nexus::http::AddressRange::parse('1.2.3'))->none();
+    expect(nexus::http::AddressRange::parse('1::2::3'))->none();
+    expect(nexus::http::AddressRange::parse('12345::1'))->none();
+    expect(nexus::http::AddressRange::parse('fe80::/129'))->none();
+    expect(nexus::http::AddressRange::parse('10.0.0.0/+8'))->none();
+    $any = expect(nexus::http::AddressRange::parse('0.0.0.0/0'))->some();
+    expect($any->holds('8.8.8.8'))->yes(says: '/0 holds every IPv4 address');
+    expect($any->holds('not an address'))->no(says: 'nothing that is no address');
+    $p = nexus::http::Proxies(parse: 'proxy.internal');
+    expect($p->trusts('proxy.internal'))->yes(says: 'an exact entry still matches as written');
 }
