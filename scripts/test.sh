@@ -43,7 +43,7 @@ done
 (cd "${root}" && "${echoc}" build --target nexus >/dev/null)
 for dir in modules/http modules/carbon modules/auth modules/auth/carbon modules/work modules/work/carbon modules/mail modules/cache modules/cache/redis modules/files modules/files/s3 modules/realtime modules/realtime/redis modules/mcp modules/debug modules/debug/work modules/debug/realtime modules/oauth modules/oauth/carbon modules/connect modules/connect/carbon examples/blog; do
     echo "== nexus gen --check (${dir})"
-    (cd "${root}/${dir}" && "${root}/ecobuild/nexus" gen --check) || status=1
+    (cd "${root}/${dir}" && epm install >/dev/null && "${root}/ecobuild/nexus" gen --check) || status=1
 done
 if [ "${SMOKE:-1}" != "0" ] && [ "${DOCKER:-1}" != "0" ]; then
     echo "== smoke (examples/blog)"
