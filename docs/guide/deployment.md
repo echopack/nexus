@@ -146,7 +146,7 @@ A deploy usually means stopping the old process and starting the new one. Send `
 2. Every extension's `drain` hook runs, last listed first: the scheduler and task feeders stop, and running tasks get `NEXUS_WORK_GRACE` to finish.
 3. The process exits with `0`.
 
-Requests in flight get `NEXUS_SHUTDOWN_GRACE` (30 s) to finish. If one is still running after that, or a second signal arrives, the process logs `stopping took too long` and exits anyway. Give your process manager a stop timeout a little longer than both graces, so it never kills the process mid-drain. With systemd, for example:
+Requests in flight get `NEXUS_SHUTDOWN_GRACE` (30 s) to finish, and the drain after them gets as long again. If either is still running after that, or a second signal arrives before the process is through, it logs `stopping took too long` and exits anyway. Keep `NEXUS_SHUTDOWN_GRACE` at least as long as `NEXUS_WORK_GRACE`, so the watchdog never cuts the tasks short. The `work` command stops the same way, without the requests. Give your process manager a stop timeout a little longer than both graces, so it never kills the process mid-drain. With systemd, for example:
 
 ```txt
 [Service]

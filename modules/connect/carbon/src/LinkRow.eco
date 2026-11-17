@@ -4,8 +4,8 @@ use std::time;
 use carbon;
 
 /**
- * A row of `connect_links`: an outside identity and the user it belongs to, keyed by
- * `<provider>:<external>`.
+ * A row of `connect_links`: an outside identity and the user it belongs to, keyed by the sha256 hex
+ * of `<provider>:<external>` (`LinkRow::key`).
  */
 #[carbon::model: 'connect_links']
 public class LinkRow : carbon::Model<LinkRow, LinkRowRepository>
@@ -32,8 +32,19 @@ public class LinkRow : carbon::Model<LinkRow, LinkRowRepository>
      */
     public static function of(const nexus::connect::Link& $l) : LinkRow
     {
-        return LinkRow($id: nexus::connect::Link::key($l->provider, $l->external), $provider: $l->provider, $external: $l->external,
+        return LinkRow($id: LinkRow::key($l->provider, $l->external), $provider: $l->provider, $external: $l->external,
             $subject: $l->subject, $email: $l->email, $createdAt: $l->createdAt);
+    }
+
+    /**
+     * The id of the row of `$provider`'s person `$external`: the sha256 hex of `Link::key`, since a
+     * database compares text by its collation and MySQL's default ignores case and accents, so
+     * sub `Alice` would find the link of `alice`. Lowercase hex means the same under every
+     * collation.
+     */
+    public static function key(const string& $provider, const string& $external) : string
+    {
+        return nexus::auth::Secrets::hash(nexus::connect::Link::key($provider, $external));
     }
 
     /**

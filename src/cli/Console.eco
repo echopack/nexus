@@ -111,12 +111,21 @@ public struct Console
             return 0;
         }
 
-        Mode $m = guard Mode::parse($parsed->value($mode)) else {
-            io::eprintln("{$name}: --mode must be dev, test or prod");
-            return 1;
-        };
         Env $environment = guard Env::load($parsed->value($envFile)) else ($e) {
             io::eprintln("{$name}: {$e->message()}");
+            return 1;
+        };
+        // --mode wins, then NEXUS_MODE from the process, then from the env file
+        string $modeName = $parsed->value($mode);
+        if (!$parsed->stated($mode)) {
+            $modeName = $environment->get('NEXUS_MODE') ?? EnvList::MODE;
+        }
+        Mode $m = guard Mode::parse($modeName) else {
+            if ($parsed->stated($mode)) {
+                io::eprintln("{$name}: --mode must be dev, test or prod");
+            } else {
+                io::eprintln("{$name}: NEXUS_MODE '{$modeName}' must be dev, test or prod");
+            }
             return 1;
         };
         string $subject = $parsed->subject($app);
@@ -172,6 +181,19 @@ public struct Console
             io::eprintln("{$name}: cannot trap signals");
             return 1;
         };
+        return Console::serve($k, $t, $options, $name, () : bool => env::signal::take() != null, function() : void {
+            env::exit(1);
+        });
+    }
+
+    /**
+     * `serve` through `$t` once the signals are trapped: `$signalled` polls for a signal and
+     * `$quit` ends the process, so a test can stand in for both. The watchdog runs until the
+     * background work has drained: the requests in flight get `$options->grace`, the drain after
+     * them as long again, and a second signal quits at once during either.
+     */
+    public static function serve(Kernel $k, Transport $t, const Serve& $options, const string& $name, function<bool()> $signalled, function<void()> $quit) : int32
+    {
         guard $k->start($options) else ($e) {
             foreach ($e->lines() as const &$line) {
                 io::eprintln("{$name}: {$line}");
@@ -179,12 +201,13 @@ public struct Console
             return 1;
         };
         $done = Flag();
+        $draining = Flag();
         Logger $log = $k->log;
         time::duration $grace = $options->grace;
-        thread::handle $ticker = guard thread::spawn(function[$done, $t, $log, $grace]() : void {
-            Console::watch($done, $t, $log, $grace, () : bool => env::signal::take() != null, function() : void {
-                env::exit(1);
-            });
+        thread::handle $ticker = guard thread::spawn(function[$done, $draining, $t, $log, $grace, $signalled, $quit]() : void {
+            Console::watch($done, stopping: function[$t]() : void {
+                $t->stop();
+            }, $log, $grace, $signalled, $quit, draining: $draining);
         });
         $log->info("listening on {$options->address()}");
         foreach (Console::risks($k, $options->host) as const &$risk) {
@@ -194,9 +217,10 @@ public struct Console
             $log->warn('serving a debug build: asserts and runtime checks are on, so it answers several times slower than a release build');
         }
         status<BootError> $served = $t->serve($k, $options);
+        $draining->raise();
+        $k->drain();
         $done->raise();
         $ticker->join();
-        $k->drain();
         guard $served else ($e) {
             foreach ($e->lines() as const &$line) {
                 io::eprintln("{$name}: {$line}");
@@ -238,27 +262,44 @@ public struct Console
 
     /**
      * What `serve`'s ticker does until `$done`: on the first signal it stops the transport, which
-     * lets the requests in flight finish; a second signal, or `$grace` passing before they do,
-     * logs and calls `$quit`, so one stuck request cannot hold the process forever.
+     * lets the requests in flight finish; a second signal, or `$grace` passing before `$done`, logs
+     * and calls `$quit`, so one stuck request cannot hold the process forever.
      */
     public static function watch(Flag $done, Transport $t, Logger $log, time::duration $grace, function<bool()> $signalled, function<void()> $quit) : void
+    {
+        Console::watch($done, stopping: function[$t]() : void {
+            $t->stop();
+        }, $log, $grace, $signalled, $quit);
+    }
+
+    /**
+     * `watch` that runs `$stop` on the first signal, for a process without a transport. Once
+     * `$draining` is raised the grace starts over, so the drain after the requests gets a grace of
+     * its own.
+     */
+    public static function watch(Flag $done, stopping: function<void()> $stop, Logger $log, time::duration $grace, function<bool()> $signalled, function<void()> $quit, draining: Flag? $draining = null) : void
     {
         bool $stopping = false;
         while (!$done->raised() && !$stopping) {
             thread::sleep(100);
             if ($signalled()) {
                 $log->info('stopping');
-                $t->stop();
+                $stop();
                 $stopping = true;
             }
         }
         time::instant $since = .now();
+        bool $drained = false;
         while (!$done->raised()) {
             thread::sleep(100);
+            if (!$drained && ($draining?->raised() ?? false)) {
+                $since = .now();
+                $drained = true;
+            }
             bool $again = $signalled();
             if ($again || $since->elapsed() >= $grace) {
                 int64 $ms = $since->elapsed()->as_micros() / 1000;
-                $log->error('stopping took too long: quitting with requests still running', ['ms' => $ms, 'signal' => $again]);
+                $log->error('stopping took too long: quitting with work still running', ['ms' => $ms, 'signal' => $again]);
                 $log->flush();
                 $quit();
                 return;
@@ -276,17 +317,49 @@ public struct Console
             io::eprintln("{$name}: cannot trap signals");
             return 1;
         };
+        // the drain's watchdog waits NEXUS_SHUTDOWN_GRACE, as serve's does
+        Serve $o = $options;
+        string? $grace = $k->env->get('NEXUS_SHUTDOWN_GRACE');
+        if ($grace != null) {
+            string $text = guard $grace;
+            time::duration $span = guard Settings::span($text) else {
+                io::eprintln("{$name}: NEXUS_SHUTDOWN_GRACE '{$text}' is not a duration like 30s or 2m");
+                return 1;
+            };
+            $o->grace = $span;
+        }
+        return Console::background($k, $o, $name, () : bool => env::signal::take() != null, function() : void {
+            env::exit(1);
+        });
+    }
+
+    /**
+     * `background` once the signals are trapped, `$signalled` and `$quit` as `serve` takes them.
+     * The drain gets `$options->grace`, and a second signal quits at once.
+     */
+    public static function background(Kernel $k, const Serve& $options, const string& $name, function<bool()> $signalled, function<void()> $quit) : int32
+    {
         guard $k->start($options) else ($e) {
             foreach ($e->lines() as const &$line) {
                 io::eprintln("{$name}: {$line}");
             }
             return 1;
         };
-        while (!env::signal::caught()) {
+        $done = Flag();
+        $asked = Flag();
+        Logger $log = $k->log;
+        time::duration $grace = $options->grace;
+        thread::handle $ticker = guard thread::spawn(function[$done, $asked, $log, $grace, $signalled, $quit]() : void {
+            Console::watch($done, stopping: function[$asked]() : void {
+                $asked->raise();
+            }, $log, $grace, $signalled, $quit);
+        });
+        while (!$asked->raised()) {
             thread::sleep(100);
         }
-        $k->log->info('stopping');
         $k->drain();
+        $done->raise();
+        $ticker->join();
         return 0;
     }
 

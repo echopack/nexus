@@ -9,8 +9,9 @@ public struct Query
     public array<QueryField> $pairs = [];
 
     /**
-     * Splits and percent-decodes `$raw` (no leading `?`). A `+` is a space. Pairs that do not
-     * decode are dropped.
+     * Splits and percent-decodes `$raw` (no leading `?`). A `+` is a space. A broken escape stays
+     * as written (`?q=100%` is `100%`), so the HTTP transport and a test request read a query the
+     * same way.
      */
     public constructor(parse: const string& $raw)
     {
@@ -30,13 +31,7 @@ public struct Query
                 $name = $piece->sub(0, $at);
                 $value = $piece->sub($at + 1, $piece->size() - $at - 1);
             }
-            string $decodedName = guard Percent::decode($name, plus: true) else {
-                continue;
-            };
-            string $decodedValue = guard Percent::decode($value, plus: true) else {
-                continue;
-            };
-            $this->pairs[] = QueryField(mv $decodedName, mv $decodedValue);
+            $this->pairs[] = QueryField(Percent::loose($name, plus: true), Percent::loose($value, plus: true));
         }
     }
 

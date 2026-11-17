@@ -1,0 +1,25 @@
+namespace nexus::connect;
+
+/**
+ * Whether a sign in whose email the provider verified links to an existing user with that email,
+ * the first time that outside identity signs in. Set it with `Extension(emailLinking: ...)`.
+ */
+public enum EmailLinking
+{
+    /**
+     * Only when the app verified that user's email too (`Users::emailVerified`). The default: an
+     * account somebody opened with another person's address is never handed to them.
+     */
+    case verified;
+
+    /**
+     * Whenever the emails match: for an app where no account holds an address its owner did not
+     * confirm (every sign up confirms by mail, or accounts are only made through providers).
+     */
+    case always;
+
+    /**
+     * Never: a person whose email has an account signs in with its password, and nothing is linked.
+     */
+    case never;
+}

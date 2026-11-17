@@ -20,6 +20,12 @@ public class TaskScheduler
 {
     public array<Planned> $plans = [];
     internal thread::mutex<map<usize, time::timestamp>> $last = thread::mutex<map<usize, time::timestamp>>(map<usize, time::timestamp>());
+
+    /**
+     * The next slot of each plan after the one it pushed last, null when it never comes: a tick
+     * compares it with the time and looks for a slot only once it passed.
+     */
+    internal thread::mutex<map<usize, time::timestamp?>> $ahead = thread::mutex<map<usize, time::timestamp?>>(map<usize, time::timestamp?>());
     internal thread::mutex<time::timestamp?> $pruned = thread::mutex<time::timestamp?>(null);
     internal time::timestamp $from = time::timestamp::from_unix_secs(0);
     internal nexus::Flag $halt = nexus::Flag();
@@ -87,9 +93,14 @@ public class TaskScheduler
             Schedule $schedule = guard $p->schedule else {
                 continue;
             };
-            time::timestamp $slot = guard $schedule->due($this->lastOf($i), $now, $w->zone) else {
+            time::timestamp? $upcoming = $this->upcoming($i, $schedule, $w->zone);
+            time::timestamp $first = guard $upcoming else {
                 continue;
             };
+            if ($first > $now) {
+                continue;
+            }
+            time::timestamp $slot = $schedule->latest($first, $now, $w->zone);
             bool $did = guard $this->push($k, $w, $p, $slot) else ($e) {
                 $k->log->with(['work' => 'scheduler'])->error('cannot push a scheduled task', ['task' => $p->name, 'detail' => $e->detail(.dev)]);
                 continue;
@@ -97,8 +108,12 @@ public class TaskScheduler
             if ($did) {
                 $queued = $queued + 1;
             }
-            thread::locked<map<usize, time::timestamp>> $held = $this->last->lock();
-            $held->value[$i] = $slot;
+            {
+                thread::locked<map<usize, time::timestamp>> $held = $this->last->lock();
+                $held->value[$i] = $slot;
+            }
+            thread::locked<map<usize, time::timestamp?>> $next = $this->ahead->lock();
+            $next->value->remove($i);
         }
         $this->prune($k, $w, $now);
         return $queued;
@@ -111,7 +126,7 @@ public class TaskScheduler
     public function start(nexus::Kernel $k, Work $w) : status<nexus::BootError>
     {
         $this->halt = nexus::Flag();
-        $this->from = $w->clock->now() - time::duration::mins(1);
+        $this->since($w->clock->now() - time::duration::mins(1));
         TaskScheduler $self = $this;
         thread::handle $t = guard thread::spawn(function[$self, $k, $w]() : void {
             while (!$self->halt->raised()) {
@@ -142,6 +157,8 @@ public class TaskScheduler
     public function since(time::timestamp $from) : void
     {
         $this->from = $from;
+        thread::locked<map<usize, time::timestamp?>> $held = $this->ahead->lock();
+        $held->value = map<usize, time::timestamp?>();
     }
 
     /**
@@ -177,6 +194,24 @@ public class TaskScheduler
         int64 $secs = $slot->unix_secs();
         string $key = "{$plan->key}@{$secs}";
         return Batch::store($d->store, $lane, $w->codecs, nexus::work::Pipeline::one($plan->item), $w->clock->now(), $slot, $key);
+    }
+
+    /**
+     * The first slot of plan `$i` (on `$schedule`) after the one it pushed last, read in `$zone`:
+     * worked out once, then kept until the plan pushes.
+     */
+    internal function upcoming(usize $i, const Schedule& $schedule, const calendar::Zone& $zone) : time::timestamp?
+    {
+        {
+            thread::locked<map<usize, time::timestamp?>> $held = $this->ahead->lock();
+            if ($held->value->has($i)) {
+                return $held->value->get($i);
+            }
+        }
+        time::timestamp? $next = $schedule->next($this->lastOf($i), $zone);
+        thread::locked<map<usize, time::timestamp?>> $held = $this->ahead->lock();
+        $held->value[$i] = $next;
+        return $next;
     }
 
     internal function lastOf(usize $i) : time::timestamp

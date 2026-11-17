@@ -9,6 +9,7 @@ internal enum HubJob
     case leave(int64 $id, string $channel);
     case detach(int64 $id);
     case hear(Note $n);
+    case lapse;
 }
 
 /**
@@ -41,8 +42,9 @@ internal struct Attached
     public time::timestamp $opened;
     public array<string> $channels = [];
 
-    // the channels it is a presence member of
+    // the channels it is a presence member of, and what the others see about it in each
     public array<string> $present = [];
+    public map<string, json::Value> $infos = [];
 
     // still counted against the socket limit; end and close clear it before the transport drops
     public bool $counted = true;
@@ -50,6 +52,20 @@ internal struct Attached
     public const function follows(const string& $channel) : bool
     {
         return has($this->channels, $channel);
+    }
+}
+
+/**
+ * A frame that many sockets send, kept once however many spools hold it.
+ */
+#[atomic]
+internal class Outgoing
+{
+    public const string $text;
+
+    public constructor(const string& $text)
+    {
+        $this->text = $text;
     }
 }
 
@@ -70,13 +86,21 @@ internal struct HubData
     // how many sockets the limit counts by each key
     public map<string, usize> $held = [];
 
-    // channel to the sockets that follow it, so a broadcast looks at those only
+    // channel to the sockets that follow it, so a broadcast looks at those only; a socket is in
+    // only once its `subscribed` and catch up went out
     public map<string, map<int64, bool>> $byChannel = [];
+
+    // channel to the sockets seated on it whose `subscribed` has not gone out yet, with the presence
+    // frames held for them until it has
+    public map<string, map<int64, array<string>>> $waiting = [];
 
     // the last broadcasts, a ring: broadcast `seq` sits at `seq % backlog`
     public array<Kept> $ring = [];
     public map<string, uint64> $seqOf = [];
     public uint64 $next = 0;
+
+    // notes may have been missed since the ring started, so an empty cursor cannot catch up
+    public bool $lapsed = false;
 
     public function follow(int64 $id, const string& $channel) : void
     {
@@ -89,6 +113,7 @@ internal struct HubData
 
     public function unfollow(int64 $id, const string& $channel) : void
     {
+        $this->unwait($id, $channel);
         if (!$this->byChannel->has($channel)) {
             return;
         }
@@ -96,6 +121,87 @@ internal struct HubData
         $ids->remove($id);
         if ($ids->empty()) {
             $this->byChannel->remove($channel);
+        }
+    }
+
+    /**
+     * Whether `$id` gets what is sent on `$channel` now.
+     */
+    public const function live(int64 $id, const string& $channel) : bool
+    {
+        return $this->byChannel->has($channel) && $this->byChannel->at($channel)->has($id);
+    }
+
+    /**
+     * Seats `$id` on `$channel` until its join: presence frames for the channel are held for it.
+     */
+    public function wait(int64 $id, const string& $channel) : void
+    {
+        if ($this->live($id, $channel)) {
+            return;
+        }
+        if (!$this->waiting->has($channel)) {
+            $this->waiting[$channel] = map<int64, array<string>>();
+        }
+        map<int64, array<string>>& $ids = $this->waiting->at($channel);
+        if (!$ids->has($id)) {
+            $ids[$id] = array<string>();
+        }
+    }
+
+    /**
+     * Makes `$id` follow `$channel` live; the frames held for it meanwhile.
+     */
+    public function admit(int64 $id, const string& $channel) : array<string>
+    {
+        array<string> $held = [];
+        if ($this->waiting->has($channel)) {
+            map<int64, array<string>>& $ids = $this->waiting->at($channel);
+            if ($ids->has($id)) {
+                $held = $ids->at($id)->clone();
+            }
+        }
+        $this->unwait($id, $channel);
+        $this->follow($id, $channel);
+        return $held;
+    }
+
+    /**
+     * Holds `$frame` for every socket waiting on `$channel` but `$skip`, up to `HELD` each.
+     */
+    public function hold(const string& $channel, int64 $skip, const string& $frame) : void
+    {
+        if (!$this->waiting->has($channel)) {
+            return;
+        }
+        foreach ($this->waiting->at($channel) as $id => &$frames) {
+            if ($id != $skip && $frames->count() < HELD) {
+                $frames->push($frame);
+            }
+        }
+    }
+
+    /**
+     * Forgets the catch up ring: notes may have been missed, so no cursor handed out before
+     * catches up from it.
+     */
+    public function lapse() : void
+    {
+        $this->ring = [];
+        $this->seqOf = [];
+        $this->next = 0;
+        $this->lapsed = true;
+    }
+
+    private function unwait(int64 $id, const string& $channel) : void
+    {
+        if (!$this->waiting->has($channel)) {
+            return;
+        }
+        map<int64, array<string>>& $ids = $this->waiting->at($channel);
+        $ids->remove($id);
+        if ($ids->empty()) {
+            $this->waiting->remove($channel);
         }
     }
 
@@ -200,13 +306,13 @@ internal struct HubData
 
     /**
      * The `event` frames of the kept broadcasts on `$channel` after the one `$after` names (empty:
-     * every one, while none was let go yet); null when that one is not kept.
+     * every one, while none was let go or missed yet); null when that one is not kept.
      */
     public const function since(const string& $after, const string& $channel) : array<string>?
     {
         uint64 $seq = 0;
         if ($after->empty()) {
-            if ($this->next != ($this->ring->count() as uint64)) {
+            if ($this->lapsed || $this->next != ($this->ring->count() as uint64)) {
                 return null;
             }
         } else {
@@ -257,6 +363,11 @@ internal struct HubData
     }
 }
 
+/**
+ * The most presence frames held for a socket between its seat and its join.
+ */
+internal const usize HELD = 256;
+
 internal function has(const array<string>& $all, const string& $s) : bool
 {
     foreach ($all as const &$x) {
@@ -281,7 +392,9 @@ internal function without(array<string>& $all, const string& $s) : bool
 }
 
 /**
- * What the hub's sender thread works on: membership, the catch-up ring, and sending.
+ * What the hub's sender thread works on: membership, the catch-up ring, and handing frames to each
+ * socket's spool, which the spools' writers send, so a socket that stops reading never holds up the
+ * hub or another socket. A socket whose spool fills up is closed with 1008.
  */
 #[atomic]
 internal class HubState
@@ -293,11 +406,15 @@ internal class HubState
     private thread::mutex<HubData> $data;
     private thread::mutex<array<HubObserver>> $observers = thread::mutex<array<HubObserver>>(array<HubObserver>());
 
-    public constructor(const string& $node, usize $backlog)
+    // each socket's frames, waiting for a writer
+    private nexus::Spools $out;
+
+    public constructor(const string& $node, usize $backlog, usize $room)
     {
         $this->node = $node;
         $this->prefix = "{$node}.";
         $this->data = thread::mutex<HubData>(HubData($backlog));
+        $this->out = nexus::Spools($room);
     }
 
     public function observe(HubObserver $o) : void
@@ -326,10 +443,11 @@ internal class HubState
 
     /**
      * Subscribes `$id` to `$channel` at once, so the protocol thread can ask `follows` without
-     * waiting on the sender; `$fresh` when `$present` and it was not a member yet. Not on: the
-     * socket is gone.
+     * waiting on the sender; `$fresh` when `$present` and it was not a member yet, `$info` what
+     * the others see about it then. What is sent on the channel reaches it once its join went
+     * out. Not on: the socket is gone.
      */
-    public function seat(int64 $id, const string& $channel, bool $present) : Seat
+    public function seat(int64 $id, const string& $channel, bool $present, const json::Value& $info) : Seat
     {
         thread::locked<HubData> $held = $this->data->lock();
         if (!$held->value->members->has($id)) {
@@ -343,7 +461,11 @@ internal class HubState
         if ($fresh) {
             $m->present->push($channel);
         }
-        $held->value->follow($id, $channel);
+        if ($present) {
+            // the hub thread reads it later: a copy of its own
+            $m->infos[$channel] = $info->clone();
+        }
+        $held->value->wait($id, $channel);
         return Seat(true, $fresh);
     }
 
@@ -378,6 +500,7 @@ internal class HubState
         Unseat $u = Unseat();
         $u->present = without($m->present, $channel);
         $u->followed = without($m->channels, $channel);
+        $m->infos->remove($channel);
         if ($u->followed) {
             $held->value->unfollow($id, $channel);
         }
@@ -450,6 +573,29 @@ internal class HubState
         return $out;
     }
 
+    /**
+     * The presence members of this node's sockets, by channel, joined or about to: what the roster
+     * should list for this node.
+     */
+    public function presence() : map<string, array<Present>>
+    {
+        map<string, array<Present>> $out = [];
+        thread::locked<HubData> $held = $this->data->lock();
+        foreach ($held->value->members as $id => const &$m) {
+            foreach ($m->present as const &$channel) {
+                json::Value $info = json::nil();
+                if ($m->infos->has($channel)) {
+                    $info = $m->infos->at($channel)->clone();
+                }
+                if (!$out->has($channel)) {
+                    $out[$channel] = array<Present>();
+                }
+                $out->at($channel)->push(Present($this->idOf($id), $info));
+            }
+        }
+        return $out;
+    }
+
     public function kept() : array<Envelope>
     {
         thread::locked<HubData> $held = $this->data->lock();
@@ -458,16 +604,7 @@ internal class HubState
 
     public function close(const string& $id, int32 $code, const string& $reason) : bool
     {
-        int64 $local = $this->local($id);
-        Attached? $was = $this->take($local);
-        if ($was == null) {
-            return false;
-        }
-        Attached $gone = guard $was;
-        nexus::Socket $s = $gone->socket;
-        $this->tellGone($local, $gone);
-        $s->close($code, $reason);
-        return true;
+        return $this->evict($this->local($id), $code, $reason);
     }
 
     public function closeAll(int32 $code, const string& $reason) : void
@@ -481,11 +618,12 @@ internal class HubState
             $held->value->members = [];
             $held->value->held = [];
             $held->value->byChannel = [];
+            $held->value->waiting = [];
         }
         foreach ($all as &$a) {
             nexus::Socket $s = $a->socket;
+            $this->shut($s, $code, $reason);
             $this->tellGone($s->id(), $a);
-            $s->close($code, $reason);
         }
     }
 
@@ -502,12 +640,24 @@ internal class HubState
             return $none;
         }
         Attached $gone = guard $was;
+        $this->out->forget($id);
         $this->tellGone($id, $gone);
         return $gone->present->clone();
     }
 
+    /**
+     * Waits until every frame handed to a spool went out or was dropped, then forgets the sockets a
+     * send failed on; whether it forgot any, which may have handed the hub more work.
+     */
+    public function settle() : bool
+    {
+        $this->out->settle();
+        return $this->reap();
+    }
+
     public function run(HubJob $job) : void
     {
+        $this->reap();
         match ($job) {
             HubJob::join($id, $channel, $after, $roll, $fresh) => {
                 $this->join($id, $channel, $after, $roll, $fresh);
@@ -516,7 +666,7 @@ internal class HubState
                 nexus::Socket? $s = $this->socketOf($id);
                 if ($s != null) {
                     nexus::Socket $sock = guard $s;
-                    $sock->send(Frames::unsubscribed($channel));
+                    $this->offer($sock, Outgoing(Frames::unsubscribed($channel)));
                     string $gid = $this->idOf($id);
                     foreach ($this->watchers() as $o) {
                         $o->left($gid, $channel);
@@ -528,6 +678,9 @@ internal class HubState
             },
             HubJob::hear($n) => {
                 $this->hear($n);
+            },
+            HubJob::lapse => {
+                $this->lapse();
             },
         }
     }
@@ -549,17 +702,27 @@ internal class HubState
                 if ($p->joined) {
                     $frame = Frames::joined($p->channel, $p->member);
                 }
-                $this->send($p->channel, $this->local($p->member->id), $frame);
+                int64 $skip = $this->local($p->member->id);
+                {
+                    // a socket whose `subscribed` has not gone out hears it right after
+                    thread::locked<HubData> $held = $this->data->lock();
+                    $held->value->hold($p->channel, $skip, $frame);
+                }
+                $this->send($p->channel, $skip, $frame);
             },
         }
     }
 
+    /**
+     * Sends `subscribed` for `$channel`, then what `$after` missed (or `reset`), then the presence
+     * frames held since the seat, and only then lets live frames reach the socket: the catch up is
+     * read and the socket goes live under one lock, on this thread, so nothing arrives twice or
+     * before `subscribed`.
+     */
     private function join(int64 $id, const string& $channel, string? $after, Roll? $roll, bool $fresh) : void
     {
         nexus::Socket? $found = null;
-        array<string> $missed = [];
-        bool $reset = false;
-        string $cursor = '';
+        array<string> $frames = [];
         {
             thread::locked<HubData> $held = $this->data->lock();
             if (!$held->value->members->has($id)) {
@@ -570,27 +733,33 @@ internal class HubState
                 return;
             }
             $found = $m->socket;
-            $cursor = $held->value->last();
+            string $cursor = $held->value->last();
+            $frames[] = Frames::subscribed($channel, $cursor, $roll);
             if ($after != null) {
                 array<string>? $since = $held->value->since($after ?? '', $channel);
                 if ($since == null) {
-                    $reset = true;
+                    $frames[] = Frames::reset($channel, $cursor);
                 } else {
-                    $missed = $since ?? $missed;
+                    foreach ($since ?? array<string>() as const &$missed) {
+                        $frames[] = $missed;
+                    }
                 }
+            }
+            foreach ($held->value->admit($id, $channel) as const &$later) {
+                $frames[] = $later;
             }
         }
         nexus::Socket $s = guard $found;
-        bool $ok = $s->send(Frames::subscribed($channel, $cursor, $roll));
-        if ($reset) {
-            $ok = $ok && $s->send(Frames::reset($channel, $cursor));
-        }
-        foreach ($missed as const &$frame) {
-            $ok = $ok && $s->send($frame);
-        }
-        if (!$ok) {
-            // gone tells `dropped` with this channel still present, so the roster forgets it
-            $this->gone($id);
+        bool $queued = $this->offer($s, function[$s, mv $frames]() : bool {
+            foreach ($frames as const &$f) {
+                if (!$s->send($f)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+        if (!$queued) {
+            // the socket was dropped with this channel still present, so the roster forgets it
             return;
         }
         if ($roll != null && $fresh) {
@@ -623,7 +792,26 @@ internal class HubState
     }
 
     /**
-     * Sends `$frame` to the sockets following `$channel`, but the socket `$skip`; how many it
+     * Notes may have been missed (the relay lost its broker for a while): the ring is forgotten,
+     * so no cursor handed out before catches up from it, and every followed channel hears `reset`.
+     */
+    private function lapse() : void
+    {
+        array<string> $channels = [];
+        {
+            thread::locked<HubData> $held = $this->data->lock();
+            $held->value->lapse();
+            foreach ($held->value->byChannel as $name => const &$ids) {
+                $channels[] = $name;
+            }
+        }
+        foreach ($channels as const &$channel) {
+            $this->send($channel, -1, Frames::reset($channel, ''));
+        }
+    }
+
+    /**
+     * Hands `$frame` to the sockets following `$channel`, but the socket `$skip`; how many it
      * reached.
      */
     private function send(const string& $channel, int64 $skip, const string& $frame) : usize
@@ -633,15 +821,43 @@ internal class HubState
             thread::locked<HubData> $held = $this->data->lock();
             $to = $held->value->following($channel, $skip);
         }
+        Outgoing $one = Outgoing($frame);
         usize $reached = 0;
         foreach ($to as $s) {
-            if ($s->send($frame)) {
+            if ($this->offer($s, $one)) {
                 $reached = $reached + 1;
-            } else {
-                $this->gone($s->id());
             }
         }
         return $reached;
+    }
+
+    private function offer(nexus::Socket $s, Outgoing $one) : bool
+    {
+        return $this->offer($s, function[$s, $one]() : bool {
+            return $s->send($one->text);
+        });
+    }
+
+    /**
+     * Queues `$send` on the spool of `$s`. A socket whose spool is full is closed with 1008 and
+     * forgotten, one a send failed on is forgotten; false for both.
+     */
+    private function offer(nexus::Socket $s, function<bool()> $send) : bool
+    {
+        match ($this->out->put($s->id(), $send)) {
+            nexus::Spooled::queued => {
+                return true;
+            },
+            nexus::Spooled::full => {
+                $this->evict($s->id(), 1008, 'too slow to keep up');
+                return false;
+            },
+            nexus::Spooled::gone => {
+                $this->gone($s->id());
+                return false;
+            },
+        }
+        return false;
     }
 
     /**
@@ -658,22 +874,50 @@ internal class HubState
                 }
             }
         }
-        array<Attached> $to = [];
+        usize $closed = 0;
         foreach ($ids as const &$id) {
-            Attached? $was = $this->take($id);
-            if ($was != null) {
-                Attached $gone = guard $was;
-                $to[] = $gone;
+            if ($this->evict($id, 4001, 'credential_ended')) {
+                $closed = $closed + 1;
             }
         }
-        foreach ($to as &$a) {
-            nexus::Socket $s = $a->socket;
-            $this->tellGone($s->id(), $a);
-            $s->close(4001, 'credential_ended');
-        }
         foreach ($this->watchers() as $o) {
-            $o->ended($end, $to->count());
+            $o->ended($end, $closed);
         }
+    }
+
+    /**
+     * Forgets the socket `$id`, closes it with `$code` once the send under way is through (what
+     * still waits for it is dropped) and tells the observers; false when it is not here.
+     */
+    private function evict(int64 $id, int32 $code, const string& $reason) : bool
+    {
+        Attached? $was = $this->take($id);
+        if ($was == null) {
+            return false;
+        }
+        Attached $gone = guard $was;
+        $this->shut($gone->socket, $code, $reason);
+        $this->tellGone($id, $gone);
+        return true;
+    }
+
+    // closes `$s` on its spool, so a socket that stopped reading never holds up who closes it
+    private function shut(nexus::Socket $s, int32 $code, const string& $reason) : void
+    {
+        string $why = $reason;
+        $this->out->shut($s->id(), function[$s, $code, $why]() : void {
+            $s->close($code, $why);
+        });
+    }
+
+    // forgets the sockets a send failed on; whether there were any
+    private function reap() : bool
+    {
+        array<int64> $failed = $this->out->failed();
+        foreach ($failed as const &$id) {
+            $this->gone($id);
+        }
+        return !$failed->empty();
     }
 
     /**

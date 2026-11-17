@@ -63,7 +63,8 @@ public class Traces
     }
 
     /**
-     * The current thread's trace, or null.
+     * The current thread's trace, or null. With traces entered inside one another it is the one
+     * entered last, the one `leave` forgets first.
      */
     public const function here() : Trace?
     {
@@ -72,9 +73,11 @@ public class Traces
         }
         thread::locked<array<Here>> $held = $this->shards[Traces::shard()]->lock();
         thread::id $me = thread::current();
-        foreach ($held->value as const &$h) {
-            if ($h->thread == $me) {
-                return $h->trace;
+        usize $i = $held->value->count();
+        while ($i > 0) {
+            $i = $i - 1;
+            if ($held->value[$i]->thread == $me) {
+                return $held->value[$i]->trace;
             }
         }
         return null;

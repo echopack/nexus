@@ -15,14 +15,17 @@ use std::time;
  * nexus::connect::carbon::Extension(),
  * ```
  *
- * `page` is the app's page the browser comes back to with `?attempt=<id>`; it posts the attempt
- * and the binding it kept to the app's action, which claims it (`Connect::claim`).
+ * `page` is the app's page the browser comes back to with `?attempt=<id>&proof=<proof>`; it posts
+ * the attempt, the proof and the binding it kept to the app's action, which claims it
+ * (`Connect::claim`). `emailLinking` says when a first sign in links to a user with its email
+ * (`EmailLinking`; by default only when the app verified that user's email).
  */
 public class Extension : nexus::Extension
 {
     public const string $page;
     public array<Connector> $connectors;
     public const Stores $stores;
+    public const EmailLinking $emailLinking;
     public calendar::Clock $clock;
     internal nexus::auth::Throttle $starts;
 
@@ -30,12 +33,14 @@ public class Extension : nexus::Extension
         page: const string& $page = '/',
         connectors: array<Connector> $connectors = array<Connector>(),
         stores: Stores $stores = .memory,
+        emailLinking: EmailLinking $emailLinking = .verified,
         clock: calendar::Clock $clock = calendar::SystemClock()
     )
     {
         $this->page = $page;
         $this->connectors = mv $connectors;
         $this->stores = $stores;
+        $this->emailLinking = $emailLinking;
         $this->clock = $clock;
         $this->starts = nexus::auth::Throttle(30, .mins(15));
     }
@@ -84,8 +89,9 @@ public class Extension : nexus::Extension
         $s->bind<Connect>(scope: function[$connectors, $clock, $page](Container $c) : Connect {
             return Connect($c->get<AttemptStore>(), $connectors, $c->get<Fetch>(), $clock, $page);
         });
-        $s->bind<Accounts>(scope: function[$clock](Container $c) : Accounts {
-            return Accounts($c->get<LinkStore>(), $clock);
+        EmailLinking $emailLinking = $this->emailLinking;
+        $s->bind<Accounts>(scope: function[$clock, $emailLinking](Container $c) : Accounts {
+            return Accounts($c->get<LinkStore>(), $clock, emailLinking: $emailLinking);
         });
         $s->bindAction<StartSignIn>(method: .post, path: '/auth/connect/{provider}', function[$starts](Container $c) : StartSignIn {
             return StartSignIn($c->get<Connect>(), $starts);

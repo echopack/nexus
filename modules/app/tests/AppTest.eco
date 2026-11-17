@@ -190,6 +190,19 @@ internal class AStamp : nexus::Middleware
 }
 
 /**
+ * Adds one `X-Count` line each time it runs, to see a middleware that runs twice.
+ */
+internal class ACount : nexus::Middleware
+{
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        nexus::Response $res = $next->run($payload);
+        $res->headers->add('X-Count', 'once');
+        return $res;
+    }
+}
+
+/**
  * The app's own around every request.
  */
 internal class AEvery : nexus::Middleware
@@ -249,6 +262,11 @@ internal class AApp : nexus::Extension
      */
     public bool $configuredThreads = false;
 
+    /**
+     * Routes the same path twice on one action, with middleware before and after.
+     */
+    public bool $again = false;
+
     public function name() : string
     {
         return 'app-test';
@@ -261,6 +279,14 @@ internal class AApp : nexus::Extension
         if ($this->noMethods) {
             array<nexus::Method> $none = [];
             $app->action<AShow>()->route($none, '/nowhere/{id}');
+        }
+        if ($this->again) {
+            $app->bind<ACount>(scoped: () => ACount());
+            $app->action<AShow>()
+                ->middleware<ACount>()
+                ->route([.get], '/again/{id}')
+                ->route([.post], '/again/{id}')
+                ->middleware<AStamp>();
         }
         if ($this->configuredThreads) {
             $app->bindAsyncQueue<AWorkerLane>()
@@ -382,6 +408,26 @@ test middleware_wraps_every_route_of_the_action
     $api = aApp()->api();
     $api->get('/items/1')->header('X-Stamp', 'yes');
     $api->get('/things/1')->header('X-Stamp', 'yes');
+}
+
+internal function aAnswer(const ecotest::http::Reply& $reply) : ecotest::http::Response
+{
+    result<ecotest::http::Response, ecotest::http::TransportError> $r = $reply->response;
+    ecotest::http::Response $got = guard $r;
+    return $got;
+}
+
+test a_path_routed_twice_runs_its_middleware_once
+{
+    $a = AApp();
+    $a->again = true;
+    TestApp $app = guard aBoot($a, true);
+    $api = $app->api();
+    ecotest::http::Response $got = aAnswer($api->get('/again/1')->status(200));
+    expect($got->headers('X-Count'))->size(1);
+    expect($got->headers('X-Stamp'))->size(1);
+    ecotest::http::Response $posted = aAnswer($api->post('/again/1', json: '{}')->status(200));
+    expect($posted->headers('X-Count'))->size(1);
 }
 
 test the_apps_middleware_wraps_every_request

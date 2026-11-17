@@ -89,6 +89,26 @@ test traces_answer_the_trace_the_current_thread_entered
     expect($traces->here() == null)->yes(says: 'left');
 }
 
+test a_nested_enter_marks_the_inner_trace_until_it_leaves
+{
+    $traces = Traces();
+    $outer = Trace();
+    $inner = Trace();
+    $traces->enter($outer);
+    $traces->enter($inner);
+    Trace $here = guard $traces->here();
+    $here->close($here->open(.cache, 'inner read', 'k'));
+    expect($inner->marks())->size(1);
+    expect($outer->marks())->size(0);
+    $traces->leave();
+    Trace $back = guard $traces->here();
+    $back->close($back->open(.cache, 'outer read', 'k'));
+    expect($outer->marks())->size(1);
+    expect($inner->marks())->size(1);
+    $traces->leave();
+    expect($traces->here() == null)->yes(says: 'both left');
+}
+
 // what the threads of a test count between them
 #[atomic]
 internal class TrTally

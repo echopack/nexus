@@ -181,7 +181,7 @@ The `json:` form writes the document as compact JSON on one line. `send` returns
 
 ### Feeding many streams
 
-You'll usually send the same event to everyone watching. `nexus::EventStreams` is a set of streams for exactly that: `publish` queues an event, and a thread of the set's own writes it to every stream, so a slow client never holds up the others. Keep one per feed, in a shared service:
+You'll usually send the same event to everyone watching. `nexus::EventStreams` is a set of streams for exactly that: `publish` queues an event and returns at once. Each stream has a queue of its own, which a few writer threads of the set's work through, so a slow client holds up only its own queue, never the others. A stream that falls more than `room` events behind (256 unless you build the set with another, `nexus::EventStreams(1024)`) is closed; its browser reconnects with `Last-Event-ID` and catches up, like after any other drop. Keep one per feed, in a shared service:
 
 ```echo title="src/Feeds/StatsFeed.eco"
 #[atomic]

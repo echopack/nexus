@@ -4,12 +4,14 @@ use std::fs;
 use std::io;
 use std::thread;
 
-// the open file and what rotation compares, held under the sink's lock
+// the open file and what rotation compares, held under the sink's lock. `open` is false after a
+// rotation that could not reopen the file: nothing rotates until it is open again
 internal struct Handle
 {
     public io::file $file;
     public uint64 $size;
     public int64 $day;
+    public bool $open = true;
 }
 
 /**
@@ -65,15 +67,26 @@ public class File : Sink
         string $line = $this->format->render($e, false);
         $line->push(10);
         thread::locked<Handle> $held = $this->handle->lock();
+        // a rotation that could not reopen the file: try again, and never rotate around it
+        if (!$held->value->open && !$this->reopen($held->value)) {
+            return;
+        }
+        int64 $day = Stamp::day($e->at);
         bool $turn = match ($this->rotate) {
             .never => false,
-            .daily => Stamp::day($e->at) != $held->value->day,
+            // forward only: an entry stamped before midnight may arrive after one stamped after it
+            .daily => $day > $held->value->day && $held->value->size > 0,
             .size($max) => $held->value->size > 0 && $held->value->size + ($line->size() as uint64) > $max,
         };
         if ($turn) {
             $this->turn($held->value);
+            if (!$held->value->open) {
+                return;
+            }
         }
-        $held->value->day = Stamp::day($e->at);
+        if ($day > $held->value->day) {
+            $held->value->day = $day;
+        }
         usize $n = guard $held->value->file->write($line) else ($err) {
             io::eprintln("nexus: cannot write {$this->path->string()}: {$err}");
             return;
@@ -87,6 +100,9 @@ public class File : Sink
     public function flush() : void
     {
         thread::locked<Handle> $held = $this->handle->lock();
+        if (!$held->value->open) {
+            return;
+        }
         if ($held->value->file->flush()->failed()) {
             io::eprintln("nexus: cannot flush {$this->path->string()}");
         }
@@ -106,13 +122,16 @@ public class File : Sink
         return $this->path->dirname() / $name;
     }
 
-    // shifts the older files up by one, moves the current one to .1 and reopens
+    // shifts the older files up by one, moves the current one to .1 and reopens. A current file
+    // that is gone (removed by hand) has nothing to shift: the history stays where it is
     private function turn(Handle& $h) : void
     {
         $h->file->close();
-        if ($this->keep == 0) {
+        $h->open = false;
+        bool $there = fs::exists($this->path)->or(false);
+        if ($there && $this->keep == 0) {
             fs::remove($this->path);
-        } else {
+        } else if ($there) {
             uint32 $i = $this->keep;
             fs::remove($this->older($i));
             while ($i > 1) {
@@ -121,11 +140,24 @@ public class File : Sink
             }
             fs::rename($this->path, $this->older(1));
         }
+        $this->reopen($h);
+    }
+
+    // opens the current file again for appending, its size what is on disk; false, said on
+    // stderr, when it cannot
+    private function reopen(Handle& $h) : bool
+    {
         io::file $f = guard fs::append($this->path) else ($err) {
             io::eprintln("nexus: cannot reopen {$this->path->string()}: {$err}");
-            return;
+            return false;
         };
         $h->file = mv $f;
+        $h->open = true;
         $h->size = 0;
+        fs::fileinfo $info = guard fs::info($this->path) else {
+            return true;
+        };
+        $h->size = $info->size as uint64;
+        return true;
     }
 }

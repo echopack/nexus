@@ -41,20 +41,25 @@ public class Observed : Store
         return $this->inner->extend($task, $until);
     }
 
-    public function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : status<nexus::Problem>
+    public function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : result<bool, nexus::Problem>
     {
-        try $this->inner->done($task, $now, $spawned);
-        if ($this->watchers->any()) {
+        bool $stored = try $this->inner->done($task, $now, $spawned);
+        if ($stored && $this->watchers->any()) {
             foreach ($spawned->tasks as const &$t) {
                 $this->tell($t, .pushed, $now);
             }
         }
-        return .ok;
+        return .ok($stored);
     }
 
     public function retry(const StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
     {
         return $this->inner->retry($task, $at, $error);
+    }
+
+    public function defer(const StoredTask& $task, time::timestamp $at, const string& $why) : status<nexus::Problem>
+    {
+        return $this->inner->defer($task, $at, $why);
     }
 
     public function fail(const StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>

@@ -3,7 +3,8 @@ namespace nexus::files::s3;
 /**
  * Opens `s3://bucket/prefix` disks with the credentials, region and endpoint of
  * `NEXUS_FILES_S3_*`. List it after nexus-files; a disk on S3 is checked at boot with one listing,
- * so a bucket that cannot be reached stops the app before it serves.
+ * so a bucket that cannot be reached stops the app before it serves. A `NEXUS_FILES_EXPIRES` S3
+ * cannot sign (under a second, past seven days) stops it too.
  *
  * ```echo
  * nexus::files::Extension(),
@@ -34,7 +35,12 @@ public class Extension : nexus::Extension
             return .error(.extension('nexus-files-s3', "NEXUS_FILES_S3_TIMEOUT is {$config->timeout}; expected more than 0s"));
         }
         calendar::Clock $clock = $this->clock;
-        $table->opener('s3', function[$config, $clock](string $url) : result<nexus::files::Store, string> {
+        std::time::duration $expires = $table->links->expires;
+        $table->opener('s3', function[$config, $clock, $expires](string $url) : result<nexus::files::Store, string> {
+            // a link without a time of its own lasts NEXUS_FILES_EXPIRES, which S3 has to sign
+            if (!S3Store::lasts($expires)) {
+                return .error("NEXUS_FILES_EXPIRES is {$expires}; an S3 link lasts 1s to 7 days");
+            }
             Bucket $b = try Bucket::of($url, $config);
             return .ok(S3Store($b, $config, clock: $clock) as nexus::files::Store);
         });

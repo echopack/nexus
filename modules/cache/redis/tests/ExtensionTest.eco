@@ -18,6 +18,23 @@ test a_server_that_does_not_answer_stops_the_boot
     expect(str::join($e->lines(), '; '))->has('cannot reach redis://127.0.0.1:1/0');
 }
 
+test an_empty_prefix_stops_the_boot
+{
+    nexus::BootError $e = expect(TestApp::attempt([nexus::cache::Extension(), nexus::cache::redis::Extension()], ['NEXUS_CACHE_URL' => 'redis://127.0.0.1:1/0', 'NEXUS_CACHE_PREFIX' => '']))->fails();
+    expect(str::join($e->lines(), '; '))->has('NEXUS_CACHE_PREFIX is empty');
+}
+
+test a_store_without_a_prefix_refuses_to_flush
+{
+    // a pool never connects until a command, and flush refuses before sending one
+    redis::Options $o = guard redis::Options::parse('redis://127.0.0.1:1/0');
+    redis::Pool $pool = redis::Pool($o, redis::PoolOptions());
+    nexus::cache::redis::RedisStore $store = nexus::cache::redis::RedisStore($pool, '', 'redis://127.0.0.1:1/0');
+    nexus::cache::CacheError $e = expect($store->flush())->fails();
+    expect($e->message())->has('flush needs a key prefix');
+    $pool->close();
+}
+
 test tls_is_refused_until_the_client_speaks_it
 {
     nexus::BootError $e = expect(TestApp::attempt([nexus::cache::Extension(), nexus::cache::redis::Extension()], ['NEXUS_CACHE_URL' => 'rediss://127.0.0.1:6380']))->fails();

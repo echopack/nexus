@@ -70,14 +70,22 @@ public class Grants
     }
 
     /**
-     * Trades a code, with the verifier of its challenge, for a new grant.
+     * Trades a code, with the verifier of its challenge, for a new grant. A code that comes back
+     * after it was redeemed may have been stolen, so the grant it was redeemed for ends
+     * (RFC 6749, section 4.1.2).
      */
     public function exchange(const string& $code, const string& $client, const string& $redirect, const string& $verifier) : result<Pair, OAuthError>
     {
-        Code? $taken = try $this->store->take(nexus::auth::Secrets::hash($code));
+        // the grant's id is the access token's, settled before the code is marked with it
+        $access = nexus::auth::Token(fresh: Grants::ACCESS);
+        Code? $taken = try $this->store->take(nexus::auth::Secrets::hash($code), $access->id);
         Code $c = guard $taken else {
             return .error(.invalidGrant('the code is unknown, used or expired'));
         };
+        if ($c->used()) {
+            try $this->drop($c->grant);
+            return .error(.invalidGrant('the code was already used; connect the app again'));
+        }
         time::timestamp $now = $this->clock->now();
         if ($c->expiresAt < $now) {
             return .error(.invalidGrant('the code expired'));
@@ -96,7 +104,6 @@ public class Grants
         if ($known == null) {
             return .error(.invalidClient('the client is no longer registered'));
         }
-        $access = nexus::auth::Token(fresh: Grants::ACCESS);
         $refresh = nexus::auth::Token($prefix: Grants::REFRESH, $id: $access->id, $secret: nexus::auth::Secrets::hex(32));
         $g = Grant($id: $access->id, $client: $client, $subject: $c->subject, $scope: $c->scope, $resource: $c->resource,
             $accessHash: $access->hash(), $accessExpiresAt: $now + $this->config->access,
@@ -242,6 +249,21 @@ public class Grants
             return $this->drop($g->id);
         }
         return .ok;
+    }
+
+    /**
+     * The signed in user behind the consent page and the account page: a credential the app issued
+     * to its own frontend with no scopes, the one that stands for all of the user. Anything less is
+     * a 403, a token the app restricted to some scopes as much as one an OAuth client holds, since
+     * handing out access or taking it back is more than any scope allows.
+     */
+    public static function user(nexus::Payload& $payload) : result<nexus::auth::Identity, nexus::Problem>
+    {
+        $me = try $payload->state<nexus::auth::Identity>();
+        if (!$me->firstParty() || !$me->scopes->empty()) {
+            return .error(.forbidden('only the app itself, signed in without scopes, answers for its user here'));
+        }
+        return .ok($me);
     }
 
     internal function checked(AuthRequest? $found) : result<Asked, nexus::Problem>

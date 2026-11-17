@@ -295,3 +295,67 @@ test a_bad_include_stops_a_create_before_the_write
     expect($r->crud()->create($payload, Post($authorId: 7, $title: 'fresh'))->failure()->status())->is(400);
     expect($r->fake->count())->is(0);
 }
+
+test a_create_the_scope_hides_still_answers_with_the_record
+{
+    $r = Rig();
+    // the read back finds nothing: the record is answered as written, not as a 404
+    $r->fake->written($insertId: 11)->rows([]);
+    $payload = payload('/posts?include=author');
+    $crud = $r->crud();
+    $crud->scope = function(PostQuery $q) : PostQuery {
+        return $q->where(PostTable::$authorId == 1);
+    };
+    $made = guard $crud->create($payload, Post($authorId: 7, $title: 'fresh'));
+    expect($made->status)->is(201);
+    expect($made->body)->is('{"data":{"id":11,"title":"fresh"}}');
+    // and it was read past the scope
+    expect($r->fake->count())->is(2);
+    expect($r->fake->last())->starts('SELECT');
+    expect($r->fake->last()->find('`author_id` = ?') < $r->fake->last()->size())->no(says: 'the read back is not scoped');
+}
+
+test a_create_reads_back_what_the_request_includes
+{
+    $r = Rig();
+    $r->fake->written($insertId: 11)->rows([row(11, 'fresh')])->rows([UserTable()->row(User($id: 7, $email: 'ada@example.com', $name: 'Ada'))]);
+    $payload = payload('/posts?include=author');
+    $made = guard $r->crud()->create($payload, Post($authorId: 7, $title: 'fresh'));
+    expect($made->status)->is(201);
+    expect($made->body)->is('{"data":{"id":11,"title":"fresh","author":"Ada"}}');
+}
+
+test authorize_sees_an_update_before_and_after_the_fill
+{
+    $r = Rig();
+    $r->fake->rows([row(3, 'mine')]);
+    $payload = payload('/posts/3');
+    $crud = $r->crud();
+    // the request may write the posts of author 7 only
+    $crud->authorize = function(nexus::crud::Verb $v, const Post& $p) : status<nexus::Problem> {
+        if ($p->authorId != 7) {
+            return .error(.forbidden('not yours'));
+        }
+        return .ok;
+    };
+    $p = $crud->update($payload, 3, function(Post& $post) : status<nexus::Problem> {
+        $post->authorId = 9;
+        return .ok;
+    })->failure();
+    expect($p->status())->is(403);
+    // only the read ran
+    expect($r->fake->count())->is(1);
+}
+
+test an_update_answers_with_the_relations_after_the_change
+{
+    $r = Rig();
+    $r->fake->rows([row(3, 'old')])->rows([UserTable()->row(User($id: 7, $email: 'ada@example.com', $name: 'Ada'))])->written();
+    $r->fake->rows([PostTable()->row(Post($id: 3, $authorId: 8, $title: 'old'))])->rows([UserTable()->row(User($id: 8, $email: 'bo@example.com', $name: 'Bo'))]);
+    $payload = payload('/posts/3?include=author');
+    string $p = body($r->crud()->update($payload, 3, function(Post& $post) : status<nexus::Problem> {
+        $post->authorId = 8;
+        return .ok;
+    }));
+    expect($p)->is('{"data":{"id":3,"title":"old","author":"Bo"}}');
+}

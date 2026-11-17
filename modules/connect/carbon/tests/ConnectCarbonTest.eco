@@ -4,10 +4,10 @@
  */
 
 use nexus::connect::{AttemptStore, Attempt, ExternalIdentity, LinkStore, Link, Oidc};
-use nexus::connect::carbon::{AttemptRow, AttemptRowTable, LinkRow, LinkRowTable};
+use nexus::connect::carbon::{AttemptRow, AttemptRowTable, LinkRow, LinkRowTable, HashConnectLinks, AddConnectProof};
 use nexus::testing::TestApp;
 use carbon::fake;
-use hydrahon::Mysql;
+use hydrahon::{Mysql, Value, DateTime};
 use std::time;
 use ecotest::expect;
 
@@ -76,10 +76,11 @@ test an_attempt_keeps_who_signed_in
     json::Value $claims = json::object();
     $claims['picture'] = json::str('https://pics.test/ann');
     $a->identity = ExternalIdentity($provider: 'acme', $subject: 'p1', $email: 'ann@example.com', $emailVerified: true, $name: 'Ann', $claims: $claims);
+    $a->proofHash = nexus::auth::Secrets::hash('the-proof');
     $r->fake->written();
     bool $mine = guard $r->attempts()->settle($a);
     expect($mine)->yes(says: 'the first settle writes the row');
-    expect($r->fake->last())->starts('UPDATE `connect_attempts` SET `error` = ?, `external_subject` = ?');
+    expect($r->fake->last())->starts('UPDATE `connect_attempts` SET `error` = ?, `proof_hash` = ?, `external_subject` = ?');
     $r->fake->written(0);
     bool $again = guard $r->attempts()->settle($a);
     expect($again)->no(says: 'a settled row is not written again');
@@ -91,6 +92,7 @@ test an_attempt_keeps_who_signed_in
     expect($who->email)->is('ann@example.com');
     expect($who->emailVerified)->yes(says: 'the flag survives the row');
     expect(json::dump($who->claims))->has('pics.test');
+    expect($back->proofHash)->is(nexus::auth::Secrets::hash('the-proof'));
 
     $r->fake->written(1);
     expect(spent($r->attempts(), 'a1'))->yes(says: 'the delete that removed the row spent it');
@@ -116,7 +118,77 @@ test a_link_is_kept_once_per_outside_identity
     expect($r->fake->last())->starts('INSERT INTO `connect_links`');
     $r->fake->rows([LinkRowTable()->row(.of($l))]);
     expect($r->links()->link($l))->fails();
-    expect(LinkRow::of($l)->id)->is('acme:p1');
+    expect(LinkRow::of($l)->id)->is(nexus::auth::Secrets::hash('acme:p1'));
+}
+
+test a_link_is_keyed_so_no_collation_folds_one_person_into_another
+{
+    // MySQL's default collation finds `acme:alice` for `acme:Alice`; their hashes differ in more than case
+    expect(LinkRow::key('acme', 'Alice'))->isNot(LinkRow::key('acme', 'alice'));
+    expect(LinkRow::key('acme', 'Alice'))->length(64);
+    expect(nexus::auth::Secrets::isHex(LinkRow::key('acme', 'Alice')))->yes(says: 'the key is lowercase hex');
+
+    $r = Rig(true);
+    $r->fake->rows([]);
+    Link? $none = guard $r->links()->find('acme', 'Alice');
+    expect($none)->none();
+    array<Value> $byHash = [Value::from(LinkRow::key('acme', 'Alice'))];
+    expect($r->fake->sent(0, $byHash))->yes(says: 'the lookup is by the hash');
+
+    ecotest::step('the links of a subject are the ones with exactly that subject');
+    $mine = Link($provider: 'acme', $external: 'p1', $subject: 'alice', $createdAt: $r->clock->now());
+    $theirs = Link($provider: 'acme', $external: 'p2', $subject: 'Alice', $createdAt: $r->clock->now());
+    $r->fake->rows([LinkRowTable()->row(.of($mine)), LinkRowTable()->row(.of($theirs))]);
+    array<Link> $found = guard $r->links()->of('alice');
+    expect($found)->size(1);
+    expect($found[0]->external)->is('p1');
+}
+
+test the_migration_adds_the_proof_to_the_attempts
+{
+    $fake = fake::Driver<Mysql>();
+    array<array<Value>> $locked = [[Value::from(1 as int64)]];
+    $fake->rows($locked)->written(0)->rows([])->written()->written()->rows($locked);
+    array<carbon::migrate::Step> $steps = [carbon::migrate::Step('20261117000700_add_connect_proof', AddConnectProof(), true)];
+    carbon::Migrator $m = carbon::Migrator(carbon::DB($fake, clock: calendar::FixedClock(time::timestamp::from_unix_secs(0))), $steps, carbon::ddl::Mysql());
+    array<string> $done = guard $m->up();
+    expect($done)->size(1);
+    expect($fake->texts()[3])->is("ALTER TABLE `connect_attempts` ADD COLUMN `proof_hash` VARCHAR(64) NOT NULL DEFAULT ''");
+}
+
+test the_migration_rekeys_the_links_by_their_hash
+{
+    $fake = fake::Driver<Mysql>();
+    array<array<Value>> $links = [
+        [Value::from('acme:p1'), Value::from('acme'), Value::from('p1')],
+        [Value::from('google:Alice'), Value::from('google'), Value::from('Alice')],
+    ];
+    array<array<Value>> $locked = [[Value::from(1 as int64)]];
+    $fake->rows($locked)->written(0)->rows([])
+        ->rows($links)->written()->written()
+        ->written()
+        ->rows($locked);
+    array<carbon::migrate::Step> $steps = [carbon::migrate::Step('20261117000710_hash_connect_links', HashConnectLinks(), true)];
+    carbon::Migrator $m = carbon::Migrator(carbon::DB($fake, clock: calendar::FixedClock(time::timestamp::from_unix_secs(0))), $steps, carbon::ddl::Mysql());
+    array<string> $done = guard $m->up();
+    expect($done)->size(1);
+    array<string> $sent = $fake->texts();
+    expect($sent[3])->is('SELECT `connect_links`.`id`, `connect_links`.`provider`, `connect_links`.`external` FROM `connect_links`');
+    expect($sent[4])->is('UPDATE `connect_links` SET `id` = ? WHERE `connect_links`.`id` = ?');
+    array<Value> $first = [Value::from(nexus::auth::Secrets::hash('acme:p1')), Value::from('acme:p1')];
+    array<Value> $second = [Value::from(nexus::auth::Secrets::hash('google:Alice')), Value::from('google:Alice')];
+    expect($fake->sent(4, $first) || $fake->sent(5, $first))->yes(says: 'acme:p1 is rekeyed by its hash');
+    expect($fake->sent(4, $second) || $fake->sent(5, $second))->yes(says: 'google:Alice is rekeyed by its hash');
+
+    ecotest::step('down puts the text back');
+    $fake->rows($locked)->written(0)->rows([[Value::from('20261117000710_hash_connect_links'), Value::from(1 as int64), Value::from(DateTime(2026, 11, 17))]])
+        ->rows([[Value::from(nexus::auth::Secrets::hash('acme:p1')), Value::from('acme'), Value::from('p1')]])->written()
+        ->written()
+        ->rows($locked);
+    usize $before = $fake->count();
+    array<string> $undone = guard $m->down();
+    expect($undone)->size(1);
+    expect($fake->sent($before + 4, [Value::from('acme:p1'), Value::from(nexus::auth::Secrets::hash('acme:p1'))]))->yes(says: 'the hash goes back to the text');
 }
 
 test prune_drops_expired_attempts

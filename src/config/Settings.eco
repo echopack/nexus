@@ -164,12 +164,25 @@ public class Settings
         return null;
     }
 
+    /**
+     * The text of `$name`, or null when no source has it. A required setting set to nothing
+     * (`NAME=`, what `env --dotenv` writes for one to fill in) is missing too; an optional one
+     * keeps its empty value.
+     */
     private function raw(const string& $name, bool $required) : string?
     {
         string? $v = $this->env->get($name);
-        if ($v == null && $required) {
-            $this->errors[] = .missing($name);
+        if (!$required) {
+            return $v;
         }
-        return $v;
+        string $text = guard $v else {
+            $this->errors[] = .missing($name);
+            return null;
+        };
+        if (str::trim($text)->empty()) {
+            $this->errors[] = .missing($name);
+            return null;
+        }
+        return $text;
     }
 }

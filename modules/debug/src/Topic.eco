@@ -1,6 +1,7 @@
 namespace nexus::debug;
 
 use std::thread;
+use std::time;
 
 /**
  * A live feed of the console: the log, the requests, the jobs. Whatever has something to tell
@@ -61,13 +62,23 @@ public class Topic
 
     /**
      * Sends `$s` every kept event after number `$after` (at most `$limit`), then each new one as it
-     * is published, until it ends.
+     * is published, until it ends. A stream opened with credential `$who` is ended when that
+     * credential ends (`end`); one with a `$life` is ended before the first event after it went
+     * by, so its client comes back through the gate.
      */
-    public function follow(nexus::EventStream $s, uint64 $after, usize $limit) : void
+    public function follow(nexus::EventStream $s, uint64 $after, usize $limit, nexus::auth::Identity? $who = null, time::duration $life = time::duration::zero()) : void
     {
         thread::locked<bool> $held = $this->gate->lock();
         $this->followers->add(1);
-        $this->mail->put(TopicJob::join($s, $this->ring->since($after, $limit)));
+        $this->mail->put(TopicJob::join($s, $this->ring->since($after, $limit), Follower($s, $who, $life, time::instant::now())));
+    }
+
+    /**
+     * Ends the streams following the topic that were opened with a credential `$e` covers.
+     */
+    public function end(const nexus::auth::Ending& $e) : void
+    {
+        $this->mail->put(TopicJob::end($e));
     }
 
     /**
@@ -101,19 +112,48 @@ public class Topic
 internal enum TopicJob
 {
     case publish(Event $e);
-    case join(nexus::EventStream $stream, array<Event> $backlog);
+    case join(nexus::EventStream $stream, array<Event> $backlog, Follower $follower);
     case leave(nexus::EventStream $stream);
+    case end(nexus::auth::Ending $ending);
+}
+
+/**
+ * A stream following a topic: who opened it and since when, so it ends with their credential or
+ * once its life went by.
+ */
+internal struct Follower
+{
+    public nexus::EventStream $stream;
+    public nexus::auth::Identity? $who;
+    public time::duration $life;
+    public time::instant $since;
+
+    public const function expired() : bool
+    {
+        return $this->life > time::duration::zero() && $this->since->elapsed() >= $this->life;
+    }
+
+    public const function covered(const nexus::auth::Ending& $e) : bool
+    {
+        nexus::auth::Identity $id = guard $this->who else {
+            return false;
+        };
+        return $e->covers($id);
+    }
 }
 
 /**
  * What a topic's thread works on: it encodes events and hands them to the streams, in the order
- * the topic put them.
+ * the topic put them, and ends the streams whose credential ended or whose life went by.
  */
 #[atomic]
 internal class TopicSender
 {
     private string $name;
     private nexus::EventStreams $streams;
+
+    // the streams following, by id; only the topic's thread touches it
+    private map<int64, Follower> $followers = [];
 
     public constructor(const string& $name, nexus::EventStreams $streams)
     {
@@ -125,9 +165,14 @@ internal class TopicSender
     {
         match ($job) {
             TopicJob::publish($e) => {
+                // a stream past its life gets nothing more; its client comes back through the gate
+                $this->endWhere(function(const Follower& $f) : bool {
+                    return $f->expired();
+                });
                 $this->streams->publish($this->event($e));
             },
-            TopicJob::join($s, $backlog) => {
+            TopicJob::join($s, $backlog, $follower) => {
+                $this->followers[$s->id()] = $follower;
                 array<nexus::ServerEvent> $encoded = [];
                 foreach ($backlog as const &$e) {
                     $encoded[] = $this->event($e);
@@ -135,8 +180,29 @@ internal class TopicSender
                 $this->streams->join($s, mv $encoded);
             },
             TopicJob::leave($s) => {
+                $this->followers->remove($s->id());
                 $this->streams->remove($s);
             },
+            TopicJob::end($ending) => {
+                $this->endWhere(function[$ending](const Follower& $f) : bool {
+                    return $f->covered($ending);
+                });
+            },
+        }
+    }
+
+    // closes and forgets the streams `$ends` picks
+    private function endWhere(function<bool(const Follower&)> $ends) : void
+    {
+        array<int64> $gone = [];
+        foreach ($this->followers as $id => const &$f) {
+            if ($ends($f)) {
+                $gone[] = $id;
+                $this->streams->close($f->stream);
+            }
+        }
+        foreach ($gone as const &$id) {
+            $this->followers->remove($id);
         }
     }
 

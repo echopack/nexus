@@ -318,7 +318,7 @@ public class IssueToken : nexus::Action
 }
 ```
 
-The answer is `{"token": "...", "id": "...", "expires_at": "..."}`, and this is the only time the token's text is seen. The client then sends it as `Authorization: Bearer <token>`. You may pass `scopes:` to `issue` to limit what the token may do.
+The answer is `{"token": "...", "id": "...", "expires_at": "..."}`, and this is the only time the token's text is seen. The client then sends it as `Authorization: Bearer <token>`. You may pass `scopes:` to `issue` to limit what the token may do. A token with scopes also stays away from what stands for the whole user: [nexus-oauth's](./oauth.md) consent and grants endpoints answer it with a `403`, so it cannot hand an app more than it holds.
 
 A token reads `<prefix>_<id>_<secret>`: your prefix, 12 hex characters that find the record, and 64 hex characters of secret, as in `blog_3f9a1c2e5d7b_...`. The store keeps only the SHA-256 of the secret and compares it in constant time. Tokens are long and random, so a fast hash is all a lookup needs. The fixed prefix is there so you, and secret scanners, can recognise a leaked token at a glance.
 
@@ -421,7 +421,7 @@ Resources change two things:
 - **A token issued for a resource opens that resource only.** A token an OAuth client got for `mcp` is a `401` with the reason `wrong_resource` anywhere else. Your own sessions and tokens still open everything.
 - **A `401` under a resource tells the client where to sign in.** It carries `WWW-Authenticate: Bearer resource_metadata="..."` pointing at the metadata, which names the authorization server. That is how an MCP client finds your sign in page by itself.
 
-[nexus-oauth](./oauth.md) says this app issues the tokens, and is the usual way to use resources. If your tokens come from an authorization server elsewhere, `Resources::issuedBy($url)` names it instead; you then bring a guard that reads its tokens.
+[nexus-oauth](./oauth.md) says this app issues the tokens, and is the usual way to use resources. If your tokens come from an authorization server elsewhere, `Resources::issuedBy($url)` names it instead; you then bring a guard that reads its tokens. Either way the metadata and the resource URLs are built on the public origin, so in production the boot needs `NEXUS_APP_URL` ([deployment](./deployment.md) explains why).
 
 ## When a credential ends
 

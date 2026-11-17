@@ -100,9 +100,10 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
     }
 
     /**
-     * Reads the code, then deletes it; only the caller whose delete removed the row gets it.
+     * Reads the code, then marks it with an update on the code still unredeemed; only the caller
+     * whose update changed the row gets it unused. Any other reads it again, redeemed.
      */
-    public function take(const string& $hash) : result<nexus::oauth::Code?, nexus::Problem>
+    public function take(const string& $hash, const string& $grant) : result<nexus::oauth::Code?, nexus::Problem>
     {
         CodeRowRepository $repo = try $this->codeRepo();
         CodeRow? $found = try $repo->find()->get($hash);
@@ -110,11 +111,22 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
             return .ok(null);
         }
         CodeRow $row = guard $found;
-        uint64 $gone = try $repo->find()->where(CodeRowTable::$hash == $hash)->purge();
-        if ($gone != 1) {
+        if (!$row->grantId->empty()) {
+            return .ok($row->code());
+        }
+        $set = hydrahon::Values();
+        $set[CodeRowTable::$grantId] = $grant;
+        uint64 $n = try $repo->find()->where(CodeRowTable::$hash == $hash)->where(CodeRowTable::$grantId == '')->update($set);
+        if ($n == 1) {
+            return .ok($row->code());
+        }
+        // another redemption got there between the read and the update
+        CodeRow? $again = try $repo->find()->get($hash);
+        if ($again == null) {
             return .ok(null);
         }
-        return .ok($row->code());
+        CodeRow $redeemed = guard $again;
+        return .ok($redeemed->code());
     }
 
     public function grant(const string& $id) : result<nexus::oauth::Grant?, nexus::Problem>
@@ -176,7 +188,10 @@ public class CarbonOAuth : nexus::oauth::OAuthStore
         array<GrantRow> $rows = try $repo->find()->where(GrantRowTable::$subject == $subject)->order(asc: GrantRowTable::$createdAt)->get();
         array<nexus::oauth::Grant> $out = [];
         foreach ($rows as const &$row) {
-            $out[] = $row->grant();
+            // the database may match the subject ignoring case; only this user's grants are theirs
+            if ($row->subject == $subject) {
+                $out[] = $row->grant();
+            }
         }
         return .ok($out);
     }

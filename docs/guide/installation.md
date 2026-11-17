@@ -147,7 +147,7 @@ X-Request-Id: 01JD...
 
 Every response carries an `X-Request-Id`, and the server logged one line for the request with the same id. If you ask for a path that doesn't exist, you get a `404` as an RFC 9457 problem document, without writing a line of error handling.
 
-You may pick another address with `--listen`, or `NEXUS_LISTEN` in the environment:
+You may pick another address with `--listen`, or `NEXUS_LISTEN` in the environment or the `.env` file:
 
 ```bash
 echoc run -- serve --listen 0.0.0.0:8080

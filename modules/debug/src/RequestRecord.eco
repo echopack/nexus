@@ -93,7 +93,9 @@ public class RequestRecord : Record
     }
 
     /**
-     * `$h` as an object of name to value, a credential replaced by `***`.
+     * `$h` as an object of name to value, a credential replaced by `***`: a header that carries
+     * one whole, or a query parameter that carries one in a header whose value is a URL (a
+     * redirect to a presigned S3 link, the page a request came from).
      */
     public static function masked(const nexus::Headers& $h) : json::Value
     {
@@ -102,6 +104,8 @@ public class RequestRecord : Record
             string $value = $item->value;
             if (RequestRecord::secret($item->name)) {
                 $value = '***';
+            } else if (RequestRecord::linked($item->name)) {
+                $value = RequestRecord::scrubbed($value);
             }
             $o[$item->name] = json::str($value);
         }
@@ -138,26 +142,54 @@ public class RequestRecord : Record
     }
 
     /**
-     * Whether a query parameter carries a credential.
+     * Whether a query parameter carries a credential: one of the names signed links, sign ins and
+     * sockets use, or any name with `token`, `secret`, `signature`, `password` or `credential` in
+     * it, any case.
      */
     public static function secretParam(const string& $name) : bool
     {
         string $n = str::lower($name);
-        array<string> $secret = ['sig', 'signature', 'token', 'access_token', 'refresh_token', 'id_token', 'ticket', 'code', 'state', 'key', 'password', 'secret', 'x-amz-signature', 'x-amz-credential', 'x-amz-security-token'];
+        array<string> $secret = ['sig', 'code', 'state', 'key', 'ticket', 'api_key', 'apikey', 'x-amz-signature', 'x-amz-credential', 'x-goog-signature', 'x-goog-credential'];
         foreach ($secret as const &$s) {
             if ($n == $s) {
                 return true;
             }
         }
-        return false;
+        return RequestRecord::mentions($n, ['token', 'secret', 'signature', 'password', 'credential']);
     }
 
     /**
-     * Whether a header carries a credential.
+     * Whether a header carries a credential: the ones that always do (`Authorization`, `Cookie`,
+     * `X-Api-Key`, ...), and any name with `token`, `secret`, `api-key`, `apikey` or `password` in
+     * it, any case (`X-Auth-Token`, `X-Amz-Security-Token`, `X-Client-Secret`).
      */
     public static function secret(const string& $name) : bool
     {
         string $n = str::lower($name);
-        return $n == 'authorization' || $n == 'cookie' || $n == 'set-cookie' || $n == 'x-accesstoken' || $n == 'proxy-authorization';
+        if ($n == 'authorization' || $n == 'proxy-authorization' || $n == 'cookie' || $n == 'set-cookie' || $n == 'x-accesstoken') {
+            return true;
+        }
+        return RequestRecord::mentions($n, ['token', 'secret', 'api-key', 'apikey', 'password']);
+    }
+
+    /**
+     * Whether a header's value is a URL, whose query may carry a credential: `Location`,
+     * `Content-Location`, `Referer`, `Refresh`.
+     */
+    public static function linked(const string& $name) : bool
+    {
+        string $n = str::lower($name);
+        return $n == 'location' || $n == 'content-location' || $n == 'referer' || $n == 'refresh';
+    }
+
+    // whether `$name`, lower case already, has one of `$parts` in it
+    private static function mentions(const string& $name, const array<string>& $parts) : bool
+    {
+        foreach ($parts as const &$p) {
+            if ($name->find($p) < $name->size()) {
+                return true;
+            }
+        }
+        return false;
     }
 }

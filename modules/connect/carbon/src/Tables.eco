@@ -22,7 +22,7 @@ public struct Tables
     }
 
     /**
-     * The sign in migration, to add to the app's own.
+     * The sign in migrations, to add to the app's own.
      */
     public static function migrations() : array<carbon::migrate::Step>
     {

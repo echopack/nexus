@@ -4,8 +4,10 @@ use std::thread;
 
 /**
  * A set of open event streams to send to at once, from any thread. A send never waits on a slow
- * client: `publish` queues the event and one thread of the set's own writes it to every stream,
- * dropping a stream once a send to it fails. Keep one per feed, shared (`#[atomic]`):
+ * client: `publish` queues the event and one thread of the set's own hands it to every stream's
+ * own queue, which a few writer threads work through (`Spools`), so a stream that stops reading
+ * holds up only itself. A stream more than `room` sends behind is closed, and a stream a send
+ * fails on is dropped. Keep one per feed, shared (`#[atomic]`):
  *
  *     return nexus::Response(events: function[$feed](nexus::EventStream $s) : void {
  *         $feed->streams->add($s);
@@ -22,9 +24,9 @@ public class EventStreams
     private Mailbox<StreamJob> $mail;
     private StreamSet $set;
 
-    public constructor()
+    public constructor(usize $room = 256)
     {
-        $set = StreamSet();
+        $set = StreamSet($room);
         $this->set = $set;
         $this->mail = Mailbox<StreamJob>(function[$set](StreamJob $job) : void {
             $set->run($job);
@@ -56,6 +58,15 @@ public class EventStreams
     }
 
     /**
+     * Stops sending to `$s` and ends it once the send under way is through; what was still queued
+     * for it is dropped.
+     */
+    public function close(EventStream $s) : void
+    {
+        $this->mail->put(StreamJob::close($s->id()));
+    }
+
+    /**
      * Queues `$e` for every stream in the set.
      */
     public function publish(const ServerEvent& $e) : void
@@ -80,11 +91,12 @@ public class EventStreams
     }
 
     /**
-     * Waits until everything queued before the call went out.
+     * Waits until everything queued before the call went out, or was dropped with its stream.
      */
     public function settle() : void
     {
         $this->mail->settle();
+        $this->set->settle();
     }
 }
 
@@ -92,20 +104,37 @@ internal enum StreamJob
 {
     case join(EventStream $stream, array<ServerEvent> $backlog);
     case leave(int64 $id);
+    case close(int64 $id);
     case publish(ServerEvent $event);
     case closeAll;
 }
 
 /**
- * The streams of an `EventStreams`, which its sender thread writes to.
+ * An event every stream sends, kept once however many queues hold it.
+ */
+#[atomic]
+internal class SharedEvent
+{
+    public const ServerEvent $e;
+
+    public constructor(const ServerEvent& $e)
+    {
+        $this->e = $e;
+    }
+}
+
+/**
+ * The streams of an `EventStreams`, which its sender thread hands sends to, one spool each.
  */
 #[atomic]
 internal class StreamSet
 {
     private thread::mutex<array<EventStream>> $members = thread::mutex<array<EventStream>>(array<EventStream>());
+    private Spools $spools;
 
-    public constructor()
+    public constructor(usize $room)
     {
+        $this->spools = Spools($room);
     }
 
     public function count() : usize
@@ -116,27 +145,42 @@ internal class StreamSet
 
     public function run(StreamJob $job) : void
     {
+        $this->reap();
         match ($job) {
             StreamJob::join($s, $backlog) => {
                 {
                     thread::locked<array<EventStream>> $held = $this->members->lock();
                     $held->value->push($s);
                 }
-                foreach ($backlog as const &$e) {
-                    if (!$s->open() || !$s->send($e)) {
-                        $this->drop($s->id());
-                        return;
-                    }
+                if ($backlog->empty()) {
+                    return;
                 }
+                $this->offer($s, function[$s, $backlog]() : bool {
+                    foreach ($backlog as const &$e) {
+                        if (!$s->open() || !$s->send($e)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                });
             },
             StreamJob::leave($id) => {
                 $this->drop($id);
+                $this->spools->forget($id);
+            },
+            StreamJob::close($id) => {
+                EventStream? $found = $this->drop($id);
+                if ($found != null) {
+                    EventStream $s = guard $found;
+                    $this->end($s);
+                }
             },
             StreamJob::publish($e) => {
+                SharedEvent $one = SharedEvent($e);
                 foreach ($this->snapshot() as $s) {
-                    if (!$s->send($e)) {
-                        $this->drop($s->id());
-                    }
+                    $this->offer($s, function[$s, $one]() : bool {
+                        return $s->send($one->e);
+                    });
                 }
             },
             StreamJob::closeAll => {
@@ -146,9 +190,52 @@ internal class StreamSet
                     $held->value = array<EventStream>();
                 }
                 foreach ($all as $s) {
-                    $s->close();
+                    $this->end($s);
                 }
             },
+        }
+    }
+
+    /**
+     * Waits until every send handed over went out or was dropped, and drops the streams one failed
+     * on.
+     */
+    public function settle() : void
+    {
+        $this->spools->settle();
+        $this->reap();
+    }
+
+    // queues `$send` on the spool of `$s`: a stream too far behind is closed, a gone one dropped
+    private function offer(EventStream $s, function<bool()> $send) : void
+    {
+        match ($this->spools->put($s->id(), $send)) {
+            Spooled::queued => {},
+            Spooled::full => {
+                $this->drop($s->id());
+                $this->end($s);
+            },
+            Spooled::gone => {
+                $this->drop($s->id());
+                $this->spools->forget($s->id());
+            },
+        }
+    }
+
+    // closes `$s` on its spool, after the send under way
+    private function end(EventStream $s) : void
+    {
+        $this->spools->shut($s->id(), function[$s]() : void {
+            $s->close();
+        });
+    }
+
+    // drops the streams a send failed on
+    private function reap() : void
+    {
+        foreach ($this->spools->failed() as $id) {
+            $this->drop($id);
+            $this->spools->forget($id);
         }
     }
 
@@ -158,17 +245,19 @@ internal class StreamSet
         return $held->value->clone();
     }
 
-    private function drop(int64 $id) : void
+    private function drop(int64 $id) : EventStream?
     {
         thread::locked<array<EventStream>> $held = $this->members->lock();
         usize $n = $held->value->count();
         usize $i = 0;
         while ($i < $n) {
             if ($held->value[$i]->id() == $id) {
+                EventStream $s = $held->value[$i];
                 $held->value->remove($i);
-                return;
+                return $s;
             }
             $i = $i + 1;
         }
+        return null;
     }
 }

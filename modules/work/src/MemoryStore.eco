@@ -16,22 +16,8 @@ public class MemoryStore : Store
     public function push(const Batch& $batch) : result<Pushed, nexus::Problem>
     {
         thread::locked<Batch> $held = $this->all->lock();
-        map<string, bool> $mine = map<string, bool>();
-        foreach ($batch->tasks as const &$t) {
-            foreach ($held->value->tasks as const &$s) {
-                if (!$t->key->empty() && $s->key == $t->key && $s->lane == $t->lane) {
-                    return .ok(.skipped);
-                }
-                if ($t->hold == Hold::unique && $s->hold == Hold::unique && $s->holdKey == $t->holdKey && $s->live()) {
-                    return .ok(.skipped);
-                }
-            }
-            if ($t->hold == Hold::unique) {
-                if ($mine->has($t->holdKey)) {
-                    return .ok(.skipped);
-                }
-                $mine[$t->holdKey] = true;
-            }
+        if (MemoryStore::clashes($held->value->tasks, $batch)) {
+            return .ok(.skipped);
         }
         foreach ($batch->tasks as const &$t) {
             $held->value->tasks[] = $t;
@@ -97,35 +83,40 @@ public class MemoryStore : Store
         return .ok;
     }
 
-    public function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : status<nexus::Problem>
+    public function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : result<bool, nexus::Problem>
     {
         thread::locked<Batch> $held = $this->all->lock();
         usize $i = guard MemoryStore::claimed($held->value->tasks, $task) else {
-            return .ok;
+            return .ok(true);
         };
         StoredTask& $t = $held->value->tasks[$i];
         $t->status = .done;
         $t->doneAt = $now;
         $t->reservedUntil = null;
         bool $released = $t->released;
+        // done, the task holds its own key no more, so what it spawned may take it
+        bool $stored = !MemoryStore::clashes($held->value->tasks, $spawned);
         array<string> $after = MemoryStore::waitingFor($held->value->edges, $task->id);
-        foreach ($spawned->tasks as const &$s) {
-            StoredTask $child = $s;
-            $child->parent = $task->id;
-            $held->value->tasks[] = mv $child;
-            foreach ($after as const &$a) {
-                $held->value->edges[] = Edge($a, $s->id);
+        int64 $more = 0;
+        if ($stored) {
+            foreach ($spawned->tasks as const &$s) {
+                StoredTask $child = $s;
+                $child->parent = $task->id;
+                $held->value->tasks[] = mv $child;
+                foreach ($after as const &$a) {
+                    $held->value->edges[] = Edge($a, $s->id);
+                }
             }
+            foreach ($spawned->edges as const &$e) {
+                $held->value->edges[] = $e;
+            }
+            $more = $spawned->tasks->count() as int64;
         }
-        foreach ($spawned->edges as const &$e) {
-            $held->value->edges[] = $e;
-        }
-        int64 $more = $spawned->tasks->count() as int64;
         if ($released) {
             $more = $more + 1;
         }
         MemoryStore::shift($held->value->tasks, $after, $more - 1);
-        return .ok;
+        return .ok($stored);
     }
 
     public function retry(const StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
@@ -139,6 +130,21 @@ public class MemoryStore : Store
         $t->availableAt = $at;
         $t->reservedUntil = null;
         $t->error = $error;
+        return .ok;
+    }
+
+    public function defer(const StoredTask& $task, time::timestamp $at, const string& $why) : status<nexus::Problem>
+    {
+        thread::locked<Batch> $held = $this->all->lock();
+        usize $i = guard MemoryStore::claimed($held->value->tasks, $task) else {
+            return .ok;
+        };
+        StoredTask& $t = $held->value->tasks[$i];
+        $t->status = .waiting;
+        $t->availableAt = $at;
+        $t->reservedUntil = null;
+        $t->attempts = $t->attempts - 1;
+        $t->error = $why;
         return .ok;
     }
 
@@ -190,12 +196,17 @@ public class MemoryStore : Store
     public function again(const string& $id, time::timestamp $now) : result<StoredTask?, nexus::Problem>
     {
         thread::locked<Batch> $held = $this->all->lock();
-        foreach ($held->value->tasks as &$t) {
-            if ($t->id == $id && $t->status == TaskStatus::failed) {
-                $t->requeue($now);
-                StoredTask $back = $t;
-                return .ok($back);
+        usize $n = $held->value->tasks->count();
+        for (usize $i = 0; $i < $n; $i++) {
+            if ($held->value->tasks[$i]->id != $id || $held->value->tasks[$i]->status != TaskStatus::failed) {
+                continue;
             }
+            if (!MemoryStore::free($held->value->tasks, $i)) {
+                return .ok(null);
+            }
+            $held->value->tasks[$i]->requeue($now);
+            StoredTask $back = $held->value->tasks[$i];
+            return .ok($back);
         }
         return .ok(null);
     }
@@ -204,11 +215,17 @@ public class MemoryStore : Store
     {
         thread::locked<Batch> $held = $this->all->lock();
         array<StoredTask> $out = [];
-        foreach ($held->value->tasks as &$t) {
-            if ($t->lane == $lane && $t->status == TaskStatus::failed) {
-                $t->requeue($now);
-                $out[] = $t;
+        usize $n = $held->value->tasks->count();
+        for (usize $i = 0; $i < $n; $i++) {
+            if ($held->value->tasks[$i]->lane != $lane || $held->value->tasks[$i]->status != TaskStatus::failed) {
+                continue;
             }
+            // a second failed task of one `.unique` key stays failed once the first waits again
+            if (!MemoryStore::free($held->value->tasks, $i)) {
+                continue;
+            }
+            $held->value->tasks[$i]->requeue($now);
+            $out[] = $held->value->tasks[$i];
         }
         return .ok($out);
     }
@@ -281,6 +298,9 @@ public class MemoryStore : Store
             StoredTask $t = $held->value->tasks[$i];
             if ($t->status == TaskStatus::waiting && $t->expired($now)) {
                 MemoryStore::failAt($held->value, $i, $now, 'expired before it ran');
+            } else if ($t->status == TaskStatus::running && !$t->held($now) && $t->expired($now)) {
+                // its server stopped and let the lease run out; nobody may claim it again
+                MemoryStore::failAt($held->value, $i, $now, 'expired before it finished');
             }
         }
         array<StoredTask> $kept = [];
@@ -353,6 +373,48 @@ public class MemoryStore : Store
     {
         thread::locked<Batch> $held = $this->all->lock();
         return $held->value->tasks;
+    }
+
+    /**
+     * Whether a task of `$batch` carries a key a task of `$all` has, or a `.unique` key a waiting or
+     * running task of `$all` holds or another task of `$batch` holds too.
+     */
+    internal static function clashes(const array<StoredTask>& $all, const Batch& $batch) : bool
+    {
+        map<string, bool> $mine = map<string, bool>();
+        foreach ($batch->tasks as const &$t) {
+            foreach ($all as const &$s) {
+                if (!$t->key->empty() && $s->key == $t->key && $s->lane == $t->lane) {
+                    return true;
+                }
+                if ($t->hold == Hold::unique && $s->hold == Hold::unique && $s->holdKey == $t->holdKey && $s->live()) {
+                    return true;
+                }
+            }
+            if ($t->hold == Hold::unique) {
+                if ($mine->has($t->holdKey)) {
+                    return true;
+                }
+                $mine[$t->holdKey] = true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether task `$i` may wait again: no other waiting or running task holds its `.unique` key.
+     */
+    internal static function free(const array<StoredTask>& $all, usize $i) : bool
+    {
+        if ($all[$i]->hold != Hold::unique) {
+            return true;
+        }
+        foreach ($all as $j => const &$s) {
+            if ($j != $i && $s->hold == Hold::unique && $s->holdKey == $all[$i]->holdKey && $s->live()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

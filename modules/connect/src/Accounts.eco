@@ -3,32 +3,37 @@ namespace nexus::connect;
 /**
  * Which of the app's users a sign in with an outside provider is, per request on the link store:
  * the user the outside identity is linked to; else the user with the email the provider verified,
- * linked now; else a new user, linked. An email the provider did not verify never opens an account
- * that has it (some providers let anybody put any address on theirs): that is a 409, and the
- * person signs in with their password first.
+ * linked now as `$emailLinking` allows (by default when the app verified that user's email too);
+ * else a new user, linked. An email the provider did not verify neither opens an account nor makes
+ * one (some providers let anybody put any address on theirs, and an account made with somebody
+ * else's address would be theirs to take later): that is a 403. A user the policy does not link by
+ * email is a 409, and the person signs in with their password first.
  *
  * ```echo
- * nexus::connect::ExternalIdentity $who = try $this->connect->claim($in->value->attempt, $in->value->binding);
+ * nexus::connect::ExternalIdentity $who = try $this->connect->claim($in->value->attempt, $in->value->binding, $in->value->proof);
  * string $subject = try $this->accounts->of($who, BlogUsers($this->users, $this->signals, $payload->locale()));
  * ```
  *
- * The app's `Users` find and make its users; the policy is here, the same for every app.
+ * The app's `Users` find and make its users; the policy is here, and `emailLinking` is the one
+ * part of it an app chooses.
  */
 public class Accounts
 {
     public LinkStore $links;
     public calendar::Clock $clock;
+    public const EmailLinking $emailLinking;
 
-    public constructor(LinkStore $links, calendar::Clock $clock)
+    public constructor(LinkStore $links, calendar::Clock $clock, emailLinking: EmailLinking $emailLinking = .verified)
     {
         $this->links = $links;
         $this->clock = $clock;
+        $this->emailLinking = $emailLinking;
     }
 
     /**
-     * The subject of the user `$who` signs in as, among `$users`. A 403 when the provider shared no
-     * email for an identity that is not linked yet, a 409 when a user has the email but the
-     * provider did not verify it.
+     * The subject of the user `$who` signs in as, among `$users`. For an identity that is not linked
+     * yet: a 403 when the provider shared no email or did not verify it, a 409 when a user has the
+     * email but `emailLinking` does not link to them.
      */
     public function of(const ExternalIdentity& $who, Users $users) : result<string, nexus::Problem>
     {
@@ -45,10 +50,14 @@ public class Accounts
         if ($who->email->empty()) {
             return .error(.forbidden("{$who->provider} shared no email; allow it and try again"));
         }
+        if (!$who->emailVerified) {
+            return .error(Accounts::unverified($who->provider));
+        }
         string? $same = try $users->withEmail($who->email);
         if ($same != null) {
             string $subject = guard $same;
-            if (!$who->emailVerified) {
+            bool $links = try $this->links(by: $subject, $users);
+            if (!$links) {
                 return .error(Accounts::taken());
             }
             try $this->link($who, $subject);
@@ -65,6 +74,31 @@ public class Accounts
     public static function taken() : nexus::Problem
     {
         return .conflict('an account has this email; sign in with its password first');
+    }
+
+    /**
+     * The 403 for an identity whose email `$provider` did not verify: it neither makes a user nor
+     * opens one.
+     */
+    public static function unverified(const string& $provider) : nexus::Problem
+    {
+        return .forbidden("{$provider} has not verified this email; verify it there, or sign in another way");
+    }
+
+    /**
+     * Whether `emailLinking` links a verified sign in to user `$subject`, who has its email.
+     */
+    internal function links(by: const string& $subject, Users $users) : result<bool, nexus::Problem>
+    {
+        if ($this->emailLinking == EmailLinking::always) {
+            return .ok(true);
+        }
+        if ($this->emailLinking == EmailLinking::never) {
+            return .ok(false);
+        }
+        // both sides vouch for the address, or an account somebody opened with another person's
+        // email would be handed to them
+        return $users->emailVerified($subject);
     }
 
     internal function link(const ExternalIdentity& $who, const string& $subject) : status<nexus::Problem>

@@ -65,3 +65,46 @@ test an_s3_disk_needs_no_files_key_and_signs_its_own_links
     expect($shown)->has('response-content-type=image%2Fpng');
     expect($shown)->has('response-content-disposition=inline');
 }
+
+test an_s3_link_lasts_a_second_to_seven_days
+{
+    calendar::ManualClock $c = calendar::ManualClock(std::time::timestamp::from_unix_secs(1369353600));
+    nexus::files::s3::S3Config $config = nexus::files::s3::S3Config($accessKey: 'AKIAIOSFODNN7EXAMPLE', $secretKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY');
+    nexus::files::s3::Bucket $b = expect(nexus::files::s3::Bucket::of('s3://examplebucket', $config))->ok();
+    $store = nexus::files::s3::S3Store($b, $config, clock: $c);
+    expect(expect($store->presign(nexus::files::Presign(.get, 'a.txt', .secs(604800))))->ok()->text())->has('X-Amz-Expires=604800');
+    expect(expect($store->presign(nexus::files::Presign(.get, 'a.txt', .secs(1))))->ok()->text())->has('X-Amz-Expires=1&');
+    nexus::files::FilesError $long = expect($store->presign(nexus::files::Presign(.get, 'a.txt', .secs(604801))))->fails();
+    expect($long->message())->has('S3 takes 1s to 7 days');
+    expect($store->presign(nexus::files::Presign(.get, 'a.txt', .millis(500))))->fails();
+
+    // an upload link past that is refused, not handed out with a time it does not keep
+    nexus::files::Links $links = nexus::files::Links('', '/files', .hours(1), nexus::Router(), $c);
+    Disk<SVolume> $d = Disk<SVolume>('media', $store, $links);
+    expect($d->uploadUrl('up/a.png', expires: .hours(24 * 30), type: 'image/png', maxBytes: 1024))->fails();
+}
+
+test a_files_expiry_s3_cannot_sign_stops_the_boot
+{
+    array<nexus::Extension> $exts = [nexus::files::Extension(), nexus::files::s3::Extension(), SApp('s3://media/x')];
+    map<string, string> $vars = ['NEXUS_FILES_EXPIRES' => '30d', 'NEXUS_FILES_S3_ACCESS_KEY' => 'AK', 'NEXUS_FILES_S3_SECRET_KEY' => 'SK', 'NEXUS_FILES_S3_ENDPOINT' => 'http://127.0.0.1:1', 'NEXUS_FILES_S3_PATH_STYLE' => 'true'];
+    nexus::BootError $e = expect(TestApp::attempt($exts, $vars))->fails();
+    expect(str::join($e->lines(), '; '))->has('NEXUS_FILES_EXPIRES is 720h0m0s; an S3 link lasts 1s to 7 days');
+}
+
+test a_range_that_would_pass_the_largest_offset_reads_to_the_end
+{
+    expect(nexus::files::s3::S3Store::range(0, 10))->is('bytes=0-9');
+    expect(nexus::files::s3::S3Store::range(5, 1))->is('bytes=5-5');
+    expect(nexus::files::s3::S3Store::range(10, std::math::MAX_UINT64))->is('bytes=10-');
+    expect(nexus::files::s3::S3Store::range(0, std::math::MAX_UINT64))->is('bytes=0-18446744073709551614');
+    expect(nexus::files::s3::S3Store::range(1, std::math::MAX_UINT64))->is('bytes=1-18446744073709551615');
+    expect(nexus::files::s3::S3Store::range(2, std::math::MAX_UINT64))->is('bytes=2-');
+}
+
+test a_timeout_past_what_libcurl_holds_is_clamped
+{
+    // 30 days in milliseconds wraps an int32
+    expect(nexus::files::s3::S3Store::millis(.hours(24 * 30)) == std::math::MAX_INT32)->yes(says: 'the clamped timeout');
+    expect(nexus::files::s3::S3Store::millis(.mins(10)) == 600000)->yes(says: 'ten minutes');
+}

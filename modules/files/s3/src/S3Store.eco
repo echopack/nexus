@@ -6,6 +6,9 @@ use std::time;
 // the sha256 of nothing, what a request without a body signs
 internal const string EMPTY_SHA = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
+// the longest a presigned link may last, in seconds: S3 refuses an X-Amz-Expires past seven days
+internal const int64 LONGEST_LINK = 604800;
+
 /**
  * One S3 answer, with the error S3 put in the body.
  */
@@ -53,7 +56,7 @@ public class S3Store : Store
         $this->bucket = $bucket;
         $this->signer = SigV4($config->accessKey, $config->secretKey, $config->region);
         $this->sessionToken = $config->sessionToken;
-        $this->timeoutMs = $config->timeout->as_millis() as int32;
+        $this->timeoutMs = S3Store::millis($config->timeout);
         $this->clock = $clock;
     }
 
@@ -90,8 +93,7 @@ public class S3Store : Store
         if ($length == 0) {
             return .ok('');
         }
-        uint64 $last = $from + $length - 1;
-        string $range = "bytes={$from}-{$last}";
+        string $range = S3Store::range($from, $length);
         curl::Request $r = $this->request(.get, $key, '', EMPTY_SHA, '', range: $range);
         // a range past the end of the object is a 416: nothing there
         Answer $a = try $this->send($r, $key, allow: 416);
@@ -192,6 +194,9 @@ public class S3Store : Store
 
     public function presign(const Presign& $ask) : result<nexus::Url, FilesError>
     {
+        if (!S3Store::lasts($ask->expires)) {
+            return .error(.unsupported("sign a link that lasts {$ask->expires}; S3 takes 1s to 7 days"));
+        }
         string $method = $ask->method->verb();
         string $object = $this->bucket->object($ask->key);
         string $host = $this->bucket->hostFor();
@@ -226,6 +231,42 @@ public class S3Store : Store
         curl::Request $r = $this->request(.get, '', SigV4::canonicalQuery($params), EMPTY_SHA, '');
         try $this->send($r, '');
         return .ok;
+    }
+
+    /**
+     * Whether S3 takes a presigned link that lasts `$expires`: one second at least, seven days at
+     * most. Outside that, S3 refuses the link when it is used, or a part of a second signs as 0.
+     */
+    public static function lasts(time::duration $expires) : bool
+    {
+        return $expires >= time::duration::secs(1) && $expires <= time::duration::secs(LONGEST_LINK);
+    }
+
+    /**
+     * The `Range` of `$length` bytes from `$from` (at least one). A length whose last byte would
+     * pass the largest offset asks for the open range `bytes=from-`, to the end, rather than a sum
+     * that wraps.
+     */
+    internal static function range(uint64 $from, uint64 $length) : string
+    {
+        if ($length - 1 > std::math::MAX_UINT64 - $from) {
+            return "bytes={$from}-";
+        }
+        uint64 $last = $from + $length - 1;
+        return "bytes={$from}-{$last}";
+    }
+
+    /**
+     * `$timeout` in the milliseconds libcurl takes, an `int32`: past about 24 days, as long as that
+     * holds rather than wrapped.
+     */
+    internal static function millis(time::duration $timeout) : int32
+    {
+        int64 $ms = $timeout->as_millis();
+        if ($ms > std::math::MAX_INT32 as int64) {
+            return std::math::MAX_INT32;
+        }
+        return $ms as int32;
     }
 
     // inside -----------------------------------------------------------------

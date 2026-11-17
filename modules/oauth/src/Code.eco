@@ -5,7 +5,8 @@ use std::time;
 /**
  * An authorization code as the store keeps it: the hash of the code, who allowed which client what
  * on which resource, where it may go back to and the PKCE challenge it must be redeemed with. Single use, for a
- * minute.
+ * minute. A redeemed code is kept until it expires, with the grant it was redeemed for, so one that
+ * comes back is seen and that grant ended (RFC 6749, section 4.1.2).
  */
 public struct Code
 {
@@ -30,4 +31,17 @@ public struct Code
      */
     public string $resource;
     public time::timestamp $expiresAt;
+
+    /**
+     * The id of the grant the code was redeemed for; empty until it is.
+     */
+    public string $grant = '';
+
+    /**
+     * Whether the code was redeemed already.
+     */
+    public const function used() : bool
+    {
+        return !$this->grant->empty();
+    }
 }

@@ -2,9 +2,11 @@ namespace nexus::realtime;
 
 /**
  * This process's open realtime sockets and what each is subscribed to, plus the last broadcasts
- * for sockets that catch up. One thread of its own sends: a subscribe's catch up and every note
- * go out in the order they were handed over, and a slow socket never holds up the one that handed
- * them over. A socket a send fails on is forgotten.
+ * for sockets that catch up. One thread of its own works through what it is handed (a subscribe's
+ * catch up, every note) in order, and hands each socket's frames to that socket's spool, which a
+ * few writer threads send (`nexus::Spools`): a socket that stops reading holds up neither the hub
+ * nor any other socket. A socket more than `room` frames behind is closed with 1008 (policy
+ * violation), and a socket a send fails on is forgotten.
  *
  * Each process's hub has a `node`, eight random hex characters; a socket's global id is
  * `<node>.<id>`, what `ready` tells it, `X-Socket-Id` sends back and presence names it by.
@@ -20,10 +22,13 @@ public class Hub
     private nexus::Mailbox<HubJob> $mail;
     private HubState $state;
 
-    public constructor(usize $backlog)
+    // how many times notes may have been missed, for the sweeper's recheck
+    private atomic<uint64> $lapses = atomic<uint64>(0);
+
+    public constructor(usize $backlog, usize $room = 256)
     {
         $node = nexus::auth::Secrets::hex(4);
-        $state = HubState($node, $backlog);
+        $state = HubState($node, $backlog, $room);
         $this->node = $node;
         $this->state = $state;
         $this->mail = nexus::Mailbox<HubJob>(function[$state](HubJob $job) : void {
@@ -86,11 +91,12 @@ public class Hub
 
     /**
      * Subscribes `$id` to `$channel` at once, so whispers and the channel cap can ask without
-     * waiting on the sender.
+     * waiting on the sender; `$info` is what the others see about a presence member. What is sent
+     * on the channel reaches the socket once its `join` went out.
      */
-    public function seat(int64 $id, const string& $channel, bool $present) : Seat
+    public function seat(int64 $id, const string& $channel, bool $present, json::Value $info = json::nil()) : Seat
     {
-        return $this->state->seat($id, $channel, $present);
+        return $this->state->seat($id, $channel, $present, $info);
     }
 
     public function follows(int64 $id, const string& $channel) : bool
@@ -105,9 +111,11 @@ public class Hub
 
     /**
      * Sends `subscribed` for `$channel` on the sender thread, then the broadcasts missed after
-     * `$after` (or `reset` when that one is no longer kept). Membership is `seat` already; this
-     * is a no-op unless the socket is still seated. `$roll` is a presence member already joined
-     * to the roster on the socket thread; `$fresh` when they were not a member yet.
+     * `$after` (or `reset` when that one is no longer kept), then whoever joined or left the
+     * presence channel since the seat; from then on the channel's frames reach the socket.
+     * Membership is `seat` already; this is a no-op unless the socket is still seated. `$roll` is
+     * a presence member already joined to the roster on the socket thread; `$fresh` when they were
+     * not a member yet.
      */
     public function join(nexus::Socket $s, const string& $channel, string? $after, Roll? $roll = null, bool $fresh = false) : void
     {
@@ -150,6 +158,34 @@ public class Hub
             else => {},
         }
         $this->mail->put(HubJob::hear($n));
+    }
+
+    /**
+     * Notes may have been missed (the relay lost its broker for a while): no catch up cursor handed
+     * out before reaches back past now, every followed channel hears `reset`, and the sweeper asks
+     * again whether the credentials of the open sockets still hold.
+     */
+    public function lapse() : void
+    {
+        $this->lapses->add(1);
+        $this->mail->put(HubJob::lapse);
+    }
+
+    /**
+     * How many times `lapse` ran.
+     */
+    public function lapses() : uint64
+    {
+        return $this->lapses->load();
+    }
+
+    /**
+     * The presence members of the sockets here, by channel: what the roster should list for this
+     * node.
+     */
+    public function presence() : map<string, array<Present>>
+    {
+        return $this->state->presence();
     }
 
     /**
@@ -201,7 +237,8 @@ public class Hub
     }
 
     /**
-     * Closes the socket with global id `$id` with `$code`; false when no socket here has it.
+     * Closes the socket with global id `$id` with `$code`, once the frame under way to it went out;
+     * false when no socket here has it.
      */
     public function close(const string& $id, int32 $code, const string& $reason) : bool
     {
@@ -215,13 +252,17 @@ public class Hub
     {
         $this->settle();
         $this->state->closeAll($code, $reason);
+        $this->settle();
     }
 
     /**
-     * Waits until everything handed over before the call went out.
+     * Waits until everything handed over before the call went out, on every socket.
      */
     public function settle() : void
     {
         $this->mail->settle();
+        while ($this->state->settle()) {
+            $this->mail->settle();
+        }
     }
 }

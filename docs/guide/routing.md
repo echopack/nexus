@@ -65,7 +65,7 @@ $app->bindAction<DeleteComment>((Container $c) => DeleteComment($c->get<CommentS
 public function handle(nexus::Payload& $payload, int64 $id, int64 $comment) : status<nexus::Problem>
 ```
 
-A path parameter in `handle()` may be a `string`, `int32`, `int64`, `uint32` or `uint64`. Captured values are percent-decoded before the action sees them, so `/files/a%20b` hands over `a b`.
+A path parameter in `handle()` may be a `string`, `int32`, `int64`, `uint16`, `uint32` or `uint64`; a number past what its type holds is a `404`. Captured values are percent-decoded before the action sees them, so `/files/a%20b` hands over `a b`.
 
 The kernel checks every route against its action before the first request. If `handle()` asks for `$comment` but the path has no `{comment}`, the boot stops with a message saying so. It's fine the other way round: a path may capture a parameter the action does not read.
 
@@ -134,7 +134,7 @@ So, what happens when nothing matches? The answer depends on why:
 - `OPTIONS` on a known path: a `204` with that `Allow` header, no action involved.
 - `HEAD` on a path that only answers `GET`: the `GET` route runs and the body is dropped.
 
-The same method and path declared twice is a boot error, never a silent "last one wins".
+The same method and path declared twice is a boot error, never a silent "last one wins". That includes two spellings of one path: `/posts/{id}` and `/posts/{slug}`, or `/posts` and `/posts/`, match the same requests, so the second is refused too.
 
 Routing happens before any middleware runs, so even a global middleware can look at `$payload->route` to see which action a request is headed for. An unmatched request is still answered at the end of the chain, so your middleware runs for a `404` too. [Middleware](./middleware.md) shows what you can do with that.
 

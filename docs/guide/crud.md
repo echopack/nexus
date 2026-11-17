@@ -173,7 +173,7 @@ $crud->load = function(PostQuery $q, const EchoPack::Rest::Includes& $inc) : Pos
 };
 ```
 
-It runs for `list`, `show` and `update`, and reloads a freshly created record when the request asks for includes, so `GET /v1/posts?include=author` loads every author of the page in one go rather than one query per post. A bad `?include=` is refused with a `400` before anything runs, writes included.
+It runs for `list`, `show` and `update`, so `GET /v1/posts?include=author` loads every author of the page in one go rather than one query per post. When the request asks for includes, a created or updated record is read again after the write, so an update that moves a post to another author answers with the new one. That read goes by the key and skips `scope`: the write went through, and a record the scope no longer sees is answered as written rather than with a `404` a client would retry into a second write. A bad `?include=` is refused with a `400` before anything runs, writes included.
 
 ## Who may see and change what
 
@@ -228,7 +228,7 @@ $this->crud->scope = function[$mine](PostQuery $q) : PostQuery {
 };
 ```
 
-A record outside the scope answers `404`, as if it did not exist.
+A record outside the scope answers `404`, as if it did not exist. The one read that skips it is the reload after a create or update, described under [loading includes](#loading-includes).
 
 ## Creating and updating
 
@@ -242,7 +242,7 @@ public function handle(nexus::Payload& $payload, nexus::Body<NewPost> $in) : res
 }
 ```
 
-`update` reads the record, authorizes it, and hands it to your closure to change before saving:
+`update` reads the record, authorizes it, and hands it to your closure to change before saving. `authorize` then sees the changed record too, and both must pass, so a change that hands a post to another author is checked against the new author as well as the old one:
 
 ```echo
 public function handle(nexus::Payload& $payload, int64 $id, nexus::Body<PostChanges> $in) : result<nexus::Response, nexus::Problem>

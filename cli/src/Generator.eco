@@ -154,10 +154,10 @@ public struct Generator
             return .error(.cannotRun($this->echoc, $e));
         };
         json::Value $decls = guard json::parse($run->stdout) else {
-            return .error(.tool($run->status, $run->stderr));
+            return .error(.tool('echoc build -p decls', $run->status, $run->stderr));
         };
         if (decl::items($decls, 'modules')->empty()) {
-            return .error(.tool($run->status, $run->stderr));
+            return .error(.tool('echoc build -p decls', $run->status, $run->stderr));
         }
         try Generator::put($file, $run->stdout);
         return .ok($decls);
@@ -218,7 +218,7 @@ public struct Generator
                 return .error(.cannotRun($this->echoc, $e));
             };
             json::Value $tools = guard json::parse($run->stdout) else {
-                return .error(.tool($run->status, $run->stderr));
+                return .error(.tool('echoc build -p tools', $run->status, $run->stderr));
             };
             $this->offered = $tools;
         }

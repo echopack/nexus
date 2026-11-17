@@ -153,6 +153,21 @@ public class Fields
     }
 
     /**
+     * Whether a JSON input gives `$name` as an explicit null, which an optional field with a default
+     * takes as null rather than as its default. A form or a query cannot say null.
+     */
+    public const function nulled(const string& $name) : bool
+    {
+        if (!$this->json) {
+            return false;
+        }
+        json::Value $there = guard $this->doc->get($name) else {
+            return false;
+        };
+        return $there->isNull();
+    }
+
+    /**
      * Ok when nothing was refused, otherwise one `invalid` problem listing every refusal.
      */
     public const function done() : status<Problem>
@@ -207,7 +222,7 @@ public class Fields
 
     public function int64(const string& $name, required: bool $required) : int64?
     {
-        if (!$this->present($name, $required, 'integer')) {
+        if (!$this->filled($name, $required, 'integer')) {
             return null;
         }
         int64? $n = null;
@@ -239,7 +254,7 @@ public class Fields
     {
         // a form value reads as unsigned, so the top half of the range is not lost to int64
         if (!$this->json) {
-            if (!$this->present($name, $required, 'integer')) {
+            if (!$this->filled($name, $required, 'integer')) {
                 return null;
             }
             uint64? $u = str::uint($this->form->pairs->get($this->key($name)) ?? '');
@@ -282,9 +297,13 @@ public class Fields
         return $n as uint16;
     }
 
+    /**
+     * A number. NaN and the infinities are refused as no number, however they are spelled (`nan`,
+     * `inf`, `1e999`): every rule would let NaN through.
+     */
     public function float64(const string& $name, required: bool $required) : float64?
     {
-        if (!$this->present($name, $required, 'number')) {
+        if (!$this->filled($name, $required, 'number')) {
             return null;
         }
         float64? $n = null;
@@ -294,10 +313,15 @@ public class Fields
         } else {
             $n = str::float($this->form->pairs->get($this->key($name)) ?? '');
         }
-        if ($n == null) {
+        float64 $got = guard $n else {
             $this->refuse($name, 'type', 'number');
+            return null;
+        };
+        if (!Check::finite($got)) {
+            $this->refuse($name, 'type', 'number');
+            return null;
         }
-        return $n;
+        return $got;
     }
 
     /**
@@ -545,11 +569,33 @@ public class Fields
     }
 
     /**
+     * Like `present`, for a field read as a number, a date or a timestamp: a form or query value left
+     * blank (`age=`, what an empty input sends) counts as missing, so an optional field is null or
+     * its default, and a required one is refused as required rather than as the wrong type.
+     */
+    private function filled(const string& $name, bool $required, const string& $kind) : bool
+    {
+        if (!$this->json) {
+            string? $given = $this->form->pairs->get($this->key($name));
+            if ($given != null) {
+                string $raw = guard $given;
+                if ($raw->empty()) {
+                    if ($required) {
+                        $this->refuse($name, 'required', $kind);
+                    }
+                    return false;
+                }
+            }
+        }
+        return $this->present($name, $required, $kind);
+    }
+
+    /**
      * A field read as text, for the readers that parse it.
      */
     private function text(const string& $name, bool $required, const string& $kind) : string?
     {
-        if (!$this->present($name, $required, $kind)) {
+        if (!$this->filled($name, $required, $kind)) {
             return null;
         }
         if (!$this->json) {

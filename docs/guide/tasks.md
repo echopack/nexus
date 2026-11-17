@@ -66,7 +66,7 @@ public struct SendWelcome : nexus::work::Task
 }
 ```
 
-You build one like any struct, `SendWelcome($user: 5)`, and keep its memberwise constructor: `nexus gen` refuses a task with a handwritten one. Every field must be public, and of a type a task can store: integers, `float64`, `bool`, `string`, `array<string>`, `array<int64>`, and their nullables. That is what lets a [distributed queue](#distributed-queues) write the task down and read it back on another server.
+You build one like any struct, `SendWelcome($user: 5)`, and keep its memberwise constructor: `nexus gen` refuses a task with a handwritten one. Every field must be public, and of a type a task can store: integers, `float64`, `bool`, `string`, `array<string>`, `array<int64>`, and their nullables. That is what lets a [distributed queue](#distributed-queues) write the task down and read it back on another server. Each value comes back as it went in: a `uint64` past the largest `int64` is stored as its digits, a `float64` that is NaN or an infinity as `"nan"`, `"inf"` or `"-inf"`, and a nullable field with a default, `public string? $locale = 'en';`, set to `null` reads back as `null`, not as its default.
 
 ### When a task fails
 
@@ -137,13 +137,13 @@ Sometimes two runs of a task must never overlap: two welcomes for the same user 
 - `.running(key)` lets one task with the key run at a time. The others wait their turn.
 - `.unique(key)` lets one task with the key wait *or* run at a time. A further push is skipped, and `push()` answers `nexus::work::Pushed::skipped` instead of `.queued(id)`.
 
-An empty key means the task type itself, so `.running('')` is "one run of this task at a time, whatever its data". A key narrows it: `.unique("user:{$this->user}")` is one per user. Once the task has finished, the key is free again.
+An empty key means the task type itself, so `.running('')` is "one run of this task at a time, whatever its data". A key narrows it: `.unique("user:{$this->user}")` is one per user. Once the task has finished, the key is free again. A failed task holds no key either, so `work:retry` leaves a failed `.unique` task failed while another task with its key waits or runs.
 
 On an async queue the key holds within the process; on a distributed queue it holds across every server.
 
 ### Expiry, priority and cleaning up
 
-Some tasks are only worth running while they are fresh. You may say how long a task may wait with `expires()`; a task that waited longer is dropped unrun, and the tasks waiting for it in a pipeline count it as failed:
+Some tasks are only worth running while they are fresh. You may say how long a task may wait with `expires()`; a task that waited longer is dropped unrun, and the tasks waiting for it in a pipeline count it as failed. A stored task that expires while its server is gone (claimed, then the server stopped and its lease ran out) is not claimed again either: the scheduler's sweep fails it, its keys go free, and the tasks waiting for it go on as they would after any failure:
 
 ```echo
 public const function expires() : std::time::duration?
@@ -380,6 +380,8 @@ foreach ($sizes as $size) {
 
 Spawned tasks run after the task that spawned them, on its queue, and any task that was waiting for the parent now waits for them too. `spawn()` takes `after:` just like `Pipeline::add()`, so spawned tasks may wait for each other. A task that fails spawns nothing, and a retry spawns afresh.
 
+Spawned tasks keep to `.unique` keys as a push does, and they go together: when one of them holds a key a waiting or running task holds, or another spawned task holds too, none of them is queued. The parent is done all the same, and its run logs `the tasks it spawned were skipped` at info. The parent's own key is free by then, so a task may spawn its successor under the same key.
+
 ## Where runs log
 
 By default a run logs to the app's log, stamped with the task's name and id. You may give a task, or a whole queue, a log of its own. `log()` answers a `nexus::work::RunLog`:
@@ -412,7 +414,9 @@ A distributed queue's `->log()` is asked first, then its async queue's. [Logging
 
 A distributed queue has to turn a task into text and back. You never write that code: `nexus gen` finds every struct conforming to `nexus::work::Task` and writes a codec for it, which `nexus::work::Extension` registers at boot. It is also where the rules on fields come from (public fields, memberwise constructor, a `handle()` of exactly the right shape), and a task that breaks one fails `nexus gen` with a message saying which. [nexus gen](./generator.md) has more on what it writes.
 
-The codec names the task by its qualified struct name, like `Blog::Tasks::SendWelcome`. If you rename or move a task while some of it is still stored, the server that claims a stored one finds no task by that name, and fails it with a note saying so. The same goes for data that no longer reads, so a field you add should have a default: tasks stored before the change then still decode. Failed this way, a task stays with the failed ones, and once the fix is deployed `work:retry` sends it back.
+The codec names the task by its qualified struct name, like `Blog::Tasks::SendWelcome`. A server that claims a stored task it has no codec for leaves it for a server that has one: it sends the task back for a minute later without using up a try, and logs a warning (`no task named ... in this program; sent back for a server that has it`). That is what keeps a rolling deploy safe, where the new servers push a new task type while the old ones still claim. It also means that if you rename or move a task while some of it is still stored, the old name keeps coming back until you cancel those tasks with `work:cancel`, so drain a queue before you rename what is in it.
+
+Data that no longer reads is different: the server knows the task and its data is wrong, so it fails the task with a note saying so. A field you add should therefore have a default, so tasks stored before the change still decode. Failed this way, a task stays with the failed ones, and once the fix is deployed `work:retry` sends it back.
 
 ## Running the workers
 

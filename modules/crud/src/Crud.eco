@@ -37,7 +37,8 @@ namespace nexus::crud;
  * `find` and `page` hand back the models, for an action that answers itself; `show`, `list`,
  * `create` and `update` answer through `T`. Every read starts from the repository's `find()`,
  * narrowed by `scope` (who sees which rows) and widened by `load` (the relations the request's
- * includes name). `authorize` runs on every single-record show or write; lists are `scope`.
+ * includes name). `authorize` runs on every single-record show or write, an update's before and
+ * after the change; lists are `scope`.
  * `before` and `after` run around every write. A database error becomes its `nexus::carbon::Problems`
  * answer.
  */
@@ -210,16 +211,14 @@ public class Crud<M, Q, K, Repo, T>
         try $this->hook(Verb::create, $model);
         $made = try $this->repo->create($model);
         $this->done(Verb::create, $made);
-        if ($this->load != null && !$inc->empty()) {
-            M $loaded = try $this->fetch($this->repo->store()->table->keyOf($made), $inc);
-            return .ok($this->transformer->createResponse($payload, $loaded, $this->context, mv $inc, status: 201));
-        }
-        return .ok($this->transformer->createResponse($payload, $made, $this->context, mv $inc, status: 201));
+        M $loaded = try $this->reread($made, $inc);
+        return .ok($this->transformer->createResponse($payload, $loaded, $this->context, mv $inc, status: 201));
     }
 
     /**
      * The record with key `$key`, changed by `$fill` and saved. Answers with it, with the relations
-     * the request includes.
+     * the request includes. `authorize` sees the record before the change and again after it, and
+     * both must pass, so a fill cannot hand the record to an owner the request may not write for.
      */
     public function update(nexus::Payload& $payload, K $key, function<status<nexus::Problem>(M&)> $fill) : result<nexus::Response, nexus::Problem>
     {
@@ -227,10 +226,14 @@ public class Crud<M, Q, K, Repo, T>
         $m = try $this->fetch($key, $inc);
         try $this->allowed(Verb::update, $m);
         try $fill($m);
+        // the fill may have changed what authorize goes by, like the owner
+        try $this->allowed(Verb::update, $m);
         try $this->hook(Verb::update, $m);
         try $this->repo->save($m);
         $this->done(Verb::update, $m);
-        return .ok($this->transformer->createResponse($payload, $m, $this->context, mv $inc));
+        // the relations were loaded before the fill, which may have changed a foreign key
+        M $loaded = try $this->reread($m, $inc);
+        return .ok($this->transformer->createResponse($payload, $loaded, $this->context, mv $inc));
     }
 
     /**
@@ -278,6 +281,25 @@ public class Crud<M, Q, K, Repo, T>
         M? $found = try $q->get($key);
         $m = guard $found else {
             return .error(.notFound("the {$this->name}"));
+        };
+        return .ok($m);
+    }
+
+    /**
+     * The record just written, read again with the relations `$inc` names, or `$written` when
+     * there are none to load. The read skips `scope`: the write went through, and a scope that does
+     * not see the record must not answer a 404 that a client retries into a second write. Should
+     * the read find nothing, the answer is `$written` as it is.
+     */
+    internal function reread(const M& $written, const EchoPack::Rest::Includes& $inc) : result<M, nexus::Problem>
+    {
+        if ($this->load == null || $inc->empty()) {
+            return .ok($written);
+        }
+        $q = $this->loading($this->repo->find(), $inc);
+        M? $found = try $q->get($this->repo->store()->table->keyOf($written));
+        $m = guard $found else {
+            return .ok($written);
         };
         return .ok($m);
     }

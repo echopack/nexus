@@ -36,6 +36,14 @@ public struct Response
     public FileBody? $file = null;
 
     /**
+     * On an answer to HEAD, the length of the body `asHead` dropped, the one a GET would have sent,
+     * which the transport still says as `Content-Length`; -1 when that length is not known up front
+     * (a stream, an event stream), and the head then says no length at all. Null on any other
+     * answer.
+     */
+    public int64? $omitted = null;
+
+    /**
      * A body of any content type.
      */
     public constructor(int32 $status, const string& $body, type: const string& $type)
@@ -152,12 +160,20 @@ public struct Response
     }
 
     /**
-     * Drops every body so a HEAD answer carries the headers and status only. RFC 7231: HEAD must
+     * Drops every body so a HEAD answer carries the headers and status only, keeping the length
+     * of what it dropped in `omitted` for the transport's `Content-Length`. RFC 7231: HEAD must
      * not change the connection, so a websocket upgrade is cleared too. A file body stays: the
      * transport sends its length for HEAD and never its bytes.
      */
     public function asHead() : void
     {
+        if ($this->file == null) {
+            if ($this->stream != null || $this->events != null) {
+                $this->omitted = -1;
+            } else {
+                $this->omitted = $this->body->size() as int64;
+            }
+        }
         $this->body = '';
         $this->stream = null;
         $this->events = null;

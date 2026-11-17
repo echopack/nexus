@@ -39,12 +39,20 @@ public class ServeCommand : Command
     public function run(Invocation& $in) : int32
     {
         $options = Serve();
-        guard $options->listen($in->value('listen')) else {
-            io::eprintln("{$in->program}: --listen wants host:port");
+        string $listen = ServeCommand::listen($in);
+        guard $options->listen($listen) else {
+            if ($in->stated('listen')) {
+                io::eprintln("{$in->program}: --listen wants host:port");
+            } else {
+                io::eprintln("{$in->program}: NEXUS_LISTEN '{$listen}' is not host:port");
+            }
             return 1;
         };
-        uint64 $w = str::uint($in->value('workers')) ?? 0;
-        $options->workers = $w as uint32;
+        uint32 $workers = guard ServeCommand::workers($in->value('workers')) else {
+            io::eprintln("{$in->program}: --workers wants a number from 0 (one per core) to 2147483647");
+            return 1;
+        };
+        $options->workers = $workers;
         $options->work = !$in->flag('no-work');
         $options->schedule = !$in->flag('no-schedule');
         string $grace = $in->env->get('NEXUS_SHUTDOWN_GRACE') ?? EnvList::SHUTDOWN_GRACE;
@@ -61,5 +69,32 @@ public class ServeCommand : Command
             return 1;
         };
         return Console::serve($k, $options, $in->program);
+    }
+
+    /**
+     * Where `serve` listens: `--listen` when given, else `NEXUS_LISTEN` from the process
+     * environment or the env file, else the default.
+     */
+    public static function listen(const Invocation& $in) : string
+    {
+        if ($in->stated('listen')) {
+            return $in->value('listen');
+        }
+        return $in->env->get('NEXUS_LISTEN') ?? EnvList::LISTEN;
+    }
+
+    /**
+     * The worker count `$text` asks for, or null when it is no number or more than a transport
+     * takes (an `int32`).
+     */
+    public static function workers(const string& $text) : uint32?
+    {
+        uint64 $n = guard str::uint(str::trim($text)) else {
+            return null;
+        };
+        if ($n > 2147483647) {
+            return null;
+        }
+        return $n as uint32;
     }
 }

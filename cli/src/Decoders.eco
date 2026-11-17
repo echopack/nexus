@@ -111,6 +111,13 @@ internal function field(Code& $code, const Program& $p, const FieldDecl& $f) : R
     string $holder = "$ok{$u}";
     if ($defaulted) {
         $code->line("{$text} $ok{$u} = {$f->defaultText};");
+        if ($optional) {
+            // an explicit null is null; only a field left out falls back to the default
+            $code->begin("if ($f->nulled({$wireQ}))");
+            $code->line("$ok{$u} = null;");
+            $code->close();
+            $out->nullable = true;
+        }
     } else if (!$required) {
         $code->line("{$text} $ok{$u} = null;");
         $out->nullable = true;
@@ -210,7 +217,7 @@ internal function field(Code& $code, const Program& $p, const FieldDecl& $f) : R
                 $code->line("$y{$u} = nexus::Check::{$r->key}($y{$u});");
             }
         }
-        builtins($code, $itemKind, $f->each, "$y{$u}", "{$u}Item");
+        builtins($code, $itemKind, rules::item($f->reader), $f->each, "$y{$u}", "{$u}Item");
         classes($code, $f->eachChecks, "$y{$u}", "$k{$u}", "{$u}Item");
         $item = types::moved($itemType, "$y{$u}");
         $code->line("$n{$u}[] = {$item};");
@@ -220,12 +227,21 @@ internal function field(Code& $code, const Program& $p, const FieldDecl& $f) : R
         $code->line("$v->at({$wireQ}, {$kindQ}, {$labelQ});");
     }
     if ($f->shape != 'objects') {
-        builtins($code, $f->kind, $f->rules, "$x{$u}", $u);
+        builtins($code, $f->kind, $f->reader, $f->rules, "$x{$u}", $u);
     }
     classes($code, $f->checks, "$x{$u}", "$b{$u}", $u);
     $kept = types::moved($bare, "$x{$u}");
+    if ($blankIsNull) {
+        // kept on one branch only, so copied: a move there would leave the other branch owning it
+        $kept = "$x{$u}";
+    }
     $code->line("{$holder} = {$kept};");
     if ($blankIsNull) {
+        if ($defaulted) {
+            // blank is null, not the default
+            $code->next('else');
+            $code->line("{$holder} = null;");
+        }
         $code->close();
     }
     $code->close();
@@ -233,10 +249,10 @@ internal function field(Code& $code, const Program& $p, const FieldDecl& $f) : R
 }
 
 /**
- * The built-in rules of one value, `$x`, of a `$kind` field. Rules that compare fields run later,
- * in `crossing`.
+ * The built-in rules of one value, `$x`, of a `$kind` field read with `$reader`. Rules that compare
+ * fields run later, in `crossing`.
  */
-internal function builtins(Code& $code, const string& $kind, const array<Rule>& $rules, const string& $x, const string& $tag) : void
+internal function builtins(Code& $code, const string& $kind, const string& $reader, const array<Rule>& $rules, const string& $x, const string& $tag) : void
 {
     int32 $n = 0;
     foreach ($rules as const &$r) {
@@ -248,7 +264,7 @@ internal function builtins(Code& $code, const string& $kind, const array<Rule>& 
         if ($kind == 'string') {
             text($code, $r, $x, "{$tag}{$n}");
         } else if ($kind == 'integer' || $kind == 'number') {
-            number($code, $kind, $r, $x, "{$tag}{$n}");
+            number($code, $kind, $reader, $r, $x, "{$tag}{$n}");
         } else if ($kind == 'boolean') {
             $code->line("$v->{$k}({$x});");
         } else if ($kind == 'date' || $kind == 'timestamp') {
@@ -309,7 +325,11 @@ internal function file(Code& $code, const Rule& $r, const string& $x) : void
     $code->line("$v->{$k}({$x}, [{$list}]);");
 }
 
-internal function number(Code& $code, const string& $kind, const Rule& $r, const string& $x, const string& $tag) : void
+/**
+ * A number rule on `$x`. A uint64 is checked as it is, by the `nexus::Check` overloads that take one,
+ * since a cast to int64 would turn the top half of its range negative and let it pass.
+ */
+internal function number(Code& $code, const string& $kind, const string& $reader, const Rule& $r, const string& $x, const string& $tag) : void
 {
     string $k = $r->key;
     string $as = 'int64';
@@ -317,6 +337,9 @@ internal function number(Code& $code, const string& $kind, const Rule& $r, const
         $as = 'float64';
     }
     string $value = "{$x} as {$as}";
+    if ($reader == 'uint64') {
+        $value = $x;
+    }
     if ($k == 'min' || $k == 'max' || $k == 'multipleOf') {
         $n = num($r->value, $as);
         $code->line("$v->{$k}({$value}, {$n});");
@@ -333,8 +356,13 @@ internal function number(Code& $code, const string& $kind, const Rule& $r, const
         $list = str::join($shown, ', ');
         $code->line("$v->{$k}({$value}, [{$list}]);");
     } else if (rules::comparing($k)) {
-        $than = num($r->value, 'float64');
         $shownQ = names::quote(literal($r->value));
+        if ($reader == 'uint64' && decl::text($r->value, 'kind') == 'int') {
+            $exact = num($r->value, 'int64');
+            $code->line("$v->compare('{$k}', {$x}, {$exact}, {$shownQ});");
+            return;
+        }
+        $than = num($r->value, 'float64');
         $code->line("$v->compare('{$k}', {$x} as float64, {$than}, {$shownQ});");
     }
 }

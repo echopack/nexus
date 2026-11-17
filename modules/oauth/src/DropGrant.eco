@@ -1,7 +1,8 @@
 namespace nexus::oauth;
 
 /**
- * Disconnects a client the signed in user allowed: its tokens stop working at once.
+ * Disconnects a client the signed in user allowed: its tokens stop working at once. Only the app's
+ * own credential without scopes does (`Grants::user`).
  */
 #[nexus::through: ["nexus::auth::Authenticate"]]
 public class DropGrant : nexus::Action
@@ -15,7 +16,7 @@ public class DropGrant : nexus::Action
 
     public function handle(nexus::Payload& $payload, string $id) : status<nexus::Problem>
     {
-        $me = try $payload->state<nexus::auth::Identity>();
+        $me = try Grants::user($payload);
         Grant? $found = try $this->grants->store->grant($id);
         Grant $g = guard $found else {
             return .error(.notFound('the grant'));

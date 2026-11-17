@@ -1,5 +1,7 @@
 namespace nexus::realtime;
 
+use std::thread;
+
 /**
  * The realtime protocol: what a socket may say and what it gets. A socket sends JSON objects with
  * an `op`:
@@ -29,6 +31,10 @@ public class Gateway : HubObserver
      * binds them after this is).
      */
     public nexus::Kernel? $kernel = null;
+
+    // presence channels a roster leave failed on, each with the debt's number, for the sweeper
+    private thread::mutex<map<string, uint64>> $owed = thread::mutex<map<string, uint64>>(map<string, uint64>());
+    private atomic<uint64> $debts = atomic<uint64>(0);
 
     public constructor(Hub $hub, Channels $channels, const Limits& $limits)
     {
@@ -180,12 +186,13 @@ public class Gateway : HubObserver
             return;
         }
         Present $me = Present($this->hub->idOf($s->id()), $info ?? json::nil());
-        Seat $seat = $this->hub->seat($s->id(), $channel, true);
+        Seat $seat = $this->hub->seat($s->id(), $channel, true, $me->info);
         if (!$seat->on) {
             return;
         }
         array<Present> $members = guard $this->appearing($k, $channel, $me) else ($e) {
-            $s->send(Frames::refused($channel, .unavailable($e->message()), $k->mode));
+            $k->log->warn('realtime presence could not list a member', ['channel' => $channel, 'error' => $e->message()]);
+            $s->send(Frames::refused($channel, .unavailable(UNAVAILABLE), $k->mode));
             $this->hub->unseat($s->id(), $channel);
             $this->depart($me->id, $channel);
             return;
@@ -270,29 +277,59 @@ public class Gateway : HubObserver
         // the hook may change what is said, not who says it or where
         $w->channel = $channel;
         $w->from = $me;
-        guard $this->publish(Note::whisper($w)) else ($e) {
-            $s->send(Frames::error(channel: $channel, .unavailable($e->message()), $k->mode));
+        guard $this->publish(Note::whisper($w)) else {
+            // publish logged why
+            $s->send(Frames::error(channel: $channel, .unavailable(UNAVAILABLE), $k->mode));
             return;
         };
     }
 
     /**
-     * The socket `$id` left presence channel `$channel`: the roster forgets it and, when it was
-     * listed there, the others hear. A subscribe that joined the roster and then never delivered
-     * owes its `left` too, since another subscriber may have seen it listed meanwhile.
+     * The socket `$id` left presence channel `$channel`: the roster forgets it and the others hear,
+     * whether the roster still listed it or not (a member is keyed by id, so a `left` twice is
+     * harmless, and one missing leaves a ghost). A subscribe that joined the roster and then never
+     * delivered owes its `left` too, since another subscriber may have seen it listed meanwhile. A
+     * roster that cannot forget it now is put right by the sweeper's next beat.
      */
     internal function depart(const string& $id, const string& $channel) : void
     {
         nexus::Kernel $k = guard $this->kernel else {
             return;
         };
-        bool $was = guard $k->services->get<Roster>()->leave($channel, $id) else {
-            $k->log->warn('realtime presence could not forget a member', ['channel' => $channel]);
-            return;
-        };
-        if ($was) {
-            $this->publish(Note::left($channel, $id));
+        result<bool, RealtimeError> $forgot = $k->services->get<Roster>()->leave($channel, $id);
+        if ($forgot->failed()) {
+            $k->log->warn('realtime presence could not forget a member', ['channel' => $channel, 'error' => $forgot->failure()->message()]);
+            $this->owe($channel);
         }
+        $this->publish(Note::left($channel, $id));
+    }
+
+    /**
+     * The presence channels the roster may still list a member of this node in that it no longer
+     * holds, each with the number of its latest debt.
+     */
+    internal function owed() : map<string, uint64>
+    {
+        thread::locked<map<string, uint64>> $held = $this->owed->lock();
+        return $held->value->clone();
+    }
+
+    /**
+     * The roster is right about `$channel` as of debt `$seen`; a debt that came since stays.
+     */
+    internal function settled(const string& $channel, uint64 $seen) : void
+    {
+        thread::locked<map<string, uint64>> $held = $this->owed->lock();
+        if ($held->value->has($channel) && $held->value->at($channel) == $seen) {
+            $held->value->remove($channel);
+        }
+    }
+
+    private function owe(const string& $channel) : void
+    {
+        uint64 $n = $this->debts->add(1) + 1;
+        thread::locked<map<string, uint64>> $held = $this->owed->lock();
+        $held->value[$channel] = $n;
     }
 
     /**
@@ -319,3 +356,9 @@ public class Gateway : HubObserver
         return nexus::auth::Identity($via: '', $subject: '', $credential: '', $guest: true);
     }
 }
+
+/**
+ * What a client hears when the relay or the roster behind realtime fails; the cause goes to the
+ * log, not to the client.
+ */
+internal const string UNAVAILABLE = 'realtime is not available right now';

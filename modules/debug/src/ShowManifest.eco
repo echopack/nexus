@@ -61,7 +61,7 @@ public class ShowManifest : nexus::Action
         $how['manifest'] = json::str("GET {$base}/api");
         $how['signIn'] = json::str("GET {$base}/api/sign-in: how to sign in, without a credential");
         $how['view'] = json::str("GET {$base}/api/panels/\{panel}/\{view}?<filters>: the view's data, shaped by its kind");
-        $how['action'] = json::str("POST {$base}/api/panels/\{panel}/actions/\{action} with a JSON body: runs a view's action");
+        $how['action'] = json::str("POST {$base}/api/panels/\{panel}/actions/\{action} with a JSON body (Content-Type: application/json): runs a view's action");
         $how['poll'] = json::str("GET {$base}/api/topics/\{topic}?after=<seq>&limit=<n>&wait=<seconds>: the events after seq, waiting up to 25s for one");
         $how['stream'] = json::str("GET {$base}/api/topics/\{topic}/stream?after=<seq>: the same as server-sent events");
         $how['auth'] = json::str('Authorization: Bearer <token> on every call');

@@ -68,7 +68,7 @@ $app->schedule(SendDigest())->cron('30 7 * * 1')->into<JobLane>();     // Monday
 $app->schedule(RefreshStats())->cron('*/15 8-18 * * 1-5')->into<JobLane>(); // every quarter hour, office hours
 ```
 
-For the weekday, both `0` and `7` are Sunday. As in cron, when both the day of month and the weekday are restricted, a day that matches either one counts.
+For the weekday, both `0` and `7` are Sunday. As in cron, when both the day of month and the weekday are restricted, a day that matches either one counts. A day field that starts with `*` counts as unrestricted there, a step after it included, as Vixie cron has it: with `*/2` for the day of month and `1` for the weekday, a line runs on the odd days that are Mondays, not on every odd day and every Monday as well.
 
 ### Time zones
 
@@ -79,6 +79,8 @@ nexus::work::Extension(zone: $zurich),
 ```
 
 where `$zurich` is a `calendar::Zone`, such as one from `calendar::Zone::named('Europe/Zurich')`. Every cron line of the app is then read in that zone, daylight saving included. `every()` schedules are not affected, since they count seconds from the epoch.
+
+Twice a year the wall clock skips or repeats an hour, and the scheduler handles it the way cron does. In the hour the clocks repeat, a time fires the first time only, so `30 2 * * *` in Zurich runs once on the last Sunday of October, not twice. A time the clocks skip fires once, at the first minute after the gap: on the last Sunday of March, 02:30 never happens in Zurich, so that night's run happens at 03:00.
 
 ## Once per slot, across every server
 
@@ -116,7 +118,7 @@ NEXUS_DATABASE_URL=... NEXUS_AUTH_KEY=... echoc run -- serve --no-schedule
 With distributed lanes there is no harm in every process scheduling, so you only need `--no-schedule` when you schedule into async lanes and want those chores on particular machines.
 
 > [!WARNING]
-> The scheduler also looks after the distributed queues' stores: once a minute it fails the stored tasks that waited past their expiry and deletes the done ones older than `NEXUS_WORK_KEEP`. It does this even when nothing is scheduled. Make sure at least one process runs the scheduler, or the task tables grow for ever.
+> The scheduler also looks after the distributed queues' stores: once a minute it fails the stored tasks that expired (waiting, or left running by a server that stopped) and deletes the done ones older than `NEXUS_WORK_KEEP`, a thousand at a time until none is left, up to twenty thousand of each a minute. It does this even when nothing is scheduled. Make sure at least one process runs the scheduler, or the task tables grow for ever.
 
 To see what is planned, `work:schedule` lists every scheduled task with its schedule, its lane, and when it is next due:
 

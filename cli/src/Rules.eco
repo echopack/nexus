@@ -5,7 +5,7 @@
 
 namespace nexusgen::rules;
 
-use nexusgen::decl;
+use nexusgen::{decl, names};
 
 /**
  * The kind a `Fields` reader reads, as messages name it.
@@ -201,10 +201,21 @@ public function misfit(const string& $key, const json::Value& $value, const stri
         return null;
     }
     if (comparing($key)) {
-        if ($vk == 'int' || $vk == 'float' || ($vk == 'string' && !decl::string($value)->empty())) {
+        if ($vk == 'int' || $vk == 'float') {
             return null;
         }
-        return "'{$key}' takes a number or the name of another field";
+        $other = decl::string($value);
+        if ($vk != 'string' || $other->empty()) {
+            return "'{$key}' takes a number or the name of another field";
+        }
+        // a quoted number is no field name, and must not read as a comparison with 0
+        if (!names::identifier($other, underscore: true) || $other == 'today' || $other == 'now') {
+            return "'{$key}' takes a number, like '{$key}: 18', or the name of another field; '{$other}' is neither (write a number without quotes)";
+        }
+        if ($item) {
+            return "'{$key}' on each item takes a number; another field is compared with the whole value";
+        }
+        return null;
     }
     if (dating($key)) {
         $text = decl::string($value);

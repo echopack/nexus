@@ -65,10 +65,14 @@ public class RedisStore : nexus::cache::Store
 
     /**
      * Unlinks every key under the prefix, a `SCAN` page at a time. Never `FLUSHDB`: the database
-     * may hold more than the cache.
+     * may hold more than the cache. Refused without a prefix, where the scan would match every
+     * key in the database.
      */
     public function flush() : status<CacheError>
     {
+        if ($this->prefix->empty()) {
+            return .error(.refused('flush needs a key prefix, or it would forget the whole database'));
+        }
         redis::ScanOptions $o = redis::ScanOptions();
         string $escaped = glob($this->prefix);
         $o->pattern = "{$escaped}*";

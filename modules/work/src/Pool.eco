@@ -9,7 +9,8 @@ use std::time;
  * oldest), runs it on a background payload of its own, and settles it: the tasks waiting for it go
  * ahead, a retry waits its backoff, a failure takes the tasks waiting for it along unless it allows
  * failure. A `.running` key lets one task run at a time and a `.unique` key one wait or run, in this
- * process. Tasks a feeder claimed from a store run here too, and the feeder settles them.
+ * process. Tasks a feeder claimed from a store run here too, and the feeder settles them; their
+ * keys are the store's to hold.
  */
 #[atomic]
 public class Pool
@@ -55,15 +56,8 @@ public class Pool
         time::timestamp $now = $this->clock->now();
         {
             thread::locked<Board> $b = $this->board->lock();
-            map<string, bool> $mine = map<string, bool>();
-            foreach ($p->items as $i => const &$item) {
-                if ($item->policy->exclusive->hold() == Hold::unique) {
-                    string $key = $item->policy->exclusive->key($names[$i]);
-                    if ($b->value->live->has($key) || $mine->has($key)) {
-                        return .ok(.skipped);
-                    }
-                    $mine[$key] = true;
-                }
+            if ($b->value->clashes($p, $names)) {
+                return .ok(.skipped);
             }
             $p->assign();
             foreach ($p->items as $i => const &$item) {
@@ -147,6 +141,7 @@ public class Pool
             thread::handle $t = guard thread::spawn(function[$self]() : void {
                 $self->loop();
             }) else {
+                $this->abandon();
                 return .error(.extension('nexus-work', "{$this->lane}: cannot start a worker thread"));
             };
             $this->keep($t);
@@ -155,10 +150,30 @@ public class Pool
         thread::handle $ticker = guard thread::spawn(function[$self]() : void {
             $self->tick();
         }) else {
+            $this->abandon();
             return .error(.extension('nexus-work', "{$this->lane}: cannot start the retry thread"));
         };
         $this->keep($ticker);
         return .ok;
+    }
+
+    /**
+     * Stops the threads a start that failed part way already started: nothing drains this pool,
+     * so they would wait forever. They hold no task yet.
+     */
+    internal function abandon() : void
+    {
+        // raised under the lock, so a worker either sees it or already waits for the wake
+        {
+            thread::locked<Board> $b = $this->board->lock();
+            $this->halt->raise();
+        }
+        $this->wake->notify_all();
+        thread::locked<array<thread::handle>> $held = $this->handles->lock();
+        foreach ($held->value as &$t) {
+            $t->join();
+        }
+        $held->value = array<thread::handle>();
     }
 
     /**
@@ -278,16 +293,34 @@ public class Pool
 
     /**
      * Settles `$n` on the board as `$s`, with what it spawned when done, and tells the observers
-     * about the tasks that joined or went with it.
+     * about the tasks that joined or went with it. What it spawned is skipped, as a push would be,
+     * when one of them holds a `.unique` key a waiting or running task holds.
      */
     internal function settled(const Node& $n, const Settle& $s, Pipeline $spawned, const array<string>& $names, nexus::Logger $log) : void
     {
+        bool $done = match ($s) {
+            Settle::done => true,
+            else => false,
+        };
         array<Dropped> $dropped = [];
         bool $known = false;
+        bool $skipped = false;
         {
             thread::locked<Board> $b = $this->board->lock();
             $known = $b->value->nodes->has($n->id);
+            // the task's own key is free once it is done, so it may spawn a task holding it
+            string $own = '';
+            if ($n->hold == Hold::unique) {
+                $own = $n->key;
+            }
+            if ($done && $known && $b->value->clashes($spawned, $names, except: $own)) {
+                $skipped = true;
+                $spawned = nexus::work::Pipeline();
+            }
             $dropped = $b->value->settle($n->id, $s, $spawned, $names);
+        }
+        if ($skipped) {
+            $log->info('the tasks it spawned were skipped: one holds a .unique key a waiting or running task holds');
         }
         // the first is the task itself, the rest waited for it
         if (!$dropped->empty()) {
@@ -299,10 +332,6 @@ public class Pool
         if (!$known) {
             return;
         }
-        bool $done = match ($s) {
-            Settle::done => true,
-            else => false,
-        };
         if ($done) {
             $this->toldPushed($spawned, $names, $this->clock->now());
         }

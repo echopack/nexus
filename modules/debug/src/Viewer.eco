@@ -8,6 +8,12 @@ public struct Viewer
     public string $via;
     public string $subject;
 
+    /**
+     * The credential the gate read, when it read one (`GuardGate`): a live stream of the console
+     * ends with it.
+     */
+    public nexus::auth::Identity? $who = null;
+
     public const function json() : json::Value
     {
         $o = json::object();

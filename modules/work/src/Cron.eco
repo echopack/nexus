@@ -4,7 +4,10 @@ namespace nexus::work;
  * A five-field cron line: minute, hour, day of month, month, weekday (0 or 7 is Sunday). A field is
  * `*`, a number, a range `a-b`, any of those with a step after a slash (`8-18/2`, every second hour
  * from 8 to 18), or a comma list of them. When both the day of month and the weekday are
- * restricted, a day matching either one matches, as cron has it.
+ * restricted, a day matching either one matches, as cron has it. As in Vixie cron, a day field
+ * that starts with `*` counts as unrestricted there, a step after it included: every second day of
+ * the month with weekday `1` runs on the odd days that are Mondays, not on every odd day and every
+ * Monday.
  */
 public struct Cron
 {
@@ -40,7 +43,7 @@ public struct Cron
         if ($weekdays[7]) {
             $weekdays[0] = true;
         }
-        $c = Cron($text: $text, $minutes: mv $minutes, $hours: mv $hours, $days: mv $days, $months: mv $months, $weekdays: mv $weekdays, $anyDay: $fields[2] == '*', $anyWeekday: $fields[4] == '*');
+        $c = Cron($text: $text, $minutes: mv $minutes, $hours: mv $hours, $days: mv $days, $months: mv $months, $weekdays: mv $weekdays, $anyDay: $fields[2]->starts('*'), $anyWeekday: $fields[4]->starts('*'));
         return .ok($c);
     }
 
@@ -52,6 +55,14 @@ public struct Cron
         if (!$this->minutes[$local->time->minute as usize] || !$this->hours[$local->time->hour as usize]) {
             return false;
         }
+        return $this->day($local);
+    }
+
+    /**
+     * Whether the day `$local` falls on matches: its month, and its day of month or weekday.
+     */
+    internal const function day(const calendar::DateTime& $local) : bool
+    {
         if (!$this->months[$local->date->month->number() as usize]) {
             return false;
         }
@@ -63,6 +74,23 @@ public struct Cron
             return $day || $weekday;
         }
         return $day && $weekday;
+    }
+
+    /**
+     * How many wall clock minutes from `$local` on cannot match: up to the next day when its day
+     * does not match, up to the next hour when its hour does not, none otherwise. Answers at least
+     * one.
+     */
+    internal const function idle(const calendar::DateTime& $local) : int64
+    {
+        int64 $minute = $local->time->minute as int64;
+        if (!$this->day($local)) {
+            return 1440 - ($local->time->hour as int64) * 60 - $minute;
+        }
+        if (!$this->hours[$local->time->hour as usize]) {
+            return 60 - $minute;
+        }
+        return 1;
     }
 
     /**

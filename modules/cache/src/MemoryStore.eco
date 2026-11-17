@@ -10,10 +10,17 @@ internal struct Kept
     internal time::timestamp? $expiresAt;
 }
 
+// an entry a full store may drop, and when it would expire anyway
+internal struct Doomed
+{
+    internal string $key;
+    internal time::timestamp? $expiresAt;
+}
+
 /**
  * Entries kept in the process: `NEXUS_CACHE_URL=memory:`, the default. They are gone when it
  * stops. An expired entry is dropped when it is next read; past `max` entries, the expired ones go,
- * then the one that expires soonest.
+ * then the ones that expire soonest, a tenth of `max` at once so the next writes find room.
  */
 #[atomic]
 public class MemoryStore : Store
@@ -99,36 +106,42 @@ public class MemoryStore : Store
     }
 
     /**
-     * Drops the expired entries, then, while there are still more than `$max`, the one that expires
-     * soonest (forever ones last), never `$written`. A scan of every entry, but only when full.
+     * Drops the expired entries, then, when there are still more than `$max`, the ones that expire
+     * soonest (forever ones last) until a tenth of `$max` is free, never `$written`. One scan and
+     * one sort of every entry, once per tenth of `$max` new keys.
      */
     private static function makeRoom(map<string, Kept>& $all, const string& $written, time::timestamp $now, usize $max) : void
     {
         array<string> $gone = [];
+        array<Doomed> $live = [];
         foreach ($all as $key => const &$k) {
             if (MemoryStore::expired($k, $now)) {
                 $gone[] = $key;
+            } else if ($key != $written) {
+                $live[] = Doomed($key, $k->expiresAt);
             }
         }
         foreach ($gone as const &$key) {
             $all->remove($key);
         }
-        while ($all->count() > $max) {
-            string? $victim = null;
-            time::timestamp? $victimAt = null;
-            foreach ($all as $key => const &$k) {
-                if ($key == $written) {
-                    continue;
-                }
-                if ($victim == null || MemoryStore::sooner($k->expiresAt, $victimAt)) {
-                    $victim = $key;
-                    $victimAt = $k->expiresAt;
-                }
+        if ($all->count() <= $max) {
+            return;
+        }
+        usize $keep = $max - $max / 10;
+        $live->sort(by: function(const Doomed& $a, const Doomed& $b) : ordering {
+            if (MemoryStore::sooner($a->expiresAt, $b->expiresAt)) {
+                return .less;
             }
-            string $v = guard $victim else {
+            if (MemoryStore::sooner($b->expiresAt, $a->expiresAt)) {
+                return .greater;
+            }
+            return .equal;
+        });
+        foreach ($live as const &$d) {
+            if ($all->count() <= $keep) {
                 return;
-            };
-            $all->remove($v);
+            }
+            $all->remove($d->key);
         }
     }
 

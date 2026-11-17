@@ -81,7 +81,7 @@ public class GuardGate : Gate
                 return .error($payload->fail($p));
             };
         }
-        return .ok(Viewer($id->via, $id->subject));
+        return .ok(Viewer($id->via, $id->subject, $id));
     }
 
     public function signIn() : json::Value

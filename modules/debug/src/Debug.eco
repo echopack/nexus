@@ -115,6 +115,16 @@ public class Debug
     }
 
     /**
+     * Ends every live stream of the console opened with a credential `$e` covers.
+     */
+    public function end(const nexus::auth::Ending& $e) : void
+    {
+        foreach ($this->topics as $t) {
+            $t->end($e);
+        }
+    }
+
+    /**
      * Whether `$path` is the console's own, so the request feed leaves it out.
      */
     public const function owns(const string& $path) : bool

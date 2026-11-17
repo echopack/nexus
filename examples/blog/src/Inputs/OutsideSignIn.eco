@@ -1,8 +1,8 @@
 namespace Blog::Inputs;
 
 /**
- * What the page `/signed-in` posts once a provider sent the browser back: the attempt from its
- * query, and the binding it kept when the sign in started.
+ * What the page `/signed-in` posts once a provider sent the browser back: the attempt and the
+ * proof from its query, and the binding it kept when the sign in started.
  */
 #[nexus::input]
 public struct OutsideSignIn
@@ -12,4 +12,7 @@ public struct OutsideSignIn
 
     #[nexus::rule: { min: 1, max: 128 }]
     public string $binding;
+
+    #[nexus::rule: { min: 1, max: 128 }]
+    public string $proof;
 }

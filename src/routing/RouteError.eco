@@ -15,7 +15,7 @@ public enum RouteError
     {
         return match ($this) {
             RouteError::pattern($source, $why) => "route '{$source}': {$why}",
-            RouteError::duplicate($verb, $source) => "route {$verb} '{$source}' is declared twice",
+            RouteError::duplicate($verb, $source) => "route {$verb} '{$source}' is declared twice: another route matches the same paths",
             RouteError::unbound($action) => "action {$action} is routed but has no container binding",
             RouteError::undispatched($action) => "{$action} is routed but nexus gen wrote no dispatcher for it; is it a class conforming to nexus::Action, and did nexus gen run?",
             RouteError::param($action, $source, $why) => "route '{$source}' of {$action}: {$why}",

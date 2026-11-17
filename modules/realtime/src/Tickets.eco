@@ -20,12 +20,16 @@ public class Tickets
     private calendar::Clock $clock;
     private Claims $claims;
 
-    public constructor(const string& $authKey, time::duration $lifetime, calendar::Clock $clock)
+    // where a claims store that fails is told, rather than to the client
+    private nexus::Logger? $log;
+
+    public constructor(const string& $authKey, time::duration $lifetime, calendar::Clock $clock, log: nexus::Logger? $log = null)
     {
         $this->key = nexus::auth::Signature::sign($authKey, 'nexus-realtime ticket');
         $this->lifetime = $lifetime;
         $this->clock = $clock;
         $this->claims = LocalClaims();
+        $this->log = $log;
     }
 
     /**
@@ -109,13 +113,15 @@ public class Tickets
     }
 
     /**
-     * Takes the nonce of `$pass`; false when it was taken already.
+     * Takes the nonce of `$pass`; false when it was taken already. A claims store that fails is a
+     * 503 saying only that realtime is not available; the cause goes to the log.
      */
     public function claim(const Pass& $pass) : result<bool, nexus::Problem>
     {
         int64 $now = $this->clock->now()->unix_secs();
         bool $got = guard $this->claims->claim($pass->nonce, $pass->exp, $now) else ($e) {
-            return .error(.unavailable($e->message()));
+            $this->log?->warn('realtime ticket claims failed', ['error' => $e->message()]);
+            return .error(.unavailable(UNAVAILABLE));
         };
         return .ok($got);
     }

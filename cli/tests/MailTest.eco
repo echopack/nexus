@@ -94,12 +94,12 @@ test a_mailable_writes_its_render_overload
         ->has('namespace nexus::mail;')
         ->has(' * The bodies of shop::Mail::Welcome, from resources/emails/welcome.txt and resources/emails/welcome.html.')
         ->has('public function render(const shop::Mail::Welcome& $m) : nexus::mail::Rendered')
-        ->has("$text->append('Hello ');\n    $text->append($m->name);\n    $text->append(', you have ');\n    $text->append(str::from($m->count));\n    $text->append(' posts.');\n    $text->push(10);\n    if ($m->inviter != null) \{\n        if ($m->inviter != null) \{\n            string $v1 = guard $m->inviter;\n            $text->append($v1);\n        }\n        $text->append(' invited you.');")
+        ->has("$text->append('Hello ');\n    $text->append($m->name);\n    $text->append(', you have ');\n    $text->append(str::from($m->count));\n    $text->append(' posts.');\n    $text->push(10);\n    if ($m->inviter != null) \{\n        if ($m->inviter != null) \{\n            string $hole1 = guard $m->inviter;\n            $text->append($hole1);\n        }\n        $text->append(' invited you.');")
         ->has('$r->text = mv $text;')
         ->has('$html->append(nexus::mail::Html::escape($m->name));')
         ->has("$html->append('</h1>');\n    $html->append($m->name);")
-        ->has('foreach ($m->posts as const &$post1) {')
-        ->has('$html->append(nexus::mail::Html::escape($post1->url));')
+        ->has('foreach ($m->posts as const &$post_1) {')
+        ->has('$html->append(nexus::mail::Html::escape($post_1->url));')
         ->has("if ($m->admin) \{\n        $html->append('admin');\n    } else \{\n        $html->append('member');\n    }")
         ->has('$r->html = mv $html;');
 }
@@ -123,8 +123,23 @@ test loops_nest_and_their_names_go_out_of_scope
     map<string, string> $files = ['m.txt' => "{{ each tags as tag }}{{ each tags as inner }}{{ tag }}{{ inner }}{{ end }}{{ end }}"];
     $p = mailProgram('nested', $files, mailTool('m.txt', ''));
     expect($p->problems)->size(0);
-    expect(emitter::render($p))->has('foreach ($m->tags as const &$tag1)')->has('foreach ($m->tags as const &$inner2)')->has('$text->append($tag1);');
+    expect(emitter::render($p))->has('foreach ($m->tags as const &$tag_1)')->has('foreach ($m->tags as const &$inner_2)')->has('$text->append($tag_1);');
     expect(mailProblem('scope', "{{ each tags as tag }}{{ end }}{{ tag }}"))->has('has no field tag');
+}
+
+test a_loop_local_never_meets_a_hole_local
+{
+    // the loop is called v and holds a nullable hole: once both were $v1
+    map<string, string> $files = ['m.txt' => '{{ each posts as v }}{{ v.title }}{{ inviter }}{{ end }}{{ each tags as hole }}{{ inviter }}{{ end }}'];
+    $p = mailProgram('collide', $files, mailTool('m.txt', ''));
+    expect($p->problems)->size(0);
+    expect(emitter::render($p))
+        ->has('foreach ($m->posts as const &$v_1) {')
+        ->has('$text->append($v_1->title);')
+        ->has('string $hole1 = guard $m->inviter;')
+        ->has('foreach ($m->tags as const &$hole_2) {')
+        ->has('string $hole2 = guard $m->inviter;')
+        ->lacks('$v1');
 }
 
 test paths_walk_into_struct_fields

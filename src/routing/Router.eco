@@ -24,13 +24,14 @@ public class Router
     private Url? $base = null;
 
     /**
-     * Adds a route. Refuses a broken pattern and a method plus path that is already taken.
+     * Adds a route. Refuses a broken pattern and a method plus path that is already taken, also
+     * when written another way (`/posts/{id}` and `/posts/{slug}/`).
      */
     public function add(Route $route) : status<RouteError>
     {
         Pattern $pattern = try Pattern::parse($route->path);
         foreach ($this->placed as const &$p) {
-            if ($p->pattern->source != $pattern->source) {
+            if (!$p->pattern->same($pattern)) {
                 continue;
             }
             foreach ($route->methods as const &$m) {

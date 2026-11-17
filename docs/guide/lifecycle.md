@@ -40,7 +40,7 @@ Everything else follows from those two files. Think of the kernel as a black box
 
 `nexus::Kernel::main` hands the process to the app's command line. It reads two options that every command shares:
 
-- `--mode <dev|test|prod>`, or `NEXUS_MODE`: what the process is for. `dev` logs pretty lines and shows problem details; `prod` logs JSON lines and keeps internal error causes to itself.
+- `--mode <dev|test|prod>`, or `NEXUS_MODE` from the environment or the env file: what the process is for. `dev` logs pretty lines and shows problem details; `prod` logs JSON lines and keeps internal error causes to itself.
 - `--env-file <path>`, `.env` by default: extra settings, read after the real environment.
 
 Then it runs the command you asked for: `serve`, `routes`, `doctor`, `env`, or one an extension or your app added, such as `migrate` or `posts:show`. The [commands](./commands.md) page lists them all.

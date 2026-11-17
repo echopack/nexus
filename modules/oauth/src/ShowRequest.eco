@@ -3,7 +3,8 @@ namespace nexus::oauth;
 /**
  * What the consent page shows the signed in user: which client asks, where it goes back to, the
  * resource and the scopes, and whether this user allowed all of that before (`granted_before`), so
- * the page may answer without asking again.
+ * the page may answer without asking again. Only the app's own credential without scopes reads it
+ * (`Grants::user`).
  *
  * ```json
  * {"id": "...", "client": {"id": "...", "name": "Claude"}, "redirect": "https://...",
@@ -25,7 +26,7 @@ public class ShowRequest : nexus::Action
 
     public function handle(nexus::Payload& $payload, string $id) : result<json::Value, nexus::Problem>
     {
-        $me = try $payload->state<nexus::auth::Identity>();
+        $me = try Grants::user($payload);
         Asked $asked = try $this->grants->request($id);
         AuthRequest $r = $asked->request;
         json::Value $client = json::object();

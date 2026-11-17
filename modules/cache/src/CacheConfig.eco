@@ -25,7 +25,7 @@ public struct CacheConfig
 
     /**
      * For Redis: what every key starts with, so the cache shares a database with other data and
-     * `flush` forgets only its own.
+     * `flush` forgets only its own. An empty one stops a Redis boot.
      */
     #[nexus::env: 'PREFIX']
     public string $prefix = 'cache:';

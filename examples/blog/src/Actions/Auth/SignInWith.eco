@@ -7,7 +7,7 @@ use Blog::Transformers::UserTransformer;
 
 /**
  * Finishes a sign in with an outside provider (Google) on the session the request is signed with:
- * claims the attempt the page `/signed-in` got back, with the binding it kept, finds, links or
+ * claims the attempt the page `/signed-in` got back, with its proof and the binding it kept, finds, links or
  * makes the user (`nexus::connect::Accounts`), puts them on the session and answers them, as
  * `POST /v1/auth/signin` does.
  */
@@ -36,7 +36,7 @@ public class SignInWith : nexus::Action
         if (!$session->anonymous()) {
             return .error(nexus::auth::Sessions::taken());
         }
-        $who = try $this->connect->claim($in->value->attempt, $in->value->binding);
+        $who = try $this->connect->claim($in->value->attempt, $in->value->binding, $in->value->proof);
         $subject = try $this->accounts->of($who, BlogUsers($this->users, $this->signals, $payload->locale()));
         try $this->sessions->attach($session->credential, $subject);
         $user = try BlogUsers::of($this->users, $subject);

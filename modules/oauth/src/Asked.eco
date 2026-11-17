@@ -31,6 +31,10 @@ public struct Asked
             return .error(.shown(.badRequest("{$client->name} asked to return to an address it did not register")));
         };
         string $state = $q->get('state') ?? '';
+        // the store keeps 500 characters of it, and the refusal leaves it out rather than echo it
+        if ($state->size() > 500) {
+            return .error(.back(Asked::refusal($redirect, 'invalid_request', 'state is longer than 500 bytes', '', $issuer)));
+        }
         if (($q->get('response_type') ?? '') != 'code') {
             return .error(.back(Asked::refusal($redirect, 'unsupported_response_type', 'response_type must be code', $state, $issuer)));
         }

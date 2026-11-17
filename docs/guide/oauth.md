@@ -85,6 +85,7 @@ A few things hold no matter what your page does:
 
 - A request lives for **ten minutes** and is answered **once**. Allowing or denying removes it; a second answer is a `404`.
 - Both endpoints sit behind `nexus::auth::Authenticate`, so only a signed in caller reaches them, and a code is issued to *that* caller's subject.
+- Only your app's own credential **without scopes** may read or answer a request, the session or token that stands for all of the user. A token you issued with `scopes: ['posts:read']` gets a `403` here: allowing a client is handing out access, and a token that may only read posts must not hand out more than that. The grants endpoints below hold to the same rule.
 - An OAuth access token cannot answer a consent request or manage grants. Those endpoints are not part of any resource, and nexus-auth refuses a resource token anywhere outside its resource.
 
 Denying sends the browser back to the client with `error=access_denied`.
@@ -173,6 +174,8 @@ Where a client's codes may go is the one thing that must never be wrong, so redi
 
 When the client or its redirect is in doubt, nexus-oauth shows a `400` instead of redirecting, because sending the browser to an address nobody vouched for is exactly what must not happen. Every other refusal goes back to the client's redirect as an OAuth error, with the `state` it sent and the `iss` parameter of RFC 9207.
 
+`/oauth/authorize` needs no sign in, and every request it accepts is kept for the consent page, so it is bounded too: thirty requests per address in fifteen minutes, then a `429`. A `state` over 500 bytes is refused with `invalid_request`, and that refusal leaves the state out rather than echo it back.
+
 ### Clients in code
 
 Your own mobile or desktop app does not need to register at runtime. You may register it in code, with a fixed id:
@@ -183,7 +186,7 @@ nexus::oauth::Extension(stores: .provided, clients: [
 ]),
 ```
 
-A client in code is found before the stored ones, and the boot checks each: one without a redirect, or with a redirect that is not valid, stops it.
+A client in code is found before the stored ones, and the boot checks each: one without a redirect, with a redirect that is not valid, or with an id that is empty or longer than 32 bytes (what the stores keep), stops it.
 
 ## Tokens
 
@@ -198,7 +201,9 @@ curl -X POST https://blog.example.com/oauth/token \
 
 PKCE is required and is **S256 only**: the authorization request carries `code_challenge=base64url(sha256(verifier))` with `code_challenge_method=S256`, and the token request the verifier itself, 43 to 128 unreserved characters, compared in constant time. A request with `plain` or without a challenge is refused.
 
-The code is taken from the store the moment it is presented, before anything else is checked. So a token request with the wrong verifier spends the code too, and the client has to start over. That is deliberate: a code gets exactly one try.
+The code is marked used the moment it is presented, before anything else is checked. So a token request with the wrong verifier spends the code too, and the client has to start over. That is deliberate: a code gets exactly one try.
+
+A used code is not thrown away, though. It is kept until its minute is up, together with the grant it was traded for. When it comes back, somebody holds a copy of it, so nexus-oauth does what RFC 6749 (section 4.1.2) asks: the request gets `invalid_grant`, and the grant the code opened ends, its tokens with it. The user connects the app again.
 
 ### Access and refresh tokens
 
@@ -252,7 +257,7 @@ try nexus::oauth::carbon::Tables::wire($db);
 $all->extend(nexus::oauth::carbon::Tables::migrations());
 ```
 
-That adds four tables: `oauth_clients`, `oauth_requests`, `oauth_codes` and `oauth_grants`. A request and a code are each taken with a delete that only one caller wins, and a refresh rotates a grant with an update conditioned on the refresh hash it read, so several servers never both spend one.
+That adds four tables: `oauth_clients`, `oauth_requests`, `oauth_codes` and `oauth_grants`. A request is taken with a delete that only one caller wins, a code is marked used with an update that only one caller wins, and a refresh rotates a grant with an update conditioned on the refresh hash it read, so several servers never both spend one.
 
 Expired requests, codes and grants are deleted by nexus-auth's pruning, under the name `oauth requests, codes and grants`. [Authentication](./auth.md) shows the `auth:prune` command and how the blog runs it every night.
 

@@ -408,6 +408,74 @@ test the_code_is_traded_once_with_its_verifier
     expect($pair->capture('$.refresh_token'))->starts('nxr_');
 }
 
+test a_code_redeemed_twice_ends_the_grant_it_opened
+{
+    $r = Rig();
+    string $client = $r->register();
+    string $back = $r->approve($r->query($client), true);
+    string $access = $r->trade($client, $back)->status(200)->capture('$.access_token');
+    $r->who($access)->json('$.result.structuredContent.subject', '7');
+    $r->signedIn->get('/oauth/grants')->count('$.items', 1);
+
+    // the same code again: somebody holds a copy, so the grant it opened ends too
+    $r->trade($client, $back)
+        ->status(400)
+        ->json('$.error', 'invalid_grant')
+        ->json('$.error_description', 'the code was already used; connect the app again');
+    $r->who($access)->status(401);
+    $r->signedIn->get('/oauth/grants')->count('$.items', 0);
+}
+
+test the_consent_and_account_pages_need_the_whole_user
+{
+    $r = Rig(api: true);
+    nexus::Payload $payload = $r->app->kernel->background('issue', 'test');
+    array<string> $reading = ['posts:read'];
+    nexus::auth::Issued $issued = guard $payload->get<nexus::auth::Tokens>()->issue('7', $scopes: $reading);
+    nexus::Kernel::finish($payload);
+    Api $narrow = $r->app->api()->bearer($issued->token);
+
+    string $client = $r->register();
+    string $id = $r->ask($r->query($client));
+    json::Value $allow = json::object();
+    $allow['allow'] = json::bool(true);
+    $narrow->get("/oauth/requests/{$id}")->status(403);
+    $narrow->post("/oauth/requests/{$id}", json: $allow)->status(403);
+    $narrow->get('/oauth/grants')->status(403);
+
+    // the refused answer did not spend the request; the user's own token answers it
+    string $access = $r->trade($client, $r->answer($id, true))->status(200)->capture('$.access_token');
+    string $grant = $r->signedIn->get('/oauth/grants')->count('$.items', 1)->capture('$.items[0].id');
+    $narrow->delete("/oauth/grants/{$grant}")->status(403);
+    $r->who($access)->json('$.result.structuredContent.subject', '7');
+}
+
+test authorize_is_throttled_per_address_and_keeps_no_long_state
+{
+    $r = Rig();
+    string $client = $r->register();
+
+    // a state over 500 bytes goes back as invalid_request, without the state
+    string $long = str::repeat('s', 501);
+    string $refused = $r->app->api()
+        ->get('/oauth/authorize', query: ['response_type' => 'code', 'client_id' => $client, 'redirect_uri' => REDIRECT, 'state' => $long])
+        ->status(302)
+        ->header('Location', starts: REDIRECT)
+        ->capture(header: 'Location');
+    expect(Rig::param($refused, 'error'))->is('invalid_request');
+    expect(Rig::param($refused, 'state'))->is('');
+    string $most = str::repeat('s', 500);
+    string $fits = str::replace($r->query($client), 'state=s1', "state={$most}");
+    $r->ask($fits);
+
+    foreach (0 .. 28 as $i) {
+        $r->ask($r->query($client));
+    }
+    $r->app->api()->get("/oauth/authorize?{$r->query($client)}")->status(429);
+    $r->clock->advance(.mins(15));
+    $r->ask($r->query($client));
+}
+
 test an_access_token_opens_its_resource_and_nothing_else
 {
     $r = Rig();
@@ -492,6 +560,13 @@ test a_client_registered_in_code_needs_no_registration
     array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::oauth::Extension(clients: $bad), nexus::mcp::Extension()];
     nexus::BootError $e = expect(TestApp::attempt($exts, Rig::vars()))->fails();
     expect($e->lines()[0])->has('client x needs a redirect');
+
+    // the stores keep a client id in 32 characters
+    array<string> $one = ['http://127.0.0.1/cli'];
+    array<nexus::oauth::Client> $long = [nexus::oauth::Client($id: str::repeat('c', 33), $name: 'Long', $redirects: $one)];
+    array<nexus::Extension> $tooLong = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), nexus::oauth::Extension(clients: $long), nexus::mcp::Extension()];
+    nexus::BootError $l = expect(TestApp::attempt($tooLong, Rig::vars()))->fails();
+    expect($l->lines()[0])->has('an id is 1 to 32 bytes');
 }
 
 test refresh_rotates_and_a_reused_token_ends_the_grant
@@ -649,7 +724,8 @@ test pruning_drops_expired_requests_codes_and_grants
     array<nexus::auth::Pruned> $done = guard $payload->get<nexus::auth::Pruning>()->run($payload);
     nexus::Kernel::finish($payload);
     expect($done[2]->name)->is('oauth requests, codes and grants');
-    expect($done[2]->count)->is(2 as uint64);
+    // the request never answered, the code kept after it was redeemed, and the grant
+    expect($done[2]->count)->is(3 as uint64);
     // the user's own token expired as well; a fresh one sees no grant
     $r->app->api()->bearer(Rig::signIn($r->app))->get('/oauth/grants')->count('$.items', 0);
 }

@@ -78,12 +78,14 @@ public enum MailError
 
     /**
      * The problem a task answers with: `unavailable` (retried) when `transient()`, `badRequest`
-     * (given up) otherwise.
+     * (given up) otherwise. An `unavailable` detail reaches the client, so it says only that the
+     * mail could not go out; the server's own words are in the `mail not sent` line `Mailer::send`
+     * logs.
      */
     public const function problem() : nexus::Problem
     {
         if ($this->transient()) {
-            return .unavailable($this->message());
+            return .unavailable('the mail could not be sent right now; try again later');
         }
         return .badRequest($this->message());
     }

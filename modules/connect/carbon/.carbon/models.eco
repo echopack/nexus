@@ -19,6 +19,7 @@ public class AttemptRowTable : hydrahon::Source, carbon::Schema<nexus::connect::
     public static hydrahon::Term<string> $verifier = carbon::select::column<string>('connect_attempts', 'verifier');
     public static hydrahon::Term<hydrahon::DateTime> $expiresAt = carbon::select::column<hydrahon::DateTime>('connect_attempts', 'expires_at');
     public static hydrahon::Term<string> $error = carbon::select::column<string>('connect_attempts', 'error');
+    public static hydrahon::Term<string> $proofHash = carbon::select::column<string>('connect_attempts', 'proof_hash');
     public static hydrahon::Term<string> $externalSubject = carbon::select::column<string>('connect_attempts', 'external_subject');
     public static hydrahon::Term<string> $externalEmail = carbon::select::column<string>('connect_attempts', 'external_email');
     public static hydrahon::Term<bool> $externalEmailVerified = carbon::select::column<bool>('connect_attempts', 'external_email_verified');
@@ -48,7 +49,7 @@ public class AttemptRowTable : hydrahon::Source, carbon::Schema<nexus::connect::
 
     public const function fields() : array<hydrahon::Field>
     {
-        array<hydrahon::Field> $out = [AttemptRowTable::$id, AttemptRowTable::$provider, AttemptRowTable::$stateHash, AttemptRowTable::$bindingHash, AttemptRowTable::$nonce, AttemptRowTable::$verifier, AttemptRowTable::$expiresAt, AttemptRowTable::$error, AttemptRowTable::$externalSubject, AttemptRowTable::$externalEmail, AttemptRowTable::$externalEmailVerified, AttemptRowTable::$externalName, AttemptRowTable::$externalClaims];
+        array<hydrahon::Field> $out = [AttemptRowTable::$id, AttemptRowTable::$provider, AttemptRowTable::$stateHash, AttemptRowTable::$bindingHash, AttemptRowTable::$nonce, AttemptRowTable::$verifier, AttemptRowTable::$expiresAt, AttemptRowTable::$error, AttemptRowTable::$proofHash, AttemptRowTable::$externalSubject, AttemptRowTable::$externalEmail, AttemptRowTable::$externalEmailVerified, AttemptRowTable::$externalName, AttemptRowTable::$externalClaims];
         return $out;
     }
 
@@ -98,12 +99,13 @@ public class AttemptRowTable : hydrahon::Source, carbon::Schema<nexus::connect::
         hydrahon::DateTime $r6 = guard $row->datetime(6) else { return .error(.column('expires_at', carbon::Problem::of($row, 6))); }
         std::time::timestamp $c6 = guard carbon::codec::Instant()->decode($r6) else ($p) { return .error(.column('expires_at', $p)); }
         string $c7 = guard $row->text(7) else { return .error(.column('error', carbon::Problem::of($row, 7))); }
-        string $c8 = guard $row->text(8) else { return .error(.column('external_subject', carbon::Problem::of($row, 8))); }
-        string $c9 = guard $row->text(9) else { return .error(.column('external_email', carbon::Problem::of($row, 9))); }
-        bool $c10 = guard $row->bool(10) else { return .error(.column('external_email_verified', carbon::Problem::of($row, 10))); }
-        string $c11 = guard $row->text(11) else { return .error(.column('external_name', carbon::Problem::of($row, 11))); }
-        string $c12 = guard $row->text(12) else { return .error(.column('external_claims', carbon::Problem::of($row, 12))); }
-        return .ok(nexus::connect::carbon::AttemptRow($id: $c0, $provider: $c1, $stateHash: $c2, $bindingHash: $c3, $nonce: $c4, $verifier: $c5, $expiresAt: $c6, $error: $c7, $externalSubject: $c8, $externalEmail: $c9, $externalEmailVerified: $c10, $externalName: $c11, $externalClaims: $c12));
+        string $c8 = guard $row->text(8) else { return .error(.column('proof_hash', carbon::Problem::of($row, 8))); }
+        string $c9 = guard $row->text(9) else { return .error(.column('external_subject', carbon::Problem::of($row, 9))); }
+        string $c10 = guard $row->text(10) else { return .error(.column('external_email', carbon::Problem::of($row, 10))); }
+        bool $c11 = guard $row->bool(11) else { return .error(.column('external_email_verified', carbon::Problem::of($row, 11))); }
+        string $c12 = guard $row->text(12) else { return .error(.column('external_name', carbon::Problem::of($row, 12))); }
+        string $c13 = guard $row->text(13) else { return .error(.column('external_claims', carbon::Problem::of($row, 13))); }
+        return .ok(nexus::connect::carbon::AttemptRow($id: $c0, $provider: $c1, $stateHash: $c2, $bindingHash: $c3, $nonce: $c4, $verifier: $c5, $expiresAt: $c6, $error: $c7, $proofHash: $c8, $externalSubject: $c9, $externalEmail: $c10, $externalEmailVerified: $c11, $externalName: $c12, $externalClaims: $c13));
     }
 
     public const function snapshot(const nexus::connect::carbon::AttemptRow& $m) : carbon::change::Snapshot
@@ -125,16 +127,18 @@ public class AttemptRowTable : hydrahon::Source, carbon::Schema<nexus::connect::
         $out->values[] = hydrahon::Value::from($s6);
         string $s7 = $m->error;
         $out->values[] = hydrahon::Value::from($s7);
-        string $s8 = $m->externalSubject;
+        string $s8 = $m->proofHash;
         $out->values[] = hydrahon::Value::from($s8);
-        string $s9 = $m->externalEmail;
+        string $s9 = $m->externalSubject;
         $out->values[] = hydrahon::Value::from($s9);
-        bool $s10 = $m->externalEmailVerified;
+        string $s10 = $m->externalEmail;
         $out->values[] = hydrahon::Value::from($s10);
-        string $s11 = $m->externalName;
+        bool $s11 = $m->externalEmailVerified;
         $out->values[] = hydrahon::Value::from($s11);
-        string $s12 = $m->externalClaims;
+        string $s12 = $m->externalName;
         $out->values[] = hydrahon::Value::from($s12);
+        string $s13 = $m->externalClaims;
+        $out->values[] = hydrahon::Value::from($s13);
         return $out;
     }
 
@@ -173,24 +177,28 @@ public class AttemptRowTable : hydrahon::Source, carbon::Schema<nexus::connect::
             $into[AttemptRowTable::$error] = $s7;
         }
         if ($only->has(8)) {
-            string $s8 = $m->externalSubject;
-            $into[AttemptRowTable::$externalSubject] = $s8;
+            string $s8 = $m->proofHash;
+            $into[AttemptRowTable::$proofHash] = $s8;
         }
         if ($only->has(9)) {
-            string $s9 = $m->externalEmail;
-            $into[AttemptRowTable::$externalEmail] = $s9;
+            string $s9 = $m->externalSubject;
+            $into[AttemptRowTable::$externalSubject] = $s9;
         }
         if ($only->has(10)) {
-            bool $s10 = $m->externalEmailVerified;
-            $into[AttemptRowTable::$externalEmailVerified] = $s10;
+            string $s10 = $m->externalEmail;
+            $into[AttemptRowTable::$externalEmail] = $s10;
         }
         if ($only->has(11)) {
-            string $s11 = $m->externalName;
-            $into[AttemptRowTable::$externalName] = $s11;
+            bool $s11 = $m->externalEmailVerified;
+            $into[AttemptRowTable::$externalEmailVerified] = $s11;
         }
         if ($only->has(12)) {
-            string $s12 = $m->externalClaims;
-            $into[AttemptRowTable::$externalClaims] = $s12;
+            string $s12 = $m->externalName;
+            $into[AttemptRowTable::$externalName] = $s12;
+        }
+        if ($only->has(13)) {
+            string $s13 = $m->externalClaims;
+            $into[AttemptRowTable::$externalClaims] = $s13;
         }
     }
 
@@ -237,6 +245,7 @@ public class AttemptRowTableAlias : hydrahon::Source
     public const hydrahon::Term<string> $verifier;
     public const hydrahon::Term<hydrahon::DateTime> $expiresAt;
     public const hydrahon::Term<string> $error;
+    public const hydrahon::Term<string> $proofHash;
     public const hydrahon::Term<string> $externalSubject;
     public const hydrahon::Term<string> $externalEmail;
     public const hydrahon::Term<bool> $externalEmailVerified;
@@ -259,6 +268,7 @@ public class AttemptRowTableAlias : hydrahon::Source
         $this->verifier = $this->carbonTable->column<string>('verifier');
         $this->expiresAt = $this->carbonTable->column<hydrahon::DateTime>('expires_at');
         $this->error = $this->carbonTable->column<string>('error');
+        $this->proofHash = $this->carbonTable->column<string>('proof_hash');
         $this->externalSubject = $this->carbonTable->column<string>('external_subject');
         $this->externalEmail = $this->carbonTable->column<string>('external_email');
         $this->externalEmailVerified = $this->carbonTable->column<bool>('external_email_verified');
@@ -597,6 +607,8 @@ public struct Carbon
     {
         array<carbon::migrate::Step> $out = [
             carbon::migrate::Step('20261102000700_create_connect_tables', nexus::connect::carbon::CreateConnectTables(), true),
+            carbon::migrate::Step('20261117000700_add_connect_proof', nexus::connect::carbon::AddConnectProof(), true),
+            carbon::migrate::Step('20261117000710_hash_connect_links', nexus::connect::carbon::HashConnectLinks(), true),
         ];
         return $out;
     }

@@ -65,14 +65,19 @@ public enum Format
             Context $c = guard $e->context;
             Format::spans($c, $out, $plain, $color);
         }
-        $out->append($e->message);
+        // a line break or an escape in the message would forge a line or drive the terminal
+        if (Format::risky($e->message, space: false)) {
+            Format::string($out, $e->message);
+        } else {
+            $out->append($e->message);
+        }
         $plain->merge($e->fields);
         foreach ($plain->items as const &$f) {
             $out->push(32);
             if ($color) {
-                Format::paint($out, 2, $f->key);
+                Format::paint($out, 2, Format::key($f->key));
             } else {
-                $out->append($f->key);
+                $out->append(Format::key($f->key));
             }
             $out->push(61);
             Format::bare($out, $f->value);
@@ -104,7 +109,7 @@ public enum Format
                     $out->push(32);
                 }
                 $first = false;
-                $out->append($f->key);
+                $out->append(Format::key($f->key));
                 $out->push(61);
                 Format::bare($out, $f->value);
             }
@@ -135,7 +140,7 @@ public enum Format
         }
         foreach ($e->all()->items as const &$f) {
             $out->push(32);
-            $out->append($f->key);
+            $out->append(Format::key($f->key));
             $out->push(61);
             Format::quote($out, $f->value->text());
         }
@@ -194,15 +199,52 @@ public enum Format
         }
     }
 
-    // a value in the pretty format: as text, quoted only when it has a space
+    // a value in the pretty format: as text, quoted when it is an empty string or has a blank or a
+    // control byte, so no value breaks the line or reaches the terminal as an escape
     private static function bare(string& $out, const Value& $v) : void
     {
         string $t = $v->text();
-        if ($v->quoted() && ($t->empty() || $t->contains(' '))) {
+        if (Format::risky($t, space: true) || ($v->quoted() && $t->empty())) {
             Format::string($out, $t);
         } else {
             $out->append($t);
         }
+    }
+
+    // whether `$s` has a control byte or DEL, or with `space` a blank too
+    private static function risky(const string& $s, space: bool $space) : bool
+    {
+        usize $i = 0;
+        while ($i < $s->size()) {
+            uint8 $c = $s->byte($i);
+            if ($c < 32 || $c == 127 || ($space && $c == 32)) {
+                return true;
+            }
+            $i = $i + 1;
+        }
+        return false;
+    }
+
+    // a field key as written: a blank, control byte, quote or equals sign, which would break the
+    // `key=value` pair, becomes `_`
+    private static function key(const string& $k) : string
+    {
+        string $out = '';
+        $out->reserve($k->size());
+        usize $i = 0;
+        while ($i < $k->size()) {
+            uint8 $c = $k->byte($i);
+            if ($c <= 32 || $c == 34 || $c == 61 || $c == 127) {
+                $out->push(95);
+            } else {
+                $out->push($c);
+            }
+            $i = $i + 1;
+        }
+        if ($out->empty()) {
+            $out->push(95);
+        }
+        return $out;
     }
 
     // logfmt: bare when the text has no space, quote, equals or control byte

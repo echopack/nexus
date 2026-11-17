@@ -243,3 +243,151 @@ test messages_translate_with_labels_and_overrides
     Problem $p = $m->translate(Problem::invalid($e), 'de');
     expect($p->fields()[0]->message)->is('Der Titel muss mindestens 3 Zeichen lang sein.');
 }
+
+test a_uint64_past_int64_is_held_to_its_rules
+{
+    $f = Fields(pairs: Query(parse: 'limit=18446744073709551615'));
+    $f->check->at('limit', 'integer', '');
+    uint64 $limit = expect($f->uint64('limit', required: true))->some();
+    $f->check->max($limit, 100);
+    $f->check->between($limit, 1, 100);
+    array<int64> $allowed = [10, 50];
+    $f->check->oneOf($limit, $allowed);
+    $f->check->multipleOf($limit, 10);
+    $f->check->compare('lte', $limit, 100, '100');
+    expect(codes($f->check))->is('limit:max limit:between limit:oneOf limit:multipleOf limit:lte');
+
+    $v = Check();
+    $v->at('n', 'integer', '');
+    uint64 $fifty = 50;
+    $v->max($fifty, 100);
+    $v->min($fifty, -5);
+    $v->between($fifty, 1, 100);
+    $v->oneOf($fifty, $allowed);
+    array<int64> $refused = [-1, 7];
+    $v->noneOf($fifty, $refused);
+    $v->multipleOf($fifty, -10);
+    $v->compare('gt', $fifty, -1, '-1');
+    $v->compare('lt', $fifty, 51, '51');
+    expect(codes($v))->is('');
+    $v->max($fifty, -1);
+    $v->compare('lt', $fifty, 50, '50');
+    expect(codes($v))->is('n:max n:lt');
+}
+
+test nan_and_the_infinities_are_no_number
+{
+    $form = Fields(pairs: Query(parse: 'a=nan&b=inf&c=-infinity&d=1e999&e=NaN&f=2.5'));
+    expect($form->float64('a', required: true))->none();
+    expect($form->float64('b', required: true))->none();
+    expect($form->float64('c', required: true))->none();
+    expect($form->float64('d', required: true))->none();
+    expect($form->float64('e', required: true))->none();
+    expect($form->float64('f', required: true))->some(2.5);
+    expect(codes($form->check))->is('a:type b:type c:type d:type e:type');
+    // JSON cannot spell them: a number too large to hold does not parse
+    expect(json::parse('{"big":1e999}'))->fails();
+    $json = Fields(json: inputDoc('{"ok":3}'));
+    expect($json->float64('ok', required: true))->some(3.0);
+
+    // the rules refuse NaN themselves too, for a value that comes from elsewhere
+    float64 $zero = 0.0;
+    float64 $nan = $zero / $zero;
+    $v = Check();
+    $v->at('x', 'number', '');
+    $v->min($nan, 0.0);
+    $v->max($nan, 10.0);
+    $v->between($nan, 0.0, 10.0);
+    $v->multipleOf($nan, 0.5);
+    $v->compare('gte', $nan, 0.0, '0');
+    $v->max(1.0 / $zero, 10.0);
+    expect(codes($v))->is('x:min x:max x:between x:multipleOf x:gte x:max');
+}
+
+test a_blank_form_number_is_no_number_at_all
+{
+    $f = Fields(pairs: Query(parse: 'age=&price=&day=&at=&big=&n=&name=&on='));
+    expect($f->int64('age', required: false))->none();
+    expect($f->float64('price', required: false))->none();
+    expect($f->date('day', required: false))->none();
+    expect($f->timestamp('at', required: false))->none();
+    expect($f->uint64('big', required: false))->none();
+    expect($f->int32('n', required: false))->none();
+    expect($f->done()->has_value())->yes(says: 'blank optional numbers and dates are missing, not wrong');
+    // a string stays an empty string, and a blank checkbox value is false as before
+    expect($f->string('name', required: false))->some('');
+    expect($f->bool('on', required: false))->some(false);
+
+    $required = Fields(pairs: Query(parse: 'age=&day='));
+    expect($required->int64('age', required: true))->none();
+    expect($required->date('day', required: true))->none();
+    expect(codes($required->check))->is('age:required day:required');
+}
+
+test an_explicit_json_null_is_told_apart
+{
+    $f = Fields(json: inputDoc('{"locale":null,"name":"x"}'));
+    expect($f->nulled('locale'))->yes(says: 'the field is there as null');
+    expect($f->nulled('name'))->no(says: 'a field with a value is not null');
+    expect($f->nulled('gone'))->no(says: 'a missing field is not null');
+    $form = Fields(pairs: Query(parse: 'locale='));
+    expect($form->nulled('locale'))->no(says: 'a form cannot say null');
+}
+
+test letters_beyond_ascii_are_letters_and_nothing_else
+{
+    $v = Check();
+    $v->at('s', 'string', '');
+    $v->alpha('Zürich');
+    $v->alpha("Ελλάδα");
+    $v->alpha("東京");
+    $v->alpha("e\u{301}");
+    $v->alphaNum("Straße1");
+    $v->alphaDash("née-ño_9");
+    expect(codes($v))->is('');
+
+    array<string> $bad = [
+        "ab\u{200B}c",
+        "ab\u{202E}c",
+        "a\u{A0}b",
+        "a\u{2003}b",
+        "a\u{3000}b",
+        "a\u{FEFF}b",
+        "a\u{2060}b",
+        "a\u{AD}b",
+        "a\u{85}b",
+        "smile\u{1F600}",
+        "heart\u{2764}\u{FE0F}",
+        "a\u{E000}b",
+        "a\u{E0041}b",
+        "a\u{D7}b",
+    ];
+    foreach ($bad as const &$b) {
+        $one = Check();
+        $one->at('s', 'string', '');
+        $one->alpha($b);
+        expect(codes($one))->is('s:alpha');
+    }
+    string $broken = 'ab';
+    $broken->push(255);
+    $v->alpha($broken);
+    string $cut = 'a';
+    $cut->push(195);
+    $v->alphaNum($cut);
+    expect(codes($v))->is('s:alpha s:alphaNum');
+}
+
+test mail_addresses_and_urls_hold_no_control_characters
+{
+    $v = Check();
+    $v->at('s', 'string', '');
+    $v->email("a@b.ch");
+    $v->url('https://echoc.dev/x');
+    expect(codes($v))->is('');
+    $v->email("a\tb@c.ch");
+    $v->email("a@b.ch\n");
+    $v->email("a\u{7F}@b.ch");
+    $v->url("https://echoc.dev/\r\nx");
+    $v->url("https://echo\u{0}c.dev");
+    expect(codes($v))->is('s:email s:email s:email s:url s:url');
+}

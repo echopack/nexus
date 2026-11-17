@@ -1,12 +1,14 @@
 /**
  * The carbon task store on a real MySQL or MariaDB, where transactions and their isolation are
- * the server's own and the fake driver cannot stand in. Runs when WORK_LIVE_URL names a database,
- * as the blog's smoke test does, and migrates the task tables into it if they are missing; skipped
- * otherwise.
+ * the server's own and the fake driver cannot stand in: racing settles, expired tasks, spawned
+ * keys, claims past a busy key, sweeps and tries given back. Runs when WORK_LIVE_URL names a
+ * database, as the blog's smoke test does, and migrates the task tables into it if they are
+ * missing; skipped otherwise. Each test works a lane of its own, so another run's rows never
+ * count.
  */
 
-use nexus::work::{StoredTask, Batch, Edge};
-use nexus::work::carbon::{QueuedTask, QueuedTaskRepository, QueuedTaskTable, TaskEdgeRepository, TaskEdgeTable, Store, SessionStore, Tables};
+use nexus::work::{StoredTask, Batch, Edge, TaskStatus};
+use nexus::work::carbon::{QueuedTask, QueuedTaskRepository, QueuedTaskTable, TaskEdgeRepository, TaskEdgeTable, TaskLock, TaskLockRepository, TaskLockTable, Store, SessionStore, Tables};
 use std::{time, thread};
 use ecotest::expect;
 
@@ -62,6 +64,92 @@ internal function liveUrl() : string?
         return null;
     };
     return string::from($u);
+}
+
+/**
+ * The live database with the task tables, or null, the test skipped, when WORK_LIVE_URL is not set.
+ */
+internal function liveDb() : carbon::DB?
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('WORK_LIVE_URL is not set');
+        return null;
+    };
+    carbon::mysql::Source $source = guard carbon::mysql::Source::parse($url);
+    carbon::DB $db = carbon::DB($source);
+    guard Tables::wire($db);
+    guard carbon::Migrator($db, Tables::migrations(), carbon::ddl::Mysql())->up();
+    return $db;
+}
+
+/**
+ * A lane no other run uses.
+ */
+internal function liveLane() : string
+{
+    int64 $stamp = time::timestamp::now()->unix_nanos();
+    return "live-{$stamp}";
+}
+
+/**
+ * The row of task `$id`, or null once it is gone.
+ */
+internal function liveRow(carbon::DB $db, const string& $id) : QueuedTask?
+{
+    QueuedTaskRepository $tasks = guard $db->session()->repo<QueuedTaskRepository>();
+    QueuedTask? $found = guard $tasks->find()->where(QueuedTaskTable::$id == $id)->first();
+    return $found;
+}
+
+/**
+ * The row of task `$id`; a missing one stops the test.
+ */
+internal function liveHas(carbon::DB $db, const string& $id) : QueuedTask
+{
+    QueuedTask $row = guard liveRow($db, $id) else {
+        die("task {$id} is gone");
+    };
+    return $row;
+}
+
+/**
+ * Whether a task holds `.running` key `$key`.
+ */
+internal function liveLocked(carbon::DB $db, const string& $key) : bool
+{
+    TaskLockRepository $locks = guard $db->session()->repo<TaskLockRepository>();
+    TaskLock? $found = guard $locks->find()->where(TaskLockTable::$lockKey == $key)->first();
+    return $found != null;
+}
+
+internal function livePush(carbon::DB $db, const Batch& $b) : bool
+{
+    nexus::work::Pushed $p = guard SessionStore($db->session())->push($b);
+    return $p->queued();
+}
+
+internal function liveClaim(carbon::DB $db, const string& $lane, time::timestamp $now, uint32 $max) : array<StoredTask>
+{
+    array<StoredTask> $got = guard SessionStore($db->session())->claim($lane, $now, $now + time::duration::mins(1), $max);
+    return $got;
+}
+
+/**
+ * Deletes the rows of `$lane` and their edges and locks.
+ */
+internal function livePurge(carbon::DB $db, const string& $lane) : void
+{
+    QueuedTaskRepository $tasks = guard $db->session()->repo<QueuedTaskRepository>();
+    array<QueuedTask> $rows = guard $tasks->find()->where(QueuedTaskTable::$lane == $lane)->get();
+    if ($rows->empty()) {
+        return;
+    }
+    array<string> $ids = SessionStore::ids($rows);
+    TaskEdgeRepository $edges = guard $db->session()->repo<TaskEdgeRepository>();
+    guard $edges->find()->where(TaskEdgeTable::$taskId in $ids || TaskEdgeTable::$afterId in $ids)->purge();
+    TaskLockRepository $locks = guard $db->session()->repo<TaskLockRepository>();
+    guard $locks->find()->where(TaskLockTable::$holder in $ids)->purge();
+    guard $tasks->find()->where(QueuedTaskTable::$lane == $lane)->purge();
 }
 
 internal function liveTask(const string& $id, const string& $lane, time::timestamp $now) : StoredTask
@@ -147,4 +235,215 @@ test dependencies_finishing_at_once_on_two_servers_all_count
     guard $edges->find()->where(TaskEdgeTable::$taskId == $sum)->purge();
     QueuedTaskRepository $tasks = guard $db->session()->repo<QueuedTaskRepository>();
     guard $tasks->find()->where(QueuedTaskTable::$lane == $lane)->purge();
+}
+
+test an_expired_task_whose_server_stopped_fails_and_lets_go_of_its_keys
+{
+    carbon::DB $db = guard liveDb() else {
+        return;
+    };
+    string $lane = liveLane();
+    time::timestamp $now = $db->now();
+    Batch $b = Batch();
+    StoredTask $lost = liveTask("{$lane}-lost", $lane, $now);
+    $lost->expiresAt = $now + time::duration::secs(5);
+    $lost->hold = .unique;
+    $lost->holdKey = "{$lane}-u";
+    $lost->allowFailure = true;
+    $b->tasks[] = $lost;
+    StoredTask $locked = liveTask("{$lane}-locked", $lane, $now);
+    $locked->expiresAt = $now + time::duration::secs(5);
+    $locked->hold = .running;
+    $locked->holdKey = "{$lane}-r";
+    $b->tasks[] = $locked;
+    StoredTask $then = liveTask("{$lane}-then", $lane, $now);
+    $then->pending = 1;
+    $b->tasks[] = $then;
+    $b->edges[] = Edge($then->id, $lost->id);
+    expect(livePush($db, $b))->yes(says: 'the tasks are stored');
+    // claimed for a minute by a server that then stops
+    expect(liveClaim($db, $lane, $now, 10))->size(2);
+    time::timestamp $old = $now - time::duration::hours(1);
+    guard SessionStore($db->session())->prune($now + time::duration::secs(30), $old);
+    expect(liveHas($db, $lost->id)->status)->is(TaskStatus::running->value() as int64);
+
+    time::timestamp $later = $now + time::duration::mins(2);
+    expect(liveClaim($db, $lane, $later, 10))->empty();
+    guard SessionStore($db->session())->prune($later, $old);
+    QueuedTask $failed = liveHas($db, $lost->id);
+    expect($failed->status)->is(TaskStatus::failed->value() as int64);
+    expect($failed->error)->is('expired before it finished');
+    expect($failed->uniqueLive)->none();
+    expect(liveHas($db, $locked->id)->status)->is(TaskStatus::failed->value() as int64);
+    expect(liveLocked($db, $locked->holdKey))->no(says: 'its running key is free');
+    expect(liveHas($db, $then->id)->pending)->is(0);
+    array<StoredTask> $next = liveClaim($db, $lane, $later, 10);
+    expect($next)->size(1);
+    expect($next[0]->id)->is($then->id);
+    StoredTask $again = liveTask("{$lane}-again", $lane, $later);
+    $again->hold = .unique;
+    $again->holdKey = $lost->holdKey;
+    expect(livePush($db, Batch([$again])))->yes(says: 'its unique key is free');
+    livePurge($db, $lane);
+}
+
+test spawned_tasks_holding_a_live_unique_key_are_skipped_and_the_parent_is_done
+{
+    carbon::DB $db = guard liveDb() else {
+        return;
+    };
+    string $lane = liveLane();
+    time::timestamp $now = $db->now();
+    StoredTask $waits = liveTask("{$lane}-waits", $lane, $now + time::duration::hours(1));
+    $waits->hold = .unique;
+    $waits->holdKey = "{$lane}-k";
+    expect(livePush($db, Batch([$waits])))->yes(says: 'the task holding the key is stored');
+    Batch $b = Batch();
+    StoredTask $parent = liveTask("{$lane}-parent", $lane, $now);
+    $parent->hold = .unique;
+    $parent->holdKey = "{$lane}-p";
+    $b->tasks[] = $parent;
+    StoredTask $after = liveTask("{$lane}-after", $lane, $now);
+    $after->pending = 1;
+    $b->tasks[] = $after;
+    $b->edges[] = Edge($after->id, $parent->id);
+    expect(livePush($db, $b))->yes(says: 'the parent is stored');
+    array<StoredTask> $p = liveClaim($db, $lane, $now, 10);
+    expect($p)->size(1);
+
+    Batch $kids = Batch();
+    StoredTask $clash = liveTask("{$lane}-clash", $lane, $now);
+    $clash->hold = .unique;
+    $clash->holdKey = $waits->holdKey;
+    $kids->tasks[] = $clash;
+    $kids->tasks[] = liveTask("{$lane}-plain", $lane, $now);
+    bool $stored = guard SessionStore($db->session())->done($p[0], $now, $kids);
+    expect($stored)->no(says: 'a spawned task holding a live key skips them all');
+    expect(liveHas($db, $parent->id)->status)->is(TaskStatus::done->value() as int64);
+    expect(liveRow($db, $clash->id))->none();
+    expect(liveRow($db, "{$lane}-plain"))->none();
+    array<StoredTask> $next = liveClaim($db, $lane, $now, 10);
+    expect($next)->size(1);
+    expect($next[0]->id)->is($after->id);
+
+    // the task's own key is free once it is done, so what it spawns may hold it
+    StoredTask $own = liveTask("{$lane}-own", $lane, $now);
+    $own->hold = .unique;
+    $own->holdKey = "{$lane}-o";
+    expect(livePush($db, Batch([$own])))->yes(says: 'the task with a key of its own is stored');
+    array<StoredTask> $o = liveClaim($db, $lane, $now, 10);
+    expect($o)->size(1);
+    StoredTask $heir = liveTask("{$lane}-heir", $lane, $now);
+    $heir->hold = .unique;
+    $heir->holdKey = $own->holdKey;
+    bool $handed = guard SessionStore($db->session())->done($o[0], $now, Batch([$heir]));
+    expect($handed)->yes(says: 'its own key goes to what it spawned');
+    expect(liveHas($db, $heir->id)->uniqueLive)->some($own->holdKey);
+    livePurge($db, $lane);
+}
+
+test a_claim_reaches_past_the_tasks_behind_a_busy_running_key
+{
+    carbon::DB $db = guard liveDb() else {
+        return;
+    };
+    string $lane = liveLane();
+    time::timestamp $now = $db->now();
+    StoredTask $holder = liveTask("{$lane}-holder", $lane, $now - time::duration::mins(10));
+    $holder->hold = .running;
+    $holder->holdKey = "{$lane}-r";
+    expect(livePush($db, Batch([$holder])))->yes(says: 'the holder is stored');
+    array<StoredTask> $first = liveClaim($db, $lane, $now, 1);
+    expect($first)->size(1);
+    // more tasks behind the busy key than a claim of one reads, all older than the free one
+    Batch $b = Batch();
+    int32 $i = 0;
+    while ($i < 12) {
+        StoredTask $t = liveTask("{$lane}-r{$i}", $lane, $now - time::duration::mins(5));
+        $t->hold = .running;
+        $t->holdKey = $holder->holdKey;
+        $b->tasks[] = $t;
+        $i++;
+    }
+    $b->tasks[] = liveTask("{$lane}-free", $lane, $now);
+    expect(livePush($db, $b))->yes(says: 'the tasks are stored');
+    array<StoredTask> $got = liveClaim($db, $lane, $now, 1);
+    expect($got)->size(1);
+    expect($got[0]->id)->is("{$lane}-free");
+    livePurge($db, $lane);
+}
+
+test a_sweep_deletes_more_finished_tasks_than_one_batch
+{
+    carbon::DB $db = guard liveDb() else {
+        return;
+    };
+    string $lane = liveLane();
+    time::timestamp $now = $db->now();
+    Batch $b = Batch();
+    int32 $i = 0;
+    while ($i < 2100) {
+        $b->tasks[] = liveTask("{$lane}-{$i}", $lane, $now);
+        $i++;
+    }
+    expect(livePush($db, $b))->yes(says: 'the tasks are stored');
+    QueuedTaskRepository $tasks = guard $db->session()->repo<QueuedTaskRepository>();
+    $set = hydrahon::Values();
+    $set[QueuedTaskTable::$status] = TaskStatus::done->value() as int64;
+    $set[QueuedTaskTable::$doneAt] = $now - time::duration::hours(48);
+    guard $tasks->find()->where(QueuedTaskTable::$lane == $lane)->update(mv $set);
+    uint64 $gone = guard SessionStore($db->session())->prune($now, $now - time::duration::hours(24));
+    expect($gone >= 2100)->yes(says: 'one prune deletes them all');
+    uint64 $left = guard $tasks->find()->where(QueuedTaskTable::$lane == $lane)->count();
+    expect($left)->is(0 as uint64);
+}
+
+test a_failed_unique_task_stays_failed_while_its_key_is_taken
+{
+    carbon::DB $db = guard liveDb() else {
+        return;
+    };
+    string $lane = liveLane();
+    time::timestamp $now = $db->now();
+    StoredTask $first = liveTask("{$lane}-first", $lane, $now);
+    $first->hold = .unique;
+    $first->holdKey = "{$lane}-u";
+    expect(livePush($db, Batch([$first])))->yes(says: 'the first task is stored');
+    array<StoredTask> $c = liveClaim($db, $lane, $now, 1);
+    guard SessionStore($db->session())->fail($c[0], $now, 'broken');
+    StoredTask $second = liveTask("{$lane}-second", $lane, $now);
+    $second->hold = .unique;
+    $second->holdKey = $first->holdKey;
+    expect(livePush($db, Batch([$second])))->yes(says: 'a failed task holds no key');
+    StoredTask? $sent = guard SessionStore($db->session())->again($first->id, $now);
+    expect($sent)->none();
+    array<StoredTask> $all = guard SessionStore($db->session())->againAll($lane, $now);
+    expect($all)->empty();
+    expect(liveHas($db, $first->id)->status)->is(TaskStatus::failed->value() as int64);
+    livePurge($db, $lane);
+}
+
+test a_deferred_task_gets_its_try_and_its_running_key_back
+{
+    carbon::DB $db = guard liveDb() else {
+        return;
+    };
+    string $lane = liveLane();
+    time::timestamp $now = $db->now();
+    StoredTask $t = liveTask("{$lane}-t", $lane, $now);
+    $t->hold = .running;
+    $t->holdKey = "{$lane}-r";
+    expect(livePush($db, Batch([$t])))->yes(says: 'the task is stored');
+    array<StoredTask> $c = liveClaim($db, $lane, $now, 1);
+    expect($c[0]->attempts)->is(1);
+    time::timestamp $later = $now + time::duration::mins(1);
+    guard SessionStore($db->session())->defer($c[0], $later, 'not here');
+    QueuedTask $row = liveHas($db, $t->id);
+    expect($row->attempts)->is(0);
+    expect($row->status)->is(TaskStatus::waiting->value() as int64);
+    expect(liveLocked($db, $t->holdKey))->no(says: 'its running key is free');
+    expect(liveClaim($db, $lane, $now, 1))->empty();
+    array<StoredTask> $again = liveClaim($db, $lane, $later, 1);
+    expect($again[0]->attempts)->is(1);
+    livePurge($db, $lane);
 }

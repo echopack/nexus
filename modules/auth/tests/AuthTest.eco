@@ -668,6 +668,25 @@ test the_address_throttle_spans_accounts
     expect($l->attempt($payload, 'one-more@example.com'))->fails();
 }
 
+test a_prune_keeps_the_keys_closest_to_a_lockout
+{
+    time::timestamp $now = time::timestamp::from_unix_secs(START);
+    map<string, nexus::auth::Strike> $strikes = [
+        'locked' => nexus::auth::Strike(5, $now),
+        'close' => nexus::auth::Strike(4, $now),
+        'fresh1' => nexus::auth::Strike(1, $now),
+        'fresh2' => nexus::auth::Strike(1, $now),
+        'stale' => nexus::auth::Strike(5, $now - time::duration::mins(20)),
+    ];
+    nexus::auth::Throttle::prune($strikes, $now, .mins(15), 5, 2);
+    // the passed window goes, then the fewest failures, never the locked out key
+    expect($strikes->count())->is(2);
+    expect($strikes->has('locked'))->yes();
+    expect($strikes->has('close'))->yes();
+    nexus::auth::Throttle::prune($strikes, $now, .mins(15), 5, 0);
+    expect($strikes->has('locked'))->yes(says: 'a locked out key stays even past the target');
+}
+
 test boot_needs_a_key_and_a_good_prefix
 {
     map<string, string> $short = ['NEXUS_AUTH_KEY' => 'too short'];
@@ -744,6 +763,19 @@ test resources_that_clash_or_have_no_path_stop_the_boot
     map<string, string> $slash = ['api' => '/v1/'];
     array<nexus::Extension> $bad = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), TResources($slash, false)];
     expect(TestApp::attempt($bad, $vars))->fails();
+}
+
+test issued_resources_need_the_public_origin_in_prod
+{
+    map<string, string> $paths = ['mcp' => '/mcp'];
+    array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), TResources($paths, true)];
+    map<string, string> $bare = ['NEXUS_AUTH_KEY' => KEY];
+    nexus::BootError $e = expect(TestApp::attempt($exts, $bare, mode: .prod))->fails();
+    expect($e->lines()[0])->has('NEXUS_APP_URL');
+    map<string, string> $set = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_APP_URL' => 'https://blog.example.com'];
+    expect(TestApp::attempt($exts, $set, mode: .prod)->failed())->no(says: 'it boots with the origin set');
+    array<nexus::Extension> $quiet = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)), TResources($paths, false)];
+    expect(TestApp::attempt($quiet, $bare, mode: .prod)->failed())->no(says: 'resources nobody issues tokens for point nowhere');
 }
 
 test pruning_removes_what_expired_in_every_store

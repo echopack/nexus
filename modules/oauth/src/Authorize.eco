@@ -4,23 +4,31 @@ namespace nexus::oauth;
  * Where a client sends the user. The request is checked and kept for ten minutes, then the browser
  * goes to the app's consent page (`consent`) with `?request=<id>`. A request whose client or
  * redirect is in doubt is a 400 here; anything else wrong goes back to the client as an OAuth
- * error.
+ * error. Anybody may ask and every request is kept, so it is thirty per address in fifteen
+ * minutes, then a 429.
  */
 public class Authorize : nexus::Action
 {
     private Grants $grants;
     private nexus::auth::Resources $resources;
     private nexus::Url $consent;
+    private nexus::auth::Throttle $throttle;
 
-    public constructor(Grants $grants, nexus::auth::Resources $resources, const nexus::Url& $consent)
+    public constructor(Grants $grants, nexus::auth::Resources $resources, const nexus::Url& $consent, nexus::auth::Throttle $throttle)
     {
         $this->grants = $grants;
         $this->resources = $resources;
         $this->consent = $consent;
+        $this->throttle = $throttle;
     }
 
     public function handle(nexus::Payload& $payload) : result<nexus::Response, nexus::Problem>
     {
+        string $peer = $payload->request->peer;
+        std::time::timestamp $now = $this->grants->clock->now();
+        if (!$this->throttle->take($peer, $now)) {
+            return .error(.tooMany($this->throttle->wait($peer, $now)));
+        }
         Asked $asked = guard Asked::check($payload, $payload->request->query, $this->grants, $this->resources) else ($d) {
             return $d->answer();
         };

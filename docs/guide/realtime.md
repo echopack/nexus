@@ -106,6 +106,10 @@ public function handle(const CommentPosted& $signal) : status<nexus::Problem>
 
 If you would rather give an event a type of its own, a struct conforming to `nexus::realtime::Broadcast` says its `channel()`, `event()` and `data()`, and `$broadcaster->send($b)` sends it.
 
+### A slow reader holds up nobody
+
+Not every client reads as fast as you send. A phone in a tunnel stops reading, and its socket's buffer fills up. So each socket gets a small queue of its own, and a few writer threads work through the queues, so one stuck socket never delays the event for everyone else. A socket that falls more than 256 frames behind is closed with code `1008`, and its client reconnects and catches up with `after`, like after any other drop.
+
 ### Skipping the socket that caused it
 
 When a reader posts a comment from the page, the page usually shows it right away. Getting the same comment back over the socket a moment later would show it twice. To avoid that, the client sends its socket's id in the `X-Socket-Id` header, and the action passes it on as `except:`:
@@ -133,7 +137,9 @@ public function member(nexus::Payload& $payload, const nexus::auth::Identity& $w
 }
 ```
 
-A subscriber now gets the list of members along with `subscribed`, and hears `joined` and `left` as others come and go. Return `null`, the default, and the channel stays without presence.
+A subscriber now gets the list of members along with `subscribed`, and hears `joined` and `left` as others come and go, always after its own `subscribed`. Return `null`, the default, and the channel stays without presence.
+
+Members are keyed by id, so hearing `left` for someone who already left is harmless, and a server says `left` even when the roster lost track of the member first. Every `NEXUS_REALTIME_BEAT`, each server also puts the roster right about its own members: one the roster lost (Redis restarted, say) is listed again and announced as `joined`, and one it no longer holds (a leave that failed while Redis was down) is taken out and announced as `left`.
 
 Since the member info is whatever the server says, you should only put in it what everyone on the channel may see.
 
@@ -193,13 +199,15 @@ Each message is one JSON object with an `op`. A client sends:
 | `{"op":"whisper","channel":"posts.5","event":"typing","data":{}}` | Whispers to the others, when the channel lets it. |
 | `{"op":"ping"}` | Answered with `pong`. |
 
-And the server sends `ready` once the socket is open (with `socket_id` and `signed_in`), `subscribed` or `refused` (with the RFC 9457 `problem` why) for each subscribe, `event` for each broadcast, `whisper`, `joined` and `left` on presence channels, and `reset` when a reconnecting client asked to catch up from an event no longer kept, which means "fetch afresh".
+And the server sends `ready` once the socket is open (with `socket_id` and `signed_in`), `subscribed` or `refused` (with the RFC 9457 `problem` why) for each subscribe, `event` for each broadcast, `whisper`, `joined` and `left` on presence channels, and `reset`, which means "fetch afresh": when a reconnecting client asked to catch up from an event no longer kept, or when the server may have missed broadcasts (its Redis listener lost the connection for a while).
+
+Nothing on a channel arrives before its `subscribed`, and nothing arrives twice: the catch up after `after` comes first, then everything live.
 
 The `socket_id` from `ready` is the value to send as `X-Socket-Id`.
 
 ## Sockets end with the sign in
 
-A socket lives as long as the sign in it was opened with. When someone signs out, or their password changes and every session ends, their sockets close at once with code `4001`, on every server. A presence channel's other readers see them leave. Credentials that simply expire are caught too: every `NEXUS_REALTIME_RECHECK`, a server checks its open sockets and closes the ones whose sign in no longer holds.
+A socket lives as long as the sign in it was opened with. When someone signs out, or their password changes and every session ends, their sockets close at once with code `4001`, on every server. A presence channel's other readers see them leave. Credentials that simply expire are caught too: every `NEXUS_REALTIME_RECHECK`, a server checks its open sockets and closes the ones whose sign in no longer holds. A server whose Redis listener was cut off checks right away once it is back, since a sign out may have been among what it missed.
 
 An open socket does not keep its session alive, though. The requests the client signs do that. [Authentication](./auth.md) covers sessions and how they end.
 
@@ -218,6 +226,8 @@ blog realtime:send --channel posts.5 --event note --data '{"text":"hi"}'
 ```
 
 On `local:` that command refuses, since its own process has no sockets to send to.
+
+When a server's listener loses Redis, it connects again on its own. Whatever was published meanwhile never reaches that server, so once it is back, every socket there hears `reset` for the channels it follows, cursors from before the gap catch up no further than `reset`, and the sign ins of its sockets are checked again.
 
 > [!NOTE]
 > `rediss://` is refused for now: the Redis client has no TLS yet.

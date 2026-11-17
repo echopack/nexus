@@ -40,6 +40,37 @@ public struct Percent
     }
 
     /**
+     * Decodes `%XX` escapes like `decode`, but a broken escape stays as written instead of
+     * failing the whole text: `100%` is `100%`, `%zz` is `%zz`. Queries and forms read this way,
+     * the way browsers send them.
+     */
+    public static function loose(const string& $text, plus: bool $plus) : string
+    {
+        string $out = '';
+        $out->reserve($text->size());
+        usize $i = 0;
+        while ($i < $text->size()) {
+            uint8 $c = $text->byte($i);
+            if ($c == 37 && $i + 2 < $text->size()) {
+                int32 $hi = Percent::nibble($text->byte($i + 1));
+                int32 $lo = Percent::nibble($text->byte($i + 2));
+                if ($hi >= 0 && $lo >= 0) {
+                    $out->push((($hi << 4) | $lo) as uint8);
+                    $i = $i + 3;
+                    continue;
+                }
+            }
+            if ($plus && $c == 43) {
+                $out->push(32);
+            } else {
+                $out->push($c);
+            }
+            $i = $i + 1;
+        }
+        return $out;
+    }
+
+    /**
      * Decodes a path segment, where `+` stays a plus.
      */
     public static function decode(const string& $text) : string?

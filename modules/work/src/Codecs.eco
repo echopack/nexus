@@ -76,6 +76,29 @@ public class Codecs
         if ($p->empty()) {
             return .error(.server('an empty pipeline was pushed'));
         }
+        return $this->checked($p);
+    }
+
+    /**
+     * The names of what a run spawned into `$p`, with ids assigned; null, logged on `$log`, when
+     * nexus gen wrote nothing for one of them or one asks for fewer than 1 or more than 100 tries.
+     */
+    internal const function spawned(Pipeline& $p, nexus::Logger $log) : array<string>?
+    {
+        array<string> $names = guard $this->checked($p) else ($problem) {
+            $log->error('the task spawned a task that cannot be queued; none of its spawned tasks run', ['detail' => $problem->detail(.dev)]);
+            return null;
+        };
+        $p->assign();
+        return $names;
+    }
+
+    /**
+     * The names of the tasks of `$p`; an error when nexus gen wrote nothing for one of them, or one
+     * asks for fewer than 1 or more than 100 tries.
+     */
+    internal const function checked(const Pipeline& $p) : result<array<string>, nexus::Problem>
+    {
         array<string> $names = try $this->names($p);
         foreach ($p->items as $i => const &$item) {
             if ($item->policy->tries < 1 || $item->policy->tries > 100) {
@@ -83,19 +106,5 @@ public class Codecs
             }
         }
         return .ok($names);
-    }
-
-    /**
-     * The names of what a run spawned into `$p`, with ids assigned; null, logged on `$log`, when
-     * nexus gen wrote nothing for one of them.
-     */
-    internal const function spawned(Pipeline& $p, nexus::Logger $log) : array<string>?
-    {
-        array<string> $names = guard $this->names($p) else ($problem) {
-            $log->error('the task spawned a task nexus gen wrote nothing for; none of its spawned tasks run', ['detail' => $problem->detail(.dev)]);
-            return null;
-        };
-        $p->assign();
-        return $names;
     }
 }

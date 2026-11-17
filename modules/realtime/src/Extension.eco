@@ -51,7 +51,7 @@ public class Extension : nexus::Extension
         $channels = Channels();
         $s->bind<Hub>(put: $hub);
         $s->bind<Channels>(put: $channels);
-        $s->bind<Tickets>(put: Tickets($s->get<nexus::auth::AuthConfig>()->key, $config->ticket, $this->clock));
+        $s->bind<Tickets>(put: Tickets($s->get<nexus::auth::AuthConfig>()->key, $config->ticket, $this->clock, log: $s->get<nexus::Logger>()));
         // with Redis nexus-realtime-redis binds the relay, the roster and the broadcaster; boot checks that it did
         if ($kind == 'local') {
             $relay = LocalRelay($hub);

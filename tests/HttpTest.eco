@@ -49,6 +49,42 @@ test percent_refuses_broken_escapes
     expect(Percent::decode('a+b', plus: true))->some('a b');
 }
 
+test a_broken_escape_in_a_query_stays_as_written
+{
+    $q = Query(parse: 'q=100%&b=%zz&c=%4&d=50%25&e=a%2');
+    expect($q->count())->is(5);
+    expect($q->get('q'))->some('100%');
+    expect($q->get('b'))->some('%zz');
+    expect($q->get('c'))->some('%4');
+    expect($q->get('d'))->some('50%');
+    expect($q->get('e'))->some('a%2');
+    $r = Request(.get, '/search?q=100%&page=2');
+    expect($r->query->get('q'))->some('100%');
+    expect($r->query->get('page'))->some('2');
+    expect(Percent::loose('a+b%20c%', plus: true))->is('a b c%');
+}
+
+test a_head_answer_keeps_the_length_it_drops
+{
+    $t = Response(text: 'hello');
+    expect($t->omitted)->none();
+    $t->asHead();
+    expect($t->body)->is('');
+    expect($t->omitted)->some(5 as int64);
+    // a stream's length is not known up front: the head says none rather than 0
+    $s = Response(stream: function(nexus::Writer $w) : void {
+        $w->write('hi');
+    }, type: 'text/plain');
+    $s->asHead();
+    expect($s->stream == null)->yes(says: 'the stream is dropped');
+    expect($s->omitted)->some(-1 as int64);
+    $e = Response(events: function(nexus::EventStream $es) : void {
+    });
+    $e->asHead();
+    expect($e->events == null)->yes(says: 'no stream opens for HEAD');
+    expect($e->omitted)->some(-1 as int64);
+}
+
 test request_splits_target
 {
     $r = Request(.get, '/v1/posts/42?include=author');

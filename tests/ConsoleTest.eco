@@ -84,6 +84,96 @@ test a_command_name_is_taken_once
     expect(Console::run($exts, ['shop', 'serve', '--env-file', 'no-such.env']))->is(1);
 }
 
+/**
+ * A command that keeps the mode it was run in.
+ */
+internal class CMode : Command
+{
+    public nexus::Mode $seen = .dev;
+
+    public const function name() : string
+    {
+        return 'which';
+    }
+
+    public const function summary() : string
+    {
+        return 'say the mode';
+    }
+
+    public function run(Invocation& $in) : int32
+    {
+        $this->seen = $in->mode;
+        return 0;
+    }
+}
+
+internal class CModeApp : Extension
+{
+    public CMode $command = CMode();
+
+    public function name() : string
+    {
+        return 'shop';
+    }
+
+    public function commands(Commands& $cmds) : void
+    {
+        $cmds->add($this->command);
+    }
+}
+
+test the_mode_is_read_from_the_env_file_too
+{
+    if (std::env::var('NEXUS_MODE') != null) {
+        ecotest::skip('NEXUS_MODE is set in the process, which wins over the file');
+    }
+    $tmp = ecotest::TempDir();
+    string $file = $tmp->file('.env');
+    expect(std::fs::writefile($file, "NEXUS_MODE=prod\n")->has_value())->yes(says: 'wrote the env file');
+    $app = CModeApp();
+    array<Extension> $exts = [$app];
+    expect(Console::run($exts, ['shop', 'which', '--env-file', $file]))->is(0);
+    expect($app->command->seen == nexus::Mode::prod)->yes(says: 'NEXUS_MODE in the env file sets the mode');
+    // --mode wins over the file
+    expect(Console::run($exts, ['shop', 'which', '--env-file', $file, '--mode', 'test']))->is(0);
+    expect($app->command->seen == nexus::Mode::testing)->yes(says: '--mode wins');
+    // a broken mode in the file is refused, not taken for dev
+    string $bad = $tmp->file('bad.env');
+    expect(std::fs::writefile($bad, "NEXUS_MODE=staging\n")->has_value())->yes(says: 'wrote the broken env file');
+    expect(Console::run($exts, ['shop', 'which', '--env-file', $bad]))->is(1);
+}
+
+test serve_listens_where_the_env_file_says
+{
+    $in = Invocation(.dev);
+    $in->values['listen'] = '127.0.0.1:3246';
+    $in->given['listen'] = false;
+    map<string, string> $vars = ['NEXUS_LISTEN' => '0.0.0.0:9000'];
+    $in->env = nexus::Env(fixed: $vars);
+    expect(nexus::ServeCommand::listen($in))->is('0.0.0.0:9000');
+    // --listen wins
+    $in->values['listen'] = '127.0.0.1:8000';
+    $in->given['listen'] = true;
+    expect(nexus::ServeCommand::listen($in))->is('127.0.0.1:8000');
+    // neither: the default
+    $plain = Invocation(.dev);
+    $plain->env = nexus::Env(fixed: map<string, string>());
+    expect(nexus::ServeCommand::listen($plain))->is(nexus::EnvList::LISTEN);
+}
+
+test serve_refuses_a_worker_count_it_cannot_take
+{
+    expect(nexus::ServeCommand::workers('0'))->some(0 as uint32);
+    expect(nexus::ServeCommand::workers(' 8 '))->some(8 as uint32);
+    expect(nexus::ServeCommand::workers('2147483647'))->some(2147483647 as uint32);
+    expect(nexus::ServeCommand::workers('2147483648'))->none();
+    expect(nexus::ServeCommand::workers('5000000000'))->none();
+    expect(nexus::ServeCommand::workers('many'))->none();
+    expect(nexus::ServeCommand::workers('-1'))->none();
+    expect(nexus::ServeCommand::workers(''))->none();
+}
+
 internal function cKernel(nexus::Mode $mode, map<string, string> $vars) : nexus::Kernel
 {
     array<Extension> $exts = [];

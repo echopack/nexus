@@ -15,7 +15,8 @@ namespace nexus::realtime;
  * - `event` with `channel`, `event`, `id` and `data`, one broadcast;
  * - `whisper` with `channel`, `event`, `data` and `from` (the sender's member id), one whisper;
  * - `reset` with the `channel` and a fresh `after` when the one sent named a broadcast no longer
- *   kept: fetch afresh;
+ *   kept, or when this server may have missed broadcasts (its relay lost the broker a while):
+ *   fetch afresh;
  * - `pong` for a `ping`, `error` with a `message` for a frame it could not use (and the `channel`
  *   and `problem` for a whisper the channel refused).
  */

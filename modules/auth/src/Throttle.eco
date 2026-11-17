@@ -12,6 +12,12 @@ use std::time;
 public class Throttle
 {
     private thread::mutex<map<string, Strike>> $strikes;
+
+    /**
+     * How many keys are kept before a prune. It grows when the keys locked out alone fill it, so a
+     * flood of them is not rescanned on every attempt; it is only read and set under the lock.
+     */
+    private atomic<int64> $ceiling = atomic<int64>(100000);
     public const int32 $limit;
     public const time::duration $window;
 
@@ -41,8 +47,14 @@ public class Throttle
         $s->count = $s->count + 1;
         $held->value[$key] = mv $s;
         // a flood of keys must not grow this without bound
-        if ($held->value->count() > 100000) {
-            Throttle::prune($held->value, $now, $this->window, $this->limit);
+        if (($held->value->count() as int64) > $this->ceiling->load()) {
+            Throttle::prune($held->value, $now, $this->window, $this->limit, 75000);
+            int64 $left = $held->value->count() as int64;
+            if ($left * 2 > 100000) {
+                $this->ceiling->store($left * 2);
+            } else {
+                $this->ceiling->store(100000);
+            }
         }
         return true;
     }
@@ -85,19 +97,37 @@ public class Throttle
     }
 
     /**
-     * Drops windows that passed and keys that are not locked out. Locked out ones stay, or a flood
-     * of fresh keys would set them free.
+     * Drops windows that passed, then the keys with the fewest failures until at most `$keep` are
+     * left. Locked out ones stay, and so do the ones closest to it, or a flood of fresh keys would
+     * set them free or give them their guesses back.
      */
-    internal static function prune(map<string, Strike>& $strikes, time::timestamp $now, time::duration $window, int32 $limit) : void
+    internal static function prune(map<string, Strike>& $strikes, time::timestamp $now, time::duration $window, int32 $limit, usize $keep) : void
     {
         array<string> $gone = [];
+        // the keys not locked out, by their count
+        array<array<string>> $byCount = [];
+        int32 $c = 0;
+        while ($c < $limit) {
+            $byCount[] = array<string>();
+            $c++;
+        }
         foreach ($strikes as $key => const &$s) {
-            if ($now - $s->since >= $window || $s->count < $limit) {
+            if ($now - $s->since >= $window) {
                 $gone[] = $key;
+            } else if ($s->count < $limit) {
+                $byCount[$s->count as usize][] = $key;
             }
         }
         foreach ($gone as const &$key) {
             $strikes->remove($key);
+        }
+        foreach ($byCount as const &$keys) {
+            foreach ($keys as const &$key) {
+                if ($strikes->count() <= $keep) {
+                    return;
+                }
+                $strikes->remove($key);
+            }
         }
     }
 }

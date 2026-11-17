@@ -167,3 +167,485 @@ internal struct MailboxState<T>
         return $all;
     }
 }
+
+/**
+ * What `Spools::put` did with a send.
+ */
+public enum Spooled
+{
+    /**
+     * Queued, behind what already waits on the spool.
+     */
+    case queued;
+
+    /**
+     * Not queued: as many sends as the spool holds wait on it already, so its receiver is not keeping
+     * up. Shut it.
+     */
+    case full;
+
+    /**
+     * Not queued: a send on the spool failed, or it is shut. Its receiver is gone.
+     */
+    case gone;
+}
+
+/**
+ * Sends to many receivers at once without waiting on any of them: an open socket, an event
+ * stream. Each receiver has a spool, keyed by its id, holding at most `room` sends; a few threads of
+ * the set's own (up to `writers`, started as they are needed, one kept while it is quiet) take the
+ * spools in turn and run each spool's sends in the order they were put, one spool on one thread at a
+ * time. A receiver that stops reading holds up its own spool and one writer, never the thread that
+ * puts nor, while a writer is spare, any other spool; once its spool is full, `put` says so and the
+ * caller `shut`s it. A spool whose send failed is listed by `failed` for its owner to forget. When no
+ * thread starts and none runs, `put` runs the sends on the caller.
+ */
+#[atomic]
+public class Spools
+{
+    public const usize $room;
+    private SpoolQueue $queue;
+
+    public constructor(usize $room, usize $writers = 8)
+    {
+        $this->room = $room;
+        $this->queue = SpoolQueue($writers);
+    }
+
+    // waits for the sends under way; what still waits is dropped
+    destructor()
+    {
+        $this->queue->close();
+    }
+
+    /**
+     * Queues `$send` on spool `$spool`, which answers whether it reached its receiver.
+     */
+    public function put(int64 $spool, function<bool()> $send) : Spooled
+    {
+        SpoolPut $p = $this->queue->put($spool, $send, $this->room);
+        if ($p->hire) {
+            $this->hire();
+        }
+        return $p->spooled;
+    }
+
+    /**
+     * Drops what waits on spool `$spool`, runs `$last` once the send under way there is through (the
+     * receiver's close) and forgets the spool. Nothing is put on it after.
+     */
+    public function shut(int64 $spool, function<void()> $last) : void
+    {
+        if ($this->queue->shut($spool, $last)) {
+            $this->hire();
+        }
+    }
+
+    /**
+     * Drops what waits on spool `$spool` and forgets it: its receiver is gone. A spool being shut is
+     * left to its close.
+     */
+    public function forget(int64 $spool) : void
+    {
+        $this->queue->forget($spool);
+    }
+
+    /**
+     * The spools a send failed on since the last call, each once.
+     */
+    public function failed() : array<int64>
+    {
+        return $this->queue->failed();
+    }
+
+    /**
+     * Waits until every send put before the call ran or was dropped, and every close shut before it
+     * ran.
+     */
+    public function settle() : void
+    {
+        $this->queue->settle();
+    }
+
+    // starts a writer the queue counted already; runs the spools here when none starts and none runs
+    private function hire() : void
+    {
+        SpoolQueue $q = $this->queue;
+        result<thread::handle, thread::error> $started = thread::spawn(function[$q]() : void {
+            Spools::write($q, true);
+        });
+        thread::handle $h = guard $started else {
+            if ($q->unhire()) {
+                Spools::write($q, false);
+            }
+            return;
+        };
+        $h->detach();
+    }
+
+    /**
+     * A writer's loop: one spool's turn after another, until the queue closes or, unless `$stay`,
+     * nothing is ready.
+     */
+    internal static function write(SpoolQueue $q, bool $stay) : void
+    {
+        while (true) {
+            Turn $turn = guard $q->next($stay) else {
+                return;
+            };
+            match ($turn) {
+                Turn::sends($spool, $sends) => {
+                    bool $ok = true;
+                    foreach ($sends as const &$send) {
+                        if (!$send()) {
+                            $ok = false;
+                            break;
+                        }
+                    }
+                    $q->sent($spool, $sends->count() as uint64, $ok);
+                },
+                Turn::last($run) => {
+                    $run();
+                    $q->ran();
+                },
+            }
+        }
+    }
+}
+
+/**
+ * What one writer's turn on a spool does: the sends waiting there, or its close.
+ */
+internal enum Turn
+{
+    case sends(int64 $spool, array<function<bool()>> $sends);
+    case last(function<void()> $run);
+}
+
+/**
+ * What a put did, and whether the caller starts a writer for it.
+ */
+internal struct SpoolPut
+{
+    public Spooled $spooled;
+    public bool $hire = false;
+}
+
+/**
+ * One receiver's spool.
+ */
+internal struct SpoolState
+{
+    public array<function<bool()>> $sends = [];
+    public function<void()>? $last = null;
+
+    // in the ready queue or on a writer, so no second writer takes it
+    public bool $busy = false;
+    public bool $failed = false;
+
+    // the waiting sends, moved out, the spool left empty
+    public function take() : array<function<bool()>>
+    {
+        array<function<bool()>> $all = mv $this->sends;
+        $this->sends = [];
+        return $all;
+    }
+}
+
+internal struct SpoolsState
+{
+    public map<int64, SpoolState> $spools = [];
+
+    // the spools with something to do, oldest first, from `head` on
+    public array<int64> $ready = [];
+    public usize $head = 0;
+    public array<int64> $failed = [];
+    public bool $closed = false;
+
+    // writers alive, those of them on no spool, and those of them asleep
+    public usize $running = 0;
+    public usize $spare = 0;
+    public usize $asleep = 0;
+
+    // sends and closes queued, and those run or dropped
+    public uint64 $queued = 0;
+    public uint64 $finished = 0;
+
+    // the failed spools, moved out, the list left empty
+    public function takeFailed() : array<int64>
+    {
+        array<int64> $all = mv $this->failed;
+        $this->failed = [];
+        return $all;
+    }
+
+    public const function waiting() : usize
+    {
+        return $this->ready->count() - $this->head;
+    }
+
+    // `$id` has something to do: in line for a writer, unless one has it already
+    public function wake(int64 $id) : void
+    {
+        SpoolState& $l = $this->spools->at($id);
+        if ($l->busy) {
+            return;
+        }
+        $l->busy = true;
+        $this->ready->push($id);
+    }
+
+    // the next spool in line, the line kept short
+    public function pop() : int64
+    {
+        int64 $id = $this->ready[$this->head];
+        $this->head = $this->head + 1;
+        if ($this->head == $this->ready->count()) {
+            $this->ready = [];
+            $this->head = 0;
+        } else if ($this->head >= 1024 && $this->head * 2 >= $this->ready->count()) {
+            array<int64> $rest = arr::room<int64>($this->ready->count() - $this->head);
+            usize $i = $this->head;
+            while ($i < $this->ready->count()) {
+                $rest->push($this->ready[$i]);
+                $i = $i + 1;
+            }
+            $this->ready = mv $rest;
+            $this->head = 0;
+        }
+        return $id;
+    }
+}
+
+/**
+ * The spools of a `Spools` and the line its writers take them from.
+ */
+#[atomic]
+internal class SpoolQueue
+{
+    private usize $most;
+    private thread::mutex<SpoolsState> $state = thread::mutex<SpoolsState>(SpoolsState());
+
+    // a spool is ready, or the queue closed
+    private thread::condition $ready = thread::condition();
+
+    // a send or close is through, or a writer stopped
+    private thread::condition $through = thread::condition();
+
+    public constructor(usize $most)
+    {
+        $this->most = $most;
+        if ($this->most == 0) {
+            $this->most = 1;
+        }
+    }
+
+    public function put(int64 $id, function<bool()> $send, usize $room) : SpoolPut
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        if ($held->value->closed) {
+            return SpoolPut(.gone);
+        }
+        if (!$held->value->spools->has($id)) {
+            $held->value->spools[$id] = SpoolState();
+        }
+        SpoolState& $l = $held->value->spools->at($id);
+        if ($l->failed || $l->last != null) {
+            return SpoolPut(.gone);
+        }
+        if ($l->sends->count() >= $room) {
+            return SpoolPut(.full);
+        }
+        $l->sends->push($send);
+        $held->value->queued = $held->value->queued + 1;
+        $held->value->wake($id);
+        return SpoolPut(.queued, $this->hire($held));
+    }
+
+    /**
+     * Shuts spool `$id`; true when the caller starts a writer.
+     */
+    public function shut(int64 $id, function<void()> $last) : bool
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        if ($held->value->closed) {
+            return false;
+        }
+        if (!$held->value->spools->has($id)) {
+            $held->value->spools[$id] = SpoolState();
+        }
+        SpoolState& $l = $held->value->spools->at($id);
+        if ($l->last != null) {
+            return false;
+        }
+        $held->value->finished = $held->value->finished + ($l->sends->count() as uint64);
+        $l->sends = [];
+        $l->last = $last;
+        $held->value->queued = $held->value->queued + 1;
+        $held->value->wake($id);
+        $this->through->notify_all();
+        return $this->hire($held);
+    }
+
+    public function forget(int64 $id) : void
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        if (!$held->value->spools->has($id)) {
+            return;
+        }
+        SpoolState& $l = $held->value->spools->at($id);
+        if ($l->last != null) {
+            return;
+        }
+        $held->value->finished = $held->value->finished + ($l->sends->count() as uint64);
+        $held->value->spools->remove($id);
+        $this->through->notify_all();
+    }
+
+    public function failed() : array<int64>
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        return $held->value->takeFailed();
+    }
+
+    /**
+     * The next turn for a writer, waiting for one while no other writer sleeps; null once the
+     * queue closed, or nothing is ready and the writer may go (another sleeps, or not `$stay`).
+     */
+    public function next(bool $stay) : Turn?
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        while (true) {
+            if ($held->value->closed) {
+                return $this->quit($held);
+            }
+            while ($held->value->waiting() > 0) {
+                int64 $id = $held->value->pop();
+                if (!$held->value->spools->has($id)) {
+                    continue;
+                }
+                SpoolState& $l = $held->value->spools->at($id);
+                if (!$l->sends->empty()) {
+                    array<function<bool()>> $sends = $l->take();
+                    $held->value->spare = $held->value->spare - 1;
+                    return Turn::sends($id, mv $sends);
+                }
+                function<void()>? $last = $l->last;
+                if ($last != null) {
+                    function<void()> $run = guard $last;
+                    $held->value->spools->remove($id);
+                    $held->value->spare = $held->value->spare - 1;
+                    return Turn::last($run);
+                }
+                $l->busy = false;
+            }
+            if (!$stay || $held->value->asleep > 0) {
+                return $this->quit($held);
+            }
+            $held->value->asleep = $held->value->asleep + 1;
+            $this->ready->wait($held);
+            $held->value->asleep = $held->value->asleep - 1;
+        }
+        return null;
+    }
+
+    /**
+     * A writer ran `$count` sends of spool `$id`, `$ok` when every one reached its receiver.
+     */
+    public function sent(int64 $id, uint64 $count, bool $ok) : void
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        $held->value->finished = $held->value->finished + $count;
+        $held->value->spare = $held->value->spare + 1;
+        if ($held->value->spools->has($id)) {
+            SpoolState& $l = $held->value->spools->at($id);
+            if (!$ok) {
+                $held->value->finished = $held->value->finished + ($l->sends->count() as uint64);
+                $l->sends = [];
+                if (!$l->failed && $l->last == null) {
+                    $held->value->failed->push($id);
+                }
+                $l->failed = true;
+            }
+            $l->busy = false;
+            if (!$l->sends->empty() || $l->last != null) {
+                $held->value->wake($id);
+                $this->ready->notify();
+            }
+        }
+        $this->through->notify_all();
+    }
+
+    /**
+     * A writer ran a spool's close.
+     */
+    public function ran() : void
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        $held->value->finished = $held->value->finished + 1;
+        $held->value->spare = $held->value->spare + 1;
+        $this->through->notify_all();
+    }
+
+    /**
+     * A writer the queue counted did not start; true when none runs, so the caller runs the spools.
+     */
+    public function unhire() : bool
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        if ($held->value->running == 1) {
+            return true;
+        }
+        $held->value->running = $held->value->running - 1;
+        $held->value->spare = $held->value->spare - 1;
+        return false;
+    }
+
+    public function settle() : void
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        uint64 $target = $held->value->queued;
+        while (!$held->value->closed && $held->value->finished < $target) {
+            $this->through->wait($held);
+        }
+    }
+
+    /**
+     * Drops what waits and waits for the writers to stop.
+     */
+    public function close() : void
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        $held->value->closed = true;
+        $held->value->spools = [];
+        $held->value->ready = [];
+        $held->value->head = 0;
+        $this->ready->notify_all();
+        $this->through->notify_all();
+        while ($held->value->running > 0) {
+            $this->through->wait($held);
+        }
+    }
+
+    // wakes a writer that sleeps, and counts one more to start when more spools are ready than
+    // writers are spare
+    private function hire(thread::locked<SpoolsState>& $held) : bool
+    {
+        $this->ready->notify();
+        if ($held->value->waiting() > $held->value->spare && $held->value->running < $this->most) {
+            $held->value->running = $held->value->running + 1;
+            $held->value->spare = $held->value->spare + 1;
+            return true;
+        }
+        return false;
+    }
+
+    // the writer stops
+    private function quit(thread::locked<SpoolsState>& $held) : Turn?
+    {
+        $held->value->running = $held->value->running - 1;
+        $held->value->spare = $held->value->spare - 1;
+        $this->through->notify_all();
+        return null;
+    }
+}

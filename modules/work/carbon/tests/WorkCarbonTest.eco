@@ -112,6 +112,14 @@ internal function fine(status<nexus::Problem> $s) : bool
     return true;
 }
 
+internal function stored(result<bool, nexus::Problem> $r) : bool
+{
+    bool $all = guard $r else ($e) {
+        die("expected success: {$e->detail(.dev)}");
+    };
+    return $all;
+}
+
 internal function bootWhy(array<nexus::Extension> $exts) : string
 {
     guard TestApp::attempt($exts, map<string, string>()) else ($e) {
@@ -192,7 +200,7 @@ test done_lets_the_waiting_tasks_go_and_a_stale_claim_changes_nothing
     $r = Rig(true);
     StoredTask $a = $r->claimed('a');
     $r->fake->written(1)->rows([TaskEdgeTable()->row(TaskEdge::of(Edge('b', 'a')))])->written(1);
-    expect(fine($r->store()->done($a, $r->clock->now(), Batch())))->yes(says: 'done is stored');
+    expect(stored($r->store()->done($a, $r->clock->now(), Batch())))->yes(says: 'done is stored');
     expect($r->fake->texts()[1])->starts('UPDATE `nexus_tasks` SET `status` = ?, `done_at` = ?');
     // the database counts down, so settles on two servers at once both count
     expect($r->fake->texts()[3])->is('UPDATE `nexus_tasks` SET `pending` = `nexus_tasks`.`pending` + ? WHERE `nexus_tasks`.`id` = ?');
@@ -200,8 +208,25 @@ test done_lets_the_waiting_tasks_go_and_a_stale_claim_changes_nothing
 
     $stale = Rig(true);
     $stale->fake->written(0);
-    expect(fine($stale->store()->done($a, $stale->clock->now(), Batch())))->yes(says: 'a stale done is no error');
+    expect(stored($stale->store()->done($a, $stale->clock->now(), Batch())))->yes(says: 'a stale done is no error');
     expect($stale->fake->texts())->size(3);
+}
+
+test a_spawned_key_another_server_took_in_between_settles_without_the_spawned_tasks
+{
+    $r = Rig(true);
+    StoredTask $a = $r->claimed('a');
+    StoredTask $u = $r->task('u');
+    $u->hold = .unique;
+    $u->holdKey = 'TSay#5';
+    // the key is free when checked, then taken before the insert: the settle rolls back and runs again
+    $r->fake->rows([])->written(1)->rows([])->fails(.driver(carbon::Failure($fault: .duplicate, $message: 'unique_live taken')))->written(1)->rows([]);
+    expect(stored($r->store()->done($a, $r->clock->now(), Batch([$u]))))->no(says: 'the spawned tasks are skipped');
+    array<string> $sent = $r->fake->texts();
+    expect($sent[0])->has('`nexus_tasks`.`unique_live` = ?')->has('`nexus_tasks`.`id` <> ?');
+    expect($sent)->has('ROLLBACK');
+    expect($r->fake->last())->is('COMMIT');
+    expect($r->fake->pending())->is(0);
 }
 
 test retries_failures_again_and_prune

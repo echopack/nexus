@@ -31,7 +31,7 @@ internal struct Board
     public map<string, bool> $held = map<string, bool>();
 
     /**
-     * The `.unique` keys of every task waiting or running.
+     * The `.unique` keys of every local task waiting or running; the store holds a fed task's.
      */
     public map<string, bool> $live = map<string, bool>();
 
@@ -54,7 +54,7 @@ internal struct Board
                 $d->next[] = $n->id;
             }
         }
-        if ($n->hold == Hold::unique) {
+        if ($n->fed == null && $n->hold == Hold::unique) {
             $this->live[$n->key] = true;
         }
         string $id = $n->id;
@@ -63,6 +63,26 @@ internal struct Board
         if ($ready) {
             $this->ready[] = $id;
         }
+    }
+
+    /**
+     * Whether a task of `$p` (named `$names`) holds a `.unique` key that a waiting or running task
+     * other than `$except` holds, or another task of `$p` holds too.
+     */
+    public const function clashes(const Pipeline& $p, const array<string>& $names, except: const string& $except = '') : bool
+    {
+        map<string, bool> $mine = map<string, bool>();
+        foreach ($p->items as $i => const &$item) {
+            if ($item->policy->exclusive->hold() != Hold::unique) {
+                continue;
+            }
+            string $key = $item->policy->exclusive->key($names[$i]);
+            if (($this->live->has($key) && $key != $except) || $mine->has($key)) {
+                return true;
+            }
+            $mine[$key] = true;
+        }
+        return false;
     }
 
     /**
@@ -322,7 +342,7 @@ internal struct Board
 
     internal function unlive(const Node& $n) : void
     {
-        if ($n->hold == Hold::unique) {
+        if ($n->fed == null && $n->hold == Hold::unique) {
             $this->live->remove($n->key);
         }
     }

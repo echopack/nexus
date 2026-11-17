@@ -175,6 +175,27 @@ public struct Pattern
         return false;
     }
 
+    /**
+     * Whether this pattern matches exactly the paths `$other` matches: the same segments, told
+     * apart only by their parameter names.
+     */
+    public const function same(const Pattern& $other) : bool
+    {
+        if ($this->segments->count() != $other->segments->count()) {
+            return false;
+        }
+        foreach ($this->segments as $i => const &$a) {
+            const Segment& $b = $other->segments[$i];
+            if ($a->kind != $b->kind || $a->constraint != $b->constraint) {
+                return false;
+            }
+            if ($a->kind == SegmentKind::literal && $a->text != $b->text) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     internal static function split(const string& $path) : array<string>
     {
         array<string> $none = [];

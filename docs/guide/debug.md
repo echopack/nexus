@@ -57,6 +57,8 @@ You don't have to do anything for this. The database, [cache](./cache.md), [mail
 
 A request is found by its id. If a client sends `X-Request-Id`, that is the id, which makes it easy to look up one request you just made.
 
+The headers are shown with their credentials masked as `***`: `Authorization`, `Cookie`, `X-Api-Key`, and any header whose name says `token`, `secret`, `api-key` or `password`. A header holding a URL (`Location`, `Content-Location`, `Referer`, `Refresh`) keeps its URL but has the credentials in its query masked, so a redirect to a presigned S3 link doesn't put its signature on the screen.
+
 ## Who gets in
 
 A console that shows your routes, your log and your settings must not be open to the world. A gate decides who gets in, and nexus-debug picks one for you in this order:
@@ -96,6 +98,8 @@ Without `login:`, the console asks for a bearer token of your app's own sign in.
 
 With no gate and no token, the console opens to requests from this machine only: the developer at their desk, nothing to type. It refuses anything else, including a request through a proxy or for a host name that is not `localhost`, so a page on another site can't reach it either.
 
+A page on another site can still make your browser send a request to `localhost`, though. So every action, whatever the gate, takes its body as `Content-Type: application/json` only (which a browser won't send across sites without asking the console first, and the console never says yes), and is refused when the browser says it comes from another site (`Sec-Fetch-Site`) or another origin (`Origin`). The console's own web app and `curl` are not affected.
+
 > [!WARNING]
 > The open gate is for development. In `prod` mode the boot stops and asks for `NEXUS_DEBUG_TOKEN` or a gate.
 
@@ -113,9 +117,9 @@ That makes the console as useful to a coding agent as to you. Point an agent at 
 |:--|:--|
 | `GET /__nexus/api` | The description: panels, views, topics, endpoints. |
 | `GET /__nexus/api/panels/{panel}/{view}` | One view's data, like `requests/timeline?id=...`. |
-| `POST /__nexus/api/panels/{panel}/actions/{action}` | Runs a view's action, like retrying a failed task. |
+| `POST /__nexus/api/panels/{panel}/actions/{action}` | Runs a view's action, like retrying a failed task. The body is JSON, sent as `application/json`. |
 | `GET /__nexus/api/topics/{topic}?after=<seq>&wait=<seconds>` | The events of a live topic (`logs`, `requests`, `jobs`) after a point, waiting for new ones. |
-| `GET /__nexus/api/topics/{topic}/stream` | The same as server-sent events. |
+| `GET /__nexus/api/topics/{topic}/stream` | The same as server-sent events, for `NEXUS_DEBUG_STREAM_LIFE` at most. |
 | `GET /__nexus/api/sign-in` | How to sign in, readable without a credential. |
 
 The blog's tests use the API the same way, to check that a request's timeline holds the queries it ran:
@@ -187,6 +191,9 @@ Pass it with `nexus::debug::Extension(panels: [...])`, or add it from an extensi
 | `NEXUS_DEBUG_PATH` | `/__nexus` | Where the console lives. The API is under `<path>/api`. |
 | `NEXUS_DEBUG_TOKEN` | | A token that opens it as a bearer token, at least 32 characters. Used when the app passes no gate. |
 | `NEXUS_DEBUG_KEEP` | `1000` | How many events each live topic keeps for late readers. |
+| `NEXUS_DEBUG_STREAM_LIFE` | `15m` | How long a live stream stays open before the console ends it and the web app opens it again through the gate. |
+
+A live stream also ends at once when the sign in it was opened with ends, through a `GuardGate`, and a viewer that stops reading is let go once it falls a few hundred events behind, so it never holds up the others.
 
 [Configuration](./configuration.md) covers how these are read.
 

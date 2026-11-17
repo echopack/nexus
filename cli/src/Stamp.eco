@@ -1,7 +1,7 @@
 /**
  * A digest of everything the generated file depends on: every `.eco` file of the module and of the
- * path dependencies its `module.eco` names, in turn (outside build, vendor and hidden
- * directories), every mail template under `resources/emails/`, the lock file and the compiler
+ * path dependencies its `module.eco` names, in turn (outside the build, vendor and hidden
+ * directories at each of their roots), every mail template under `resources/emails/`, the lock file and the compiler
  * used. Equal stamps mean the decls pass can be skipped.
  */
 
@@ -18,10 +18,10 @@ public function digest(const std::fs::path& $root, const string& $echoc) : strin
     $h->update($echoc);
     $h->update('nexus-gen 6');
     array<string> $files = [];
-    walk($root, '.eco', $files);
+    walk($root, '.eco', $files, true);
     array<string> $seen = [];
     follow($root, $files, $seen);
-    walk($root / mails::FOLDER, '', $files);
+    walk($root / mails::FOLDER, '', $files, true);
     $files[] = ($root / 'epm.lock.json')->string();
     $files->sort();
     foreach ($files as const &$path) {
@@ -52,26 +52,29 @@ internal function follow(const std::fs::path& $dir, array<string>& $out, array<s
             continue;
         }
         $seen[] = $key;
-        walk($at, '.eco', $out);
+        walk($at, '.eco', $out, true);
         follow($at, $out, $seen);
     }
 }
 
 /**
- * Adds every file under `$dir` whose name ends in `$suffix` to `$out`, as its path spelled out.
+ * Adds every file under `$dir` whose name ends in `$suffix` to `$out`, as its path spelled out. At
+ * a `$root` (a module's own directory, or one nested in it with a `module.eco` of its own),
+ * `ecobuild/`, `vendor/` and hidden entries are skipped: build output, installed dependencies and
+ * `.nexus/` itself. Deeper down they are sources like any other, so `src/vendor/` counts.
  */
-internal function walk(const std::fs::path& $dir, const string& $suffix, array<string>& $out) : void
+internal function walk(const std::fs::path& $dir, const string& $suffix, array<string>& $out, bool $root) : void
 {
     $d = guard std::fs::opendir($dir) else {
         return;
     };
     foreach ($d as const &$e) {
         $name = $e->name();
-        if ($name->starts('.') || $name == 'ecobuild' || $name == 'vendor') {
+        if ($root && ($name->starts('.') || $name == 'ecobuild' || $name == 'vendor')) {
             continue;
         }
         if ($e->is_directory()) {
-            walk($e->path(), $suffix, $out);
+            walk($e->path(), $suffix, $out, std::fs::exists($e->path() / 'module.eco')->or(false));
         } else if ($name->ends($suffix)) {
             $out[] = $e->path()->string();
         }

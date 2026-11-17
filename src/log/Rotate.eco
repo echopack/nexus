@@ -42,7 +42,8 @@ public enum Rotate
         int64 $n = guard str::int($digits) else {
             return .error(.rotate($text));
         };
-        if ($n <= 0) {
+        // a size that does not fit in 64 bits would wrap to a small one and rotate every line
+        if ($n <= 0 || ($n as uint64) > 18446744073709551615 / $unit) {
             return .error(.rotate($text));
         }
         return .ok(.size(($n as uint64) * $unit));

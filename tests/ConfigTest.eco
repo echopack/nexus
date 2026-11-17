@@ -18,6 +18,23 @@ test dotenv_parses_lines
     expect(Env::parse('.env', "JUSTAWORD\n", $bad))->fails();
 }
 
+test dotenv_drops_inline_comments_and_keeps_quoted_text
+{
+    $out = map<string, string>();
+    string $text = "URL=\"https://example.com\" # public origin\nKEY=abc # note\nHASH=abc#def\nTAB=x\t# tabbed\nSINGLE='a # b' # kept inside\nESC=\"say \\\"hi\\\" \\\\ \\n\"\n";
+    guard Env::parse('.env', $text, $out);
+    expect($out->get('URL'))->is('https://example.com');
+    expect($out->get('KEY'))->is('abc');
+    expect($out->get('HASH'))->is('abc#def');
+    expect($out->get('TAB'))->is('x');
+    expect($out->get('SINGLE'))->is('a # b');
+    expect($out->get('ESC'))->is("say \"hi\" \\ \\n");
+    $open = map<string, string>();
+    expect(Env::parse('.env', "OPEN=\"never closed\n", $open))->fails();
+    $after = map<string, string>();
+    expect(Env::parse('.env', "AFTER=\"a\"b\n", $after))->fails();
+}
+
 test settings_read_types_and_collect_errors
 {
     map<string, string> $vars = ['POOL' => '16', 'DEBUG' => 'yes', 'TIMEOUT' => '5m', 'PORT' => '99999', 'RATIO' => 'x'];
@@ -33,6 +50,22 @@ test settings_read_types_and_collect_errors
     array<string> $lines = expect($done)->fails()->lines();
     expect($lines)->size(3);
     expect($lines[2])->is('config: DB_URL is required but not set');
+}
+
+test a_required_setting_set_to_nothing_is_missing
+{
+    map<string, string> $vars = ['DB_URL' => '', 'KEY' => '  ', 'POOL' => '', 'NOTE' => ''];
+    $s = Settings(Env(fixed: $vars));
+    expect($s->string('DB_URL', required: true))->none();
+    expect($s->string('KEY', required: true))->none();
+    expect($s->uint32('POOL', required: true))->none();
+    // an optional setting keeps its empty value
+    expect($s->string('NOTE', required: false))->some('');
+    array<string> $lines = expect($s->done())->fails()->lines();
+    expect($lines)->size(3);
+    expect($lines[0])->is('config: DB_URL is required but not set');
+    expect($lines[1])->is('config: KEY is required but not set');
+    expect($lines[2])->is('config: POOL is required but not set');
 }
 
 test env_overrides_win

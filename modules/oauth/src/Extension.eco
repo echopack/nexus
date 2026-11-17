@@ -33,6 +33,7 @@ public class Extension : nexus::Extension
     public const Stores $stores;
     public calendar::Clock $clock;
     internal nexus::auth::Throttle $registrations;
+    internal nexus::auth::Throttle $authorizations;
     internal string? $consent;
     internal array<Client> $clients;
 
@@ -46,6 +47,7 @@ public class Extension : nexus::Extension
         $this->stores = $stores;
         $this->clock = $clock;
         $this->registrations = nexus::auth::Throttle(10, .mins(15));
+        $this->authorizations = nexus::auth::Throttle(30, .mins(15));
         $this->consent = $consent;
         $this->clients = mv $clients;
     }
@@ -71,6 +73,10 @@ public class Extension : nexus::Extension
             return .error(.extension('nexus-oauth', "consent: '{$config->consent}' is no URL: {$e->message()}"));
         };
         foreach ($this->clients as const &$c) {
+            // the stores keep a client's id in 32 characters
+            if ($c->id->empty() || $c->id->size() > 32) {
+                return .error(.extension('nexus-oauth', "client '{$c->id}': an id is 1 to 32 bytes"));
+            }
             if ($c->redirects->empty()) {
                 return .error(.extension('nexus-oauth', "client {$c->id} needs a redirect"));
             }
@@ -91,6 +97,7 @@ public class Extension : nexus::Extension
         });
         calendar::Clock $clock = $this->clock;
         nexus::auth::Throttle $throttle = $this->registrations;
+        nexus::auth::Throttle $authorizations = $this->authorizations;
         $s->bind<Grants>(scope: function[$clients, $config, $clock](Container $c) : Grants {
             return Grants($c->get<OAuthStore>(), $clients, $config, $clock, $c->get<nexus::auth::Endings>());
         });
@@ -100,8 +107,8 @@ public class Extension : nexus::Extension
         $s->bindAction<Register>(method: .post, path: '/oauth/register', function[$config, $clock, $throttle](Container $c) : Register {
             return Register($c->get<OAuthStore>(), $config, $clock, $throttle);
         });
-        $s->bindAction<Authorize>(method: .get, path: '/oauth/authorize', function[$resources, $consent](Container $c) : Authorize {
-            return Authorize($c->get<Grants>(), $resources, $consent);
+        $s->bindAction<Authorize>(method: .get, path: '/oauth/authorize', function[$resources, $consent, $authorizations](Container $c) : Authorize {
+            return Authorize($c->get<Grants>(), $resources, $consent, $authorizations);
         });
         $s->bindAction<ShowRequest>(method: .get, path: '/oauth/requests/{id}', function[$resources](Container $c) : ShowRequest {
             return ShowRequest($c->get<Grants>(), $resources);

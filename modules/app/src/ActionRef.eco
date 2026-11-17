@@ -26,7 +26,8 @@ public class ActionRef<A>
 
     /**
      * Answers `$methods` at `$path` with this action. Call it again for another path; the
-     * middleware of this ref wraps every route.
+     * middleware of this ref wraps every route. The same path again only adds the methods to the
+     * route it has already, which its middleware wraps once.
      */
     public function route(array<nexus::Method> $methods, const string& $path) : ActionRef<A>
     {
@@ -38,6 +39,12 @@ public class ActionRef<A>
         nexus::ActionRef<A> $ref = $this->app->services->route<A>(method: $methods[0], path: $path);
         for ($i = 1; $i < $methods->count(); $i++) {
             $this->app->services->route<A>(method: $methods[$i], path: $path);
+        }
+        // the route this ref wrapped already: wrapping it again would run each middleware twice
+        foreach ($this->routes as const &$known) {
+            if ($known->path() == $path) {
+                return $this;
+            }
         }
         foreach ($this->around as const &$wrap) {
             $wrap($ref);

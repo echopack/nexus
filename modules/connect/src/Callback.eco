@@ -3,7 +3,7 @@ namespace nexus::connect;
 /**
  * Where a provider sends the browser back, `/auth/connect/{provider}/callback`: with a GET and the
  * code in the query, or with a POST and the code in a form (`response_mode=form_post`). It ends at
- * the app's page with `?attempt=<id>`.
+ * the app's page with `?attempt=<id>&proof=<proof>`.
  */
 public class Callback : nexus::Action
 {

@@ -4,10 +4,11 @@ use std::thread;
 use std::time;
 
 /**
- * A server's housekeeping threads, under `serve`: every `recheck` it asks whether the credentials
- * of its open sockets still hold and closes those whose credential expired (4001), and every
- * `beat` it tells the roster it is alive and takes out the members of servers that stopped, telling
- * the channels they left.
+ * A server's housekeeping threads, under `serve`: every `recheck`, and at once after the hub's
+ * relay lost notes (`Hub::lapse`, an `ended` among them maybe), it asks whether the credentials of
+ * its open sockets still hold and closes those whose credential expired (4001); every `beat` it
+ * tells the roster it is alive, takes out the members of servers that stopped, telling the
+ * channels they left, and puts the roster right about this server's own members.
  */
 #[atomic]
 public class Sweeper
@@ -89,8 +90,8 @@ public class Sweeper
     }
 
     /**
-     * Tells the roster this server is alive, and takes out the members of the presence channels
-     * followed here whose server stopped beating.
+     * Tells the roster this server is alive, takes out the members of the presence channels
+     * followed here whose server stopped beating, and reconciles this server's own members.
      */
     public function pulse(nexus::Kernel $kernel) : void
     {
@@ -112,6 +113,69 @@ public class Sweeper
                 $gateway->publish(Note::left($c->name, $id));
             }
         }
+        $this->reconcile($kernel, $roster, $gateway);
+    }
+
+    /**
+     * Puts the roster right about this server's members: one the hub holds and the roster lost (a
+     * Redis that restarted, another server that pruned this one while it could not beat) is listed
+     * again and the channel hears it joined; one the roster lists for this server and the hub no
+     * longer holds (a leave that failed) is taken out and the channel hears it left. The roster is
+     * read before the hub, so a member that subscribes meanwhile is never taken for a ghost.
+     */
+    public function reconcile(nexus::Kernel $kernel, Roster $roster, Gateway $gateway) : void
+    {
+        map<string, uint64> $owed = $gateway->owed();
+        array<string> $names = [];
+        foreach ($this->hub->presence() as $name => const &$members) {
+            $names[] = $name;
+        }
+        foreach ($owed as $name => $debt) {
+            if (!has($names, $name)) {
+                $names[] = $name;
+            }
+        }
+        map<string, array<Present>> $listed = [];
+        foreach ($names as const &$name) {
+            array<Present> $members = guard $roster->members($name) else ($e) {
+                $kernel->log->warn('realtime presence could not read the roster', ['channel' => $name, 'error' => $e->message()]);
+                continue;
+            };
+            $listed[$name] = $members;
+        }
+        map<string, array<Present>> $held = $this->hub->presence();
+        foreach ($listed as $channel => const &$members) {
+            array<Present> $mine = [];
+            if ($held->has($channel)) {
+                $mine = $held->at($channel);
+            }
+            bool $right = true;
+            foreach ($members as const &$m) {
+                if (SocketId::node($m->id) != $this->hub->node || Sweeper::lists($mine, $m->id)) {
+                    continue;
+                }
+                guard $roster->leave($channel, $m->id) else ($e) {
+                    $kernel->log->warn('realtime presence could not forget a member', ['channel' => $channel, 'error' => $e->message()]);
+                    $right = false;
+                    continue;
+                };
+                $gateway->publish(Note::left($channel, $m->id));
+            }
+            foreach ($mine as const &$p) {
+                if (Sweeper::lists($members, $p->id)) {
+                    continue;
+                }
+                guard $roster->join($channel, $p) else ($e) {
+                    $kernel->log->warn('realtime presence could not list a member', ['channel' => $channel, 'error' => $e->message()]);
+                    $right = false;
+                    continue;
+                };
+                $gateway->publish(Note::joined($channel, $p));
+            }
+            if ($right && $owed->has($channel)) {
+                $gateway->settled($channel, $owed->at($channel));
+            }
+        }
     }
 
     internal function loopBeat(nexus::Kernel $kernel) : void
@@ -130,12 +194,27 @@ public class Sweeper
     internal function loopRecheck(nexus::Kernel $kernel) : void
     {
         time::instant $checked = time::instant::now();
+        uint64 $lapses = $this->hub->lapses();
         while (!$this->halt->load()) {
             thread::sleep(100);
-            if ($this->every > time::duration::zero() && $checked->elapsed() >= $this->every) {
+            // an `ended` may have been lost with the notes, whether rechecks are on or not
+            bool $lapsed = $this->hub->lapses() != $lapses;
+            if ($lapsed || ($this->every > time::duration::zero() && $checked->elapsed() >= $this->every)) {
+                $lapses = $this->hub->lapses();
                 $this->recheck($kernel);
                 $checked = time::instant::now();
             }
         }
+    }
+
+    // whether `$all` has the member `$id`
+    private static function lists(const array<Present>& $all, const string& $id) : bool
+    {
+        foreach ($all as const &$p) {
+            if ($p->id == $id) {
+                return true;
+            }
+        }
+        return false;
     }
 }

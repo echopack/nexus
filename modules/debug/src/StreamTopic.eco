@@ -3,7 +3,9 @@ namespace nexus::debug;
 /**
  * `GET <base>/api/topics/{topic}/stream?after=`: the topic as server-sent events, from the events
  * after `after` (or `Last-Event-ID`) on. The web app follows it. The stream waits on the transport
- * without holding a thread; the topic sends each new event to it as it is published.
+ * without holding a thread; the topic sends each new event to it as it is published. It lives as
+ * long as the gate's answer does: the credential it was opened with ending ends it, and so does
+ * `NEXUS_DEBUG_STREAM_LIFE` going by, after which the web app opens it again through the gate.
  */
 public class StreamTopic : nexus::Action
 {
@@ -17,14 +19,17 @@ public class StreamTopic : nexus::Action
     public function handle(nexus::Payload& $payload, string $topic) : result<nexus::Response, nexus::Problem>
     {
         Topic $t = try Api::topic($this->debug, $topic);
+        Viewer $viewer = try $payload->state<Viewer>();
+        nexus::auth::Identity? $who = $viewer->who;
+        std::time::duration $life = $this->debug->config->streamLife;
         int64 $from = Api::number($payload->request->header('Last-Event-ID'), 0);
         $from = Api::number($payload->request->query->get('after'), $from);
         uint64 $start = $from as uint64;
-        $r = nexus::Response(events: function[$t, $start](nexus::EventStream $s) : void {
+        $r = nexus::Response(events: function[$t, $start, $who, $life](nexus::EventStream $s) : void {
             nexus::ServerEvent $retry = nexus::ServerEvent('');
             $retry->retry = std::time::duration::millis(2000);
             $s->send($retry);
-            $t->follow($s, $start, 200);
+            $t->follow($s, $start, 200, $who, $life);
         }, closed: function[$t](nexus::EventStream $s) : void {
             $t->unfollow($s);
         });

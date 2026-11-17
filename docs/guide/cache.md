@@ -94,10 +94,10 @@ blog cache:clear
 
 `NEXUS_CACHE_URL` picks the store:
 
-- `memory:` keeps entries in the process. This is the default. They are gone when it stops, and each server has its own, so it suits one server, development and tests. Past `NEXUS_CACHE_MAX_ENTRIES`, expired entries go first, then the ones that expire soonest.
+- `memory:` keeps entries in the process. This is the default. They are gone when it stops, and each server has its own, so it suits one server, development and tests. Past `NEXUS_CACHE_MAX_ENTRIES`, expired entries go first, then the ones that expire soonest, a tenth of the limit at once.
 - `redis://user:pass@host:6379/db` keeps them in Redis, shared by every server and every restart. Needs nexus-cache-redis.
 
-In Redis, every key starts with `NEXUS_CACHE_PREFIX`, so the cache may share a database with other data. `flush` and `cache:clear` forget only the keys under that prefix, never the whole database.
+In Redis, every key starts with `NEXUS_CACHE_PREFIX`, so the cache may share a database with other data. `flush` and `cache:clear` forget only the keys under that prefix, never the whole database. That is why an empty `NEXUS_CACHE_PREFIX` stops the boot with Redis.
 
 nexus-cache-redis pings the server once at boot, and one that does not answer stops the boot with a message. With any URL other than `redis://`, it steps aside, so your tests may run on `memory:` with the same extension list.
 

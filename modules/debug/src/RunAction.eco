@@ -2,7 +2,8 @@ namespace nexus::debug;
 
 /**
  * `POST <base>/api/panels/{panel}/actions/{action}`: runs a panel's action with the body as its
- * input, `{}` when there is none.
+ * input, `{}` when there is none. The body has to be sent as `application/json`, and a browser that
+ * says the call comes from another site is turned away (`sameSite`).
  */
 public class RunAction : nexus::Action
 {
@@ -15,6 +16,7 @@ public class RunAction : nexus::Action
 
     public function handle(nexus::Payload& $payload, string $panel, string $action) : result<nexus::Response, nexus::Problem>
     {
+        try RunAction::sameSite($payload->request);
         Listed $l = try Api::panel($this->debug, $panel);
         string $body = $payload->request->body;
         if (str::trim($body)->empty()) {
@@ -28,5 +30,36 @@ public class RunAction : nexus::Action
         nexus::Logger $log = $this->debug->kernel?->log ?? $payload->log;
         $log->info('debug action', ['panel' => $panel, 'action' => $action, 'req' => $payload->request->id]);
         return .ok(Api::json($out));
+    }
+
+    /**
+     * Whether `$req` may run an action: a 415 unless its body is sent as `application/json`, which
+     * a page on another site cannot send without the browser asking first (a CORS preflight the
+     * console never answers), and a 403 when the browser says it comes from another site
+     * (`Sec-Fetch-Site` other than `same-origin` or `none`) or from another origin (`Origin` other
+     * than the request's own). What keeps a page the developer happens to visit from running
+     * actions on a console that lets in whoever asks from localhost.
+     */
+    public static function sameSite(const nexus::Request& $req) : status<nexus::Problem>
+    {
+        string $type = $req->contentType();
+        if ($type != 'application/json') {
+            if ($type->empty()) {
+                $type = 'none';
+            }
+            return .error(.unsupportedMedia($type));
+        }
+        string? $site = $req->header('Sec-Fetch-Site');
+        if ($site != null) {
+            string $from = str::lower(str::trim($site ?? ''));
+            if ($from != 'same-origin' && $from != 'none') {
+                return .error(.forbidden('debug actions are run from the console itself, not from another site'));
+            }
+        }
+        string? $origin = $req->header('Origin');
+        if ($origin != null && str::lower(str::trim($origin ?? '')) != str::lower($req->origin())) {
+            return .error(.forbidden('debug actions are run from the console itself, not from another origin'));
+        }
+        return .ok;
     }
 }

@@ -121,13 +121,36 @@ public struct SigV4
         return crypto::hex(crypto::hmacSha256($kSigning, $toSign));
     }
 
-    // the canonical header block: `name:value` lines, values trimmed
+    // the canonical header block: `name:value` lines, values trimmed and runs of spaces squeezed
     internal static function block(const array<SignedHeader>& $sorted) : string
     {
         string $out = '';
         foreach ($sorted as const &$h) {
-            string $value = string::from(str::trim($h->value));
+            string $value = SigV4::squeeze(string::from(str::trim($h->value)));
             $out->append("{$h->name}:{$value}\n");
+        }
+        return $out;
+    }
+
+    // `$value` with every run of spaces and tabs as one space, as S3 signs a header it received;
+    // quoted text included, like the AWS example `"a   b   c"` signed as `"a b c"`
+    internal static function squeeze(const string& $value) : string
+    {
+        string $out = '';
+        bool $gap = false;
+        usize $i = 0;
+        while ($i < $value->size()) {
+            uint8 $b = $value->byte($i);
+            if ($b == 32 || $b == 9) {
+                $gap = true;
+            } else {
+                if ($gap) {
+                    $out->push(32);
+                    $gap = false;
+                }
+                $out->push($b);
+            }
+            $i++;
         }
         return $out;
     }

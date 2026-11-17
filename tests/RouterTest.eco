@@ -124,6 +124,14 @@ test router_refuses_duplicates
     guard $r->add(routerRoute($get, '/posts', 'A'));
     status<RouteError> $again = $r->add(routerRoute($get, '/posts', 'B'));
     expect($again)->fails();
+    // other spellings of a taken path are refused too
+    expect($r->add(routerRoute($get, '/posts/', 'C')))->fails();
+    guard $r->add(routerRoute($get, '/posts/{id}', 'D'));
+    expect($r->add(routerRoute($get, '/posts/{slug}', 'E')))->fails();
+    // a constraint or another method is a different route
+    guard $r->add(routerRoute($get, '/posts/{id:integer}', 'F'));
+    array<Method> $post = [.post];
+    guard $r->add(routerRoute($post, '/posts/{slug}', 'G'));
 }
 
 test router_builds_links_by_action_type

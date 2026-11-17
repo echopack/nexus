@@ -21,6 +21,17 @@ test request_converts
     expect($r->peer)->is('127.0.0.1');
 }
 
+test the_wire_query_reads_like_a_test_request
+{
+    // libhttp's own pairs are not used: the raw query goes through nexus's parser
+    $in = http::Request(http::Method::get, '/s?q=100%&tag=a+b&tag=%41', '/s', 'q=100%&tag=a+b&tag=%41', http::Query(), 'HTTP/1.1', http::Headers(), '', '127.0.0.1:5000');
+    $r = expect(Wire::request($in))->some();
+    $t = nexus::Request(.get, '/s?q=100%&tag=a+b&tag=%41');
+    expect($r->query->count())->is(3);
+    expect($r->query->get('q'))->some('100%');
+    expect($r->query->encode())->is($t->query->encode());
+}
+
 test unknown_verb_is_null
 {
     $in = http::Request(http::Method::other('BREW'), '/', '/', '', http::Query(), 'HTTP/1.1', http::Headers(), '', '');
@@ -49,6 +60,26 @@ test a_streamed_response_streams
     expect($r->headers->get('Content-Type'))->some('text/event-stream');
 }
 
+test a_head_answer_is_framed_by_the_length_it_dropped
+{
+    // libhttp frames a streamed answer to HEAD by its declared length and never runs it
+    $out = nexus::Response(text: 'hello');
+    $out->asHead();
+    $r = Wire::response($out);
+    expect($r->streamed())->yes(says: 'the head goes out framed by the dropped length');
+    expect($r->status)->is(200);
+    expect($r->body)->is('');
+    expect($r->headers->get('Content-Type'))->some('text/plain; charset=utf-8');
+    $events = nexus::Response(events: function(nexus::EventStream $s) : void {
+    });
+    $events->asHead();
+    $e = Wire::response($events);
+    expect($e->feeds())->no(says: 'HEAD opens no outlet');
+    expect($e->streamed())->yes(says: 'and says no length');
+    $get = Wire::response(nexus::Response(text: 'hello'));
+    expect($get->streamed())->no(says: 'a GET answer is sent from its body');
+}
+
 test a_file_body_goes_out_from_the_file
 {
     $tmp = ecotest::TempDir();
@@ -64,10 +95,17 @@ test a_file_body_goes_out_from_the_file
     expect($r->headers->all('Content-Range'))->size(1);
     expect($r->headers->get('Content-Range'))->some('bytes 2-5/10');
 
-    // gone since it was looked at: what libhttp answers stands
+    // gone since it was looked at: what libhttp answers stands, with nexus's own headers
     expect(std::fs::remove($path)->has_value())->yes(says: 'removed the fixture');
-    $gone = Wire::response($d->respond($req, file: $path));
+    $answer = $d->respond($req, file: $path);
+    $answer->header('X-Request-Id', 'r-1');
+    $answer->header('Access-Control-Allow-Origin', 'https://app.example');
+    $gone = Wire::response($answer);
     expect($gone->status)->is(404);
+    expect($gone->headers->get('X-Request-Id'))->some('r-1');
+    expect($gone->headers->get('Access-Control-Allow-Origin'))->some('https://app.example');
+    expect($gone->headers->all('Content-Range'))->size(0);
+    expect($gone->headers->all('Content-Type'))->size(1);
 }
 
 test an_event_stream_opens_an_outlet
@@ -205,4 +243,22 @@ test what_is_no_address_trusts_nothing
     expect($any->holds('not an address'))->no(says: 'nothing that is no address');
     $p = nexus::http::Proxies(parse: 'proxy.internal');
     expect($p->trusts('proxy.internal'))->yes(says: 'an exact entry still matches as written');
+}
+
+test a_forwarded_hop_with_a_port_is_one_client
+{
+    expect(nexus::http::Proxies::hop('203.0.113.9:51234'))->is('203.0.113.9');
+    expect(nexus::http::Proxies::hop('[2001:db8::1]:443'))->is('2001:db8::1');
+    expect(nexus::http::Proxies::hop('[2001:db8::1]'))->is('2001:db8::1');
+    expect(nexus::http::Proxies::hop('2001:db8::1'))->is('2001:db8::1');
+    expect(nexus::http::Proxies::hop('203.0.113.9'))->is('203.0.113.9');
+    $p = nexus::http::Proxies(parse: '10.0.0.0/8');
+    // the port changes with every connection, the client does not
+    $a = expect(Wire::request(forwarded('10.0.0.2:40000', '203.0.113.9:51234'), $p))->some();
+    expect($a->peer)->is('203.0.113.9');
+    $b = expect(Wire::request(forwarded('10.0.0.2:40000', '[2001:db8::1]:443'), $p))->some();
+    expect($b->peer)->is('2001:db8::1');
+    // a trusted proxy that writes its own port is still a trusted proxy
+    $c = expect(Wire::request(forwarded('10.0.0.2:40000', '203.0.113.9, 10.0.0.3:8080'), $p))->some();
+    expect($c->peer)->is('203.0.113.9');
 }

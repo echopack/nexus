@@ -1,8 +1,10 @@
 namespace nexus::debug;
 
+use std::time;
+
 /**
  * The debug console's settings, read from `NEXUS_DEBUG_ENABLED`, `NEXUS_DEBUG_PATH`,
- * `NEXUS_DEBUG_TOKEN` and `NEXUS_DEBUG_KEEP`.
+ * `NEXUS_DEBUG_TOKEN`, `NEXUS_DEBUG_KEEP` and `NEXUS_DEBUG_STREAM_LIFE`.
  */
 #[nexus::config: 'NEXUS_DEBUG']
 public struct DebugConfig
@@ -32,4 +34,12 @@ public struct DebugConfig
      */
     #[nexus::env: 'KEEP']
     public uint32 $keep = 1000;
+
+    /**
+     * How long a live topic stream stays open before the console ends it; the web app opens it
+     * again through the gate, so a viewer the gate no longer lets in stops getting events. A stream
+     * ends at once when the credential it was opened with ends.
+     */
+    #[nexus::env: 'STREAM_LIFE']
+    public time::duration $streamLife = .mins(15);
 }

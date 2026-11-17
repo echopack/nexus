@@ -548,3 +548,212 @@ test recorded_targets_hide_credentials_in_the_query
         ->json('$.rows[0].target', '/hello?sig=***')
         ->lacks('a-signature-of-the-app');
 }
+
+test debug_actions_turn_away_what_another_site_can_send
+{
+    // the open gate lets in whatever reaches localhost, a page the developer visits included
+    map<string, string> $vars = ['NEXUS_DEBUG_ENABLED' => 'true'];
+    array<Panel> $panels = [TPanel()];
+    array<nexus::Extension> $exts = [nexus::debug::Extension(panels: $panels), TExt()];
+    $app = TestApp($exts, $vars);
+    $api = $app->api()->with('Host', 'localhost:3246');
+    string $bump = '/__nexus/api/panels/counter/actions/bump';
+
+    // a form or a no-cors fetch sends text/plain without asking the browser first
+    $api->post($bump, body: '{"by":1}', type: 'text/plain')->problem(415);
+    $api->post($bump, body: 'by=1', type: 'application/x-www-form-urlencoded')->problem(415);
+    $api->with('Sec-Fetch-Site', 'cross-site')->post($bump, json: '{"by":1}')->problem(403);
+    $api->with('Sec-Fetch-Site', 'same-site')->post($bump, json: '{"by":1}')->problem(403);
+    $api->with('Origin', 'https://attacker.example')->post($bump, json: '{"by":1}')->problem(403);
+    $api->with('Origin', 'null')->post($bump, json: '{"by":1}')->problem(403);
+    $api->get('/__nexus/api/panels/counter/now')->ok()->json('$.count', 0);
+
+    // the console's own calls, and a script's
+    $api->with('Origin', 'http://localhost:3246')->with('Sec-Fetch-Site', 'same-origin')->post($bump, json: '{"by":2}')->ok();
+    $api->with('Sec-Fetch-Site', 'none')->post($bump, json: '{"by":1}')->ok();
+    $api->post($bump, body: '{"by":1}', type: 'application/json; charset=utf-8')->ok();
+    $api->get('/__nexus/api/panels/counter/now')->ok()->json('$.count', 4);
+}
+
+test a_stream_ends_with_the_sign_in_it_was_opened_with
+{
+    map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_DEBUG_ENABLED' => 'true'];
+    array<nexus::Extension> $exts = [
+        nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1)),
+        nexus::debug::Extension(gate: GuardGate()->through<TAnyone>()),
+        TExt(),
+    ];
+    $app = TestApp($exts, $vars);
+    nexus::Payload $payload = $app->kernel->background('issue', 'test');
+    nexus::auth::Issued $mine = guard $payload->get<nexus::auth::Tokens>()->issue('7');
+    nexus::auth::Issued $other = guard $payload->get<nexus::auth::Tokens>()->issue('8');
+    nexus::Kernel::finish($payload);
+    map<string, string> $auth = ['Authorization' => "Bearer {$mine->token}"];
+    map<string, string> $theirs = ['Authorization' => "Bearer {$other->token}"];
+    $s = $app->events('/__nexus/api/topics/requests/stream', $auth);
+    $t2 = $app->events('/__nexus/api/topics/requests/stream', $theirs);
+    expect($s->opened())->yes(says: 'the stream opens');
+    nexus::debug::Topic $t = expect($app->kernel->services->get<Debug>()->named('requests'))->some();
+    $t->settle();
+
+    // the token is revoked: its stream ends, another's stays
+    nexus::Payload $p = $app->kernel->background('revoke', 'test');
+    nexus::auth::Identity $id = guard $p->get<nexus::auth::Tokens>()->check($mine->token);
+    guard $p->get<nexus::auth::Tokens>()->revoke($id->credential);
+    nexus::Kernel::finish($p);
+    $t->settle();
+    expect($s->open())->no(says: 'the stream of the revoked token ended');
+    expect($t2->open())->yes(says: 'the other stream goes on');
+    $app->api()->get('/hello')->ok();
+    $t->settle();
+    expect($s->named('requests'))->size(0);
+    expect($t2->named('requests'))->size(1);
+    $t2->leave();
+}
+
+test a_stream_ends_once_its_life_went_by
+{
+    map<string, string> $short = ['NEXUS_DEBUG_STREAM_LIFE' => '50ms'];
+    $app = tokenApp($short);
+    string $token = TOKEN;
+    map<string, string> $auth = ['Authorization' => "Bearer {$token}"];
+    $s = $app->events('/__nexus/api/topics/requests/stream', $auth);
+    nexus::debug::Topic $t = expect($app->kernel->services->get<Debug>()->named('requests'))->some();
+    $app->api()->get('/hello')->ok();
+    $t->settle();
+    expect($s->named('requests'))->size(1);
+    thread::sleep(80);
+
+    // what comes after its life does not reach it; the web app opens it again through the gate
+    $app->api()->get('/hello')->ok();
+    $t->settle();
+    expect($s->open())->no(says: 'the stream ended');
+    expect($s->named('requests'))->size(1);
+    expect($t->following())->is(0 as int64);
+}
+
+/**
+ * A viewer that stopped reading: every send waits until `stuck` is cleared.
+ */
+#[atomic]
+internal class DStalled : nexus::EventStream
+{
+    public atomic<bool> $stuck = atomic<bool>(true);
+    public atomic<int32> $got = atomic<int32>(0);
+    public atomic<bool> $closed = atomic<bool>(false);
+
+    public function id() : int64
+    {
+        return 616161;
+    }
+
+    public function send(const nexus::ServerEvent& $e) : bool
+    {
+        while ($this->stuck->load()) {
+            thread::sleep(2);
+        }
+        $this->got->add(1);
+        return true;
+    }
+
+    public function comment(const string& $text) : bool
+    {
+        return true;
+    }
+
+    public function close() : void
+    {
+        $this->closed->store(true);
+    }
+
+    public function open() : bool
+    {
+        return !$this->closed->load();
+    }
+}
+
+/**
+ * A viewer that keeps what it was sent.
+ */
+#[atomic]
+internal class DQuick : nexus::EventStream
+{
+    public atomic<int32> $got = atomic<int32>(0);
+
+    public function id() : int64
+    {
+        return 626262;
+    }
+
+    public function send(const nexus::ServerEvent& $e) : bool
+    {
+        $this->got->add(1);
+        return true;
+    }
+
+    public function comment(const string& $text) : bool
+    {
+        return true;
+    }
+
+    public function close() : void
+    {
+    }
+
+    public function open() : bool
+    {
+        return true;
+    }
+}
+
+test a_viewer_that_stops_reading_holds_up_nobody_and_is_let_go
+{
+    nexus::debug::Topic $t = nexus::debug::Topic('jobs', 'Jobs', 1000);
+    DStalled $stalled = DStalled();
+    DQuick $quick = DQuick();
+    $t->follow($stalled, 0, 200);
+    $t->follow($quick, 0, 200);
+    int64 $n = 0;
+    while ($n < 300) {
+        json::Value $doc = json::object();
+        $doc['n'] = json::int($n);
+        $t->publish($doc);
+        $n++;
+    }
+    std::time::instant $start = .now();
+    while ($quick->got->load() < 300 && $start->elapsed() < std::time::duration::secs(2)) {
+        thread::sleep(2);
+    }
+    expect($quick->got->load())->is(300);
+
+    // its queue filled up: it is ended once the send it is stuck in gives up, nothing more queued
+    expect($stalled->closed->load())->no(says: 'the close waits behind the stuck send');
+    $stalled->stuck->store(false);
+    $t->settle();
+    expect($stalled->closed->load())->yes(says: 'a viewer too far behind is let go');
+    expect($stalled->got->load())->is(1);
+}
+
+test recorded_headers_hide_credentials_in_urls_and_names
+{
+    nexus::Headers $h = nexus::Headers();
+    $h->add('Location', 'https://bucket.s3.amazonaws.com/a.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA%2F20260101&X-Amz-Signature=abc123&X-Amz-Security-Token=tok');
+    $h->add('Content-Location', '/files/a.pdf?expires=9&sig=s1');
+    $h->add('Referer', 'https://app.example/reset?token=t1&page=2');
+    $h->add('Refresh', '0; url=/next?code=c1');
+    $h->add('X-Api-Key', 'k1');
+    $h->add('X-Auth-Token', 'k2');
+    $h->add('X-Amz-Security-Token', 'k3');
+    $h->add('X-Client-Secret', 'k4');
+    $h->add('Content-Type', 'application/json');
+    json::Value $o = nexus::debug::RequestRecord::masked($h);
+    string $all = json::dump($o);
+    foreach (['abc123', 'AKIA', '=tok', 's1', 't1', 'c1', 'k1', 'k2', 'k3', 'k4'] as const &$secret) {
+        expect($all)->lacks($secret);
+    }
+    expect($o->get('Location')?->asStr())->some('https://bucket.s3.amazonaws.com/a.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=***&X-Amz-Signature=***&X-Amz-Security-Token=***');
+    expect($o->get('Referer')?->asStr())->some('https://app.example/reset?token=***&page=2');
+    expect($o->get('X-Api-Key')?->asStr())->some('***');
+    expect($o->get('Content-Type')?->asStr())->some('application/json');
+    expect(nexus::debug::RequestRecord::scrubbed('/list?pageToken=p1&client_secret=s'))->is('/list?pageToken=***&client_secret=***');
+}

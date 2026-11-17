@@ -21,10 +21,12 @@ internal function google(World& $world, const Api& $browser, const string& $sub,
     $claims = json::object(['iss' => 'https://accounts.google.com', 'sub' => $sub, 'email' => $email, 'name' => 'Grace Hopper']);
     $claims['email_verified'] = json::bool($verified);
     $world->google->signedIn(nexus::connect::Google::TOKEN, $url, $claims);
-    $browser->get('/auth/connect/google/callback', query: ['state' => nexus::connect::ScriptedFetch::param($url, 'state'), 'code' => 'from-google'])
+    // the page gets the attempt and the proof only the browser that came back holds
+    $back = $browser->get('/auth/connect/google/callback', query: ['state' => nexus::connect::ScriptedFetch::param($url, 'state'), 'code' => 'from-google'])
         ->status(302)
-        ->header('Location', "http://app/signed-in?attempt={$attempt}");
-    $claim = json::object(['attempt' => $attempt, 'binding' => $started->capture('$.binding')]);
+        ->header('Location', starts: "http://app/signed-in?attempt={$attempt}&proof=");
+    string $location = $back->capture(header: 'Location');
+    $claim = json::object(['attempt' => $attempt, 'binding' => $started->capture('$.binding'), 'proof' => nexus::connect::ScriptedFetch::param($location, 'proof')]);
     return $browser->post('/v1/auth/connect', json: $claim);
 }
 
@@ -50,15 +52,14 @@ test signing_in_with_google_makes_finds_and_links_users
     ecotest::step('a session somebody signed in on already takes nobody else');
     google($world, $grace, 'g-1', 'grace@example.com', true)->problem(409);
 
-    ecotest::step('a verified email of an existing account links to it');
-    $editor = $world->visitor();
-    google($world, $editor, 'g-2', 'editor@example.com', true)->status(200);
-    $editor->get('/v1/me')->json('$.data.name', 'The editor');
-    expect($world->db->count('connect_links'))->is(2);
+    ecotest::step('a verified email links to no account the blog never verified the email of');
+    google($world, $world->visitor(), 'g-2', 'editor@example.com', true)->problem(409);
+    expect($world->db->count('connect_links'))->is(1);
 
-    ecotest::step('an unverified one does not');
-    google($world, $world->visitor(), 'g-3', 'editor@example.com', false)->problem(409);
-    expect($world->db->count('connect_links'))->is(2);
+    ecotest::step('an unverified email makes no account at all');
+    google($world, $world->visitor(), 'g-3', 'stranger@example.com', false)->problem(403);
+    expect($world->db->count('users'))->is($users + 1);
+    expect($world->db->count('connect_links'))->is(1);
 }
 
 #[group: "integration"]

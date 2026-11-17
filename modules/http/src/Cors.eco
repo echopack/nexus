@@ -2,7 +2,8 @@ namespace nexus::http;
 
 /**
  * Cross-origin resource sharing. Answers preflight requests itself and adds the allow headers to
- * every response for an allowed origin. Add it first in an extension's `middleware` hook:
+ * every response for an allowed origin, and `Vary: Origin` to every response unless the list is a
+ * plain `*`. Add it first in an extension's `middleware` hook:
  *
  *     array<string> $origins = ['https://app.example.com'];
  *     $p->add(nexus::http::Cors($origins));
@@ -28,15 +29,20 @@ public class Cors : nexus::Middleware
     public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
     {
         $origin = guard $payload->request->header('Origin') else {
-            return $next->run($payload);
+            $r = $next->run($payload);
+            $this->vary($r);
+            return $r;
         };
         if (!$this->allows($origin)) {
-            return $next->run($payload);
+            $r = $next->run($payload);
+            $this->vary($r);
+            return $r;
         }
         bool $preflight = $payload->request->method == nexus::Method::options && $payload->request->header('Access-Control-Request-Method') != null;
         if ($preflight) {
             $r = nexus::Response(204);
             $this->stamp($r, $origin);
+            $this->vary($r);
             $r->header('Access-Control-Allow-Methods', str::join($this->methods, ', '));
             $r->header('Access-Control-Allow-Headers', str::join($this->headers, ', '));
             $r->header('Access-Control-Max-Age', str::from($this->maxAge));
@@ -44,6 +50,7 @@ public class Cors : nexus::Middleware
         }
         $r = $next->run($payload);
         $this->stamp($r, $origin);
+        $this->vary($r);
         if (!$this->expose->empty()) {
             $r->header('Access-Control-Expose-Headers', str::join($this->expose, ', '));
         }
@@ -62,20 +69,51 @@ public class Cors : nexus::Middleware
 
     private const function stamp(nexus::Response& $r, const string& $origin) : void
     {
-        bool $any = false;
-        foreach ($this->origins as const &$o) {
-            if ($o == '*') {
-                $any = true;
-            }
-        }
+        bool $any = $this->any();
         if ($any && !$this->credentials) {
             $r->header('Access-Control-Allow-Origin', '*');
         } else {
             $r->header('Access-Control-Allow-Origin', $origin);
-            $r->headers->add('Vary', 'Origin');
         }
         if ($this->credentials && !$any) {
             $r->header('Access-Control-Allow-Credentials', 'true');
         }
+    }
+
+    /**
+     * Whether the allow list holds `*`.
+     */
+    private const function any() : bool
+    {
+        foreach ($this->origins as const &$o) {
+            if ($o == '*') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Adds `Origin` to the response's `Vary`, kept after what is there already. The answer depends
+     * on the request's origin whether or not it is allowed, so a cache must not hand one origin's
+     * answer (or the answer to no origin) to another. A plain `*` without credentials answers every
+     * origin the same and varies on nothing.
+     */
+    private const function vary(nexus::Response& $r) : void
+    {
+        if ($this->any() && !$this->credentials) {
+            return;
+        }
+        array<string> $lines = $r->headers->all('Vary');
+        foreach ($lines as const &$line) {
+            foreach (str::split($line, ',') as const &$part) {
+                $token = str::trim($part);
+                if (str::iequals($token, 'Origin') || $token == '*') {
+                    return;
+                }
+            }
+        }
+        $lines[] = 'Origin';
+        $r->header('Vary', str::join($lines, ', '));
     }
 }

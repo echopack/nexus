@@ -31,10 +31,10 @@ public enum Failure
     case cannotRun(string $program, std::io::ioerror $cause);
 
     /**
-     * `echoc -p decls` (or `-p tools`) ended with `$status` and printed no declarations; `$stderr`
-     * is what it said.
+     * The echoc pass `$pass` (`echoc build -p decls`, or `-p tools`) ended with `$status` and printed
+     * nothing that reads; `$stderr` is what it said.
      */
-    case tool(std::process::exit_status $status, string $stderr);
+    case tool(string $pass, std::process::exit_status $status, string $stderr);
 
     /**
      * Every declaration that does not fit, one line each.
@@ -72,6 +72,18 @@ public enum Failure
     case generator(string $program, string $output);
 }
 
+/**
+ * Why the echoc pass `$pass` gave nothing to read: what it said on stderr, or that it said nothing
+ * at all, which a failure there and an empty answer alike can end in.
+ */
+internal function failedPass(const string& $pass, const std::process::exit_status& $status, const string& $stderr) : string
+{
+    if (str::trim($stderr)->empty()) {
+        return "{$pass} printed nothing nexus gen could read, and nothing on stderr ({$status})";
+    }
+    return "{$pass} failed ({$status}):\n{$stderr}";
+}
+
 namespace str;
 
 /**
@@ -85,7 +97,7 @@ public function from(const nexusgen::Failure& $f) : string
         .unnamed => 'module.eco names no module (#[module: "..."])',
         .noModule($name) => "the decls pass holds no module named {$name}",
         .cannotRun($program, $cause) => "could not run {$program}: {$cause}",
-        .tool($status, $stderr) => "echoc -p decls failed ({$status}):\n{$stderr}",
+        .tool($pass, $status, $stderr) => nexusgen::failedPass($pass, $status, $stderr),
         .problems($lines) => str::join($lines, "\n"),
         .stale($path) => "{$path} is out of date; run nexus gen",
         .cannotWrite($path, $cause) => "could not write {$path}: {$cause}",

@@ -44,11 +44,8 @@ public struct Wire
         $r = nexus::Request($m, $in->target);
         $r->path = $in->path;
         $r->queryString = $in->queryString;
-        $q = nexus::Query();
-        foreach ($in->query->pairs as const &$p) {
-            $q->add($p->name, $p->value);
-        }
-        $r->query = mv $q;
+        // nexus's own parser, so a test request built from the same target reads the same query
+        $r->query = nexus::Query(parse: $in->queryString);
         foreach ($in->headers->items as const &$h) {
             $r->headers->add($h->name, $h->value);
         }
@@ -74,12 +71,24 @@ public struct Wire
     /**
      * The wire response for a nexus response: a streamed one streams, chunked; a file body goes
      * out from the file, with sendfile where it can; an event stream opens an outlet; a websocket
-     * upgrades.
+     * upgrades. An answer to HEAD says the length of the body it left out, or no length when that
+     * was a stream.
      */
     public static function response(const nexus::Response& $out) : http::Response
     {
         $r = http::Response($out->status, $out->body);
-        if ($out->events != null) {
+        if ($out->omitted != null) {
+            int64 $length = guard $out->omitted;
+            // libhttp never runs the stream of an answer to HEAD, it only frames the head with it
+            $none = function(http::Writer $w) : void {
+            };
+            if ($length >= 0) {
+                $r = http::Response(stream: $none, length: $length as usize);
+            } else {
+                $r = http::Response(stream: $none);
+            }
+            $r->status = $out->status;
+        } else if ($out->events != null) {
             nexus::EventHooks $hooks = guard $out->events;
             $r = http::Response(events: Wire::feed($hooks));
             $r->status = $out->status;
@@ -89,8 +98,14 @@ public struct Wire
         } else if ($out->file != null) {
             nexus::FileBody $f = guard $out->file;
             $r = http::Response(file: $f->path, offset: $f->offset, length: $f->length);
-            // the file went away or shrank since it was looked at: libhttp's own answer stands
+            // the file went away or shrank since it was looked at: libhttp's own answer stands, with
+            // nexus's headers (request id, CORS, security) but not the ones that describe the file
             if ($r->status != 200) {
+                foreach ($out->headers->items as const &$h) {
+                    if (!Wire::describes($h->name)) {
+                        $r->headers->add($h->name, $h->value);
+                    }
+                }
                 return $r;
             }
             $r->status = $out->status;
@@ -108,6 +123,15 @@ public struct Wire
             $r->headers->add($h->name, $h->value);
         }
         return $r;
+    }
+
+    /**
+     * Whether `$name` is a header that describes a file body, which libhttp's own error answer
+     * says for itself.
+     */
+    internal static function describes(const string& $name) : bool
+    {
+        return str::iequals($name, 'Content-Type') || str::iequals($name, 'Content-Range') || str::iequals($name, 'Content-Length');
     }
 
     /**

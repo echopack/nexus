@@ -60,6 +60,14 @@ public class Extension : nexus::Extension
         }
         $s->bind<Debug>(put: $debug);
         $this->debug = $debug;
+        // a sign out or a revoke ends the console's streams opened with that credential
+        nexus::auth::Endings? $endings = $s->find<nexus::auth::Endings>();
+        if ($endings != null) {
+            nexus::auth::Endings $e = guard $endings;
+            $e->listen(function[$debug](nexus::auth::Ending $end) : void {
+                $debug->end($end);
+            });
+        }
         $this->requests = $requests;
         $this->logs = $logs;
         $this->traces = $s->get<nexus::trace::Traces>();

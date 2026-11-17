@@ -144,6 +144,25 @@ test logfmt_quotes_what_needs_it
     expect($odd)->has(' msg=ok say="a \\"b\\"" eq="x=y" empty=""');
 }
 
+test no_format_lets_a_line_break_or_an_escape_through
+{
+    Fields $f = ['user' => "bob\n12:00:00.000 INFO  forged", 'tab' => "a\tb", "bad key=x\n" => 'v', 'plain' => 'ok'];
+    Entry $e = Entry(at(0), .info, "login\nINFO admin logged in \u{1b}[2J", null, $f);
+    string $pretty = Format::pretty->render($e, false);
+    expect($pretty->contains("\n"))->no(says: 'one pretty line');
+    expect($pretty->contains("\u{1b}"))->no(says: 'no escape reaches the terminal');
+    expect($pretty)->has('"login\\nINFO admin logged in \\u001b[2J"');
+    expect($pretty)->has('user="bob\\n12:00:00.000 INFO  forged"');
+    expect($pretty)->has('tab="a\\tb"');
+    expect($pretty)->has(' bad_key_x_=v');
+    expect($pretty)->has(' plain=ok');
+    // a plain message stays as it is
+    expect(Format::pretty->render(spanned(), false))->has(': rows read ');
+    string $logfmt = Format::logfmt->render($e, false);
+    expect($logfmt->contains("\n"))->no(says: 'one logfmt line');
+    expect($logfmt)->has(' bad_key_x_=v');
+}
+
 test json_is_one_object_with_typed_values
 {
     string $line = Format::json->render(spanned(), false);
@@ -409,16 +428,97 @@ test a_daily_file_turns_over_at_the_first_entry_of_a_new_day
     $dir = TempDir();
     File $f = guard File::open($dir->file('day.log'), .json, .daily, 3);
     Fields $none = [];
+    // days after the one the file was opened on
     int64 $day = 86400000;
-    $f->write(Entry(at(20000 * $day + 5), .info, 'monday', null, $none));
-    $f->write(Entry(at(20000 * $day + 9), .info, 'monday again', null, $none));
-    $f->write(Entry(at(20001 * $day + 1), .info, 'tuesday', null, $none));
+    $f->write(Entry(at(40000 * $day + 5), .info, 'monday', null, $none));
+    $f->write(Entry(at(40000 * $day + 9), .info, 'monday again', null, $none));
+    $f->write(Entry(at(40001 * $day + 1), .info, 'tuesday', null, $none));
     $f->flush();
     string $old = guard std::fs::readfile($dir->file('day.1.log'));
     string $now = guard std::fs::readfile($dir->file('day.log'));
     expect($old)->has('monday again');
     expect($now)->has('tuesday');
     expect($now->contains('monday'))->no(says: 'the new day starts empty');
+    // the empty file it was opened with was not kept as a day of its own
+    bool $second = guard std::fs::exists($dir->file('day.2.log'));
+    expect($second)->no(says: 'an empty file does not rotate');
+}
+
+test a_daily_file_turns_once_when_entries_cross_midnight_out_of_order
+{
+    $dir = TempDir();
+    File $f = guard File::open($dir->file('day.log'), .json, .daily, 7);
+    Fields $none = [];
+    int64 $day = 86400000;
+    $f->write(Entry(at(40000 * $day + 5), .info, 'monday', null, $none));
+    // stamped before the lock: the last of monday arrives after the first of tuesday
+    $f->write(Entry(at(40001 * $day + 1), .info, 'tuesday', null, $none));
+    $f->write(Entry(at(40001 * $day - 1), .info, 'late monday', null, $none));
+    $f->write(Entry(at(40001 * $day + 2), .info, 'tuesday again', null, $none));
+    $f->flush();
+    string $old = guard std::fs::readfile($dir->file('day.1.log'));
+    string $now = guard std::fs::readfile($dir->file('day.log'));
+    expect($old)->has('monday');
+    expect($old->contains('tuesday'))->no(says: 'monday holds no tuesday');
+    expect($now)->has('tuesday');
+    expect($now)->has('late monday');
+    expect($now)->has('tuesday again');
+    bool $second = guard std::fs::exists($dir->file('day.2.log'));
+    expect($second)->no(says: 'one midnight, one rotation');
+}
+
+test a_size_rotation_shifts_nothing_while_the_current_file_is_gone
+{
+    $dir = TempDir();
+    File $f = guard File::open($dir->file('app.log'), .logfmt, .size(100), 3);
+    Fields $none = [];
+    $f->write(Entry(at(0), .info, 'first file, a line with some room in it', null, $none));
+    $f->write(Entry(at(0), .info, 'second file, a line with some room in it', null, $none));
+    string $kept = guard std::fs::readfile($dir->file('app.1.log'));
+    expect($kept)->has('first file');
+    // removed by hand while the sink holds it open
+    guard std::fs::remove($dir->file('app.log'));
+    $f->write(Entry(at(0), .info, 'third file, a line with some room in it', null, $none));
+    $f->flush();
+    string $still = guard std::fs::readfile($dir->file('app.1.log'));
+    expect($still)->has('first file');
+    bool $second = guard std::fs::exists($dir->file('app.2.log'));
+    expect($second)->no(says: 'the history did not move for a file that is gone');
+    string $now = guard std::fs::readfile($dir->file('app.log'));
+    expect($now)->has('third file');
+}
+
+test a_file_that_cannot_be_reopened_stops_rotating_until_it_can
+{
+    $dir = TempDir();
+    std::fs::path $root = $dir->file('logs');
+    guard std::fs::mkdir($root);
+    std::fs::path $path = $root / 'app.log';
+    File $f = guard File::open($path, .logfmt, .size(100), 3);
+    Fields $none = [];
+    $f->write(Entry(at(0), .info, 'first file, a line with some room in it', null, $none));
+    $f->write(Entry(at(0), .info, 'second file, a line with some room in it', null, $none));
+    // neither the directory nor the file may be written: the next rotation cannot reopen
+    guard std::fs::chmod($root, std::fs::fileperms(0x16d));
+    guard std::fs::chmod($path, std::fs::fileperms(0x124));
+    if (std::fs::append($path)->has_value()) {
+        guard std::fs::chmod($root, std::fs::fileperms(0x1ed));
+        ecotest::skip('this user writes read-only files');
+    }
+    $f->write(Entry(at(0), .info, 'lost while locked, a line with some room', null, $none));
+    $f->write(Entry(at(0), .info, 'lost too while locked, a line with room', null, $none));
+    guard std::fs::chmod($root, std::fs::fileperms(0x1ed));
+    guard std::fs::chmod($path, std::fs::fileperms(0x1a4));
+    $f->write(Entry(at(0), .info, 'back again, a line with some room in it', null, $none));
+    $f->flush();
+    string $now = guard std::fs::readfile($path);
+    string $one = guard std::fs::readfile($root / 'app.1.log');
+    string $two = guard std::fs::readfile($root / 'app.2.log');
+    expect($now)->has('back again');
+    expect($one)->has('second file');
+    expect($two)->has('first file');
+    bool $three = guard std::fs::exists($root / 'app.3.log');
+    expect($three)->no(says: 'one rotation once the file could be reopened');
 }
 
 test a_file_that_cannot_open_is_an_error
@@ -438,6 +538,11 @@ test settings_parse_and_name_what_is_wrong
     Rotate $daily = Rotate::parse('daily')->or(.never);
     expect(match ($daily) { .daily => true, else => false })->yes(says: 'daily');
     expect(Rotate::parse('lots'))->fails();
+    // too large for 64 bits: refused, not wrapped to a size that rotates every line
+    expect(Rotate::parse('17179869184gb'))->fails();
+    expect(Rotate::parse('9223372036854775807kb'))->fails();
+    Rotate $most = Rotate::parse('17179869183gb')->or(.never);
+    expect(match ($most) { .size($b) => $b == 18446744072635809792, else => false })->yes(says: 'the largest size that fits');
     expect(Level::parse('loud'))->fails();
     Level $never = guard Level::parse('loud') else ($e) {
         expect($e->message())->has("not 'loud'");

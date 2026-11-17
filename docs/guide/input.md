@@ -211,7 +211,7 @@ The type of a field says what the client must send, and which rules may go on it
 | `string` | string | text |
 | `bool` | boolean | `true` or `false`; in a form also `1`/`0`, `on`/`off`, `yes`/`no` |
 | `int32`, `int64`, `uint16`, `uint32`, `uint64` | integer | a whole number in range |
-| `float64` | number | a number |
+| `float64` | number | a number; not NaN or an infinity, however it is spelled (`nan`, `inf`, `1e999`) |
 | `calendar::Date` | date | an ISO 8601 date, `2026-10-28` |
 | `time::timestamp` | timestamp | an RFC 3339 instant, `2026-10-28T09:30:00Z` |
 | a backed enum | enum | one of the enum's values |
@@ -221,6 +221,8 @@ The type of a field says what the client must send, and which rules may go on it
 | `array<string>`, `array<int64>`, `array<nexus::Upload>`, an array of enums or inputs | list | a list |
 
 A value of the wrong type is refused with the code `type` and a message naming what was expected ("must be a whole number"). An enum value that is not one of its cases is refused with `oneOf`, listing the ones that are.
+
+A `uint64` keeps its whole range: a form or query value past the largest `int64` is read as it is, and `min`, `max`, `between`, `oneOf`, `multipleOf` and the comparisons hold it to its rules without a cast, so `?limit=18446744073709551615` is refused by `max: 100` like any other value too large.
 
 ### Optional fields
 
@@ -238,6 +240,10 @@ public struct PostChanges
 ```
 
 The rules of an optional field only run when the client sent it. Here, a `PATCH` without a title leaves the title alone, while a title of two characters is refused.
+
+An HTML form sends every input it has, so an empty number field arrives as `age=`. For a number, a date or a timestamp, a blank form or query value counts as left out: an optional field is `null` (or its default), and a required one is refused with `required`, not with `type`. A blank string field is still the empty string.
+
+A nullable field with a default other than `null`, like `public string? $locale = 'en';`, tells the two apart: left out, it is `'en'`; sent as `"locale": null` in JSON, it is `null`.
 
 ### Labels and messages
 
@@ -411,7 +417,7 @@ Uppercases a string before the other rules run. Fits strings and string list ite
 Trims a string and replaces every run of whitespace inside it with one space. Fits strings and string list items.
 
 #### nullIfBlank
-Turns a blank string into `null`. Fits a `string?` field only, not list items.
+Turns a blank string into `null`, even on a field whose default is something else. Fits a `string?` field only, not list items.
 
 ### Size
 
@@ -433,16 +439,16 @@ A string must have exactly this many characters, a list exactly this many items.
 The string must contain something besides whitespace.
 
 #### email
-The string must be a plausible email address: one `@`, something before it, a dot in the domain after it, no spaces.
+The string must be a plausible email address: one `@`, something before it, a dot in the domain after it, no spaces and no control characters.
 
 #### url
-The string must be an absolute `http` or `https` URL with a host and no spaces.
+The string must be an absolute `http` or `https` URL with a host, no spaces and no control characters.
 
 #### uuid
 The string must be a UUID in its 8-4-4-4-12 hex form, any case.
 
 #### alpha
-The string must contain letters only. Letters beyond ASCII count.
+The string must contain letters only. Letters beyond ASCII count, in well-formed UTF-8. nexus carries no Unicode tables, so beyond ASCII it refuses what is known not to be a letter and takes the rest as one: control and format characters (zero-width spaces and joiners, direction marks and overrides, the byte order mark), every kind of space (the no-break space and the ideographic space among them), the punctuation and symbols of Latin-1 and General Punctuation, private-use code points, variation selectors, and emoji and the symbol blocks they come from. A letter-like symbol or a digit of another script still passes. `alphaNum` and `alphaDash` read characters beyond ASCII the same way.
 
 #### alphaNum
 The string must contain letters and digits only.
@@ -474,7 +480,7 @@ The value must not be one of the list. Fits strings and integers. `noneOf: ['adm
 The number must be a multiple of the value. Fits integers and numbers. `multipleOf: 5`.
 
 #### gt
-The number must be greater than a value, or than another field of the input. Fits integers and numbers. `gt: 0`, `gt: 'minimum'`.
+The number must be greater than a value, or than another field of the input. Fits integers and numbers. `gt: 0`, `gt: 'minimum'`. A number is written without quotes: `gt: '18'` names no field, and `nexus gen` refuses it.
 
 #### gte
 Like `gt`, but equal is allowed.

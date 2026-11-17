@@ -635,3 +635,165 @@ test upload_rules_and_doors_are_checked
     expect($p8)->size(1);
     expect($p8[0])->has('takes shop::Attach, which has a file upload; a tool call carries JSON only');
 }
+
+test a_uint64_task_field_keeps_its_top_half
+{
+    string $fields = '{"name":"big","visibility":"public","static":false,"type":{"kind":"prim","name":"uint64"},"default":false,"tools":[]},{"name":"ratio","visibility":"public","static":false,"type":{"kind":"prim","name":"float64"},"default":false,"tools":[]}';
+    $p = Program(genDecls(genTask('', $fields, genTaskHandle())));
+    expect($p->problems)->empty();
+    expect(emitter::render($p))
+        ->has("$p->put('big', $task->big);")
+        ->lacks('$task->big as int64')
+        ->has("uint64? $vBig = $p->uint64('big', required: true);")
+        ->has("$p->put('ratio', $task->ratio);");
+}
+
+test an_explicit_null_is_not_the_default
+{
+    string $locale = '{"name":"locale","visibility":"public","static":false,"type":{"kind":"optional","of":{"kind":"string"}},"default":true,"default_value":"\'en\'","tools":[]}';
+    $task = Program(genDecls(genTask('', $locale, genTaskHandle())));
+    expect($task->problems)->empty();
+    expect(emitter::render($task))
+        ->has("string? $okLocale = 'en';")
+        ->has("$vLocale = $p->string('locale', required: false);")
+        ->has("} else if ($p->nulled('locale')) \{\n            $okLocale = null;");
+    string $blank = '{"name":"locale","visibility":"public","static":false,"type":{"kind":"optional","of":{"kind":"string"}},"default":true,"default_value":"\'en\'","tools":[{"namespace":"nexus","name":"rule","value":{"kind":"record","fields":[{"key":"nullIfBlank","value":{"kind":"bool","boolean":true}}]}}]}';
+    $input = Program(genDecls(genInputNamed('Prefs', '', $blank)));
+    expect($input->problems)->empty();
+    expect(emitter::render($input))
+        ->has("string? $okLocale = 'en';\n        if ($f->nulled('locale')) \{\n            $okLocale = null;\n        }")
+        // kept on one branch only, so copied rather than moved, which would not compile
+        ->has('$okLocale = $xLocale;')
+        ->has("} else \{\n                $okLocale = null;");
+}
+
+test uint64_rules_compare_without_a_cast
+{
+    string $limit = genField('limit', '{"kind":"prim","name":"uint64"}', genRule('{"key":"max","value":{"kind":"int","integer":100}},{"key":"between","value":{"kind":"list","items":[{"kind":"int","integer":1},{"kind":"int","integer":100}]}},{"key":"oneOf","value":{"kind":"list","items":[{"kind":"int","integer":10},{"kind":"int","integer":50}]}},{"key":"gte","value":{"kind":"int","integer":1}},{"key":"multipleOf","value":{"kind":"int","integer":5}}'));
+    $p = Program(genDecls(genInputNamed('Page', '', $limit)));
+    expect($p->problems)->empty();
+    expect(emitter::render($p))
+        ->has('$v->max($xLimit, 100 as int64);')
+        ->has('$v->between($xLimit, 1 as int64, 100 as int64);')
+        ->has('$v->oneOf($xLimit, [10, 50]);')
+        ->has("$v->compare('gte', $xLimit, 1 as int64, '1');")
+        ->has('$v->multipleOf($xLimit, 5 as int64);')
+        ->lacks('$xLimit as int64');
+}
+
+test a_quoted_number_is_no_field_to_compare_with
+{
+    $quoted = genProblems(genInputNamed('Age', '', genField('age', '{"kind":"prim","name":"int32"}', genRule('{"key":"gte","value":{"kind":"string","text":"18"}}'))));
+    expect($quoted)->size(1);
+    expect($quoted[0])->has("'gte' takes a number, like 'gte: 18', or the name of another field; '18' is neither");
+    $signed = genProblems(genInputNamed('Age', '', genField('age', '{"kind":"prim","name":"float64"}', genRule('{"key":"lt","value":{"kind":"string","text":"-1.5"}}'))));
+    expect($signed[0])->has("'-1.5' is neither");
+    $missing = genProblems(genInputNamed('Age', '', genField('age', '{"kind":"prim","name":"int32"}', genRule('{"key":"gt","value":{"kind":"string","text":"floor"}}'))));
+    expect($missing[0])->has('names $floor, which is not a field of shop::Age');
+    $low = genField('low', '{"kind":"prim","name":"int32"}', '');
+    $high = genField('high', '{"kind":"prim","name":"int32"}', genRule('{"key":"gt","value":{"kind":"string","text":"low"}}'));
+    expect(genProblems(genInputNamed('Range', '', "{$low},{$high}")))->empty();
+}
+
+test a_flag_left_out_is_false
+{
+    $ctx = genPayload();
+    $out = genOut();
+    string $force = '{"name":"force","visibility":"public","static":false,"type":{"kind":"prim","name":"bool"},"default":false,"tools":[]}';
+    string $in = '{"name":"in","type":{"kind":"named","name":"shop::ItemRef"},"default":false}';
+    $input = genInput($force);
+    $command = genCommand('', "{$ctx},{$out},{$in}", '{"kind":"named","name":"nexus::Cli"}');
+    $p = Program(genDecls("{$input},{$command}"));
+    expect($p->problems)->empty();
+    expect(emitter::render($p))
+        ->has("if ($in->flag('force')) \{\n            $pairs->add('force', 'true');\n        } else \{\n            $pairs->add('force', 'false');\n        }");
+}
+
+test a_uint16_path_param_is_an_integer
+{
+    string $port = '{"name":"port","type":{"kind":"prim","name":"uint16"},"default":false}';
+    $p = Program(genDecls(genAction('', $port, genResult('{"kind":"string"}'), genAct())));
+    expect($p->problems)->empty();
+    expect(emitter::render($p))
+        ->has("uint32 $argPortWide = guard nexus::Param::uint32($payload, 'port') else ($p) \{")
+        ->has("if ($argPortWide > 65535) \{\n            return nexus::Reply::problem($payload, nexus::Problem::notFound($payload->request->path));")
+        ->has('uint16 $argPort = $argPortWide as uint16;')
+        ->has("nexus::PathParam('port', 'number', false)");
+}
+
+test inputs_of_other_modules_are_inputs_here
+{
+    string $file = genField('file', '{"kind":"named","name":"nexus::Upload"}', '');
+    string $login = '{"kind":"struct","name":"Login","qualified":"lib::Login","visibility":"public","file":"src/Login.eco","line":2,"tools":[{"namespace":"nexus","name":"input","value":null}],"conforms":[],"fields":[{"name":"email","visibility":"public","static":false,"type":{"kind":"string"},"default":false,"tools":[]}],"constructors":[]}';
+    string $attach = "\{\"kind\":\"struct\",\"name\":\"Attach\",\"qualified\":\"lib::Attach\",\"visibility\":\"public\",\"file\":\"src/Attach.eco\",\"line\":2,\"tools\":[\{\"namespace\":\"nexus\",\"name\":\"input\",\"value\":null}],\"conforms\":[],\"fields\":[{$file}],\"constructors\":[]}";
+    string $body = '{"name":"in","type":{"kind":"named","name":"nexus::Body","args":[{"kind":"named","name":"lib::Login"}]},"default":false}';
+    string $action = genAction('', $body, genResult('{"kind":"string"}'), genAct());
+    string $text = "\{\"modules\":[\{\"name\":\"shop\",\"declarations\":[{$action}]},\{\"name\":\"lib\",\"declarations\":[{$login},{$attach}]}]}";
+    json::Value $all = expect(json::parse($text))->ok();
+    json::Value $local = expect(nexusgen::Generator::only($all, 'shop'))->some();
+    $p = Program($local, $all);
+    expect($p->problems)->empty();
+    expect(emitter::render($p))->has('$valueIn = guard lib::LoginDecoder::decode($payload, $fieldsIn) else ($p) {');
+
+    // an upload nested in another module's input still keeps the input off a query
+    string $nested = '{"name":"att","visibility":"public","static":false,"type":{"kind":"named","name":"lib::Attach"},"default":false,"tools":[]}';
+    string $search = genInputNamed('Search', '', $nested);
+    string $query = '{"name":"q","type":{"kind":"named","name":"nexus::QueryOf","args":[{"kind":"named","name":"shop::Search"}]},"default":false}';
+    string $find = genAction('', $query, genResult('{"kind":"string"}'), genAct());
+    string $text2 = "\{\"modules\":[\{\"name\":\"shop\",\"declarations\":[{$search},{$find}]},\{\"name\":\"lib\",\"declarations\":[{$login},{$attach}]}]}";
+    json::Value $all2 = expect(json::parse($text2))->ok();
+    json::Value $local2 = expect(nexusgen::Generator::only($all2, 'shop'))->some();
+    $q = Program($local2, $all2);
+    expect($q->problems)->size(1);
+    expect($q->problems[0])->has('nexus::QueryOf<shop::Search> has a file upload');
+}
+
+test defaults_name_what_their_file_reaches
+{
+    std::fs::path $root = std::env::tmp() / 'nexus-defaulttest';
+    std::fs::remove_all($root);
+    std::fs::mkdir($root / 'src', recursive: true);
+    std::fs::writefile($root / 'src' / 'DbConfig.eco', "namespace shop;\n\nuse std::time;\nuse shop::limits::\{MAX_POOL as POOL};\n\n#[nexus::config: 'DB']\npublic struct DbConfig \{}\n");
+    string $wait = '{"name":"wait","visibility":"public","static":false,"type":{"kind":"named","name":"std::time::duration"},"default":true,"default_value":"time::duration::secs(30)","tools":[]}';
+    string $port = '{"name":"port","visibility":"public","static":false,"type":{"kind":"prim","name":"int64"},"default":true,"default_value":"DEFAULT_PORT","tools":[{"namespace":"nexus","name":"env","value":null}]}';
+    string $pool = '{"name":"pool","visibility":"public","static":false,"type":{"kind":"prim","name":"int64"},"default":true,"default_value":"POOL + Sizes::base(\'x DEFAULT_PORT\', $n: 2)->fit","tools":[{"namespace":"nexus","name":"env","value":null}]}';
+    string $const = '{"kind":"const","name":"DEFAULT_PORT","qualified":"shop::DEFAULT_PORT","visibility":"internal","file":"src/DbConfig.eco","line":3}';
+    string $sizes = '{"kind":"struct","name":"Sizes","qualified":"shop::Sizes","visibility":"public","file":"src/Sizes.eco","line":3,"tools":[],"conforms":[],"fields":[],"constructors":[]}';
+    $config = genConfig('DB', "[{$wait},{$port},{$pool}]");
+    json::Value $decls = genDecls("{$config},{$const},{$sizes}");
+    $p = Program($decls, $decls, root: $root);
+    expect($p->problems)->empty();
+    expect($p->configs[0]->fields[0]->defaultText)->is('std::time::duration::secs(30)');
+    expect($p->configs[0]->fields[1]->defaultText)->is('shop::DEFAULT_PORT');
+    expect($p->configs[0]->fields[2]->defaultText)->is("shop::limits::MAX_POOL + shop::Sizes::base('x DEFAULT_PORT', $n: 2)->fit");
+    expect(emitter::render($p))
+        ->has('int64 $okC0Port = shop::DEFAULT_PORT;')
+        ->has('int64 $d0 = shop::DEFAULT_PORT;');
+    std::fs::remove_all($root);
+}
+
+test a_source_under_a_nested_vendor_directory_makes_the_stamp_stale
+{
+    std::fs::path $root = std::env::tmp() / 'nexus-stampvendor';
+    std::fs::remove_all($root);
+    std::fs::mkdir($root / 'src' / 'vendor', recursive: true);
+    std::fs::mkdir($root / 'vendor', recursive: true);
+    std::fs::writefile($root / 'module.eco', "#[module: \"app\"]\n");
+    std::fs::writefile($root / 'src' / 'vendor' / 'Shim.eco', 'enum Kind { case a; }');
+    std::fs::writefile($root / 'vendor' / 'Dep.eco', 'enum Dep { case a; }');
+    string $before = stamp::digest($root, 'echoc');
+    std::fs::writefile($root / 'vendor' / 'Dep.eco', 'enum Dep { case a; case b; }');
+    expect(stamp::digest($root, 'echoc'))->is($before);
+    std::fs::writefile($root / 'src' / 'vendor' / 'Shim.eco', 'enum Kind { case a; case b; }');
+    expect(stamp::digest($root, 'echoc') == $before)->no(says: 'a source under src/vendor changed');
+    std::fs::remove_all($root);
+}
+
+test a_failed_pass_says_which_one
+{
+    std::process::output $ran = expect(std::process::command('true', array<string>())->output())->ok();
+    nexusgen::Failure $empty = .tool('echoc build -p tools', $ran->status, '');
+    expect(str::from($empty))->has('echoc build -p tools printed nothing nexus gen could read, and nothing on stderr');
+    nexusgen::Failure $said = .tool('echoc build -p decls', $ran->status, 'boom');
+    expect(str::from($said))->has('echoc build -p decls failed (')->has('boom');
+}

@@ -1,0 +1,21 @@
+namespace nexus::oauth::carbon;
+
+use carbon;
+
+/**
+ * `grant_id` on `oauth_codes`: a redeemed code is kept until it expires with the grant it was
+ * redeemed for, so one that comes back ends that grant (RFC 6749, section 4.1.2).
+ */
+#[carbon::migration: '20261117000600_mark_oauth_codes']
+public class MarkOAuthCodes : carbon::Migration
+{
+    public function up(carbon::Migrating $m) : status<carbon::Error>
+    {
+        return $m->alter(carbon::ddl::Alter('oauth_codes')->string('grant_id', 12, $default: ''));
+    }
+
+    public function down(carbon::Migrating $m) : status<carbon::Error>
+    {
+        return $m->alter(carbon::ddl::Alter('oauth_codes')->drop('grant_id'));
+    }
+}

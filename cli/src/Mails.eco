@@ -234,7 +234,9 @@ internal function compile(const Program& $p, const json::Value& $d, const string
         $locals++;
         MailOp $loop = MailOp(.each);
         $loop->text = $list->expr;
-        $loop->local = "${$piece->name}{$locals}";
+        // a loop local always has `_` before its number and a hole local (`$hole1`) never does, so
+        // no name a template gives its loop can meet one
+        $loop->local = "${$piece->name}_{$locals}";
         $ops[] = $loop;
         $open[] = Open(.each, false, $piece->line, $piece->column, $scope->count());
         $scope[] = Var($piece->name, $loop->local, decl::field($list->type, 'of'));
@@ -401,7 +403,7 @@ internal function body(Code& $code, const array<MailOp>& $ops, const string& $ou
         } else if ($op->step == Step::hole) {
             if ($op->nullable) {
                 $holes++;
-                string $v = "$v{$holes}";
+                string $v = "$hole{$holes}";
                 $code->begin("if ({$op->text} != null)");
                 $code->line("{$op->type} {$v} = guard {$op->text};");
                 $code->line(write($op, $v, $out));

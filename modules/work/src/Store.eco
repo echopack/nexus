@@ -31,14 +31,26 @@ public interface Store
 
     /**
      * A claimed task finished. What it spawned (`$spawned`, waiting for each other as it says) is
-     * stored, every task waiting for it waits for those too, and lets go of it.
+     * stored, every task waiting for it waits for those too, and lets go of it. What it spawned is
+     * skipped, all of it, as a push would be when one of them holds a `.unique` key a waiting or
+     * running task holds, or another of them holds too; the task's own key is free by then. Answers
+     * false when it skipped them.
      */
-    function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : status<nexus::Problem>;
+    function done(const StoredTask& $task, time::timestamp $now, const Batch& $spawned) : result<bool, nexus::Problem>;
 
     /**
      * A claimed task is due again at `$at`.
      */
     function retry(const StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>;
+
+    /**
+     * A claimed task this server cannot run is due again at `$at` without using a try: its attempts
+     * go back to what they were before the claim. A store that cannot give the try back retries it.
+     */
+    function defer(const StoredTask& $task, time::timestamp $at, const string& $why) : status<nexus::Problem>
+    {
+        return $this->retry($task, $at, $why);
+    }
 
     /**
      * A claimed task failed for good: kept with the failed ones. The tasks waiting for it go ahead
@@ -58,7 +70,8 @@ public interface Store
 
     /**
      * Makes failed task `$id` due at `$now` with its tries fresh; the tasks held back behind it run
-     * once it is done. Answers the task sent back, null when no failed task has that id.
+     * once it is done. Answers the task sent back, null when no failed task has that id or it holds
+     * a `.unique` key a waiting or running task holds.
      */
     function again(const string& $id, time::timestamp $now) : result<StoredTask?, nexus::Problem>;
 
@@ -91,8 +104,9 @@ public interface Store
     function graph(const string& $id, uint32 $depth) : result<Graph, nexus::Problem>;
 
     /**
-     * Fails the waiting tasks that expired by `$now` and deletes the done and cancelled ones that
-     * finished before `$before`; answers how many it deleted.
+     * Fails the tasks that expired by `$now` while they wait, or while they run on a server whose
+     * lease ran out (it stopped, and nobody may claim an expired task again), and deletes the done
+     * and cancelled ones that finished before `$before`; answers how many it deleted.
      */
     function prune(time::timestamp $now, time::timestamp $before) : result<uint64, nexus::Problem>;
 

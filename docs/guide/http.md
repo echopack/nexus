@@ -36,7 +36,7 @@ It listens on `127.0.0.1:3246` and answers until you press Ctrl-C. `127.0.0.1` i
 NEXUS_LISTEN=0.0.0.0:8080 ./ecobuild/blog serve
 ```
 
-`--listen` wins when both are given. It accepts `host:port`, `:port` (the default host), a bare port, and `[ipv6]:port`. An IPv6 address always goes in brackets: `1::2:3` is an address of its own, not `[1::2]:3`, so nexus refuses it rather than guess.
+`--listen` wins when both are given, and `NEXUS_LISTEN` may also be a line in the `.env` file (the real environment wins over it). It accepts `host:port`, `:port` (the default host), a bare port, and `[ipv6]:port`. An IPv6 address always goes in brackets: `1::2:3` is an address of its own, not `[1::2]:3`, so nexus refuses it rather than guess.
 
 `serve` warns you about two settings that are fine on your machine and risky anywhere else: dev mode on an address other machines reach (clients would see the cause of every error), and a missing `NEXUS_APP_URL` outside dev. [Deployment](./deployment.md) covers both.
 
@@ -156,7 +156,7 @@ When `serve` gets `SIGINT` or `SIGTERM`, it stops in order rather than dropping 
 2. Once the last one has answered, every extension's `drain` hook runs, last listed first, so task workers and streams stop after the requests that may have fed them.
 3. The process exits with `0`.
 
-Requests in flight get `NEXUS_SHUTDOWN_GRACE` (30 s by default) to finish. If one is still running then, or a second signal arrives, the process logs `stopping took too long: quitting with requests still running` and exits, so one stuck request can never hold a deploy hostage.
+Requests in flight get `NEXUS_SHUTDOWN_GRACE` (30 s by default) to finish, and the background work's drain after them as long again. If one is still running then, or a second signal arrives before the process is through, it logs `stopping took too long: quitting with work still running` and exits, so one stuck request can never hold a deploy hostage.
 
 ```sh
 NEXUS_SHUTDOWN_GRACE=10s ./ecobuild/blog serve

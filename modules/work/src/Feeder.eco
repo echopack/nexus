@@ -155,7 +155,8 @@ internal class Feeder
             return;
         }
         Codec $codec = guard $this->work->codecs->find($task->name) else {
-            $this->reject($task, "no task named {$task->name} in this program", $log);
+            // a server that has it runs it, say a newer one during a rolling deploy
+            $this->later($task, "no task named {$task->name} in this program", $log);
             return;
         };
         function<result<Item, DataError>(const string&)> $decode = $codec->decode;
@@ -192,6 +193,23 @@ internal class Feeder
         $s->tell($log, $task->attempts, 0.0, $this->work->clock->now());
         $this->told($task, $s, 0.0);
         $this->settle($task, $s, Batch(), $log);
+    }
+
+    /**
+     * Sends claimed `$task` back without using a try, for `$why`: due again in a minute (in a poll,
+     * when that is longer), for a server that can run it.
+     */
+    internal function later(const StoredTask& $task, const string& $why, nexus::Logger $log) : void
+    {
+        time::duration $wait = time::duration::mins(1);
+        if ($this->work->config->poll > $wait) {
+            $wait = $this->work->config->poll;
+        }
+        $log->warn("{$why}; sent back for a server that has it", ['in' => $wait->as_secs()]);
+        guard $this->lane->store->defer($task, $this->work->clock->now() + $wait, $why) else ($p) {
+            $log->error('the store cannot settle a task', ['detail' => $p->detail(.dev)]);
+            return;
+        };
     }
 
     /**
@@ -274,7 +292,7 @@ internal class Feeder
         time::timestamp $now = $this->work->clock->now();
         Store $store = $this->lane->store;
         status<nexus::Problem> $saved = match ($s) {
-            Settle::done => $store->done($task, $now, $spawned),
+            Settle::done => $this->finish($task, $now, $spawned, $log),
             Settle::retry($at, $why) => $store->retry($task, $at, $why),
             Settle::fail($why) => $store->fail($task, $now, $why),
         };
@@ -282,5 +300,18 @@ internal class Feeder
             $log->error('the store cannot settle a task', ['detail' => $p->detail(.dev)]);
             return;
         };
+    }
+
+    /**
+     * Stores claimed `$task` as done with what it spawned, telling `$log` when the store skipped
+     * those for a `.unique` key.
+     */
+    internal function finish(const StoredTask& $task, time::timestamp $now, const Batch& $spawned, nexus::Logger $log) : status<nexus::Problem>
+    {
+        bool $stored = try $this->lane->store->done($task, $now, $spawned);
+        if (!$stored) {
+            $log->info('the tasks it spawned were skipped: one holds a .unique key a waiting or running task holds');
+        }
+        return .ok;
     }
 }

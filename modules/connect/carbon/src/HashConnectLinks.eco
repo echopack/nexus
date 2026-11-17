@@ -1,0 +1,64 @@
+namespace nexus::connect::carbon;
+
+use carbon;
+
+/**
+ * Keys `connect_links` by the sha256 hex of `<provider>:<external>` (`LinkRow::key`) instead of
+ * the text itself, which MySQL's default collation compared ignoring case and accents. The rows
+ * there are rekeyed one by one, against the table as it is at this point, not through `LinkRow`.
+ */
+#[carbon::migration: '20261117000710_hash_connect_links']
+public class HashConnectLinks : carbon::Migration
+{
+    public function up(carbon::Migrating $m) : status<carbon::Error>
+    {
+        return HashConnectLinks::rekey($m, true);
+    }
+
+    public function down(carbon::Migrating $m) : status<carbon::Error>
+    {
+        return HashConnectLinks::rekey($m, false);
+    }
+
+    /**
+     * Sets every row's id to the hash of its provider and external id, or back to the text when
+     * `$hashed` is false.
+     */
+    internal static function rekey(carbon::Migrating $m, bool $hashed) : status<carbon::Error>
+    {
+        hydrahon::Table $t = hydrahon::Table(name: 'connect_links');
+        hydrahon::Term<string> $id = $t->column<string>('id');
+        hydrahon::Term<string> $provider = $t->column<string>('provider');
+        hydrahon::Term<string> $external = $t->column<string>('external');
+        hydrahon::Select $q = hydrahon::Select(from: hydrahon::Table(name: 'connect_links'));
+        $q->fields([$id, $provider, $external]);
+        carbon::Connection $db = $m->session()->connection();
+        carbon::Cursor $rows = try $db->query($q);
+        // read every row before the first update, so the cursor is done with
+        map<string, string> $keys = [];
+        while (true) {
+            bool $more = try $rows->step();
+            if (!$more) {
+                break;
+            }
+            string $was = $rows->text(0) ?? '';
+            string $key = nexus::connect::Link::key($rows->text(1) ?? '', $rows->text(2) ?? '');
+            if ($hashed) {
+                $key = nexus::auth::Secrets::hash($key);
+            }
+            if ($was != $key) {
+                $keys[$was] = $key;
+            }
+        }
+        foreach ($keys as $was => const &$key) {
+            $set = hydrahon::Values();
+            $set[$id] = $key;
+            hydrahon::Update $u = hydrahon::Update(hydrahon::Table(name: 'connect_links'));
+            $u->set(mv $set);
+            string $from = $was;
+            $u->where($id == $from);
+            try $db->exec($u);
+        }
+        return .ok;
+    }
+}

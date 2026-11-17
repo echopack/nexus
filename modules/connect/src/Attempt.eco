@@ -4,9 +4,10 @@ use std::time;
 
 /**
  * One sign in with a provider, from its start until the app claims it, at most ten minutes. The
- * store keeps hashes of the state and the binding, never them: the state is the provider's echo of
- * the attempt, the binding what proves the claim comes from the browser that started it. The
- * nonce and the PKCE verifier are kept as they are, since the callback needs them.
+ * store keeps hashes of the state, the binding and the proof, never them: the state is the
+ * provider's echo of the attempt, the binding what proves the claim comes from the browser that
+ * started it, the proof what proves it comes from the browser the provider sent back. The nonce
+ * and the PKCE verifier are kept as they are, since the callback needs them.
  */
 public struct Attempt
 {
@@ -28,6 +29,12 @@ public struct Attempt
      * otherwise.
      */
     public string $error = '';
+
+    /**
+     * The hash of the proof the callback handed the browser it sent on to the app's page, once the
+     * callback has run; empty otherwise.
+     */
+    public string $proofHash = '';
 
     /**
      * Whether the callback has run, well or not.

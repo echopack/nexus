@@ -166,7 +166,7 @@ nexus::Url $longer = try $this->covers->url($key, expires: .hours(1), name: 'cov
 
 Without `expires:`, a link lasts `NEXUS_FILES_EXPIRES`, fifteen minutes by default.
 
-So, who signs these links? S3 signs its own, and the link points straight at the bucket. Every other disk is served by nexus-files itself, on a signed route the extension adds: `GET|PUT /files/{disk}/{key*}`. Those links are signed with `NEXUS_FILES_KEY`, so binding a `file:` or `memory:` disk needs that key, at least 32 characters long. A link that was changed or has expired gets a `403`.
+So, who signs these links? S3 signs its own, and the link points straight at the bucket. S3 takes a link that lasts one second to seven days: asking for one outside that is an `unsupported` error, and a `NEXUS_FILES_EXPIRES` outside it stops the boot of an app with an `s3://` disk. Every other disk is served by nexus-files itself, on a signed route the extension adds: `GET|PUT /files/{disk}/{key*}`. Those links are signed with `NEXUS_FILES_KEY`, so binding a `file:` or `memory:` disk needs that key, at least 32 characters long. A link that was changed or has expired gets a `403`.
 
 > [!WARNING]
 > Changing `NEXUS_FILES_KEY` ends every link handed out with the old key.
@@ -234,7 +234,7 @@ $world->api->with('If-None-Match', $all[0]->etag)->get("/v1/posts/{$id}/cover")-
 | Variable | Default | Meaning |
 |:--|:--|:--|
 | `NEXUS_FILES_KEY` | | Signs the links of `file:` and `memory:` disks. At least 32 characters; required when you bind one. |
-| `NEXUS_FILES_EXPIRES` | `15m` | How long a link lasts when the code names no time. |
+| `NEXUS_FILES_EXPIRES` | `15m` | How long a link lasts when the code names no time. At most `7d` with an S3 disk. |
 | `NEXUS_FILES_ROUTE` | `/files` | Where the signed route answers. |
 | `NEXUS_FILES_S3_ACCESS_KEY` | | The S3 access key. |
 | `NEXUS_FILES_S3_SECRET_KEY` | | The S3 secret key. |

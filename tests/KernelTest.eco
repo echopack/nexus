@@ -205,6 +205,10 @@ test head_and_options_are_answered
     Response $head = $k->handle(Request(.head, '/hello/bob'));
     expect($head->status)->is(200);
     expect($head->body)->is('');
+    // the transport still says the length a GET would have sent
+    Response $get = $k->handle(Request(.get, '/hello/bob'));
+    expect($get->omitted)->none();
+    expect($head->omitted)->some($get->body->size() as int64);
     Response $opts = $k->handle(Request(.options, '/hello/bob'));
     expect($opts->status)->is(204);
     string $allow = expect($opts->header('Allow'))->some();

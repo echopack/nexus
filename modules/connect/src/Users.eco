@@ -17,6 +17,17 @@ public interface Users
     function withEmail(const string& $email) : result<string?, nexus::Problem>;
 
     /**
+     * Whether the app verified that user `$subject` owns their email (they followed a link mailed
+     * to it, or they signed up through a provider that verified it). Only then does a verified sign
+     * in with the same email link to them. False unless the app says otherwise, so an app that
+     * does not verify emails never links by email.
+     */
+    function emailVerified(const string& $subject) : result<bool, nexus::Problem>
+    {
+        return .ok(false);
+    }
+
+    /**
      * A new user for `$who`, who signs in with the provider (no password), and whatever else a
      * new user gets (a welcome mail): its subject. A 409 (`Accounts::taken()`) when a user got the
      * email in the meantime.

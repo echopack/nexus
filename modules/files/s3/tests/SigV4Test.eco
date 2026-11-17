@@ -76,6 +76,26 @@ test xml_reads_a_listing
     expect(Xml::decode('&lt;&amp;lt;&nope;'))->is('<&lt;&nope;');
 }
 
+test a_header_value_signs_with_its_runs_of_spaces_squeezed
+{
+    // S3 signs what it received squeezed, so a value with a double space must sign alike
+    array<SignedHeader> $loose = awsHeaders(NOTHING);
+    $loose[] = SignedHeader('content-type', "  text/plain;  \t charset=utf-8 ");
+    array<SignedHeader> $tight = awsHeaders(NOTHING);
+    $tight[] = SignedHeader('content-type', 'text/plain; charset=utf-8');
+    expect(signer()->authorization('PUT', '/a.txt', '', $loose, NOTHING, may24()))->is(signer()->authorization('PUT', '/a.txt', '', $tight, NOTHING, may24()));
+    expect(SigV4::squeeze('"a   b   c"'))->is('"a b c"');
+    expect(SigV4::squeeze('a b'))->is('a b');
+}
+
+test xml_decodes_numeric_character_references
+{
+    expect(Xml::decode('a&#13;b&#x2F;c&#X2f;'))->is("a\rb/c/");
+    expect(Xml::decode('&#228;&#x20AC;&#x1F600;'))->is('ä€😀');
+    expect(Xml::decode('&#;&#x;&#0;&#xD800;&#x110000;&#12a;&#99999999;'))->is('&#;&#x;&#0;&#xD800;&#x110000;&#12a;&#99999999;');
+    expect(Xml::value('<Key>a&#x20;b</Key>', 'Key'))->some('a b');
+}
+
 test a_disk_url_names_its_bucket_and_prefix
 {
     S3Config $c = S3Config($accessKey: 'AK', $secretKey: 'SK', $region: 'eu-central-1');

@@ -40,8 +40,7 @@ public struct Schedule
     }
 
     /**
-     * The latest slot after `$after` and no later than `$now`, or null when none fell in between. A
-     * cron line looks back at most a day.
+     * The latest slot after `$after` and no later than `$now`, or null when none fell in between.
      */
     public const function due(time::timestamp $after, time::timestamp $now, const calendar::Zone& $zone) : time::timestamp?
     {
@@ -52,27 +51,42 @@ public struct Schedule
             }
             return null;
         }
-        Cron $c = guard $this->cron else {
+        time::timestamp $at = guard $this->next($after, $zone) else {
             return null;
         };
-        int64 $minute = Schedule::floor($now->unix_secs(), 60);
-        int32 $looked = 0;
-        while ($looked < 1440) {
-            time::timestamp $at = .from_unix_secs($minute);
-            if ($at <= $after) {
-                return null;
-            }
-            if (Schedule::hits($c, $at, $zone)) {
-                return $at;
-            }
-            $minute = $minute - 60;
-            $looked = $looked + 1;
+        if ($at > $now) {
+            return null;
         }
-        return null;
+        return $this->latest($at, $now, $zone);
     }
 
     /**
-     * The first slot after `$after`, looking a year ahead at most.
+     * The latest slot no later than `$now`, from slot `$slot` on: the slots missed in between are
+     * not caught up.
+     */
+    public const function latest(time::timestamp $slot, time::timestamp $now, const calendar::Zone& $zone) : time::timestamp
+    {
+        if ($this->everySecs > 0) {
+            return .from_unix_secs(Schedule::floor($now->unix_secs(), $this->everySecs));
+        }
+        time::timestamp $at = $slot;
+        while (true) {
+            time::timestamp $later = guard $this->next($at, $zone) else {
+                return $at;
+            };
+            if ($later > $now) {
+                return $at;
+            }
+            $at = $later;
+        }
+        return $at;
+    }
+
+    /**
+     * The first slot after `$after`, looking a year ahead at most. A cron line keeps to its zone's
+     * wall clock as cron does when the clocks change: in the hour repeated when they go back, a
+     * wall time fires the first time only; the wall times skipped when they go forward fire once, at
+     * the first minute after the gap.
      */
     public const function next(time::timestamp $after, const calendar::Zone& $zone) : time::timestamp?
     {
@@ -84,24 +98,64 @@ public struct Schedule
             return null;
         };
         int64 $minute = Schedule::floor($after->unix_secs(), 60) + 60;
-        int64 $looked = 0;
-        while ($looked < 527040) {
+        int64 $end = $minute + 527040 * 60;
+        while ($minute < $end) {
             time::timestamp $at = .from_unix_secs($minute);
-            if (Schedule::hits($c, $at, $zone)) {
+            calendar::Zoned $z = guard calendar::Zoned::of($at, $zone) else {
+                return null;
+            };
+            if (Schedule::fires($c, $z, $zone)) {
                 return $at;
             }
-            $minute = $minute + 60;
-            $looked = $looked + 1;
+            int64 $idle = $c->idle($z->local());
+            int64 $to = $minute + $idle * 60;
+            if ($idle > 1) {
+                // the wall clock keeps pace with the instant only until the offset changes, so stop
+                // at the change and look at the first minute after it
+                time::timestamp? $change = $zone->next($at);
+                if ($change != null) {
+                    time::timestamp $on = guard $change;
+                    int64 $first = Schedule::floor($on->unix_secs() + 59, 60);
+                    if ($first < $to) {
+                        $to = $first;
+                    }
+                }
+            }
+            $minute = $to;
         }
         return null;
     }
 
-    internal static function hits(const Cron& $c, time::timestamp $at, const calendar::Zone& $zone) : bool
+    /**
+     * Whether cron line `$c` fires at the minute `$z`: its wall clock matches and did not come round
+     * already (in the hour repeated when clocks go back, the first time counts), or `$z` is the
+     * first minute after clocks went forward and a wall time they skipped matches.
+     */
+    internal static function fires(const Cron& $c, const calendar::Zoned& $z, const calendar::Zone& $zone) : bool
     {
-        calendar::Zoned $z = guard calendar::Zoned::of($at, $zone) else {
-            return false;
-        };
-        return $c->matches($z->local());
+        calendar::DateTime $local = $z->local();
+        if ($c->matches($local)) {
+            array<calendar::Offset> $offsets = $zone->candidates($local);
+            // the larger offset is the earlier instant of a wall time that happens twice
+            if ($offsets->count() < 2 || $offsets[0]->seconds == $z->offset->seconds) {
+                return true;
+            }
+        }
+        int64 $secs = $z->instant->unix_secs();
+        int64 $before = $zone->offset(time::timestamp::from_unix_secs($secs - 60))->seconds as int64;
+        int64 $wall = $secs + $before;
+        int64 $end = $secs + ($z->offset->seconds as int64);
+        // the wall times between the minute before the change and this one, read as UTC
+        while ($wall < $end) {
+            calendar::Zoned $skipped = guard calendar::Zoned::of(time::timestamp::from_unix_secs($wall), calendar::Zone::utc()) else {
+                return false;
+            };
+            if ($c->matches($skipped->local())) {
+                return true;
+            }
+            $wall = $wall + 60;
+        }
+        return false;
     }
 
     /**

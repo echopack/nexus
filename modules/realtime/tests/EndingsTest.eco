@@ -76,3 +76,25 @@ test a_recheck_closes_the_sockets_whose_credential_expired
     expect($ws->closedWith->load())->is(4001);
     expect($guest->open())->yes(says: 'a guest has nothing to expire');
 }
+
+test a_lapse_rechecks_at_once_even_with_rechecks_off
+{
+    // the relay lost notes, an `ended` maybe among them: the sweeper asks right away
+    map<string, string> $off = ['NEXUS_REALTIME_RECHECK' => '0s', 'NEXUS_REALTIME_BEAT' => '0s'];
+    $r = Rig($off);
+    TestSocket $ws = $r->bearer($r->token('7'));
+    Sweeper $sweeper = $r->app->kernel->services->get<Sweeper>();
+    $sweeper->start($r->app->kernel);
+    $r->clock->advance(.mins(61));
+    std::thread::sleep(300);
+    expect($ws->open())->yes(says: 'nothing asks while rechecks are off');
+    $r->hub()->lapse();
+    int32 $tries = 0;
+    while ($ws->open() && $tries < 200) {
+        std::thread::sleep(10);
+        $tries++;
+    }
+    $sweeper->stop();
+    $r->hub()->settle();
+    expect($ws->closedWith->load())->is(4001);
+}

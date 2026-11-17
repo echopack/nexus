@@ -208,10 +208,7 @@ internal function dispatch(Code& $code, const ActionDecl& $a) : void
         $bare = types::render(types::bare($p->type));
         $key = names::quote($p->name);
         if (!$p->optionalSegment) {
-            $arg = types::binding($p->typeText, "$arg{$u}");
-            $code->begin("{$arg} = guard nexus::Param::{$reader}($payload, {$key}) else ($p)");
-            problem($code);
-            $code->close(';');
+            param($code, $reader, $p->typeText, $key, "$arg{$u}");
             continue;
         }
         if ($p->hasDefault) {
@@ -220,10 +217,7 @@ internal function dispatch(Code& $code, const ActionDecl& $a) : void
             $code->line("{$p->typeText} $arg{$u} = null;");
         }
         $code->begin("if ($payload->param({$key}) != null)");
-        $got = types::binding($bare, "$got{$u}");
-        $code->begin("{$got} = guard nexus::Param::{$reader}($payload, {$key}) else ($p)");
-        problem($code);
-        $code->close(';');
+        param($code, $reader, $bare, $key, "$got{$u}");
         $gotMoved = types::moved($bare, "$got{$u}");
         $code->line("$arg{$u} = {$gotMoved};");
         $code->close();
@@ -272,6 +266,30 @@ internal function dispatch(Code& $code, const ActionDecl& $a) : void
         $code->line("return {$reply};");
     }
     $code->close();
+}
+
+/**
+ * Reads the path parameter `$key` into a new local `$local` of type `$type`. `nexus::Param` reads
+ * a uint16 as a uint32, so one past 65535 is answered here, like any value too large for its
+ * type: 404.
+ */
+internal function param(Code& $code, const string& $reader, const string& $type, const string& $key, const string& $local) : void
+{
+    if ($reader != 'uint16') {
+        $declared = types::binding($type, $local);
+        $code->begin("{$declared} = guard nexus::Param::{$reader}($payload, {$key}) else ($p)");
+        problem($code);
+        $code->close(';');
+        return;
+    }
+    string $wide = "{$local}Wide";
+    $code->begin("uint32 {$wide} = guard nexus::Param::uint32($payload, {$key}) else ($p)");
+    problem($code);
+    $code->close(';');
+    $code->begin("if ({$wide} > 65535)");
+    $code->line('return nexus::Reply::problem($payload, nexus::Problem::notFound($payload->request->path));');
+    $code->close();
+    $code->line("uint16 {$local} = {$wide} as uint16;");
 }
 
 /**
@@ -441,7 +459,7 @@ internal function call(Code& $code, const ActionDecl& $a) : void
             $hasDefault = true;
             $defaultText = 'null';
         }
-        $r = read($code, '$args', $p->name, $p->type, $hasDefault, $defaultText, "A{$u}");
+        $r = read($code, '$args', $p->name, $p->type, $hasDefault, $defaultText, "A{$u}", true);
         if (!$r->unwrap->empty()) {
             $unwraps[] = $r->unwrap;
         }
@@ -860,8 +878,13 @@ internal function command(Code& $code, const Program& $p, const CommandDecl& $cm
                 $code->close();
                 $word = $word + 1;
             } else if ($reader == 'bool') {
+                // a flag is there or not: left out it is false, even with no default to say so
                 $code->begin("if ($in->flag({$option}))");
                 $code->line("$pairs->add({$wireQ}, 'true');");
+                if (!types::optional($f->type)) {
+                    $code->next('else');
+                    $code->line("$pairs->add({$wireQ}, 'false');");
+                }
                 $code->close();
             } else if ($reader == 'strings' || $reader == 'ints') {
                 $code->begin("foreach ($in->list({$option}) as const &$item)");
@@ -906,10 +929,12 @@ internal function command(Code& $code, const Program& $p, const CommandDecl& $cm
 // reading values ---------------------------------------------------------
 
 /**
- * Emits the read of one value from `$source` (a `nexus::Fields` or a `nexus::Settings`) with its
- * rules, and says where it ends up.
+ * Emits the read of one value from `$source` (a `nexus::Fields`, a `nexus::Settings` or a
+ * `nexus::work::TaskData`) with its rules, and says where it ends up. With `$nulls`, the source can
+ * give a field as an explicit null (`nulled`), which an optional field with a default takes as
+ * null; only a missing one falls back to the default.
  */
-internal function read(Code& $code, const string& $source, const string& $wire, const json::Value& $type, bool $hasDefault, const string& $defaultText, const string& $tag) : Read
+internal function read(Code& $code, const string& $source, const string& $wire, const json::Value& $type, bool $hasDefault, const string& $defaultText, const string& $tag, bool $nulls) : Read
 {
     $reader = types::reader($type);
     $bare = types::render(types::bare($type));
@@ -932,6 +957,10 @@ internal function read(Code& $code, const string& $source, const string& $wire, 
         $code->begin("if ($v{$tag} != null)");
         $code->line("{$x} = guard $v{$tag};");
         $code->line("$ok{$tag} = {$moved};");
+        if ($optional && $nulls) {
+            $code->next("else if ({$source}->nulled({$wireQ}))");
+            $code->line("$ok{$tag} = null;");
+        }
         $code->close();
         return Read("$ok{$tag}", '');
     }
@@ -992,7 +1021,7 @@ internal function task(Code& $code, const TaskDecl& $j) : void
     array<string> $named = [];
     foreach ($j->fields as const &$f) {
         $u = names::upper($f->name);
-        $r = read($code, '$p', $f->name, $f->type, $f->hasDefault, $f->defaultText, $u);
+        $r = read($code, '$p', $f->name, $f->type, $f->hasDefault, $f->defaultText, $u, true);
         if (!$r->unwrap->empty()) {
             $unwraps[] = $r->unwrap;
         }
@@ -1011,11 +1040,12 @@ internal function task(Code& $code, const TaskDecl& $j) : void
 }
 
 /**
- * `$value` as the type `TaskData::put` takes for `$reader`.
+ * `$value` as the type `TaskData::put` takes for `$reader`. A uint64 goes as it is: its own `put`
+ * keeps the top half of the range, which an int64 would turn negative.
  */
 internal function widen(const string& $value, const string& $reader) : string
 {
-    if ($reader == 'int32' || $reader == 'uint16' || $reader == 'uint32' || $reader == 'uint64') {
+    if ($reader == 'int32' || $reader == 'uint16' || $reader == 'uint32') {
         return "{$value} as int64";
     }
     return $value;
@@ -1242,7 +1272,8 @@ internal function configs(Code& $code, const Program& $p) : void
                 continue;
             }
             $u = names::upper($f->name);
-            $r = read($code, '$s', $f->wire, $f->type, $f->hasDefault, $f->defaultText, "C{$i}{$u}");
+            // the environment has no null: a variable is set or it is not
+            $r = read($code, '$s', $f->wire, $f->type, $f->hasDefault, $f->defaultText, "C{$i}{$u}", false);
             if (!$r->unwrap->empty()) {
                 $unwraps[] = $r->unwrap;
             }

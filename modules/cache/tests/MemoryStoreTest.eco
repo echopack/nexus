@@ -91,3 +91,17 @@ test a_full_store_drops_what_expires_soonest
     expect($m->count() as int64)->is(2 as int64);
     expect(read($m, 'newest'))->is('5');
 }
+
+test a_full_store_frees_a_tenth_at_once
+{
+    $m = MemoryStore(max: 20, clock: clock());
+    foreach (0 .. 21 as $i) {
+        expect($m->put("k{$i}", 'v', .expires(.mins($i as int64 + 1))))->fine();
+    }
+    // the 21st key drops the three that expire soonest, so the next two new keys fit as they are
+    expect($m->count() as int64)->is(18 as int64);
+    expect(read($m, 'k0'))->is('<none>');
+    expect(read($m, 'k2'))->is('<none>');
+    expect(read($m, 'k3'))->is('v');
+    expect(read($m, 'k20'))->is('v');
+}

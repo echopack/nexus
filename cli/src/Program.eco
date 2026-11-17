@@ -1,6 +1,6 @@
 namespace nexusgen;
 
-use nexusgen::{decl, exposures, mails, names, records, rules, types};
+use nexusgen::{decl, defaults, exposures, mails, names, records, rules, types};
 
 /**
  * Everything `nexus gen` writes code for, read from one module's decls: actions, inputs, configs,
@@ -76,6 +76,24 @@ public struct Program
     internal map<string, string> $ruleTypes = [];
 
     /**
+     * The `#[nexus::input]` structs of the other modules of the program, read so this module's
+     * actions, commands and tools may take one, and its inputs nest one.
+     */
+    internal array<TypeDecl> $foreign = [];
+
+    /**
+     * Every qualified name the program declares, and every namespace on the way to one: what a
+     * default value may name without spelling it out.
+     */
+    internal map<string, bool> $declared = [];
+
+    /**
+     * What the `use` lines of each source file bind, by file, read the first time a default there
+     * needs them.
+     */
+    internal map<string, map<string, string>> $usesOf = [];
+
+    /**
      * Reads the module in `$decls`, which is the whole program too.
      */
     public constructor(const json::Value& $decls)
@@ -110,15 +128,26 @@ public struct Program
      */
     private function read(const json::Value& $decls, const json::Value& $all) : void
     {
+        $modules = decl::items($decls, 'modules');
+        string $own = '';
+        if (!$modules->empty()) {
+            $own = decl::text($modules[0], 'name');
+        }
+        array<json::Value> $others = [];
         foreach (decl::items($all, 'modules') as const &$mod) {
+            bool $mine = decl::text($mod, 'name') == $own;
             foreach (decl::items($mod, 'declarations') as const &$d) {
                 $kind = decl::text($d, 'kind');
                 $q = decl::text($d, 'qualified');
+                $this->declare($q);
                 if ($kind == 'class' && decl::conforms($d, 'nexus::Middleware')) {
                     $this->middleware[$q] = true;
                 }
                 if ($kind == 'struct' && decl::has($d, 'input')) {
                     $this->known[$q] = true;
+                    if (!$mine) {
+                        $others[] = $d;
+                    }
                 }
                 if ($kind == 'enum') {
                     $this->readEnum($d);
@@ -138,13 +167,22 @@ public struct Program
                 }
             }
         }
-        $modules = decl::items($decls, 'modules');
         if ($modules->empty()) {
             $this->problems[] = 'the decls output names no module';
             return;
         }
         json::Value $m = $modules[0]->clone();
         $this->module = decl::text($m, 'name');
+        // their own module reports what does not fit in them, so they are read quietly
+        usize $said = $this->problems->count();
+        foreach ($others as const &$d) {
+            TypeDecl? $other = $this->inputDecl($d);
+            if ($other != null) {
+                TypeDecl $t = guard $other;
+                $this->foreign[] = mv $t;
+            }
+        }
+        $this->problems->truncate($said);
         $declarations = decl::items($m, 'declarations');
         foreach ($declarations as const &$d) {
             if (decl::has($d, 'input')) {
@@ -189,6 +227,39 @@ public struct Program
                 $this->named[] = decl::text($d, 'qualified');
             }
         }
+    }
+
+    /**
+     * Notes the qualified name `$q` and every namespace on the way to it.
+     */
+    internal function declare(const string& $q) : void
+    {
+        string $at = $q;
+        while (!$at->empty() && !$this->declared->has($at)) {
+            $this->declared[$at] = true;
+            $at = names::space($at);
+        }
+    }
+
+    /**
+     * `$text`, a default written in the source file of declaration `$d`, with every name it reaches
+     * through that file's `use` lines or its namespace written out in full, so it means the same in
+     * the generated file.
+     */
+    internal function qualified(const json::Value& $d, const string& $text) : string
+    {
+        if ($text->empty()) {
+            return $text;
+        }
+        string $file = decl::text($d, 'file');
+        if (!$this->usesOf->has($file)) {
+            std::fs::path $at = $this->root / $file;
+            if ($file->starts('/')) {
+                $at = $file;
+            }
+            $this->usesOf[$file] = defaults::uses(std::fs::readfile($at)->or(''));
+        }
+        return defaults::qualify($text, names::space(decl::text($d, 'qualified')), $this->usesOf->get($file), $this->declared);
     }
 
     internal const function where(const json::Value& $d) : string
@@ -313,7 +384,7 @@ public struct Program
         $type = decl::field($raw, 'type');
         $text = types::render($type);
         $hasDefault = decl::flag($raw, 'default');
-        $defaultText = decl::text($raw, 'default_value');
+        $defaultText = $this->qualified($d, decl::text($raw, 'default_value'));
         $named = types::name($type);
         $p = Param($name, .query, $type, $text, $hasDefault, $defaultText);
 
@@ -359,7 +430,7 @@ public struct Program
             return $p;
         }
         $reader = types::reader($type);
-        if ($reader == 'string' || $reader == 'int32' || $reader == 'int64' || $reader == 'uint32' || $reader == 'uint64') {
+        if ($reader == 'string' || $reader == 'int32' || $reader == 'int64' || $reader == 'uint16' || $reader == 'uint32' || $reader == 'uint64') {
             $p->kind = .path;
             $p->optionalSegment = types::optional($type) || $hasDefault;
             return $p;
@@ -376,21 +447,37 @@ public struct Program
         return null;
     }
 
+    /**
+     * Whether `$qualified` is an `#[nexus::input]` struct of the program, in this module or another
+     * one: what a body, a query, a command, a tool and a nested field may take alike.
+     */
     internal const function knowsInput(const string& $qualified) : bool
     {
-        return $this->findInput($qualified) != null;
+        return $this->known->has($qualified) || $this->findInput($qualified) != null;
     }
 
     internal function readInput(const json::Value& $d) : void
     {
+        TypeDecl? $read = $this->inputDecl($d);
+        if ($read != null) {
+            TypeDecl $t = guard $read;
+            $this->inputs[] = mv $t;
+        }
+    }
+
+    /**
+     * The `#[nexus::input]` struct `$d` as it is decoded, or null after a problem.
+     */
+    internal function inputDecl(const json::Value& $d) : TypeDecl?
+    {
         $q = decl::text($d, 'qualified');
         if (decl::text($d, 'kind') != 'struct') {
             $this->fail($d, "#[nexus::input] goes on a struct; {$q} is not one");
-            return;
+            return null;
         }
         if (!decl::items($d, 'constructors')->empty()) {
             $this->fail($d, "#[nexus::input] {$q} must keep its memberwise constructor; remove the handwritten one");
-            return;
+            return null;
         }
         $t = TypeDecl($q, decl::text($d, 'file'), decl::int($d, 'line'));
         bool $refused = false;
@@ -406,7 +493,7 @@ public struct Program
             $t->fields[] = mv $field;
         }
         if ($refused) {
-            return;
+            return null;
         }
         json::Value? $whole = decl::tool($d, 'rule');
         if ($whole != null) {
@@ -414,20 +501,20 @@ public struct Program
             foreach (decl::record(decl::value($wholeTool)) as const &$e) {
                 if ($e->key != 'check') {
                     $this->fail($d, "#[nexus::rule] on the input {$q} takes only 'check', a rule class over the whole input; '{$e->key}' goes on a field");
-                    return;
+                    return null;
                 }
                 foreach (decl::classes($e->value) as const &$n) {
                     if (!$this->ruleFits($d, $d, $n, $q, "the input {$q}")) {
-                        return;
+                        return null;
                     }
                     $t->checks[] = $n;
                 }
             }
         }
         if (!$this->crossFits($d, $t)) {
-            return;
+            return null;
         }
-        $this->inputs[] = mv $t;
+        return $t;
     }
 
     internal function readTask(const json::Value& $d) : void
@@ -458,7 +545,7 @@ public struct Program
                 $this->fail($d, "task field ${$name} has type {$text}; task data holds integers, float64, bool, strings, arrays of strings or int64, and their nullables");
                 return;
             }
-            $j->fields[] = FieldDecl($name, $name, $type, $text, decl::flag($f, 'default'), decl::text($f, 'default_value'));
+            $j->fields[] = FieldDecl($name, $name, $type, $text, decl::flag($f, 'default'), $this->qualified($d, decl::text($f, 'default_value')));
         }
         string $wanted = 'public function handle(nexus::Payload& $payload) : status<nexus::work::Failure>';
         json::Value $h = guard decl::handle($d) else {
@@ -475,11 +562,16 @@ public struct Program
     }
 
     /**
-     * The `#[nexus::input]` struct named `$qualified` in this module, or null.
+     * The `#[nexus::input]` struct named `$qualified`, of this module or another one, or null.
      */
     internal const function findInput(const string& $qualified) : TypeDecl?
     {
         foreach ($this->inputs as const &$i) {
+            if ($i->qualified == $qualified) {
+                return $i;
+            }
+        }
+        foreach ($this->foreign as const &$i) {
             if ($i->qualified == $qualified) {
                 return $i;
             }
@@ -745,7 +837,7 @@ public struct Program
         } else {
             $wire = decl::option($f, 'name', $name);
         }
-        $out = FieldDecl($name, $wire, $type, $text, decl::flag($f, 'default'), decl::text($f, 'default_value'));
+        $out = FieldDecl($name, $wire, $type, $text, decl::flag($f, 'default'), $this->qualified($d, decl::text($f, 'default_value')));
         $out->secret = decl::has($f, 'secret');
         $out->doc = names::prose(decl::text($f, 'doc'));
         $out->positional = decl::has($f, 'positional');

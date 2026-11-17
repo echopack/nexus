@@ -4,10 +4,10 @@
  */
 
 use nexus::oauth::{OAuthStore, Client, Code, Grant, Rotation, AuthRequest};
-use nexus::oauth::carbon::{ClientRow, ClientRowTable, CodeRow, CodeRowTable, GrantRow, GrantRowTable, RequestRow, RequestRowTable};
+use nexus::oauth::carbon::{ClientRow, ClientRowTable, CodeRow, CodeRowTable, GrantRow, GrantRowTable, RequestRow, RequestRowTable, MarkOAuthCodes};
 use nexus::testing::TestApp;
 use carbon::fake;
-use hydrahon::Mysql;
+use hydrahon::{Mysql, Value};
 use std::time;
 use ecotest::expect;
 
@@ -85,7 +85,7 @@ internal function answered(OAuthStore $s, const string& $id) : AuthRequest?
 
 internal function takeOne(OAuthStore $s, const string& $hash) : Code?
 {
-    Code? $c = guard $s->take($hash);
+    Code? $c = guard $s->take($hash, 'g1');
     return $c;
 }
 
@@ -108,17 +108,60 @@ test a_client_is_registered_with_its_redirects_on_lines
     expect($row->client()->redirects)->size(2);
 }
 
-test a_code_is_taken_by_the_delete_that_removes_it
+test a_code_is_redeemed_by_the_update_that_marks_it_and_kept
 {
     $r = Rig(true);
     $r->fake->rows([CodeRowTable()->row(.of($r->code()))])->written(1);
     Code $c = expect(takeOne($r->store(), 'h1'))->some();
     expect($c->subject)->is('7');
     expect($c->named)->yes(says: 'the code was taken for a named client');
-    expect($r->fake->last())->is('DELETE FROM `oauth_codes` WHERE `oauth_codes`.`hash` = ?');
+    expect($c->used())->no(says: 'the caller whose update marked it gets it unused');
+    expect($r->fake->last())->is('UPDATE `oauth_codes` SET `grant_id` = ? WHERE `oauth_codes`.`hash` = ? AND `oauth_codes`.`grant_id` = ?');
 
-    $r->fake->rows([CodeRowTable()->row(.of($r->code()))])->written(0);
+    ecotest::step('a redemption that lost the race reads it again, redeemed');
+    Code $marked = $r->code();
+    $marked->grant = 'g0';
+    $r->fake->rows([CodeRowTable()->row(.of($r->code()))])->written(0)->rows([CodeRowTable()->row(.of($marked))]);
+    Code $late = expect(takeOne($r->store(), 'h1'))->some();
+    expect($late->grant)->is('g0');
+
+    ecotest::step('a redeemed code is not written again');
+    $r->fake->rows([CodeRowTable()->row(.of($marked))]);
+    usize $before = $r->fake->count();
+    Code $again = expect(takeOne($r->store(), 'h1'))->some();
+    expect($again->used())->yes(says: 'the code says it was redeemed');
+    expect($again->grant)->is('g0');
+    expect($r->fake->count())->is($before + 1);
+
+    $r->fake->rows([]);
     expect(takeOne($r->store(), 'h1'))->none();
+}
+
+test the_migration_adds_the_grant_a_code_was_redeemed_for
+{
+    $fake = fake::Driver<Mysql>();
+    array<array<Value>> $locked = [[Value::from(1 as int64)]];
+    $fake->rows($locked)->written(0)->rows([])->written()->written()->rows($locked);
+    array<carbon::migrate::Step> $steps = [carbon::migrate::Step('20261117000600_mark_oauth_codes', MarkOAuthCodes(), true)];
+    carbon::Migrator $m = carbon::Migrator(carbon::DB($fake, clock: calendar::FixedClock(time::timestamp::from_unix_secs(0))), $steps, carbon::ddl::Mysql());
+    array<string> $done = guard $m->up();
+    expect($done)->size(1);
+    expect($fake->texts()[3])->is("ALTER TABLE `oauth_codes` ADD COLUMN `grant_id` VARCHAR(12) NOT NULL DEFAULT ''");
+}
+
+test the_grants_of_a_subject_are_the_ones_with_exactly_that_subject
+{
+    $r = Rig(true);
+    Grant $mine = $r->grant();
+    Grant $theirs = $r->grant();
+    $theirs->id = 'g2';
+    $theirs->subject = 'Alice';
+    $mine->subject = 'alice';
+    // what a collation that ignores case answers for `alice`
+    $r->fake->rows([GrantRowTable()->row(.of($mine)), GrantRowTable()->row(.of($theirs))]);
+    array<Grant> $found = guard $r->store()->grants('alice');
+    expect($found)->size(1);
+    expect($found[0]->id)->is('g1');
 }
 
 test a_request_is_answered_by_the_delete_that_removes_it

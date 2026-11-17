@@ -1,0 +1,230 @@
+/**
+ * Makes a default value mean in the generated file what it meant where it was written. The
+ * generated code sits in other namespaces and has none of the source file's `use` lines, so every
+ * name a default reaches through one of those, or through the namespace it was written in, is
+ * spelled out in full: under `use std::time;`, `time::duration::secs(30)` becomes
+ * `std::time::duration::secs(30)`, and `DEFAULT_PORT` written in `namespace app` becomes
+ * `app::DEFAULT_PORT`. Strings, variables, members and labels are left as they are.
+ */
+
+namespace nexusgen::defaults;
+
+use nexusgen::names;
+
+/**
+ * What each `use` of the source text `$source` binds, by the name it binds: `time` to `std::time`
+ * for `use std::time;`, both names of a group, the alias of an `as`.
+ */
+public function uses(const string& $source) : map<string, string>
+{
+    map<string, string> $out = [];
+    string $statement = '';
+    bool $open = false;
+    foreach (str::split($source, "\n") as const &$raw) {
+        string $line = string::from(str::trim($raw));
+        if (!$open) {
+            if (!$line->starts('use ')) {
+                continue;
+            }
+            $open = true;
+            $statement = '';
+        }
+        $statement->append($line);
+        $statement->append(' ');
+        if ($line->contains(';')) {
+            statement($statement, $out);
+            $open = false;
+        }
+    }
+    return $out;
+}
+
+/**
+ * `$text` with every name it reaches through `$uses` or the namespace `$space` (and the ones around
+ * it) written out in full. `$known` holds every qualified name the program declares, and every
+ * namespace on the way to one.
+ */
+public function qualify(const string& $text, const string& $space, const map<string, string>& $uses, const map<string, bool>& $known) : string
+{
+    string $out = '';
+    usize $n = $text->size();
+    usize $i = 0;
+    while ($i < $n) {
+        uint8 $c = $text->byte($i);
+        if ($c == 39 || $c == 34) {
+            usize $end = closing($text, $i);
+            $out->append($text->sub($i, $end - $i));
+            $i = $end;
+            continue;
+        }
+        if ($c == 36 || digit($c)) {
+            // a variable, or a number with whatever letters belong to it (`0x1F`, `1e3`)
+            usize $j = $i + 1;
+            while ($j < $n && word($text->byte($j))) {
+                $j++;
+            }
+            $out->append($text->sub($i, $j - $i));
+            $i = $j;
+            continue;
+        }
+        if (!start($c)) {
+            $out->push($c);
+            $i++;
+            continue;
+        }
+        usize $j = $i;
+        while (true) {
+            while ($j < $n && word($text->byte($j))) {
+                $j++;
+            }
+            if ($j + 2 < $n && $text->byte($j) == 58 && $text->byte($j + 1) == 58 && start($text->byte($j + 2))) {
+                $j = $j + 2;
+            } else {
+                break;
+            }
+        }
+        string $chain = $text->sub($i, $j - $i);
+        if (member($out) || label($text, $j)) {
+            $out->append($chain);
+        } else {
+            $out->append(resolve($chain, $space, $uses, $known));
+        }
+        $i = $j;
+    }
+    return $out;
+}
+
+/**
+ * The name `$chain` (`a::b::c`) written out: its first segment through a `use`, else the closest
+ * namespace around `$space` that declares it; unchanged when neither does.
+ */
+internal function resolve(const string& $chain, const string& $space, const map<string, string>& $uses, const map<string, bool>& $known) : string
+{
+    usize $sep = $chain->find('::');
+    string $first = $chain->sub(0, $sep);
+    string $rest = $chain->sub($sep, $chain->size() - $sep);
+    if ($uses->has($first)) {
+        string $target = $uses->get($first);
+        return "{$target}{$rest}";
+    }
+    string $outer = $space;
+    while (!$outer->empty()) {
+        string $candidate = "{$outer}::{$first}";
+        if ($known->has($candidate)) {
+            return "{$candidate}{$rest}";
+        }
+        $outer = names::space($outer);
+    }
+    return $chain;
+}
+
+/**
+ * Adds what one `use ...;` statement binds to `$out`.
+ */
+internal function statement(const string& $text, map<string, string>& $out) : void
+{
+    string $body = $text->sub(4, $text->size() - 4);
+    usize $end = $body->find(';');
+    $body = string::from(str::trim($body->sub(0, $end)));
+    usize $open = $body->find('{');
+    if ($open == $body->size()) {
+        bind($body, $out);
+        return;
+    }
+    string $base = string::from(str::trim($body->sub(0, $open)));
+    if ($base->ends('::')) {
+        $base = $base->sub(0, $base->size() - 2);
+    }
+    usize $close = $body->find('}');
+    string $group = $body->sub($open + 1, $close - $open - 1);
+    foreach (str::split($group, ',') as const &$item) {
+        string $one = string::from(str::trim($item));
+        if (!$one->empty()) {
+            bind("{$base}::{$one}", $out);
+        }
+    }
+}
+
+/**
+ * Binds `a::b::c` (as `c`) or `a::b::c as d` (as `d`) in `$out`.
+ */
+internal function bind(const string& $spec, map<string, string>& $out) : void
+{
+    string $path = $spec;
+    string $alias = '';
+    usize $as = $spec->find(' as ');
+    if ($as < $spec->size()) {
+        $path = string::from(str::trim($spec->sub(0, $as)));
+        $alias = string::from(str::trim($spec->sub($as + 4, $spec->size() - $as - 4)));
+    } else {
+        $alias = names::short($path);
+    }
+    if (!$path->empty() && !$alias->empty()) {
+        $out[$alias] = $path;
+    }
+}
+
+/**
+ * Where the string literal opening at `$at` ends, just past its closing quote.
+ */
+internal function closing(const string& $text, usize $at) : usize
+{
+    uint8 $quote = $text->byte($at);
+    usize $i = $at + 1;
+    while ($i < $text->size()) {
+        uint8 $c = $text->byte($i);
+        if ($c == 92) {
+            $i = $i + 2;
+            continue;
+        }
+        if ($c == $quote) {
+            return $i + 1;
+        }
+        $i++;
+    }
+    return $text->size();
+}
+
+/**
+ * Whether what was written so far ends in `->` or `.`, so the name that follows is a member or an
+ * enum case, not something to look up.
+ */
+internal function member(const string& $out) : bool
+{
+    usize $i = $out->size();
+    while ($i > 0 && $out->byte($i - 1) == 32) {
+        $i = $i - 1;
+    }
+    if ($i == 0) {
+        return false;
+    }
+    uint8 $last = $out->byte($i - 1);
+    return $last == 46 || ($last == 62 && $i > 1 && $out->byte($i - 2) == 45);
+}
+
+/**
+ * Whether the name ending at `$at` is a label, `forEvent: ...`: a single `:` follows it.
+ */
+internal function label(const string& $text, usize $at) : bool
+{
+    usize $i = $at;
+    while ($i < $text->size() && $text->byte($i) == 32) {
+        $i++;
+    }
+    return $i < $text->size() && $text->byte($i) == 58 && !($i + 1 < $text->size() && $text->byte($i + 1) == 58);
+}
+
+internal function start(uint8 $c) : bool
+{
+    return ($c >= 97 && $c <= 122) || ($c >= 65 && $c <= 90) || $c == 95;
+}
+
+internal function digit(uint8 $c) : bool
+{
+    return $c >= 48 && $c <= 57;
+}
+
+internal function word(uint8 $c) : bool
+{
+    return start($c) || digit($c);
+}

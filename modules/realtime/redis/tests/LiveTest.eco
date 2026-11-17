@@ -238,3 +238,27 @@ test live_the_members_of_a_server_that_stopped_beating_are_taken_out
     expect($again)->size(0);
 }
 
+
+test live_a_listener_back_on_redis_resets_its_followers
+{
+    string $url = guard liveUrl() else {
+        ecotest::skip('REALTIME_REDIS_URL is not set and ecotest started no redis');
+        return;
+    };
+    string $run = nexus::Kernel::id();
+    TestApp $a = server($url, "test:{$run}:");
+    nexus::realtime::Hub $hub = $a->kernel->services->get<nexus::realtime::Hub>();
+    TestSocket $ws = $a->socket('/realtime');
+    $ws->say('{"op":"subscribe","channel":"rooms.tea"}');
+    expect(waits($ws, 'subscribed', 1))->yes(says: 'in');
+
+    // the server drops the listener; what is published until it is back is lost to this server
+    redis::Options $o = guard redis::Options::parse($url);
+    redis::Pool $pool = redis::Pool($o, redis::PoolOptions());
+    array<string> $kill = ['CLIENT', 'KILL', 'TYPE', 'pubsub'];
+    guard $pool->call($kill);
+    $pool->close();
+    expect(waits($ws, 'reset', 1))->yes(says: 'the followers fetch afresh');
+    expect($hub->lapses())->is(1 as uint64);
+    stop($a);
+}

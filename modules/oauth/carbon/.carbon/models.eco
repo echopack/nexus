@@ -278,6 +278,7 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
     public static hydrahon::Term<string> $scope = carbon::select::column<string>('oauth_codes', 'scope');
     public static hydrahon::Term<string> $resource = carbon::select::column<string>('oauth_codes', 'resource');
     public static hydrahon::Term<hydrahon::DateTime> $expiresAt = carbon::select::column<hydrahon::DateTime>('oauth_codes', 'expires_at');
+    public static hydrahon::Term<string> $grantId = carbon::select::column<string>('oauth_codes', 'grant_id');
     private hydrahon::Table $carbonTable;
 
     public constructor()
@@ -302,7 +303,7 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
 
     public const function fields() : array<hydrahon::Field>
     {
-        array<hydrahon::Field> $out = [CodeRowTable::$hash, CodeRowTable::$client, CodeRowTable::$subject, CodeRowTable::$redirect, CodeRowTable::$named, CodeRowTable::$challenge, CodeRowTable::$scope, CodeRowTable::$resource, CodeRowTable::$expiresAt];
+        array<hydrahon::Field> $out = [CodeRowTable::$hash, CodeRowTable::$client, CodeRowTable::$subject, CodeRowTable::$redirect, CodeRowTable::$named, CodeRowTable::$challenge, CodeRowTable::$scope, CodeRowTable::$resource, CodeRowTable::$expiresAt, CodeRowTable::$grantId];
         return $out;
     }
 
@@ -353,7 +354,8 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
         string $c7 = guard $row->text(7) else { return .error(.column('resource', carbon::Problem::of($row, 7))); }
         hydrahon::DateTime $r8 = guard $row->datetime(8) else { return .error(.column('expires_at', carbon::Problem::of($row, 8))); }
         std::time::timestamp $c8 = guard carbon::codec::Instant()->decode($r8) else ($p) { return .error(.column('expires_at', $p)); }
-        return .ok(nexus::oauth::carbon::CodeRow($hash: $c0, $client: $c1, $subject: $c2, $redirect: $c3, $named: $c4, $challenge: $c5, $scope: $c6, $resource: $c7, $expiresAt: $c8));
+        string $c9 = guard $row->text(9) else { return .error(.column('grant_id', carbon::Problem::of($row, 9))); }
+        return .ok(nexus::oauth::carbon::CodeRow($hash: $c0, $client: $c1, $subject: $c2, $redirect: $c3, $named: $c4, $challenge: $c5, $scope: $c6, $resource: $c7, $expiresAt: $c8, $grantId: $c9));
     }
 
     public const function snapshot(const nexus::oauth::carbon::CodeRow& $m) : carbon::change::Snapshot
@@ -377,6 +379,8 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
         $out->values[] = hydrahon::Value::from($s7);
         hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->expiresAt);
         $out->values[] = hydrahon::Value::from($s8);
+        string $s9 = $m->grantId;
+        $out->values[] = hydrahon::Value::from($s9);
         return $out;
     }
 
@@ -417,6 +421,10 @@ public class CodeRowTable : hydrahon::Source, carbon::Schema<nexus::oauth::carbo
         if ($only->has(8)) {
             hydrahon::DateTime $s8 = carbon::codec::Instant()->encode($m->expiresAt);
             $into[CodeRowTable::$expiresAt] = $s8;
+        }
+        if ($only->has(9)) {
+            string $s9 = $m->grantId;
+            $into[CodeRowTable::$grantId] = $s9;
         }
     }
 
@@ -464,6 +472,7 @@ public class CodeRowTableAlias : hydrahon::Source
     public const hydrahon::Term<string> $scope;
     public const hydrahon::Term<string> $resource;
     public const hydrahon::Term<hydrahon::DateTime> $expiresAt;
+    public const hydrahon::Term<string> $grantId;
     private hydrahon::Table $carbonTable;
 
     public constructor(alias: string $alias, schema: string? $schema = null)
@@ -482,6 +491,7 @@ public class CodeRowTableAlias : hydrahon::Source
         $this->scope = $this->carbonTable->column<string>('scope');
         $this->resource = $this->carbonTable->column<string>('resource');
         $this->expiresAt = $this->carbonTable->column<hydrahon::DateTime>('expires_at');
+        $this->grantId = $this->carbonTable->column<string>('grant_id');
     }
 
     public const function table() : hydrahon::Table
@@ -1163,6 +1173,7 @@ public struct Carbon
     {
         array<carbon::migrate::Step> $out = [
             carbon::migrate::Step('20261102000600_create_oauth_tables', nexus::oauth::carbon::CreateOAuthTables(), true),
+            carbon::migrate::Step('20261117000600_mark_oauth_codes', nexus::oauth::carbon::MarkOAuthCodes(), true),
         ];
         return $out;
     }

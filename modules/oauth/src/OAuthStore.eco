@@ -45,9 +45,11 @@ public interface OAuthStore
     function keep(const Code& $c) : status<nexus::Problem>;
 
     /**
-     * The code with hash `$hash`, removed as it is read: two callers never both get it.
+     * The code with hash `$hash` as it was, marked redeemed for grant `$grant` in the same step when
+     * it was not: two callers never both find it unused. A redeemed code stays until it expires, so
+     * the next caller finds it used, with the grant it was redeemed for.
      */
-    function take(const string& $hash) : result<Code?, nexus::Problem>;
+    function take(const string& $hash, const string& $grant) : result<Code?, nexus::Problem>;
 
     function grant(const string& $id) : result<Grant?, nexus::Problem>;
 

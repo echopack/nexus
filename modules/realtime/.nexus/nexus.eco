@@ -71,6 +71,7 @@ public function generated(nexus::Generated $g) : void
     $g->name<nexus::realtime::Seat>('nexus::realtime::Seat');
     $g->name<nexus::realtime::Unseat>('nexus::realtime::Unseat');
     $g->name<nexus::realtime::Attached>('nexus::realtime::Attached');
+    $g->name<nexus::realtime::Outgoing>('nexus::realtime::Outgoing');
     $g->name<nexus::realtime::Kept>('nexus::realtime::Kept');
     $g->name<nexus::realtime::HubData>('nexus::realtime::HubData');
     $g->name<nexus::realtime::HubState>('nexus::realtime::HubState');

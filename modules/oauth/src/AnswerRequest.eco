@@ -3,7 +3,7 @@ namespace nexus::oauth;
 /**
  * The signed in user's answer on the consent page, `{"allow": true}`. The request is spent; the
  * answer is where the browser goes next, `{"redirect": "..."}`: back to the client with a code, or
- * with `access_denied`.
+ * with `access_denied`. Only the app's own credential without scopes answers (`Grants::user`).
  */
 #[nexus::through: ["nexus::auth::Authenticate"]]
 public class AnswerRequest : nexus::Action
@@ -17,7 +17,7 @@ public class AnswerRequest : nexus::Action
 
     public function handle(nexus::Payload& $payload, string $id, nexus::Body<Decision> $in) : result<json::Value, nexus::Problem>
     {
-        $me = try $payload->state<nexus::auth::Identity>();
+        $me = try Grants::user($payload);
         Asked $asked = try $this->grants->answer($id);
         string $issuer = $payload->origin();
         json::Value $o = json::object();

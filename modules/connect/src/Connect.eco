@@ -7,7 +7,7 @@ use std::time;
  * callback are nexus-connect's routes; the claim is the app's, in the action its page posts to:
  *
  * ```echo
- * nexus::connect::ExternalIdentity $who = try $this->connect->claim($in->value->attempt, $in->value->binding);
+ * nexus::connect::ExternalIdentity $who = try $this->connect->claim($in->value->attempt, $in->value->binding, $in->value->proof);
  * string $subject = try $this->accounts->of($who, BlogUsers($this->users, $this->signals, $payload->locale()));
  * // then a token for $subject
  * ```
@@ -48,7 +48,14 @@ public class Connect
         $a = Attempt($id: nexus::auth::Secrets::hex(16), $provider: $provider, $stateHash: nexus::auth::Secrets::hash($state),
             $bindingHash: nexus::auth::Secrets::hash($binding), $nonce: nexus::auth::Secrets::hex(16), $verifier: $verifier, $expiresAt: $until);
         string $challenge = crypto::base64url(crypto::sha256($verifier));
-        string $url = try $c->authorizeUrl($a, $state, $challenge, Connect::callback($payload, $provider), $this->fetch);
+        string $url = guard $c->authorizeUrl($a, $state, $challenge, Connect::callback($payload, $provider), $this->fetch) else ($p) {
+            if ($p->status() != 503) {
+                return .error($p);
+            }
+            // the provider's own words (an address, a curl error) are for the log, not the client
+            $payload->log->warn('sign in could not start', ['provider' => $provider, 'detail' => $p->detail(.dev)]);
+            return .error(.unavailable("sign in with {$provider} is not possible right now; try again later"));
+        };
         try $this->attempts->start($a);
         return .ok(Started($url, $a->id, $binding, $until));
     }
@@ -56,7 +63,8 @@ public class Connect
     /**
      * The provider sent the browser back with `$params` (the query, or the form of a `form_post`).
      * The code is traded and what came of it kept on the attempt; the browser goes on to the app's
-     * page with `?attempt=<id>`, and `&error=` when it did not work out.
+     * page with `?attempt=<id>&proof=<proof>`, and `&error=` when it did not work out. The proof is
+     * made here and handed to this browser only, so only the browser that came back can claim.
      */
     public function finish(nexus::Payload& $payload, const string& $provider, const nexus::Query& $params) : nexus::Response
     {
@@ -65,13 +73,13 @@ public class Connect
             return $payload->fail($p);
         };
         Attempt $a = guard $found else {
-            return $this->back($payload, '', 'expired');
+            return $this->back($payload, '', '', 'expired');
         };
         if ($a->provider != $provider || $a->settled() || $a->expiresAt < $this->clock->now()) {
-            return $this->back($payload, '', 'expired');
+            return $this->back($payload, '', '', 'expired');
         }
         Connector $c = guard $this->connectors->find($provider) else {
-            return $this->back($payload, '', 'expired');
+            return $this->back($payload, '', '', 'expired');
         };
         string $refused = $params->get('error') ?? '';
         string $code = $params->get('code') ?? '';
@@ -92,11 +100,12 @@ public class Connect
     }
 
     /**
-     * Who signed in with attempt `$id`, once, for the browser that holds its `$binding`: a 401
-     * when the binding is wrong or the sign in failed, a 409 while the provider has not sent the
-     * browser back, a 404 for an attempt that is gone or expired.
+     * Who signed in with attempt `$id`, once, for the browser that holds both its `$binding` (it
+     * started the sign in) and its `$proof` (the provider sent it back): a 401 when either is wrong
+     * or the sign in failed, a 409 while the provider has not sent the browser back, a 404 for an
+     * attempt that is gone or expired.
      */
-    public function claim(const string& $id, const string& $binding) : result<ExternalIdentity, nexus::Problem>
+    public function claim(const string& $id, const string& $binding, const string& $proof) : result<ExternalIdentity, nexus::Problem>
     {
         Attempt? $found = try $this->attempts->find($id);
         Attempt $a = guard $found else {
@@ -110,6 +119,11 @@ public class Connect
         }
         if (!$a->settled()) {
             return .error(.conflict('the provider has not sent the browser back yet'));
+        }
+        // the binding proves who started; the proof proves who came back, so a sign in finished
+        // in another browser (a link someone was sent) is claimed by neither
+        if (!crypto::equal(nexus::auth::Secrets::hash($proof), $a->proofHash)) {
+            return .error(.unauthorized('this sign in came back to another browser', $reason: 'sign_in_elsewhere'));
         }
         bool $mine = try $this->attempts->spend($id);
         if (!$mine) {
@@ -135,28 +149,35 @@ public class Connect
         return .notFound('the sign in (it is claimed once, within ten minutes; start again)');
     }
 
-    internal function settle(nexus::Payload& $payload, const Attempt& $a) : nexus::Response
+    /**
+     * Saves what the callback learned on `$a` with a fresh proof, and sends the browser on with it.
+     */
+    internal function settle(nexus::Payload& $payload, Attempt& $a) : nexus::Response
     {
+        string $proof = nexus::auth::Secrets::hex(32);
+        $a->proofHash = nexus::auth::Secrets::hash($proof);
         bool $mine = guard $this->attempts->settle($a) else ($p) {
             return $payload->fail($p);
         };
         // another callback settled it first: what it stored is the answer, not this one's result
         if (!$mine) {
-            return $this->back($payload, '', 'expired');
+            return $this->back($payload, '', '', 'expired');
         }
-        return $this->back($payload, $a->id, $a->error);
+        return $this->back($payload, $a->id, $proof, $a->error);
     }
 
     /**
-     * The browser on its way to the app's page, with the attempt and the error when there is one.
+     * The browser on its way to the app's page, with the attempt and its proof, and the error when
+     * there is one.
      */
-    internal function back(nexus::Payload& $payload, const string& $attempt, const string& $error) : nexus::Response
+    internal function back(nexus::Payload& $payload, const string& $attempt, const string& $proof, const string& $error) : nexus::Response
     {
         nexus::Url $page = guard $payload->absolute($this->page) else {
             return $payload->fail(.badRequest('the Host header names no host'));
         };
         if (!$attempt->empty()) {
             $page->query->add('attempt', $attempt);
+            $page->query->add('proof', $proof);
         }
         if (!$error->empty()) {
             $page->query->add('error', $error);

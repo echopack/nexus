@@ -1,0 +1,282 @@
+/**
+ * Spools: each receiver's sends run in order on writer threads of their own, a spool holds at most
+ * `room` of them, a shut spool closes after the send under way, and an event stream that falls too
+ * far behind is closed while the others keep receiving.
+ */
+
+use nexus::{Spools, Spooled, Flag, EventStreams, EventStream, ServerEvent};
+use ecotest::expect;
+use std::thread;
+
+/**
+ * What the sends and closes of a test did, in the order they did it.
+ */
+#[atomic]
+internal class SpLog
+{
+    private thread::mutex<array<string>> $lines = thread::mutex<array<string>>(array<string>());
+
+    public function add(const string& $line) : void
+    {
+        thread::locked<array<string>> $held = $this->lines->lock();
+        $held->value->push($line);
+    }
+
+    public function all() : array<string>
+    {
+        thread::locked<array<string>> $held = $this->lines->lock();
+        return $held->value;
+    }
+}
+
+// waits up to two seconds for `$f`
+internal function spWait(Flag $f) : bool
+{
+    int32 $tries = 0;
+    while (!$f->raised() && $tries < 2000) {
+        thread::sleep(1);
+        $tries++;
+    }
+    return $f->raised();
+}
+
+// a send that says it started, then waits for `$gate` before it is through
+internal function spBlocked(SpLog $log, const string& $name, Flag $started, Flag $gate) : function<bool()>
+{
+    return function[$log, $name, $started, $gate]() : bool {
+        $started->raise();
+        spWait($gate);
+        $log->add($name);
+        return true;
+    };
+}
+
+internal function spSend(SpLog $log, const string& $name) : function<bool()>
+{
+    return function[$log, $name]() : bool {
+        $log->add($name);
+        return true;
+    };
+}
+
+internal function spIs(Spooled $got, Spooled $want) : bool
+{
+    return $got == $want;
+}
+
+test a_full_spool_answers_full_and_the_others_keep_going
+{
+    $log = SpLog();
+    $spools = Spools(2);
+    $started = Flag();
+    $gate = Flag();
+    expect(spIs($spools->put(1, spBlocked($log, 'a1', $started, $gate)), .queued))->yes(says: 'the first send is queued');
+    expect(spWait($started))->yes(says: 'a writer took it');
+    // the send under way holds no room; two more wait behind it
+    expect(spIs($spools->put(1, spSend($log, 'a2')), .queued))->yes(says: 'room for one');
+    expect(spIs($spools->put(1, spSend($log, 'a3')), .queued))->yes(says: 'room for two');
+    expect(spIs($spools->put(1, spSend($log, 'a4')), .full))->yes(says: 'a third waiting send is one too many');
+    // another receiver is not held up by the slow one
+    expect(spIs($spools->put(2, spSend($log, 'b1')), .queued))->yes(says: 'another spool has room');
+    int32 $tries = 0;
+    while ($log->all()->count() < 1 && $tries < 2000) {
+        thread::sleep(1);
+        $tries++;
+    }
+    expect($log->all())->size(1);
+    expect($log->all()[0])->is('b1');
+    $gate->raise();
+    $spools->settle();
+    array<string> $all = $log->all();
+    expect($all)->size(4);
+    expect($all[1])->is('a1');
+    expect($all[2])->is('a2');
+    expect($all[3])->is('a3');
+}
+
+test a_shut_spool_closes_after_the_send_under_way_and_drops_the_rest
+{
+    $log = SpLog();
+    $spools = Spools(8);
+    $started = Flag();
+    $gate = Flag();
+    $spools->put(1, spBlocked($log, 'under way', $started, $gate));
+    expect(spWait($started))->yes(says: 'a writer took it');
+    $spools->put(1, spSend($log, 'dropped'));
+    $spools->shut(1, function[$log]() : void {
+        $log->add('closed');
+    });
+    expect(spIs($spools->put(1, spSend($log, 'too late')), .gone))->yes(says: 'nothing is put on a shut spool');
+    thread::sleep(20);
+    expect($log->all())->size(0);
+    $gate->raise();
+    $spools->settle();
+    array<string> $all = $log->all();
+    expect($all)->size(2);
+    expect($all[0])->is('under way');
+    expect($all[1])->is('closed');
+}
+
+test a_failed_send_is_listed_once_and_forgetting_it_frees_the_id
+{
+    $log = SpLog();
+    $spools = Spools(8);
+    $spools->put(3, function() : bool {
+        return false;
+    });
+    $spools->settle();
+    expect(spIs($spools->put(3, spSend($log, 'after the failure')), .gone))->yes(says: 'its receiver is gone');
+    array<int64> $failed = $spools->failed();
+    expect($failed)->size(1);
+    expect($failed[0])->is(3 as int64);
+    expect($spools->failed())->size(0);
+    $spools->forget(3);
+    expect(spIs($spools->put(3, spSend($log, 'a new receiver')), .queued))->yes(says: 'a forgotten id starts over');
+    $spools->settle();
+    array<string> $all = $log->all();
+    expect($all)->size(1);
+    expect($all[0])->is('a new receiver');
+}
+
+test forget_drops_what_waits_and_settle_does_not_wait_for_it
+{
+    $log = SpLog();
+    $spools = Spools(8);
+    $started = Flag();
+    $gate = Flag();
+    $spools->put(1, spBlocked($log, 'under way', $started, $gate));
+    expect(spWait($started))->yes(says: 'a writer took it');
+    $spools->put(1, spSend($log, 'waiting'));
+    $spools->forget(1);
+    $gate->raise();
+    $spools->settle();
+    array<string> $all = $log->all();
+    expect($all)->size(1);
+    expect($all[0])->is('under way');
+}
+
+test settle_waits_for_every_send_put_before_it_in_order
+{
+    $log = SpLog();
+    $spools = Spools(64, 2);
+    int32 $i = 0;
+    while ($i < 20) {
+        int64 $id = ($i % 4) as int64;
+        $spools->put($id, function[$log, $id, $i]() : bool {
+            thread::sleep(1);
+            $log->add("{$id}:{$i}");
+            return true;
+        });
+        $i++;
+    }
+    $spools->settle();
+    array<string> $all = $log->all();
+    expect($all)->size(20);
+    // each spool's sends ran in the order they were put
+    int32 $last0 = -1;
+    foreach ($all as const &$line) {
+        if ($line->starts('0:')) {
+            int64 $n = guard str::int($line->sub(2, $line->size() - 2));
+            expect($n > ($last0 as int64))->yes(says: 'in order');
+            $last0 = $n as int32;
+        }
+    }
+}
+
+/**
+ * A stream whose first send waits for `gate`, and that keeps what it was sent and whether it was
+ * closed.
+ */
+#[atomic]
+internal class SpStream : EventStream
+{
+    private int64 $number;
+    private bool $slow;
+    public Flag $started = Flag();
+    public Flag $gate = Flag();
+    public Flag $closed = Flag();
+    public SpLog $got = SpLog();
+
+    public constructor(int64 $number, bool $slow)
+    {
+        $this->number = $number;
+        $this->slow = $slow;
+    }
+
+    public function id() : int64
+    {
+        return $this->number;
+    }
+
+    public function send(const ServerEvent& $e) : bool
+    {
+        if ($this->slow && !$this->started->raised()) {
+            $this->started->raise();
+            spWait($this->gate);
+        }
+        $this->got->add($e->data);
+        return true;
+    }
+
+    public function comment(const string& $text) : bool
+    {
+        return true;
+    }
+
+    public function close() : void
+    {
+        $this->closed->raise();
+    }
+
+    public function open() : bool
+    {
+        return !$this->closed->raised();
+    }
+}
+
+// waits up to two seconds for `$s` to have been sent `$n` events
+internal function spReceived(SpStream $s, usize $n) : bool
+{
+    int32 $tries = 0;
+    while ($s->got->all()->count() < $n && $tries < 2000) {
+        thread::sleep(1);
+        $tries++;
+    }
+    return $s->got->all()->count() >= $n;
+}
+
+test a_stream_more_than_room_events_behind_is_closed_and_the_others_get_everything
+{
+    $streams = EventStreams(2);
+    $slow = SpStream(1, true);
+    $fast = SpStream(2, false);
+    $streams->add($slow);
+    $streams->add($fast);
+    // each event reaches the fast stream before the next, so only the slow one falls behind
+    $streams->publish(ServerEvent('e1'));
+    expect(spWait($slow->started))->yes(says: 'the slow stream is sending e1');
+    expect(spReceived($fast, 1))->yes(says: 'the fast stream got e1');
+    $streams->publish(ServerEvent('e2'));
+    expect(spReceived($fast, 2))->yes(says: 'the fast stream got e2');
+    $streams->publish(ServerEvent('e3'));
+    expect(spReceived($fast, 3))->yes(says: 'the fast stream got e3');
+    // a third event waiting is one more than room
+    $streams->publish(ServerEvent('e4'));
+    int32 $tries = 0;
+    while ($streams->count() > 1 && $tries < 2000) {
+        thread::sleep(1);
+        $tries++;
+    }
+    expect($streams->count())->is(1 as usize);
+    expect($slow->closed->raised())->no(says: 'it closes only after the send under way');
+    $slow->gate->raise();
+    $streams->settle();
+    expect($slow->closed->raised())->yes(says: 'the slow stream was closed');
+    array<string> $slowGot = $slow->got->all();
+    expect($slowGot)->size(1);
+    expect($slowGot[0])->is('e1');
+    array<string> $fastGot = $fast->got->all();
+    expect($fastGot)->size(4);
+    expect($fastGot[3])->is('e4');
+    expect($fast->closed->raised())->no(says: 'the fast stream stays open');
+}

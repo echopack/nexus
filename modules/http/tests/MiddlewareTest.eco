@@ -83,6 +83,83 @@ test cors_stamps_allowed_origins_only
     expect($r2->header('Access-Control-Allow-Origin'))->none();
 }
 
+internal class MwVaried : nexus::Middleware
+{
+    public function handle(nexus::Payload& $payload, nexus::Next $next) : nexus::Response
+    {
+        $r = $next->run($payload);
+        $r->header('Vary', 'Accept-Encoding');
+        return $r;
+    }
+}
+
+internal class MwCorsApp : nexus::Extension
+{
+    private nexus::http::Cors $cors;
+    private bool $varied;
+
+    public constructor(nexus::http::Cors $cors, bool $varied)
+    {
+        $this->cors = $cors;
+        $this->varied = $varied;
+    }
+
+    public function name() : string
+    {
+        return 'mw-cors';
+    }
+
+    public function services(nexus::Services& $s) : status<nexus::BootError>
+    {
+        return MwApp()->services($s);
+    }
+
+    public function middleware(nexus::Pipeline& $p, Container $services) : void
+    {
+        $p->add($this->cors);
+        if ($this->varied) {
+            $p->add(MwVaried());
+        }
+    }
+}
+
+internal function corsRun(nexus::http::Cors $cors, const string& $origin, bool $varied = false) : nexus::Response
+{
+    array<nexus::Extension> $exts = [MwCorsApp($cors, $varied)];
+    array<nexus::ConfigTable> $configs = [];
+    $vars = map<string, string>();
+    $tables = nexus::Tables($configs: $configs);
+    $k = guard nexus::Kernel::boot($exts, nexus::Mode::testing, nexus::Logger::silent(), nexus::Env(fixed: mv $vars), tables: $tables);
+    $req = nexus::Request(nexus::Method::get, '/hello');
+    if (!$origin->empty()) {
+        $req->headers->set('Origin', $origin);
+    }
+    return $k->handle(mv $req);
+}
+
+test cors_varies_on_origin_for_every_answer
+{
+    array<string> $origins = ['https://app.example.com'];
+    $cors = nexus::http::Cors($origins);
+    // allowed, refused and no origin at all: each answer depends on the origin
+    expect(corsRun($cors, 'https://app.example.com')->headers->all('Vary'))->size(1);
+    expect(corsRun($cors, 'https://app.example.com')->header('Vary'))->some('Origin');
+    expect(corsRun($cors, 'https://evil.example')->header('Vary'))->some('Origin');
+    expect(corsRun($cors, '')->header('Vary'))->some('Origin');
+    // an existing Vary keeps its value, Origin goes after it
+    $varied = corsRun($cors, 'https://evil.example', true);
+    expect($varied->headers->all('Vary'))->size(1);
+    expect($varied->header('Vary'))->some('Accept-Encoding, Origin');
+    // a plain wildcard answers every origin the same
+    array<string> $any = ['*'];
+    expect(corsRun(nexus::http::Cors($any), 'https://app.example.com')->header('Vary'))->none();
+    expect(corsRun(nexus::http::Cors($any), '')->header('Vary'))->none();
+    // a wildcard with credentials echoes the origin back, so it varies again
+    $credentialed = nexus::http::Cors($any);
+    $credentialed->credentials = true;
+    expect(corsRun($credentialed, '')->header('Vary'))->some('Origin');
+}
+
 test secure_headers_are_added
 {
     $k = mwKernel();

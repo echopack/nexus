@@ -189,6 +189,87 @@ test schedules_find_due_and_next_slots
     expect(Schedule::of('', ''))->ok();
 }
 
+internal function zurich() : calendar::Zone
+{
+    calendar::Zone $z = guard calendar::Zone::named('Europe/Zurich') else {
+        die('no zone file for Europe/Zurich');
+    };
+    return $z;
+}
+
+internal function nextOf(const Schedule& $s, int64 $after, const calendar::Zone& $zone) : int64
+{
+    time::timestamp $at = expect($s->next(time::timestamp::from_unix_secs($after), $zone))->some();
+    return $at->unix_secs();
+}
+
+test a_cron_slot_in_the_hour_clocks_repeat_fires_once
+{
+    calendar::Zone $zone = zurich();
+    Schedule $s = scheduleOf('', '30 2 * * *');
+    // 2025-10-26: 02:30 comes round at 00:30Z in summer time and again at 01:30Z in winter time
+    expect(nextOf($s, 1761433200, $zone))->is(1761438600);
+    expect(nextOf($s, 1761438600, $zone))->is(1761528600);
+    time::timestamp $first = .from_unix_secs(1761438600);
+    expect($s->due($first, time::timestamp::from_unix_secs(1761443100), $zone))->none();
+    time::timestamp $slot = expect($s->due(time::timestamp::from_unix_secs(1761433200), time::timestamp::from_unix_secs(1761443100), $zone))->some();
+    expect($slot->unix_secs())->is(1761438600);
+}
+
+test a_cron_slot_clocks_skip_fires_after_the_gap
+{
+    calendar::Zone $zone = zurich();
+    Schedule $s = scheduleOf('', '30 2 * * *');
+    // 2026-03-29: clocks go from 02:00 to 03:00 at 01:00Z, so 02:30 never comes and 03:00 stands in
+    expect(nextOf($s, 1774742400, $zone))->is(1774746000);
+    expect(nextOf($s, 1774746000, $zone))->is(1774830600);
+    // every quarter of the skipped hour is one slot
+    Schedule $quarters = scheduleOf('', '*/15 2 * * *');
+    expect(nextOf($quarters, 1774742400, $zone))->is(1774746000);
+    expect(nextOf($quarters, 1774746000, $zone))->is(1774828800);
+    // a slot after the gap on its own stays where it is
+    Schedule $three = scheduleOf('', '0 3 * * *');
+    expect(nextOf($three, 1774742400, $zone))->is(1774746000);
+}
+
+test a_starred_day_field_with_a_step_counts_as_unrestricted
+{
+    Cron $odd = expect(Cron::parse('0 9 */2 * 1'))->ok();
+    expect($odd->matches(calendar::DateTime(2026, .november, 9, 9, 0)))->yes(says: 'an odd Monday matches');
+    expect($odd->matches(calendar::DateTime(2026, .november, 2, 9, 0)))->no(says: 'an even Monday does not');
+    expect($odd->matches(calendar::DateTime(2026, .november, 3, 9, 0)))->no(says: 'an odd Tuesday does not');
+    Cron $either = expect(Cron::parse('0 9 1-31/2 * 1'))->ok();
+    expect($either->matches(calendar::DateTime(2026, .november, 2, 9, 0)))->yes(says: 'with both restricted a Monday matches');
+}
+
+test the_scheduler_keeps_the_next_slot_until_it_pushes
+{
+    map<string, string> $vars = ['NEXUS_WORK_POLL' => '10ms'];
+    $r = Rig($vars, $plans: true);
+    nexus::work::TaskScheduler $sched = $r->work()->scheduler;
+    $sched->since(time::timestamp::from_unix_secs(START));
+    expect($sched->tick($r->app->kernel, $r->work(), time::timestamp::from_unix_secs(START + 30)))->is(0 as uint32);
+    {
+        std::thread::locked<map<usize, time::timestamp?>> $ahead = $sched->ahead->lock();
+        expect($ahead->value->count())->is(2 as usize);
+        time::timestamp? $nightly = $ahead->value->get(1);
+        time::timestamp $at = expect($nightly)->some();
+        expect($at->unix_secs())->is(START + 60);
+    }
+    expect($sched->tick($r->app->kernel, $r->work(), time::timestamp::from_unix_secs(START + 90)))->is(2 as uint32);
+    {
+        std::thread::locked<map<usize, time::timestamp?>> $ahead = $sched->ahead->lock();
+        expect($ahead->value->empty())->yes(says: 'a plan that pushed looks for its next slot again');
+    }
+    expect($sched->tick($r->app->kernel, $r->work(), time::timestamp::from_unix_secs(START + 120)))->is(0 as uint32);
+    {
+        std::thread::locked<map<usize, time::timestamp?>> $ahead = $sched->ahead->lock();
+        time::timestamp? $nightly = $ahead->value->get(1);
+        time::timestamp $at = expect($nightly)->some();
+        expect($at->unix_secs())->is(START + 60 + 86400);
+    }
+}
+
 test exclusive_keys_default_to_the_task_type
 {
     Exclusive $none = .none;
@@ -446,4 +527,53 @@ test a_run_logs_where_its_task_or_queue_says
         }
     }
     expect($said)->is(1);
+}
+
+test a_fed_task_holds_no_local_unique_key
+{
+    $b = nexus::work::Board();
+    nexus::work::Item $item = nexus::work::Item::of<TSay>(TSay('fed', $mode: 'unique', $key: 'u'));
+    nexus::work::Node $n = nexus::work::Node::of('t1', 'TSay', $item);
+    $n->fed = nexus::work::Fed(nexus::work::Run('t1', 'TSay'), function(const nexus::work::Outcome& $o) : void {});
+    $b->add(mv $n, array<string>());
+    expect($b->take())->some();
+    $b->finish('t1');
+    // the store holds a fed task's key, so a local push of it is not skipped after the run
+    expect($b->live->empty())->yes(says: 'no key is left behind');
+}
+
+test spawned_tasks_clash_on_a_live_unique_key
+{
+    $b = nexus::work::Board();
+    nexus::work::Item $item = nexus::work::Item::of<TSay>(TSay('a', $mode: 'unique', $key: 'u'));
+    $b->add(nexus::work::Node::of('t1', 'TSay', $item), array<string>());
+    array<string> $names = ['TSay'];
+    Pipeline $same = Pipeline();
+    $same->add(TSay('b', $mode: 'unique', $key: 'u'));
+    expect($b->clashes($same, $names))->yes(says: 'a waiting task holds the key');
+    expect($b->clashes($same, $names, except: 'TSay#u'))->no(says: 'a task settling may hand its own key on');
+    Pipeline $other = Pipeline();
+    $other->add(TSay('c', $mode: 'unique', $key: 'v'));
+    expect($b->clashes($other, $names))->no();
+    Pipeline $twice = Pipeline();
+    $twice->add(TSay('d', $mode: 'unique', $key: 'w'));
+    $twice->add(TSay('e', $mode: 'unique', $key: 'w'));
+    array<string> $both = ['TSay', 'TSay'];
+    expect($b->clashes($twice, $both))->yes(says: 'two tasks of one pipeline cannot share a key');
+}
+
+test spawned_tasks_need_tries_in_range
+{
+    $c = nexus::work::Codecs();
+    $c->add<TSay>('TSay', (const TSay& $t) => TSayTaskCodec::encode($t), (const string& $text) => TSayTaskCodec::decode($text));
+    $log = nexus::Logger(array<nexus::log::Sink>(), .trace);
+    Pipeline $many = Pipeline();
+    $many->add(TSay('x', $limit: 1000000));
+    expect($c->spawned($many, $log))->none();
+    Pipeline $none = Pipeline();
+    $none->add(TSay('y', $limit: 0));
+    expect($c->spawned($none, $log))->none();
+    Pipeline $fine = Pipeline();
+    $fine->add(TSay('z', $limit: 5));
+    expect($c->spawned($fine, $log))->some();
 }

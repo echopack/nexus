@@ -3,10 +3,11 @@
  * the app's carbon database.
  *
  * Four tables, `oauth_clients`, `oauth_requests`, `oauth_codes` and
- * `oauth_grants`, in one migration the app adds to its own. A request and
- * a code are each taken with a delete that only one caller wins, and a
- * refresh rotates the grant with an update on the refresh hash it read,
- * so several processes never both spend one.
+ * `oauth_grants`, in migrations the app adds to its own. A request is taken
+ * with a delete that only one caller wins, a code is redeemed with an
+ * update that only one caller wins (and kept, so one redeemed twice ends
+ * its grant), and a refresh rotates the grant with an update on the
+ * refresh hash it read, so several processes never both spend one.
  */
 
 #[module: "nexus-oauth-carbon"]

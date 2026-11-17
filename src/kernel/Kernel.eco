@@ -72,9 +72,23 @@ public class Kernel
     }
 
     /**
-     * Boots with explicit tables, for tests that want generated tables of their own.
+     * Boots with explicit tables, for tests that want generated tables of their own. A boot that
+     * fails shuts down what it booted so far and flushes the log, so the lines it wrote reach their
+     * sinks before the process exits.
      */
     public static function boot(array<Extension> $extensions, Mode $mode, Logger $log, Env $env, tables: const Tables& $tables) : result<Kernel, BootError>
+    {
+        result<Kernel, BootError> $booted = Kernel::assemble(mv $extensions, $mode, $log, $env, $tables);
+        if (!$booted->has_value()) {
+            $log->flush();
+        }
+        return $booted;
+    }
+
+    /**
+     * `boot` but for the flush when it fails.
+     */
+    internal static function assemble(array<Extension> $extensions, Mode $mode, Logger $log, Env $env, const Tables& $tables) : result<Kernel, BootError>
     {
         $generated = Generated($tables->generated);
         $b = container::Builder();
@@ -135,7 +149,45 @@ public class Kernel
             $router->origin($origin);
         }
         $root = $b->seal(warm: true);
+        // from here on a failed boot releases the container it sealed
+        guard Kernel::check($router, $s, $inputs, $root) else ($e) {
+            $root->drop();
+            return .error($e);
+        };
 
+        $p = Pipeline();
+        foreach ($extensions as &$ext) {
+            $ext->middleware($p, $root);
+        }
+        $k = Kernel(mv $extensions, $mode, $log, $env, $root, $router, $p->links, $p->names, $s->around, $generated);
+        // every binding once, in a throwaway request: a missing one, a cycle
+        // or a once binding that takes a per-request one stops the boot here
+        // with its chain, not some request later
+        $probe = $k->background('boot', 'probe');
+        $probe->services->probe();
+        Kernel::finish($probe);
+        usize $i = 0;
+        while ($i < $k->extensions->count()) {
+            guard $k->extensions[$i]->boot($k) else ($e) {
+                // the extensions booted before it shut down, last first, and the container with them
+                while ($i > 0) {
+                    $i = $i - 1;
+                    $k->extensions[$i]->shutdown($k);
+                }
+                $k->services->drop();
+                return .error($e);
+            };
+            $i = $i + 1;
+        }
+        return .ok($k);
+    }
+
+    /**
+     * Whether everything routed, wrapped around requests or checked as a rule is bound in the
+     * sealed `$root`.
+     */
+    internal static function check(Router $router, Services $s, Inputs $inputs, container::Container $root) : status<BootError>
+    {
         foreach ($router->routes() as const &$r) {
             $bound = $r->bound;
             if (!$bound($root)) {
@@ -160,22 +212,7 @@ public class Kernel
                 return .error(.extension('nexus', "rule class {$rule->name} is not bound; bind it in the app's services like an action"));
             }
         }
-
-        $p = Pipeline();
-        foreach ($extensions as &$ext) {
-            $ext->middleware($p, $root);
-        }
-        $k = Kernel(mv $extensions, $mode, $log, $env, $root, $router, $p->links, $p->names, $s->around, $generated);
-        // every binding once, in a throwaway request: a missing one, a cycle
-        // or a once binding that takes a per-request one stops the boot here
-        // with its chain, not some request later
-        $probe = $k->background('boot', 'probe');
-        $probe->services->probe();
-        Kernel::finish($probe);
-        foreach ($k->extensions as &$ext) {
-            try $ext->boot($k);
-        }
-        return .ok($k);
+        return .ok;
     }
 
     /**

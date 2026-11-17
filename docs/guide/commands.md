@@ -24,7 +24,7 @@ Every command also takes two options of its own:
 
 | Option | What it does |
 |:--|:--|
-| `--mode <mode>` | What the process is for: `dev`, `test` or `prod`. Defaults to `NEXUS_MODE`, else `dev`. |
+| `--mode <mode>` | What the process is for: `dev`, `test` or `prod`. Defaults to `NEXUS_MODE` (from the environment, else the env file), else `dev`. |
 | `--env-file <path>` | A `.env` file to read. Defaults to `.env`; the process's own environment wins over it. |
 
 ```sh
@@ -43,8 +43,8 @@ The core brings four commands to every app.
 
 | Option | What it does |
 |:--|:--|
-| `--listen <host:port>` | Where to listen. Defaults to `NEXUS_LISTEN`, else `127.0.0.1:3246`. |
-| `--workers <n>` | Worker threads, `0` for one per core. |
+| `--listen <host:port>` | Where to listen. Defaults to `NEXUS_LISTEN` (from the environment, else the env file), else `127.0.0.1:3246`. |
+| `--workers <n>` | Worker threads, `0` for one per core. A count that is no number, or more than 2147483647, is refused. |
 | `--no-work` | Run no task workers in this process. |
 | `--no-schedule` | Push no scheduled tasks from this process. |
 
@@ -234,7 +234,7 @@ A refused option is printed per field, with the message the API would send, in t
 title: The title field must be at least 3 characters.
 ```
 
-A few things can't come from a command line, and `nexus gen` tells you so when it reads the input: a nested input, a JSON field, or a file upload (take a path instead, and read the file). A `bool` option may not default to `true`, since a flag can only switch something on. A positional is a single value, not a list, and a required positional must come before the optional ones.
+A few things can't come from a command line, and `nexus gen` tells you so when it reads the input: a nested input, a JSON field, or a file upload (take a path instead, and read the file). A `bool` option may not default to `true`, since a flag can only switch something on; left out, it is `false`, with or without a default written. A positional is a single value, not a list, and a required positional must come before the optional ones.
 
 ### What a command runs on
 

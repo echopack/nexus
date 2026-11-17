@@ -24,6 +24,11 @@ public class AttemptRow : carbon::Model<AttemptRow, AttemptRowRepository>
     public string $error = '';
 
     /**
+     * The hash of the proof the callback handed the browser, empty until the callback has run.
+     */
+    public string $proofHash = '';
+
+    /**
      * The outside identity's `sub`, empty until the callback learned it.
      */
     public string $externalSubject = '';
@@ -48,7 +53,7 @@ public class AttemptRow : carbon::Model<AttemptRow, AttemptRowRepository>
     public static function of(const nexus::connect::Attempt& $a) : AttemptRow
     {
         $row = AttemptRow($id: $a->id, $provider: $a->provider, $stateHash: $a->stateHash, $bindingHash: $a->bindingHash,
-            $nonce: $a->nonce, $verifier: $a->verifier, $expiresAt: $a->expiresAt, $error: $a->error);
+            $nonce: $a->nonce, $verifier: $a->verifier, $expiresAt: $a->expiresAt, $error: $a->error, $proofHash: $a->proofHash);
         if ($a->identity != null) {
             nexus::connect::ExternalIdentity $who = guard $a->identity;
             $row->externalSubject = $who->subject;
@@ -66,7 +71,7 @@ public class AttemptRow : carbon::Model<AttemptRow, AttemptRowRepository>
     public const function attempt() : nexus::connect::Attempt
     {
         $a = nexus::connect::Attempt($id: $this->id, $provider: $this->provider, $stateHash: $this->stateHash, $bindingHash: $this->bindingHash,
-            $nonce: $this->nonce, $verifier: $this->verifier, $expiresAt: $this->expiresAt, $error: $this->error);
+            $nonce: $this->nonce, $verifier: $this->verifier, $expiresAt: $this->expiresAt, $error: $this->error, $proofHash: $this->proofHash);
         if (!$this->externalSubject->empty()) {
             json::Value $claims = json::parse($this->externalClaims)->or(json::object());
             $a->identity = nexus::connect::ExternalIdentity($provider: $this->provider, $subject: $this->externalSubject,

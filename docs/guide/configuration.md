@@ -81,6 +81,8 @@ Any of them may be nullable, `string? $webhook`: unset, it is `null`.
 
 A field with a default uses it when the variable is not set. A field with neither a default nor `?` is required, and the app will not boot without it.
 
+A default may be any expression the struct's file can write, including names it reaches through its `use` lines or its namespace: `time::duration::secs(30)` under `use std::time;`, or a constant `DEFAULT_PORT` declared beside the struct. `nexus gen` spells those names out in full where it writes the code that reads the struct.
+
 When something is wrong, the boot stops and lists every bad variable at once, so a broken deploy shows you everything to fix in one go rather than one variable per restart:
 
 ```txt
@@ -129,7 +131,7 @@ export BLOG_STATS_EVERY=5s
 NEXUS_DATABASE_URL=mysql://app:secret@127.0.0.1:3306/blog
 ```
 
-Blank lines and `#` comments are skipped, an `export ` prefix is allowed, and single or double quotes around a value are removed. A line without `=` stops the boot with the file and line number.
+Blank lines and `#` comments are skipped, an `export ` prefix is allowed, and single or double quotes around a value are removed. A comment may also follow a value, after a space: `BLOG_STATS_EVERY=5s # how often` is `5s`, while `KEY=abc#def` keeps its `#`. Inside double quotes, `\"` is a quote and `\\` a backslash. A line without `=`, a quote that is not closed, or text after a closing quote stops the boot with the file and line number.
 
 By default the app reads `.env` in the directory it starts in; a missing file is fine. You may point it at another file with `--env-file`, which every command takes:
 
@@ -179,7 +181,7 @@ To start a `.env` file from scratch, ask for one:
 echoc run -- env --dotenv > .env
 ```
 
-Each variable comes under its description, commented out with its default, except the required and secret ones, which are left empty for you to fill in.
+Each variable comes under its description, commented out with its default, except the required and secret ones, which are left empty for you to fill in. A required setting left empty (`NAME=`) counts as not set, so the app refuses to boot until you fill it in.
 
 ## The mode
 
@@ -196,8 +198,7 @@ NEXUS_MODE=prod echoc run -- serve
 echoc run -- serve --mode prod
 ```
 
-> [!IMPORTANT]
-> `NEXUS_MODE` is read from the process environment before the `.env` file is loaded, so a `NEXUS_MODE` line in `.env` does not change the mode. Set it in the real environment, or pass `--mode`.
+`NEXUS_MODE` is read like any other setting: `--mode` wins, then the real environment, then the `.env` file (or the one `--env-file` names). So a `NEXUS_MODE=prod` line in a server's `.env` is enough. A value that names no mode stops the command instead of falling back to `dev`.
 
 The mode changes a few things at once. [Problems and errors](./problems.md#server-errors-and-the-mode) shows exactly what a client sees in each. In `prod`, extensions whose links leave the app refuse to boot without `NEXUS_APP_URL` (see [absolute links](./routing.md#absolute-links)), and outside `dev`, `serve` and `doctor` warn when it is missing. In `dev`, `serve` warns when it listens where other machines can reach it, since every client would see the cause of every error.
 

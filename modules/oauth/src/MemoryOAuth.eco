@@ -105,14 +105,17 @@ public class MemoryOAuth : OAuthStore
         return .ok;
     }
 
-    public function take(const string& $hash) : result<Code?, nexus::Problem>
+    public function take(const string& $hash, const string& $grant) : result<Code?, nexus::Problem>
     {
         thread::locked<map<string, Code>> $held = $this->codes->lock();
         if (!$held->value->has($hash)) {
             return .ok(null);
         }
         Code $c = $held->value->get($hash);
-        $held->value->remove($hash);
+        if (!$c->used()) {
+            Code& $kept = $held->value->at($hash);
+            $kept->grant = $grant;
+        }
         return .ok($c);
     }
 

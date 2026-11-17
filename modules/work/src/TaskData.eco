@@ -28,9 +28,36 @@ public struct TaskData
         $this->object[$name] = .int($value);
     }
 
+    /**
+     * Stores an unsigned value: as a JSON integer while it fits an int64, as its decimal digits in a
+     * string past that, so the top half of the range comes back as it went in.
+     */
+    public function put(const string& $name, uint64 $value) : void
+    {
+        if ($value <= (int64::max() as uint64)) {
+            $this->object[$name] = .int($value as int64);
+            return;
+        }
+        $this->object[$name] = .str(str::from($value));
+    }
+
+    /**
+     * Stores a float. NaN and the infinities are no JSON numbers, so they are kept as the strings
+     * `nan`, `inf` and `-inf`, which `float64` reads back.
+     */
     public function put(const string& $name, float64 $value) : void
     {
-        $this->object[$name] = .float($value);
+        if ($value != $value) {
+            $this->object[$name] = .str('nan');
+        } else if ($value - $value != 0.0) {
+            if ($value > 0.0) {
+                $this->object[$name] = .str('inf');
+            } else {
+                $this->object[$name] = .str('-inf');
+            }
+        } else {
+            $this->object[$name] = .float($value);
+        }
     }
 
     public function put(const string& $name, bool $value) : void
@@ -104,10 +131,16 @@ public struct TaskData
             return null;
         };
         float64? $f = $v->asFloat();
-        if ($f == null) {
-            $this->errors[] = .mistyped($name, 'a number');
+        if ($f != null) {
+            return $f;
         }
-        return $f;
+        // NaN and the infinities, as `put` keeps them
+        string $s = $v->asStr() ?? '';
+        if ($s == 'nan' || $s == 'inf' || $s == '-inf') {
+            return str::float($s);
+        }
+        $this->errors[] = .mistyped($name, 'a number');
+        return null;
     }
 
     public function int64(const string& $name, required: bool $required) : int64?
@@ -161,9 +194,25 @@ public struct TaskData
         return $out;
     }
 
+    /**
+     * An unsigned value: a JSON integer, or the decimal digits `put` writes for one past int64.
+     */
     public function uint64(const string& $name, required: bool $required) : uint64?
     {
-        int64 $n = guard $this->int64($name, required: $required) else {
+        json::Value $v = guard $this->present($name, $required) else {
+            return null;
+        };
+        string? $text = $v->asStr();
+        if ($text != null) {
+            string $digits = guard $text;
+            uint64 $big = guard str::uint($digits) else {
+                $this->errors[] = .mistyped($name, 'an integer');
+                return null;
+            };
+            return $big;
+        }
+        int64 $n = guard $v->asInt() else {
+            $this->errors[] = .mistyped($name, 'an integer');
             return null;
         };
         if ($n < 0) {
@@ -212,6 +261,18 @@ public struct TaskData
             $out[] = $n;
         }
         return $out;
+    }
+
+    /**
+     * Whether the object holds `$name` as an explicit null, which an optional field with a default
+     * reads as null rather than as its default.
+     */
+    public const function nulled(const string& $name) : bool
+    {
+        json::Value $v = guard $this->object->get($name) else {
+            return false;
+        };
+        return $v->isNull();
     }
 
     /**

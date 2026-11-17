@@ -1,0 +1,67 @@
+/**
+ * Task data at the edges of its types: the top half of uint64, NaN and the infinities, and an
+ * explicit null next to a missing field.
+ */
+
+use ecotest::expect;
+use nexus::work::TaskData;
+
+test task_data_keeps_the_whole_uint64_range
+{
+    $p = TaskData();
+    uint64 $top = 18446744073709551615;
+    uint64 $past = 9223372036854775808;
+    uint64 $small = 7;
+    $p->put('top', $top);
+    $p->put('past', $past);
+    $p->put('small', $small);
+    expect($p->text())->has('"small":7');
+    TaskData $back = expect(TaskData::parse($p->text()))->ok();
+    expect($back->uint64('top', required: true))->some(18446744073709551615);
+    expect($back->uint64('past', required: true))->some(9223372036854775808);
+    expect($back->uint64('small', required: true))->some(7);
+    expect($back->done())->fine();
+
+    // data written before, as a plain integer, still reads; a negative one or other text does not
+    TaskData $old = expect(TaskData::parse('{"n":42,"neg":-1,"word":"x"}'))->ok();
+    expect($old->uint64('n', required: true))->some(42);
+    expect($old->uint64('neg', required: true))->none();
+    expect($old->uint64('word', required: true))->none();
+    expect($old->done())->fails();
+}
+
+test task_data_keeps_nan_and_the_infinities
+{
+    float64 $zero = 0.0;
+    $p = TaskData();
+    $p->put('nan', $zero / $zero);
+    $p->put('up', 1.0 / $zero);
+    $p->put('down', -1.0 / $zero);
+    $p->put('plain', 2.5);
+    // writing them must not stop the process, and what is written is JSON
+    string $text = $p->text();
+    TaskData $back = expect(TaskData::parse($text))->ok();
+    float64 $nan = expect($back->float64('nan', required: true))->some();
+    expect($nan != $nan)->yes(says: 'NaN reads back as NaN');
+    float64 $up = expect($back->float64('up', required: true))->some();
+    expect($up > 0.0 && $up - $up != 0.0)->yes(says: 'infinity reads back');
+    float64 $down = expect($back->float64('down', required: true))->some();
+    expect($down < 0.0 && $down - $down != 0.0)->yes(says: 'minus infinity reads back');
+    expect($back->float64('plain', required: true))->some(2.5);
+    expect($back->done())->fine();
+
+    TaskData $other = expect(TaskData::parse('{"f":"infinity"}'))->ok();
+    expect($other->float64('f', required: true))->none();
+}
+
+test task_data_tells_an_explicit_null_from_a_missing_field
+{
+    $p = TaskData();
+    $p->nil('locale');
+    TaskData $back = expect(TaskData::parse($p->text()))->ok();
+    expect($back->nulled('locale'))->yes(says: 'the field is there as null');
+    expect($back->nulled('gone'))->no(says: 'a missing field is not null');
+    $p->put('locale', 'de');
+    TaskData $set = expect(TaskData::parse($p->text()))->ok();
+    expect($set->nulled('locale'))->no(says: 'a field with a value is not null');
+}

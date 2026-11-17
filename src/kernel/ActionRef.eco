@@ -46,6 +46,15 @@ public class ActionRef<A>
     }
 
     /**
+     * The path the route was asked for, as written. Routing the same action at the same path again
+     * hands back this route, with the method added.
+     */
+    public const function path() : string
+    {
+        return $this->wiring->source;
+    }
+
+    /**
      * The action's qualified name.
      */
     public const function action() : string

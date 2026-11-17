@@ -428,7 +428,7 @@ public struct SignInWithDispatch
      */
     public static function about() : string
     {
-        return 'Finishes a sign in with an outside provider (Google) on the session the request is signed with: claims the attempt the page `/signed-in` got back, with the binding it kept, finds, links or makes the user (`nexus::connect::Accounts`), puts them on the session and answers them, as `POST /v1/auth/signin` does.';
+        return 'Finishes a sign in with an outside provider (Google) on the session the request is signed with: claims the attempt the page `/signed-in` got back, with its proof and the binding it kept, finds, links or makes the user (`nexus::connect::Accounts`), puts them on the session and answers them, as `POST /v1/auth/signin` does.';
     }
 
     /**
@@ -439,7 +439,7 @@ public struct SignInWithDispatch
         $call = function(nexus::Payload& $payload, nexus::Fields& $args) : nexus::Response {
             return Blog::Actions::Auth::SignInWithDispatch::call($payload, $args);
         };
-        return nexus::mcp::Offer('Blog::Actions::Auth::SignInWith', nexus::mcp::Schema::of('{"type":"object","properties":{"attempt":{"type":"string","minLength":1,"maxLength":64},"binding":{"type":"string","minLength":1,"maxLength":128}},"required":["attempt","binding"],"additionalProperties":false}'), Blog::Actions::Auth::SignInWithDispatch::about(), mv $call);
+        return nexus::mcp::Offer('Blog::Actions::Auth::SignInWith', nexus::mcp::Schema::of('{"type":"object","properties":{"attempt":{"type":"string","minLength":1,"maxLength":64},"binding":{"type":"string","minLength":1,"maxLength":128},"proof":{"type":"string","minLength":1,"maxLength":128}},"required":["attempt","binding","proof"],"additionalProperties":false}'), Blog::Actions::Auth::SignInWithDispatch::about(), mv $call);
     }
 
     /**
@@ -2100,12 +2100,23 @@ public struct OutsideSignInDecoder
             $v->maxLength($xBinding, 128);
             $vBinding = mv $xBinding;
         }
+        // proof
+        $v->at('proof', 'string', '');
+        string? $vProof = null;
+        $rProof = $f->string('proof', required: true);
+        if ($rProof != null) {
+            $xProof = guard $rProof;
+            $v->minLength($xProof, 1);
+            $v->maxLength($xProof, 128);
+            $vProof = mv $xProof;
+        }
         if ($v->count() != $before) {
             return null;
         }
         $okAttempt = guard $vAttempt;
         $okBinding = guard $vBinding;
-        return Blog::Inputs::OutsideSignIn($attempt: mv $okAttempt, $binding: mv $okBinding);
+        $okProof = guard $vProof;
+        return Blog::Inputs::OutsideSignIn($attempt: mv $okAttempt, $binding: mv $okBinding, $proof: mv $okProof);
     }
 }
 
@@ -2507,11 +2518,11 @@ public function render(const Blog::Mail::WelcomeMail& $m) : nexus::mail::Rendere
         $text->push(10);
         $text->append('The latest posts:');
         $text->push(10);
-        foreach ($m->posts as const &$post1) {
+        foreach ($m->posts as const &$post_1) {
             $text->append('- ');
-            $text->append($post1->title);
+            $text->append($post_1->title);
             $text->append(' (');
-            $text->append($post1->url);
+            $text->append($post_1->url);
             $text->append(')');
             $text->push(10);
         }
@@ -2540,11 +2551,11 @@ public function render(const Blog::Mail::WelcomeMail& $m) : nexus::mail::Rendere
         $html->push(10);
         $html->append('  <ul>');
         $html->push(10);
-        foreach ($m->posts as const &$post1) {
+        foreach ($m->posts as const &$post_1) {
             $html->append('    <li><a href="');
-            $html->append(nexus::mail::Html::escape($post1->url));
+            $html->append(nexus::mail::Html::escape($post_1->url));
             $html->append('">');
-            $html->append(nexus::mail::Html::escape($post1->title));
+            $html->append(nexus::mail::Html::escape($post_1->title));
             $html->append('</a></li>');
             $html->push(10);
         }

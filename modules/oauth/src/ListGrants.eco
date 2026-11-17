@@ -2,7 +2,8 @@ namespace nexus::oauth;
 
 /**
  * The clients the signed in user allowed, for an account page: the grant id, the client's name, the
- * resource and scopes, when it was allowed and last used.
+ * resource and scopes, when it was allowed and last used. Only the app's own credential without
+ * scopes lists them (`Grants::user`).
  */
 #[nexus::through: ["nexus::auth::Authenticate"]]
 public class ListGrants : nexus::Action
@@ -16,7 +17,7 @@ public class ListGrants : nexus::Action
 
     public function handle(nexus::Payload& $payload) : result<json::Value, nexus::Problem>
     {
-        $me = try $payload->state<nexus::auth::Identity>();
+        $me = try Grants::user($payload);
         array<Grant> $mine = try $this->grants->store->grants($me->subject);
         json::Value $items = json::arr();
         foreach ($mine as const &$g) {

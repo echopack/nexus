@@ -4,7 +4,8 @@ use std::time;
 use carbon;
 
 /**
- * A row of `oauth_codes`: an authorization code by its hash.
+ * A row of `oauth_codes`: an authorization code by its hash, and once redeemed the grant it was
+ * redeemed for.
  */
 #[carbon::model: 'oauth_codes']
 public class CodeRow : carbon::Model<CodeRow, CodeRowRepository>
@@ -23,6 +24,12 @@ public class CodeRow : carbon::Model<CodeRow, CodeRowRepository>
     public string $resource;
     public time::timestamp $expiresAt;
 
+    /**
+     * The id of the grant the code was redeemed for, empty until it is. Not `grant`, a word SQL
+     * keeps for itself.
+     */
+    public string $grantId = '';
+
     public function link() : carbon::Link&
     {
         return $this->link;
@@ -35,7 +42,7 @@ public class CodeRow : carbon::Model<CodeRow, CodeRowRepository>
     public static function of(const nexus::oauth::Code& $c) : CodeRow
     {
         return CodeRow($hash: $c->hash, $client: $c->client, $subject: $c->subject, $redirect: $c->redirect, $named: $c->named,
-            $challenge: $c->challenge, $scope: $c->scope, $resource: $c->resource, $expiresAt: $c->expiresAt);
+            $challenge: $c->challenge, $scope: $c->scope, $resource: $c->resource, $expiresAt: $c->expiresAt, $grantId: $c->grant);
     }
 
     /**
@@ -44,6 +51,7 @@ public class CodeRow : carbon::Model<CodeRow, CodeRowRepository>
     public const function code() : nexus::oauth::Code
     {
         return nexus::oauth::Code($hash: $this->hash, $client: $this->client, $subject: $this->subject, $redirect: $this->redirect,
-            $named: $this->named, $challenge: $this->challenge, $scope: $this->scope, $resource: $this->resource, $expiresAt: $this->expiresAt);
+            $named: $this->named, $challenge: $this->challenge, $scope: $this->scope, $resource: $this->resource, $expiresAt: $this->expiresAt,
+            $grant: $this->grantId);
     }
 }

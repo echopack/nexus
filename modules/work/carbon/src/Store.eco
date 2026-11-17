@@ -45,7 +45,7 @@ public class Store : nexus::work::Store
         return $this->open()->extend($task, $until);
     }
 
-    public function done(const nexus::work::StoredTask& $task, time::timestamp $now, const nexus::work::Batch& $spawned) : status<nexus::Problem>
+    public function done(const nexus::work::StoredTask& $task, time::timestamp $now, const nexus::work::Batch& $spawned) : result<bool, nexus::Problem>
     {
         return $this->open()->done($task, $now, $spawned);
     }
@@ -53,6 +53,11 @@ public class Store : nexus::work::Store
     public function retry(const nexus::work::StoredTask& $task, time::timestamp $at, const string& $error) : status<nexus::Problem>
     {
         return $this->open()->retry($task, $at, $error);
+    }
+
+    public function defer(const nexus::work::StoredTask& $task, time::timestamp $at, const string& $why) : status<nexus::Problem>
+    {
+        return $this->open()->defer($task, $at, $why);
     }
 
     public function fail(const nexus::work::StoredTask& $task, time::timestamp $now, const string& $error) : status<nexus::Problem>

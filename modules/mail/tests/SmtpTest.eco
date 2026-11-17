@@ -68,6 +68,9 @@ test a_busy_server_is_transient
     expect(code($e))->is(451 as int64);
     expect($e->transient())->yes();
     expect($e->problem()->status())->is(503 as int32);
+    // the server's own words stay in the log; the client is told only to try again
+    expect($e->problem()->detail(.prod))->is('the mail could not be sent right now; try again later');
+    expect($e->problem()->detail(.prod))->lacks('451');
 }
 
 test a_server_without_starttls_is_refused_when_tls_is_required

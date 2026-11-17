@@ -6,9 +6,10 @@
  * and gets the provider's URL and a binding secret it keeps. The provider
  * sends the browser back to `/auth/connect/{provider}/callback`, which
  * trades the code (PKCE and the client secret), checks the ID token and
- * sends the browser on to the app's page with `?attempt=<id>`. The page
- * posts the attempt and its binding to the app's own action, which claims
- * the outside identity once with `Connect::claim`, finds or makes the user
+ * sends the browser on to the app's page with `?attempt=<id>&proof=<proof>`.
+ * The page posts the attempt, its proof and the binding to the app's own
+ * action, which claims the outside identity once with `Connect::claim`
+ * (the binding proves who started, the proof who came back), finds or makes the user
  * it is (`Accounts`, on the app's `Users`) and signs them in the way it
  * always does.
  *

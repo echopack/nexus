@@ -23,7 +23,19 @@ public enum Problem
     case tooLarge;
     case unsupportedMedia(string $type);
     case tooMany(int64 $retryAfter);
+
+    /**
+     * 503: a dependency is away and trying again later may work. `$detail` is a public message
+     * and reaches the client in every mode, so it says what the client can do (`the database is
+     * busy; try again`), never the dependency's own error text; log that where it happens. A
+     * cause only the server should see is `server`.
+     */
     case unavailable(string $detail);
+
+    /**
+     * 500: the server failed. `$cause` reaches the client only in a mode that reveals internals,
+     * and is logged when the request fails.
+     */
     case server(string $cause);
     case custom(ProblemDetail $detail);
 

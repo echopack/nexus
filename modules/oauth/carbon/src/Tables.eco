@@ -22,7 +22,7 @@ public struct Tables
     }
 
     /**
-     * The OAuth migration, to add to the app's own.
+     * The OAuth migrations, to add to the app's own.
      */
     public static function migrations() : array<carbon::migrate::Step>
     {

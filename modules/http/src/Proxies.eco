@@ -74,7 +74,7 @@ public struct Proxies
         }
         array<string> $hops = [];
         foreach (str::split($forwarded, ',') as const &$part) {
-            $hops[] = string::from(str::trim($part));
+            $hops[] = Proxies::hop(string::from(str::trim($part)));
         }
         usize $i = $hops->count();
         while ($i > 0) {
@@ -107,6 +107,28 @@ public struct Proxies
             return 'https';
         }
         return 'http';
+    }
+
+    /**
+     * One `X-Forwarded-For` entry as a bare address. Some proxies write the port too
+     * (`203.0.113.9:51234`, `[2001:db8::1]:443`), and it changes with every connection, so a
+     * bracketed IPv6 entry loses its brackets and port and an IPv4 one (exactly one colon) loses its
+     * port. A bare IPv6 entry has more colons and stays as it is.
+     */
+    public static function hop(const string& $entry) : string
+    {
+        if ($entry->starts('[')) {
+            usize $close = $entry->find(']');
+            if ($close < $entry->size()) {
+                return $entry->sub(1, $close - 1)->clone();
+            }
+            return $entry;
+        }
+        usize $colon = $entry->find(':');
+        if ($colon < $entry->size() && $entry->find(':', $colon + 1) == $entry->size()) {
+            return $entry->sub(0, $colon)->clone();
+        }
+        return $entry;
     }
 
     /**

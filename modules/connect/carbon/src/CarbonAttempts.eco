@@ -50,6 +50,7 @@ public class CarbonAttempts : nexus::connect::AttemptStore
         AttemptRow $row = .of($a);
         $set = hydrahon::Values();
         $set[AttemptRowTable::$error] = $row->error;
+        $set[AttemptRowTable::$proofHash] = $row->proofHash;
         $set[AttemptRowTable::$externalSubject] = $row->externalSubject;
         $set[AttemptRowTable::$externalEmail] = $row->externalEmail;
         $set[AttemptRowTable::$externalEmailVerified] = $row->externalEmailVerified;

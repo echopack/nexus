@@ -29,6 +29,10 @@ public class Extension : nexus::Extension
         if ($kind != 'redis' && $kind != 'rediss') {
             return .ok;
         }
+        // flush scans by the prefix, so an empty one would unlink the whole database
+        if ($config->prefix->empty()) {
+            return .error(.extension('nexus-cache-redis', 'NEXUS_CACHE_PREFIX is empty: in Redis every cache key needs a prefix, or cache:clear would forget the whole database'));
+        }
         redis::Options $o = guard redis::Options::parse($config->url) else ($e) {
             return .error(.extension('nexus-cache-redis', "NEXUS_CACHE_URL: {$e}"));
         };

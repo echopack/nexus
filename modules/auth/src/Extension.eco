@@ -129,4 +129,13 @@ public class Extension : nexus::Extension
     {
         $cmds->add(PruneCommand());
     }
+
+    public function boot(nexus::Kernel $kernel) : status<nexus::BootError>
+    {
+        Resources $resources = $kernel->services->get<Resources>();
+        if (!$resources->all()->empty() && $resources->issued()) {
+            try $kernel->needsOrigin('nexus-auth', 'the resource URLs and the metadata a 401 points clients to');
+        }
+        return .ok;
+    }
 }

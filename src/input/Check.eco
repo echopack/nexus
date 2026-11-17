@@ -216,12 +216,12 @@ public class Check
 
     /**
      * A plausible mail address: one `@`, something before it, a dot in the domain after it, no
-     * spaces.
+     * spaces and no control characters.
      */
     public function email(const string& $value) : void
     {
         usize $at = $value->find('@');
-        bool $ok = $at > 0 && $at < $value->size() && !$value->contains(' ');
+        bool $ok = $at > 0 && $at < $value->size() && Check::unbroken($value);
         if ($ok) {
             string $domain = $value->sub($at + 1, $value->size() - $at - 1);
             $ok = $domain->contains('.') && !$domain->contains('@') && !$domain->starts('.') && !$domain->ends('.');
@@ -232,7 +232,7 @@ public class Check
     }
 
     /**
-     * An absolute `http` or `https` URL with a host and no spaces.
+     * An absolute `http` or `https` URL with a host, no spaces and no control characters.
      */
     public function url(const string& $value) : void
     {
@@ -242,7 +242,7 @@ public class Check
         } else if ($value->starts('http://')) {
             $rest = $value->sub(7, $value->size() - 7);
         }
-        bool $ok = !$rest->empty() && !$value->contains(' ') && !$rest->starts('/') && !$rest->starts('?') && !$rest->starts('#');
+        bool $ok = !$rest->empty() && Check::unbroken($value) && !$rest->starts('/') && !$rest->starts('?') && !$rest->starts('#');
         if (!$ok) {
             $this->rule('url');
         }
@@ -259,7 +259,7 @@ public class Check
     }
 
     /**
-     * Letters only. Any letter beyond ASCII counts.
+     * Letters only. Letters beyond ASCII count too, as far as `only` tells them apart.
      */
     public function alpha(const string& $value) : void
     {
@@ -382,21 +382,21 @@ public class Check
 
     public function min(float64 $value, float64 $min) : void
     {
-        if ($value < $min) {
+        if (!Check::finite($value) || $value < $min) {
             $this->rule('min', Check::one('min', str::from($min)));
         }
     }
 
     public function max(float64 $value, float64 $max) : void
     {
-        if ($value > $max) {
+        if (!Check::finite($value) || $value > $max) {
             $this->rule('max', Check::one('max', str::from($max)));
         }
     }
 
     public function between(float64 $value, float64 $min, float64 $max) : void
     {
-        if ($value < $min || $value > $max) {
+        if (!Check::finite($value) || $value < $min || $value > $max) {
             $this->rule('between', Check::two('min', str::from($min), 'max', str::from($max)));
         }
     }
@@ -415,7 +415,7 @@ public class Check
         }
         float64 $times = $value / $of;
         float64 $whole = std::math::round($times);
-        if (std::math::abs($times - $whole) > 0.000000001) {
+        if (!Check::finite($times) || std::math::abs($times - $whole) > 0.000000001) {
             $this->rule('multipleOf', Check::one('value', str::from($of)));
         }
     }
@@ -447,9 +447,94 @@ public class Check
         }
     }
 
+    // a uint64 against int64 bounds, compared without a cast that would turn its top half negative
+
+    public function min(uint64 $value, int64 $min) : void
+    {
+        if (Check::below($value, $min)) {
+            $this->rule('min', Check::one('min', str::from($min)));
+        }
+    }
+
+    public function max(uint64 $value, int64 $max) : void
+    {
+        if (Check::above($value, $max)) {
+            $this->rule('max', Check::one('max', str::from($max)));
+        }
+    }
+
+    public function between(uint64 $value, int64 $min, int64 $max) : void
+    {
+        if (Check::below($value, $min) || Check::above($value, $max)) {
+            $this->rule('between', Check::two('min', str::from($min), 'max', str::from($max)));
+        }
+    }
+
+    public function multipleOf(uint64 $value, int64 $of) : void
+    {
+        if ($of == 0) {
+            return;
+        }
+        uint64 $step = $of as uint64;
+        if ($of < 0) {
+            // the magnitude, without negating int64's lowest value
+            $step = ((-($of + 1)) as uint64) + 1;
+        }
+        if ($value % $step != 0) {
+            $this->rule('multipleOf', Check::one('value', str::from($of)));
+        }
+    }
+
+    public function oneOf(uint64 $value, const array<int64>& $allowed) : void
+    {
+        array<string> $shown = [];
+        foreach ($allowed as const &$a) {
+            if ($a >= 0 && ($a as uint64) == $value) {
+                return;
+            }
+            $shown[] = str::from($a);
+        }
+        $this->rule('oneOf', Check::one('values', str::join($shown, ', ')));
+    }
+
+    public function noneOf(uint64 $value, const array<int64>& $refused) : void
+    {
+        array<string> $shown = [];
+        bool $hit = false;
+        foreach ($refused as const &$r) {
+            if ($r >= 0 && ($r as uint64) == $value) {
+                $hit = true;
+            }
+            $shown[] = str::from($r);
+        }
+        if ($hit) {
+            $this->rule('noneOf', Check::one('values', str::join($shown, ', ')));
+        }
+    }
+
+    /**
+     * `gt`, `gte`, `lt` or `lte` of a uint64 against a whole number, exactly.
+     */
+    public function compare(const string& $code, uint64 $value, int64 $than, const string& $shown) : void
+    {
+        bool $ok = true;
+        if ($code == 'gt') {
+            $ok = Check::above($value, $than);
+        } else if ($code == 'gte') {
+            $ok = !Check::below($value, $than);
+        } else if ($code == 'lt') {
+            $ok = Check::below($value, $than);
+        } else if ($code == 'lte') {
+            $ok = !Check::above($value, $than);
+        }
+        if (!$ok) {
+            $this->rule($code, Check::one('value', $shown));
+        }
+    }
+
     /**
      * `gt`, `gte`, `lt` or `lte` against `$than`; `$shown` is what the message names (a number, or
-     * the other field's value).
+     * the other field's value). NaN compares with nothing, so it is refused.
      */
     public function compare(const string& $code, float64 $value, float64 $than, const string& $shown) : void
     {
@@ -848,24 +933,144 @@ public class Check
     }
 
     /**
-     * Whether `$value` is letters only, plus digits and `-`/`_` when asked. Bytes past ASCII belong
-     * to letters beyond it.
+     * Whether `$value` is a number: neither NaN nor an infinity.
+     */
+    internal static function finite(float64 $value) : bool
+    {
+        // NaN and the infinities are the floats whose difference with themselves is no zero
+        return $value - $value == 0.0;
+    }
+
+    /**
+     * Whether the uint64 `$value` is less than the int64 `$bound`.
+     */
+    internal static function below(uint64 $value, int64 $bound) : bool
+    {
+        return $bound > 0 && $value < ($bound as uint64);
+    }
+
+    /**
+     * Whether the uint64 `$value` is greater than the int64 `$bound`.
+     */
+    internal static function above(uint64 $value, int64 $bound) : bool
+    {
+        return $bound < 0 || $value > ($bound as uint64);
+    }
+
+    /**
+     * Whether `$value` holds no space and no control character (below 0x20, or 0x7F).
+     */
+    internal static function unbroken(const string& $value) : bool
+    {
+        usize $i = 0;
+        while ($i < $value->size()) {
+            uint8 $b = $value->byte($i);
+            if ($b <= 32 || $b == 127) {
+                return false;
+            }
+            $i = $i + 1;
+        }
+        return true;
+    }
+
+    /**
+     * Whether `$value` is letters only, plus digits and `-`/`_` when asked. Past ASCII the value has
+     * to be well-formed UTF-8, and a character counts as a letter unless it is one of what is known
+     * not to be: a control or format character (the zero-width ones and the direction overrides
+     * among them), a space, the punctuation and symbols of Latin-1 and General Punctuation, a
+     * private-use or noncharacter code point, a variation selector, or an emoji or other pictograph.
+     * There are no Unicode tables here, so this is an approximation: a symbol, a mark or a digit of
+     * another script outside those ranges still passes as a letter.
      */
     internal static function only(const string& $value, bool $digits, bool $dashes) : bool
     {
-        if ($value->empty()) {
+        if ($value->empty() || !str::is_utf8($value)) {
             return false;
         }
         usize $i = 0;
         while ($i < $value->size()) {
             uint8 $b = $value->byte($i);
-            bool $letter = ($b >= 65 && $b <= 90) || ($b >= 97 && $b <= 122) || $b > 127;
+            if ($b > 127) {
+                // a lead byte and its continuation bytes, which is_utf8 has already checked
+                uint32 $c = 0;
+                usize $more = 0;
+                if ($b >= 240) {
+                    $c = ($b & 7) as uint32;
+                    $more = 3;
+                } else if ($b >= 224) {
+                    $c = ($b & 15) as uint32;
+                    $more = 2;
+                } else {
+                    $c = ($b & 31) as uint32;
+                    $more = 1;
+                }
+                usize $k = 1;
+                while ($k <= $more) {
+                    $c = ($c << 6) | (($value->byte($i + $k) & 63) as uint32);
+                    $k = $k + 1;
+                }
+                if (!Check::letter($c)) {
+                    return false;
+                }
+                $i = $i + 1 + $more;
+                continue;
+            }
+            bool $letter = ($b >= 65 && $b <= 90) || ($b >= 97 && $b <= 122);
             bool $digit = $b >= 48 && $b <= 57;
             bool $dash = $b == 45 || $b == 95;
             if (!$letter && !($digits && $digit) && !($dashes && $dash)) {
                 return false;
             }
             $i = $i + 1;
+        }
+        return true;
+    }
+
+    /**
+     * Whether the code point `$c`, past ASCII, passes as a letter; see `only` for what does not.
+     */
+    internal static function letter(uint32 $c) : bool
+    {
+        // C1 controls, then Latin-1 punctuation and symbols (the no-break space and the soft hyphen
+        // among them) except the letters ª, µ and º, and the signs × and ÷
+        if ($c <= 0xBF) {
+            return $c == 0xAA || $c == 0xB5 || $c == 0xBA;
+        }
+        if ($c == 0xD7 || $c == 0xF7) {
+            return false;
+        }
+        // Arabic and Syriac format characters, the Mongolian vowel separator, the Ogham space
+        if (($c >= 0x600 && $c <= 0x605) || $c == 0x61C || $c == 0x6DD || $c == 0x70F || $c == 0x8E2 || $c == 0x180E || $c == 0x1680) {
+            return false;
+        }
+        // General Punctuation: spaces, zero-width characters, direction marks and overrides,
+        // separators, invisible operators
+        if ($c >= 0x2000 && $c <= 0x206F) {
+            return false;
+        }
+        // the combining keycap, technical symbols, arrows, dingbats and the rest of the symbol
+        // blocks emoji come from
+        if ($c == 0x20E3 || ($c >= 0x2190 && $c <= 0x2BFF)) {
+            return false;
+        }
+        // the ideographic space
+        if ($c == 0x3000) {
+            return false;
+        }
+        // private use
+        if (($c >= 0xE000 && $c <= 0xF8FF) || $c >= 0xF0000) {
+            return false;
+        }
+        // noncharacters, variation selectors, the byte order mark and the specials
+        if (($c >= 0xFDD0 && $c <= 0xFDEF) || ($c >= 0xFE00 && $c <= 0xFE0F) || $c == 0xFEFF || ($c >= 0xFFF0 && $c <= 0xFFFF)) {
+            return false;
+        }
+        if (($c & 0xFFFE) == 0xFFFE) {
+            return false;
+        }
+        // emoji, pictographs and the other symbol planes of the SMP, then tags and selectors
+        if (($c >= 0x1F000 && $c <= 0x1FAFF) || ($c >= 0x1D173 && $c <= 0x1D17A) || ($c >= 0xE0000 && $c <= 0xE0FFF)) {
+            return false;
         }
         return true;
     }

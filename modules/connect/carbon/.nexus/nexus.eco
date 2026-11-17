@@ -11,11 +11,13 @@ namespace nexusgen::nexus_connect_carbon;
 #[nexus::generated: 'nexus-connect-carbon']
 public function generated(nexus::Generated $g) : void
 {
+    $g->name<nexus::connect::carbon::AddConnectProof>('nexus::connect::carbon::AddConnectProof');
     $g->name<nexus::connect::carbon::AttemptRow>('nexus::connect::carbon::AttemptRow');
     $g->name<nexus::connect::carbon::CarbonAttempts>('nexus::connect::carbon::CarbonAttempts');
     $g->name<nexus::connect::carbon::CarbonLinks>('nexus::connect::carbon::CarbonLinks');
     $g->name<nexus::connect::carbon::CreateConnectTables>('nexus::connect::carbon::CreateConnectTables');
     $g->name<nexus::connect::carbon::Extension>('nexus::connect::carbon::Extension');
+    $g->name<nexus::connect::carbon::HashConnectLinks>('nexus::connect::carbon::HashConnectLinks');
     $g->name<nexus::connect::carbon::LinkRow>('nexus::connect::carbon::LinkRow');
     $g->name<nexus::connect::carbon::Tables>('nexus::connect::carbon::Tables');
 }

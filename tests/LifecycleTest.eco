@@ -2,7 +2,7 @@
  * Background payloads get a scope of their own, and a failed start drains what already started.
  */
 
-use nexus::{Kernel, Tables, Extension, ConfigTable, Env, Payload, Serve, BootError};
+use nexus::{Kernel, Tables, Extension, ConfigTable, Env, Payload, Serve, BootError, Flag};
 use ecotest::expect;
 
 #[atomic]
@@ -75,6 +75,81 @@ test a_failed_start_drains_the_extensions_already_started
     expect(lStarted($s))->no(says: 'the kernel refuses to start when an extension does');
     expect($trace->started->load())->is(2);
     expect($trace->drained->load())->is(1);
+}
+
+#[atomic]
+internal class LBooted
+{
+    public atomic<int32> $booted = atomic<int32>(0);
+    public atomic<int32> $shut = atomic<int32>(0);
+    public atomic<int32> $flushed = atomic<int32>(0);
+}
+
+internal class LBooting : Extension
+{
+    public LBooted $trace;
+    public bool $refuse = false;
+
+    public constructor(LBooted $trace, bool $refuse)
+    {
+        $this->trace = $trace;
+        $this->refuse = $refuse;
+    }
+
+    public function name() : string
+    {
+        return 'booting-test';
+    }
+
+    public function boot(Kernel $k) : status<BootError>
+    {
+        if ($this->refuse) {
+            $k->log->error('cannot boot');
+            return .error(.extension('booting-test', 'refused to boot'));
+        }
+        $this->trace->booted->add(1);
+        return .ok;
+    }
+
+    public function shutdown(Kernel $k) : void
+    {
+        $this->trace->shut->add(1);
+    }
+}
+
+#[atomic]
+internal class LFlushes : nexus::log::Sink
+{
+    public LBooted $trace;
+
+    public constructor(LBooted $trace)
+    {
+        $this->trace = $trace;
+    }
+
+    public function write(const nexus::log::Entry& $e) : void
+    {
+    }
+
+    public function flush() : void
+    {
+        $this->trace->flushed->add(1);
+    }
+}
+
+test a_failed_boot_shuts_down_what_booted_and_flushes_the_log
+{
+    $trace = LBooted();
+    array<Extension> $exts = [LBooting($trace, false), LBooting($trace, false), LBooting($trace, true), LBooting($trace, false)];
+    array<ConfigTable> $configs = [];
+    $tables = Tables($configs: $configs);
+    $vars = map<string, string>();
+    array<nexus::log::Sink> $sinks = [LFlushes($trace)];
+    result<Kernel, BootError> $r = Kernel::boot(mv $exts, .testing, nexus::Logger(mv $sinks, .info), Env(fixed: $vars), tables: $tables);
+    expect($r)->fails();
+    expect($trace->booted->load())->is(2);
+    expect($trace->shut->load())->is(2);
+    expect($trace->flushed->load() >= 1)->yes(says: 'the log was flushed before the boot answered');
 }
 
 internal function lStarted(status<BootError> $s) : bool
@@ -160,5 +235,130 @@ test a_stop_that_finishes_never_quits
     });
     $finisher->join();
     expect($t->stops->load())->is(1);
+    expect($s->quits->load())->is(0);
+}
+
+// drains until the watchdog quits, or five seconds
+internal class LSlowDrain : Extension
+{
+    public LSignals $signals;
+    public atomic<int32> $quitDuring = atomic<int32>(0);
+
+    public constructor(LSignals $signals)
+    {
+        $this->signals = $signals;
+    }
+
+    public function name() : string
+    {
+        return 'slow-drain';
+    }
+
+    public function drain(Kernel $k) : void
+    {
+        int32 $waited = 0;
+        while ($this->signals->quits->load() == 0 && $waited < 50) {
+            std::thread::sleep(100);
+            $waited++;
+        }
+        $this->quitDuring->store($this->signals->quits->load());
+    }
+}
+
+test a_second_signal_during_the_drain_still_quits_the_server
+{
+    $s = LSignals();
+    $s->second->store(3);
+    $slow = LSlowDrain($s);
+    array<Extension> $exts = [$slow];
+    Kernel $k = lBoot($exts);
+    $t = LStuck();
+    $o = Serve();
+    $o->grace = std::time::duration::secs(60);
+    int32 $code = nexus::Console::serve($k, $t, $o, 'app', () : bool => $s->poll(), function() : void {
+        $s->quits->add(1);
+    });
+    expect($code)->is(0);
+    expect($s->quits->load())->is(1);
+    expect($slow->quitDuring->load())->is(1);
+}
+
+test a_drain_that_overruns_the_grace_quits_the_worker
+{
+    $s = LSignals();
+    $slow = LSlowDrain($s);
+    array<Extension> $exts = [$slow];
+    Kernel $k = lBoot($exts);
+    $o = Serve();
+    $o->grace = std::time::duration::millis(300);
+    std::time::instant $at = .now();
+    int32 $code = nexus::Console::background($k, $o, 'work', () : bool => $s->poll(), function() : void {
+        $s->quits->add(1);
+    });
+    expect($code)->is(0);
+    expect($slow->quitDuring->load())->is(1);
+    expect($at->elapsed()->as_micros() < 4000000)->yes(says: 'quit at the grace, not after the drain');
+}
+
+// serves until stopped, then takes `finish` ms more for its requests
+#[atomic]
+internal class LSlowStop : nexus::Transport
+{
+    public Flag $stopped = Flag();
+    public int32 $finish;
+
+    public constructor(int32 $finish)
+    {
+        $this->finish = $finish;
+    }
+
+    public function serve(Kernel $kernel, const Serve& $options) : status<BootError>
+    {
+        while (!$this->stopped->raised()) {
+            std::thread::sleep(10);
+        }
+        std::thread::sleep($this->finish);
+        return .ok;
+    }
+
+    public function stop() : void
+    {
+        $this->stopped->raise();
+    }
+}
+
+// a drain that takes `ms`
+internal class LTimedDrain : Extension
+{
+    public int32 $ms;
+
+    public constructor(int32 $ms)
+    {
+        $this->ms = $ms;
+    }
+
+    public function name() : string
+    {
+        return 'timed-drain';
+    }
+
+    public function drain(Kernel $k) : void
+    {
+        std::thread::sleep($this->ms);
+    }
+}
+
+test the_drain_after_the_requests_gets_a_grace_of_its_own
+{
+    $s = LSignals();
+    array<Extension> $exts = [LTimedDrain(400)];
+    Kernel $k = lBoot($exts);
+    $o = Serve();
+    $o->grace = std::time::duration::millis(600);
+    // the requests take 400ms of the grace, the drain 400ms more: each fits, both together do not
+    int32 $code = nexus::Console::serve($k, LSlowStop(400), $o, 'app', () : bool => $s->poll(), function() : void {
+        $s->quits->add(1);
+    });
+    expect($code)->is(0);
     expect($s->quits->load())->is(0);
 }

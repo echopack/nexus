@@ -266,6 +266,155 @@ test cancel_prune_and_expiry
     expect(find($s, 'stale')->error)->is('expired before it ran');
 }
 
+test an_expired_task_whose_server_stopped_fails_and_lets_go
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    Batch $b = Batch();
+    StoredTask $lost = task('lost', $now);
+    $lost->expiresAt = $now + time::duration::secs(5);
+    $lost->hold = .unique;
+    $lost->holdKey = 'TSay#5';
+    $lost->allowFailure = true;
+    $b->tasks[] = $lost;
+    StoredTask $then = task('then', $now);
+    $then->pending = 1;
+    $b->tasks[] = $then;
+    $b->edges[] = Edge('then', 'lost');
+    store($s, $b);
+    // claimed with a lease of a minute by a server that then stops
+    expect(ids(claim($s, $now, 10)))->is('lost');
+    time::timestamp $leased = $now + time::duration::secs(30);
+    got($s->prune($leased, $leased));
+    expect(find($s, 'lost')->status == TaskStatus::running)->yes(says: 'a task whose lease holds still runs');
+    time::timestamp $later = $now + time::duration::mins(2);
+    expect(claim($s, $later, 10))->empty();
+    got($s->prune($later, $later));
+    expect(find($s, 'lost')->status == TaskStatus::failed)->yes(says: 'an expired task nobody holds fails');
+    expect(find($s, 'lost')->error)->is('expired before it finished');
+    expect(ids(claim($s, $later, 10)))->is('then');
+    StoredTask $next = task('next', $later);
+    $next->hold = .unique;
+    $next->holdKey = 'TSay#5';
+    expect(store($s, one($next))->queued())->yes(says: 'its unique key is free');
+}
+
+test spawned_tasks_holding_a_live_unique_key_are_skipped
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    StoredTask $waits = task('waits', $now + time::duration::hours(1));
+    $waits->hold = .unique;
+    $waits->holdKey = 'TSay#k';
+    store($s, one($waits));
+    Batch $b = Batch();
+    StoredTask $parent = task('parent', $now);
+    $parent->hold = .unique;
+    $parent->holdKey = 'TSay#p';
+    $b->tasks[] = $parent;
+    StoredTask $after = task('after', $now);
+    $after->pending = 1;
+    $b->tasks[] = $after;
+    $b->edges[] = Edge('after', 'parent');
+    store($s, $b);
+    array<StoredTask> $p = claim($s, $now, 10);
+    expect(ids($p))->is('parent');
+
+    Batch $kids = Batch();
+    StoredTask $clash = task('clash', $now);
+    $clash->hold = .unique;
+    $clash->holdKey = 'TSay#k';
+    $kids->tasks[] = $clash;
+    $kids->tasks[] = task('plain', $now);
+    bool $stored = got($s->done($p[0], $now, $kids));
+    expect($stored)->no(says: 'a spawned task holding a live key skips them all');
+    expect($s->tasks())->size(3);
+    expect(find($s, 'parent')->status == TaskStatus::done)->yes(says: 'the parent is done all the same');
+    expect(ids(claim($s, $now, 10)))->is('after');
+
+    // a task may hand its own key on to what it spawns, but two of them cannot share one
+    StoredTask $own = task('own', $now);
+    $own->hold = .unique;
+    $own->holdKey = 'TSay#o';
+    store($s, one($own));
+    array<StoredTask> $o = claim($s, $now, 10);
+    Batch $heirs = Batch();
+    StoredTask $heir = task('heir', $now);
+    $heir->hold = .unique;
+    $heir->holdKey = 'TSay#o';
+    $heirs->tasks[] = $heir;
+    expect(got($s->done($o[0], $now, $heirs)))->yes(says: 'the task\'s own key is free once it is done');
+    array<StoredTask> $h = claim($s, $now, 10);
+    expect(ids($h))->is('heir');
+    Batch $twins = Batch();
+    StoredTask $one = task('twin1', $now);
+    $one->hold = .unique;
+    $one->holdKey = 'TSay#t';
+    StoredTask $two = task('twin2', $now);
+    $two->hold = .unique;
+    $two->holdKey = 'TSay#t';
+    $twins->tasks[] = $one;
+    $twins->tasks[] = $two;
+    expect(got($s->done($h[0], $now, $twins)))->no(says: 'two spawned tasks cannot share a key');
+    expect(claim($s, $now, 10))->empty();
+}
+
+test a_failed_unique_task_goes_back_only_while_its_key_is_free
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    StoredTask $first = task('first', $now);
+    $first->hold = .unique;
+    $first->holdKey = 'TSay#r';
+    store($s, one($first));
+    guard $s->fail(claim($s, $now, 1)[0], $now, 'broken');
+    StoredTask $second = task('second', $now);
+    $second->hold = .unique;
+    $second->holdKey = 'TSay#r';
+    expect(store($s, one($second))->queued())->yes(says: 'a failed task holds no key');
+    expect(got($s->again('first', $now)))->none();
+    expect(got($s->againAll('jobs', $now)))->empty();
+    expect(find($s, 'first')->status == TaskStatus::failed)->yes(says: 'it stays failed while the key is taken');
+
+    guard $s->fail(claim($s, $now, 1)[0], $now, 'broken');
+    // both failed now: one of them goes back, the other stays failed
+    expect(ids(got($s->againAll('jobs', $now))))->is('first');
+    expect(find($s, 'second')->status == TaskStatus::failed)->yes(says: 'a second task of one key stays failed');
+}
+
+test a_deferred_task_gets_its_try_back
+{
+    $s = MemoryStore();
+    time::timestamp $now = .from_unix_secs(START);
+    store($s, one(task('a', $now)));
+    array<StoredTask> $first = claim($s, $now, 1);
+    expect($first[0]->attempts)->is(1);
+    time::timestamp $later = $now + time::duration::mins(1);
+    guard $s->defer($first[0], $later, 'not here');
+    expect(find($s, 'a')->attempts)->is(0);
+    expect(find($s, 'a')->status == TaskStatus::waiting)->yes(says: 'a deferred task waits');
+    expect(claim($s, $now, 1))->empty();
+    array<StoredTask> $again = claim($s, $later, 1);
+    expect($again[0]->attempts)->is(1);
+}
+
+test a_server_without_a_task_type_sends_it_back_untried
+{
+    $r = rig();
+    time::timestamp $now = .from_unix_secs(START);
+    StoredTask $newer = task('newer', $now);
+    $newer->name = 'TNewer';
+    store($r->store, one($newer));
+    $r->start();
+    $r->heard('no task named TNewer in this program; sent back for a server that has it');
+    $r->stop();
+    StoredTask $t = find($r->store, 'newer');
+    expect($t->status == TaskStatus::waiting)->yes(says: 'the task waits for a server that has it');
+    expect($t->attempts)->is(0);
+    expect($t->availableAt->unix_secs())->is(START + 60);
+    expect($r->app->logged('no task named TNewer in this program; sent back for a server that has it'))->yes();
+}
+
 test a_distributed_queue_runs_its_tasks_on_its_async_queue
 {
     $r = rig();

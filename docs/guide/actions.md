@@ -56,7 +56,7 @@ The parameters of `handle()` say what the request must provide. You never parse 
 
 ### Path parameters
 
-Any loose `string` or integer parameter (`int32`, `int64`, `uint32`, `uint64`) comes from the path, bound by name:
+Any loose `string` or integer parameter (`int32`, `int64`, `uint16`, `uint32`, `uint64`) comes from the path, bound by name:
 
 ```echo
 // GET /v1/posts/{id}
