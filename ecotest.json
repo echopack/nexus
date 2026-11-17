@@ -1,0 +1,14 @@
+{
+  "services": [
+    {
+      "name": "mysql",
+      "run": ["sh", "-c", "docker rm -f nexus-test-mysql >/dev/null 2>&1; exec docker run --rm --name nexus-test-mysql -e MYSQL_ROOT_PASSWORD=test -p 127.0.0.1:33070:3306 --tmpfs /var/lib/mysql mysql:8.0 --skip-log-bin"],
+      "url": "mysql://root:test@127.0.0.1:33070/?fetchServerKey=true"
+    },
+    {
+      "name": "redis",
+      "run": ["sh", "-c", "docker rm -f nexus-test-redis >/dev/null 2>&1; exec docker run --rm --name nexus-test-redis -p 127.0.0.1:63790:6379 redis:7-alpine"],
+      "url": "redis://127.0.0.1:63790/15"
+    }
+  ]
+}

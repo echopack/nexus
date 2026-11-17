@@ -15,7 +15,7 @@
 
 #[module: "nexus"]
 #[version: "0.1.0"]
-#[epm::echoc: ">=0.15.0"]
+#[epm::echoc: ">=0.16.0"]
 #[epm::license: "MIT"]
 #[epm::description: "The HTTP application framework for Echo"]
 
@@ -26,6 +26,10 @@
 #[requires: "echopack/calendar" { version: "^0.1.2", source: git "https://github.com/echopack/calendar" }]
 
 #[sources: "src/**/*.eco"]
+
+// every module developed with the core. `echoc test --workspace` builds them as one program and
+// runs each one's tests, and `epm install` here installs what all of them require
+#[workspace: ["modules/*", "modules/*/*", "examples/blog"]]
 
 // the developer tool: `nexus gen`, run by an app's before_build hook
 #[target: exe { name: "nexus", entry: "cli/main.eco", public: true }] {

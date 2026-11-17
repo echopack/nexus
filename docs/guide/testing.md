@@ -316,7 +316,9 @@ The `-m ../..` runs the ecotest that the nexus repository vendors, since the blo
 
 ### The whole repository
 
-`scripts/test.sh` at the repository root runs every suite the same way: the core, each module, and the blog, each through ecotest (so suites with an `ecotest.json` get their MySQL or Redis in Docker). It then checks with `nexus gen --check` that no generated file is stale, and finishes with the blog's smoke test over a real socket. `DOCKER=0` skips everything that needs Docker, `SMOKE=0` skips just the smoke test, and `IMAGE=mariadb:11` runs it on another server.
+`scripts/test.sh` at the repository root runs every suite as one build: `ecotest --workspace` compiles the core, every module and the blog once, as the `#[workspace:]` in the root `module.eco` lists them, and runs each test in its own process. The MySQL and Redis the integration tests want start in Docker from the root `ecotest.json`. It then checks with `nexus gen --check` that no generated file is stale, and finishes with the blog's smoke test over a real socket. `DOCKER=0` starts no service and skips the smoke test (the tests that want a server skip themselves), `SMOKE=0` skips just the smoke test, and `IMAGE=mariadb:11` runs it on another server.
+
+`scripts/test-each.sh` runs the same suites one directory at a time, each with its own `epm install` and `vendor/`. That is the proof every package builds and passes alone, the way its users get it, so it is the run before a release.
 
 ## Settings
 
