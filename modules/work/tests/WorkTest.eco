@@ -275,8 +275,8 @@ test async_retries_with_backoff_then_fails
     $r = rig();
     $r->start();
     pushed($r->workers()->push(TSay('flaky'), tries: 2));
-    $r->wait(1);
-    thread::sleep(50);
+    // the retry is due ten seconds after the first try settles, so the clock moves after that
+    $r->heard('task will retry');
     expect($r->tally->all())->size(1);
     expect($r->app->logged('task will retry'))->yes(says: 'the first try retries');
     expect($r->app->logged('heard flaky failed: flaky fails'))->no(says: 'a retry is not the end');

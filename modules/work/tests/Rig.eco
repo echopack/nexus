@@ -6,7 +6,7 @@
 use std::thread;
 use std::time;
 use nexus::testing::TestApp;
-use nexus::work::{Task, Failure, Exclusive, Priority, Run, Flow, TaskData, DataError, Queues, MemoryStore, Store, AsyncQueue, DistributedQueue, Lane, Pool, Distributed, Work};
+use nexus::work::{Task, Failure, Exclusive, Priority, Run, Flow, TaskData, DataError, Queues, MemoryStore, Store, AsyncQueue, DistributedQueue, Lane, Pool, Distributed, Work, TaskStatus};
 
 // 2026-11-02T02:59:00Z, a Monday
 internal const int64 START = 1793588340;
@@ -365,6 +365,41 @@ internal class Rig
             thread::sleep(10);
             $waited++;
         }
+    }
+
+    /**
+     * Waits, at most five seconds, until the log holds `$message`.
+     */
+    public function heard(const string& $message) : void
+    {
+        int32 $waited = 0;
+        while (!$this->app->logged($message) && $waited < 500) {
+            thread::sleep(10);
+            $waited++;
+        }
+    }
+
+    /**
+     * Waits, at most five seconds, until a stored task is `$status` after a try that failed with
+     * `$why`. A run is in the tally as soon as it starts, before its outcome is stored.
+     */
+    public function settled(const string& $why, TaskStatus $status) : void
+    {
+        int32 $waited = 0;
+        while (!$this->holds($why, $status) && $waited < 500) {
+            thread::sleep(10);
+            $waited++;
+        }
+    }
+
+    private function holds(const string& $why, TaskStatus $status) : bool
+    {
+        foreach ($this->store->tasks() as const &$t) {
+            if ($t->error == $why && $t->status == $status) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

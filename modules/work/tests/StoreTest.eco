@@ -319,10 +319,10 @@ test a_failing_stored_task_retries_then_fails_and_holds_its_dependents
     Step $flaky = $p->add(TSay('flaky', $limit: 2));
     $p->add(TSay('held'), after: [$flaky]);
     pushed($r->jobs()->push($p));
-    $r->wait(1);
+    // the retry is due ten seconds after the first try settles, so the clock moves after that
+    $r->settled('flaky fails', .waiting);
     $r->clock->advance(time::duration::secs(11));
-    $r->wait(2);
-    thread::sleep(80);
+    $r->settled('flaky fails', .failed);
     $r->stop();
     expect($r->tally->has('held'))->no(says: 'the task after a failure is held back');
     array<StoredTask> $failed = got($r->store->failed('jobs', 10));
