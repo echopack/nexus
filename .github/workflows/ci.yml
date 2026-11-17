@@ -32,8 +32,8 @@ jobs:
 
   # the suites that need no Docker
   macos:
-    name: macos-15
-    runs-on: macos-15
+    name: macos-26
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
 

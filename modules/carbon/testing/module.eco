@@ -15,7 +15,7 @@
 
 #[requires: "echopack/carbon" { version: "^0.2.1", source: git "https://github.com/echopack/carbon" }]
 #[requires: "echopack/carbon/drivers/mysql" { version: "^0.2.1", source: git "https://github.com/echopack/carbon" }]
-#[requires: "echolang/ecotest" { version: "^0.3.3", source: git "https://github.com/echolang/ecotest" }]
+#[requires: "echolang/ecotest" { version: "^0.3.4", source: git "https://github.com/echolang/ecotest" }]
 
 #[sources: "src/*.eco"]
 

@@ -14,7 +14,7 @@
  */
 
 #[module: "nexus"]
-#[version: "0.1.0"]
+#[version: "0.1.0"] // x-release-please-version
 #[epm::echoc: ">=0.16.0"]
 #[epm::license: "MIT"]
 #[epm::description: "The HTTP application framework for Echo"]
@@ -38,5 +38,5 @@
 
 #[target: test] {
     #[sources: ["tests/*.eco", "cli/src/*.eco", "cli/tests/*.eco"]]
-    #[requires: "echolang/ecotest" { version: "^0.3.3", source: git "https://github.com/echolang/ecotest" }]
+    #[requires: "echolang/ecotest" { version: "^0.3.4", source: git "https://github.com/echolang/ecotest" }]
 }

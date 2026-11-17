@@ -2,47 +2,14 @@
   "lockVersion": 2,
   "packages": [
     {
-      "name": "echopack/calendar",
-      "version": "0.1.2",
+      "name": "echolang/libhttp",
+      "version": "0.2.11",
       "source": {
         "kind": "git",
-        "url": "https://github.com/echopack/calendar"
+        "url": "https://github.com/echolang/libhttp"
       },
-      "rev": "b2ef806e2572fc3f363392fdb9e8cb81dc9bdc62",
-      "sha256": "f4cceef46e395e35d00e90a453dd244cc75529f2daff5643381751725ae81d18",
-      "requires": []
-    },
-    {
-      "name": "echolang/libcrypto",
-      "version": "0.3.3",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libcrypto"
-      },
-      "rev": "3fba8f815d9e64bdad62e2b7182322061690ce39",
-      "sha256": "967109386299591b31f1a257597e6931800e241435b3b81b959404149e49e343",
-      "requires": []
-    },
-    {
-      "name": "echolang/libcommand",
-      "version": "0.1.6",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libcommand"
-      },
-      "rev": "4020d4f35546c78372c06aa01248776bed596758",
-      "sha256": "4bfae8b9b27946520a9baa3cfa4cb4afa1d3cc91067e9593165442b54eb3bee5",
-      "requires": []
-    },
-    {
-      "name": "echolang/libjson",
-      "version": "0.3.0",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libjson"
-      },
-      "rev": "5d646d796c5ba5c60670231d80ec0f151a7598c6",
-      "sha256": "91bdc6d0a553efc11e46ff1dee29916367679ebb5f3d425b7e317ccf7407ff31",
+      "rev": "382feefc608d44a51b6fbee5c9560f86b64c9385",
+      "sha256": "55ae981ca262ea2cf8eeebe437907af386e35bdaba82e15c4f6518f7556fb932",
       "requires": []
     },
     {
@@ -57,29 +24,62 @@
       "requires": []
     },
     {
-      "name": "echolang/ecotest",
+      "name": "echolang/libjson",
+      "version": "0.3.0",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libjson"
+      },
+      "rev": "5d646d796c5ba5c60670231d80ec0f151a7598c6",
+      "sha256": "91bdc6d0a553efc11e46ff1dee29916367679ebb5f3d425b7e317ccf7407ff31",
+      "requires": []
+    },
+    {
+      "name": "echolang/libcommand",
+      "version": "0.1.6",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libcommand"
+      },
+      "rev": "4020d4f35546c78372c06aa01248776bed596758",
+      "sha256": "4bfae8b9b27946520a9baa3cfa4cb4afa1d3cc91067e9593165442b54eb3bee5",
+      "requires": []
+    },
+    {
+      "name": "echolang/libcrypto",
       "version": "0.3.3",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libcrypto"
+      },
+      "rev": "3fba8f815d9e64bdad62e2b7182322061690ce39",
+      "sha256": "967109386299591b31f1a257597e6931800e241435b3b81b959404149e49e343",
+      "requires": []
+    },
+    {
+      "name": "echopack/calendar",
+      "version": "0.1.2",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echopack/calendar"
+      },
+      "rev": "b2ef806e2572fc3f363392fdb9e8cb81dc9bdc62",
+      "sha256": "f4cceef46e395e35d00e90a453dd244cc75529f2daff5643381751725ae81d18",
+      "requires": []
+    },
+    {
+      "name": "echolang/ecotest",
+      "version": "0.3.4",
       "source": {
         "kind": "git",
         "url": "https://github.com/echolang/ecotest"
       },
-      "rev": "ba963eb88f2865414549dd44b58afbc21d2de386",
-      "sha256": "08d9dc17fea387dda4cb99a7d74251b1228d7bb10792f8778ab583c9d8c717a1",
+      "rev": "f8df70408f7b763b1a5009097b33caca088c0c34",
+      "sha256": "ffc20fdad5fa09f9e6034133619a9414dfd150d423d06e844efdfaeebcb2481a",
       "requires": [
         "echolang/libcommand",
         "echolang/libjson"
       ]
-    },
-    {
-      "name": "echolang/libhttp",
-      "version": "0.2.11",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libhttp"
-      },
-      "rev": "382feefc608d44a51b6fbee5c9560f86b64c9385",
-      "sha256": "55ae981ca262ea2cf8eeebe437907af386e35bdaba82e15c4f6518f7556fb932",
-      "requires": []
     }
   ]
 }

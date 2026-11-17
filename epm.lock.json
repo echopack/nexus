@@ -2,22 +2,41 @@
   "lockVersion": 2,
   "packages": [
     {
-      "name": "echolang/ecotest",
-      "version": "0.3.3",
+      "name": "echolang/libhttp",
+      "version": "0.2.11",
       "source": {
         "kind": "git",
-        "url": "https://github.com/echolang/ecotest"
+        "url": "https://github.com/echolang/libhttp"
       },
-      "rev": "ba963eb88f2865414549dd44b58afbc21d2de386",
-      "sha256": "08d9dc17fea387dda4cb99a7d74251b1228d7bb10792f8778ab583c9d8c717a1",
+      "rev": "382feefc608d44a51b6fbee5c9560f86b64c9385",
+      "sha256": "55ae981ca262ea2cf8eeebe437907af386e35bdaba82e15c4f6518f7556fb932",
+      "requires": []
+    },
+    {
+      "name": "echopack/rest",
+      "version": "0.2.1",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echopack/rest"
+      },
+      "rev": "33f2b86e5a34977bd9f1fdc9d25c95ce471e7fa9",
+      "sha256": "85365996adc977dd20d6973d3b9a7e1a7d54a3b031118c7b22ed7e2e00986468",
       "requires": [
-        "echolang/libcommand",
         "echolang/libjson",
-        "echolang/libcurl"
-      ],
-      "packages": [
-        "modules/http"
+        "echolang/libhttp",
+        "echopack/calendar"
       ]
+    },
+    {
+      "name": "echopack/calendar",
+      "version": "0.1.2",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echopack/calendar"
+      },
+      "rev": "b2ef806e2572fc3f363392fdb9e8cb81dc9bdc62",
+      "sha256": "f4cceef46e395e35d00e90a453dd244cc75529f2daff5643381751725ae81d18",
+      "requires": []
     },
     {
       "name": "echolang/libjson",
@@ -31,25 +50,50 @@
       "requires": []
     },
     {
-      "name": "echolang/libcurl",
-      "version": "1.0.2",
+      "name": "echolang/libredis",
+      "version": "0.1.1",
       "source": {
         "kind": "git",
-        "url": "https://github.com/echolang/libcurl"
+        "url": "https://github.com/echolang/libredis"
       },
-      "rev": "29eb5a3766dc458a79caafaf046d08e0cbda7a5f",
-      "sha256": "2d058ba7671879bcbec34cd219011cbfc7ee08f2a041fd889a4fd05914be8ad1",
+      "rev": "bef989a79a2dea6a6bf852d12c80f84f397fe6c2",
+      "sha256": "35c1bbfc0f0b4858dad4425277c6938ae76e1351ac3d86fc4af1668c1000781a",
+      "requires": [
+        "echolang/libtcp",
+        "echolang/libcrypto"
+      ]
+    },
+    {
+      "name": "echolang/libcrypto",
+      "version": "0.3.3",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libcrypto"
+      },
+      "rev": "3fba8f815d9e64bdad62e2b7182322061690ce39",
+      "sha256": "967109386299591b31f1a257597e6931800e241435b3b81b959404149e49e343",
       "requires": []
     },
     {
-      "name": "echolang/libcommand",
-      "version": "0.1.6",
+      "name": "echolang/libtcp",
+      "version": "0.2.3",
       "source": {
         "kind": "git",
-        "url": "https://github.com/echolang/libcommand"
+        "url": "https://github.com/echolang/libtcp"
       },
-      "rev": "4020d4f35546c78372c06aa01248776bed596758",
-      "sha256": "4bfae8b9b27946520a9baa3cfa4cb4afa1d3cc91067e9593165442b54eb3bee5",
+      "rev": "f8449f7048514fc6cd1287db1353b3437e6f62b2",
+      "sha256": "6ce318e853ee8fd05d36820383e6f737ccb07adba0ae6f1c35d7c0b15140e558",
+      "requires": []
+    },
+    {
+      "name": "echopack/container",
+      "version": "0.1.0",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echopack/container"
+      },
+      "rev": "3264ab412767f43f2857cff91b828ac858cb54ba",
+      "sha256": "09d258f5eb5482b4c5123a46605df7f25e10a5d602d7b62be92d04ae331c6327",
       "requires": []
     },
     {
@@ -88,39 +132,6 @@
       ]
     },
     {
-      "name": "echolang/libcrypto",
-      "version": "0.3.3",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libcrypto"
-      },
-      "rev": "3fba8f815d9e64bdad62e2b7182322061690ce39",
-      "sha256": "967109386299591b31f1a257597e6931800e241435b3b81b959404149e49e343",
-      "requires": []
-    },
-    {
-      "name": "echolang/libtcp",
-      "version": "0.2.3",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libtcp"
-      },
-      "rev": "f8449f7048514fc6cd1287db1353b3437e6f62b2",
-      "sha256": "6ce318e853ee8fd05d36820383e6f737ccb07adba0ae6f1c35d7c0b15140e558",
-      "requires": []
-    },
-    {
-      "name": "echopack/calendar",
-      "version": "0.1.2",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echopack/calendar"
-      },
-      "rev": "b2ef806e2572fc3f363392fdb9e8cb81dc9bdc62",
-      "sha256": "f4cceef46e395e35d00e90a453dd244cc75529f2daff5643381751725ae81d18",
-      "requires": []
-    },
-    {
       "name": "echopack/hydrahon",
       "version": "0.1.4",
       "source": {
@@ -132,55 +143,44 @@
       "requires": []
     },
     {
-      "name": "echopack/container",
-      "version": "0.1.0",
+      "name": "echolang/libcommand",
+      "version": "0.1.6",
       "source": {
         "kind": "git",
-        "url": "https://github.com/echopack/container"
+        "url": "https://github.com/echolang/libcommand"
       },
-      "rev": "3264ab412767f43f2857cff91b828ac858cb54ba",
-      "sha256": "09d258f5eb5482b4c5123a46605df7f25e10a5d602d7b62be92d04ae331c6327",
+      "rev": "4020d4f35546c78372c06aa01248776bed596758",
+      "sha256": "4bfae8b9b27946520a9baa3cfa4cb4afa1d3cc91067e9593165442b54eb3bee5",
       "requires": []
     },
     {
-      "name": "echolang/libredis",
-      "version": "0.1.1",
+      "name": "echolang/libcurl",
+      "version": "1.0.2",
       "source": {
         "kind": "git",
-        "url": "https://github.com/echolang/libredis"
+        "url": "https://github.com/echolang/libcurl"
       },
-      "rev": "bef989a79a2dea6a6bf852d12c80f84f397fe6c2",
-      "sha256": "35c1bbfc0f0b4858dad4425277c6938ae76e1351ac3d86fc4af1668c1000781a",
-      "requires": [
-        "echolang/libtcp",
-        "echolang/libcrypto"
-      ]
+      "rev": "29eb5a3766dc458a79caafaf046d08e0cbda7a5f",
+      "sha256": "2d058ba7671879bcbec34cd219011cbfc7ee08f2a041fd889a4fd05914be8ad1",
+      "requires": []
     },
     {
-      "name": "echopack/rest",
-      "version": "0.2.1",
+      "name": "echolang/ecotest",
+      "version": "0.3.4",
       "source": {
         "kind": "git",
-        "url": "https://github.com/echopack/rest"
+        "url": "https://github.com/echolang/ecotest"
       },
-      "rev": "33f2b86e5a34977bd9f1fdc9d25c95ce471e7fa9",
-      "sha256": "85365996adc977dd20d6973d3b9a7e1a7d54a3b031118c7b22ed7e2e00986468",
+      "rev": "f8df70408f7b763b1a5009097b33caca088c0c34",
+      "sha256": "ffc20fdad5fa09f9e6034133619a9414dfd150d423d06e844efdfaeebcb2481a",
       "requires": [
+        "echolang/libcommand",
         "echolang/libjson",
-        "echolang/libhttp",
-        "echopack/calendar"
+        "echolang/libcurl"
+      ],
+      "packages": [
+        "modules/http"
       ]
-    },
-    {
-      "name": "echolang/libhttp",
-      "version": "0.2.11",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libhttp"
-      },
-      "rev": "382feefc608d44a51b6fbee5c9560f86b64c9385",
-      "sha256": "55ae981ca262ea2cf8eeebe437907af386e35bdaba82e15c4f6518f7556fb932",
-      "requires": []
     }
   ]
 }

@@ -2,42 +2,6 @@
   "lockVersion": 2,
   "packages": [
     {
-      "name": "echolang/ecotest",
-      "version": "0.3.3",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/ecotest"
-      },
-      "rev": "ba963eb88f2865414549dd44b58afbc21d2de386",
-      "sha256": "08d9dc17fea387dda4cb99a7d74251b1228d7bb10792f8778ab583c9d8c717a1",
-      "requires": [
-        "echolang/libcommand",
-        "echolang/libjson"
-      ]
-    },
-    {
-      "name": "echolang/libjson",
-      "version": "0.3.0",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libjson"
-      },
-      "rev": "5d646d796c5ba5c60670231d80ec0f151a7598c6",
-      "sha256": "91bdc6d0a553efc11e46ff1dee29916367679ebb5f3d425b7e317ccf7407ff31",
-      "requires": []
-    },
-    {
-      "name": "echolang/libcommand",
-      "version": "0.1.6",
-      "source": {
-        "kind": "git",
-        "url": "https://github.com/echolang/libcommand"
-      },
-      "rev": "4020d4f35546c78372c06aa01248776bed596758",
-      "sha256": "4bfae8b9b27946520a9baa3cfa4cb4afa1d3cc91067e9593165442b54eb3bee5",
-      "requires": []
-    },
-    {
       "name": "echopack/carbon",
       "version": "0.2.1",
       "source": {
@@ -112,6 +76,42 @@
       },
       "rev": "f34df4c2dc7869394374118a8533f6fe381fd23a",
       "sha256": "0286a7f8e7714702ac5ef55dc124b1f3dc779210d2b2093586ed07b736f2d7f6",
+      "requires": []
+    },
+    {
+      "name": "echolang/libjson",
+      "version": "0.3.0",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libjson"
+      },
+      "rev": "5d646d796c5ba5c60670231d80ec0f151a7598c6",
+      "sha256": "91bdc6d0a553efc11e46ff1dee29916367679ebb5f3d425b7e317ccf7407ff31",
+      "requires": []
+    },
+    {
+      "name": "echolang/ecotest",
+      "version": "0.3.4",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/ecotest"
+      },
+      "rev": "f8df70408f7b763b1a5009097b33caca088c0c34",
+      "sha256": "ffc20fdad5fa09f9e6034133619a9414dfd150d423d06e844efdfaeebcb2481a",
+      "requires": [
+        "echolang/libcommand",
+        "echolang/libjson"
+      ]
+    },
+    {
+      "name": "echolang/libcommand",
+      "version": "0.1.6",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/echolang/libcommand"
+      },
+      "rev": "4020d4f35546c78372c06aa01248776bed596758",
+      "sha256": "4bfae8b9b27946520a9baa3cfa4cb4afa1d3cc91067e9593165442b54eb3bee5",
       "requires": []
     }
   ]

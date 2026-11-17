@@ -15,8 +15,8 @@
 #[depends: "../.."]
 #[requires: "echopack/container" { version: "^0.1.0", source: git "https://github.com/echopack/container" }]
 #[requires: "echolang/libjson" { version: "^0.3.0", source: git "https://github.com/echolang/libjson" }]
-#[requires: "echolang/ecotest" { version: "^0.3.3", source: git "https://github.com/echolang/ecotest" }]
-#[requires: "echolang/ecotest/modules/http" { version: "^0.3.3", source: git "https://github.com/echolang/ecotest" }]
+#[requires: "echolang/ecotest" { version: "^0.3.4", source: git "https://github.com/echolang/ecotest" }]
+#[requires: "echolang/ecotest/modules/http" { version: "^0.3.4", source: git "https://github.com/echolang/ecotest" }]
 
 #[sources: "src/*.eco"]
 
