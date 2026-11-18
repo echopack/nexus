@@ -61,12 +61,17 @@ test a_presence_join_does_not_land_after_the_socket_is_gone
     $r = Rig();
     TestSocket $ann = $r->bearer($r->token('7'));
     $r->say($ann, 'subscribe', 'rooms.tea');
+    // the hub thread waits on a broadcast, so the ghost's join stays queued until it is dropped
+    $hold = Holding();
+    $r->hub()->observe($hold);
+    guard $r->app->kernel->services->get<Broadcaster>()->send('posts.5', 'x', json::object());
     $ghost = TDropped();
     $r->hub()->attach($ghost, Gateway::nobody(), '127.0.0.1');
     Gateway $g = $r->app->kernel->services->get<Gateway>();
     $conn = Connection(Gateway::nobody(), $g->limits->rate);
     $g->heard($ghost, $conn, nexus::SocketMessage::text('{"op":"subscribe","channel":"rooms.tea"}'));
     $r->hub()->drop($ghost->id());
+    $hold->held->store(false);
     $r->hub()->settle();
     array<Present> $left = guard $r->app->kernel->services->get<Roster>()->members('rooms.tea');
     expect($left)->size(1);
@@ -174,6 +179,22 @@ internal class Watcher : HubObserver
     public function delivered(const Envelope& $e, usize $reached) : void
     {
         $this->reached->add($reached as int32);
+    }
+}
+
+/**
+ * Holds the hub thread in its first broadcast until `held` is let go.
+ */
+#[atomic]
+internal class Holding : HubObserver
+{
+    public atomic<bool> $held = atomic<bool>(true);
+
+    public function delivered(const Envelope& $e, usize $reached) : void
+    {
+        while ($this->held->load()) {
+            std::thread::sleep(2);
+        }
     }
 }
 

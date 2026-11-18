@@ -632,6 +632,8 @@ test a_socket_that_stops_reading_is_closed_and_the_others_keep_up
     $r = Rig();
     TestSocket $fast = $r->app->socket('/realtime');
     $r->say($fast, 'subscribe', 'posts.5');
+    $w = Watcher();
+    $r->hub()->observe($w);
     $stalled = TStalled();
     $r->hub()->attach($stalled, nexus::realtime::Gateway::nobody(), "127.0.0.1");
     $r->hub()->seat($stalled->id(), 'posts.5', false);
@@ -644,11 +646,13 @@ test a_socket_that_stops_reading_is_closed_and_the_others_keep_up
     }
     expect(events($fast, 300))->is(300 as usize);
 
-    // its lane filled up: forgotten at once, closed with 1008 once the stuck send gives up
+    // its lane filled up: forgotten at once, closed with 1008 once the stuck send gives up; the
+    // observers hear of it once its spool is shut, which the count of sockets runs ahead of
     time::instant $start = .now();
-    while ($r->hub()->connections() > 1 && $start->elapsed() < time::duration::secs(2)) {
+    while ($w->closed->load() < 1 && $start->elapsed() < time::duration::secs(2)) {
         std::thread::sleep(2);
     }
+    expect($w->closed->load())->is(1);
     expect($r->hub()->connections())->is(1 as usize);
     expect($r->hub()->subscribers('posts.5'))->is(1 as usize);
     expect($stalled->closedWith->load())->is(0);
