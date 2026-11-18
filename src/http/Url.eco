@@ -53,8 +53,9 @@ public struct Url
 
     /**
      * Parses an absolute URL with a scheme and a host, or a path starting with `/`. Refuses spaces
-     * and control characters, a broken scheme, host, port or escape, user info before the host, and
-     * anything else (`mailto:x`, `posts/5`, `//host/x`).
+     * and control characters, a broken scheme, host, port or escape, user info before the host, a
+     * `\` before the query (escape it as `%5C`), and anything else (`mailto:x`, `posts/5`,
+     * `//host/x`, `/\host/x`).
      */
     public static function parse(const string& $raw) : result<Url, UrlError>
     {
@@ -88,6 +89,10 @@ public struct Url
             $end = $question;
         }
         string $head = $raw->sub(0, $end);
+        // Browsers read `\` as `/` here, so `/\evil.com` would leave the origin like `//evil.com`.
+        if ($head->find('\\') < $head->size()) {
+            return .error(.form($raw));
+        }
         if ($head->starts('/')) {
             if ($head->starts('//')) {
                 return .error(.form($raw));

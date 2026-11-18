@@ -34,6 +34,9 @@ test url_parses_hosts_and_relative_paths
     expect($rel->absolute())->no(says: 'a path-only url is relative');
     expect($rel->origin())->is('');
     expect($rel->text())->is('/v1/posts?page=2');
+    Url $escaped = guard Url::parse('/files/a%5Cb?q=c\\d');
+    expect($escaped->path)->is('/files/a%5Cb');
+    expect($escaped->query->get('q'))->some('c\\d');
 }
 
 test url_refuses_what_is_no_url
@@ -42,6 +45,10 @@ test url_refuses_what_is_no_url
     expect(Url::parse('/a b'))->fails();
     expect(Url::parse('posts/5'))->fails();
     expect(Url::parse('//evil.com/x'))->fails();
+    expect(Url::parse('/\\evil.com/x'))->fails();
+    expect(Url::parse('/\\/evil.com'))->fails();
+    expect(Url::parse('\\\\evil.com'))->fails();
+    expect(Url::parse('https://example.com/a\\b'))->fails();
     expect(Url::parse('mailto:x@example.com'))->fails();
     expect(Url::parse('1http://example.com'))->fails();
     expect(Url::parse('https:///x'))->fails();
