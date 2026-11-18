@@ -14,7 +14,7 @@ internal function live() : S3Store?
     if ($url->empty()) {
         return null;
     }
-    S3Config $c = S3Config(
+    $c = S3Config(
         $accessKey: str::from(std::env::var('NEXUS_FILES_S3_ACCESS_KEY', '')),
         $secretKey: str::from(std::env::var('NEXUS_FILES_S3_SECRET_KEY', '')),
         $region: str::from(std::env::var('NEXUS_FILES_S3_REGION', 'us-east-1')),
@@ -70,7 +70,7 @@ test the_store_keeps_reads_ranges_lists_and_streams_on_a_real_server
     expect($got->body)->is('hello world');
 
     // and a presigned PUT takes a body of the type it names
-    Presign $ask = Presign(.put, 'd/up.txt', .mins(5));
+    $ask = Presign(.put, 'd/up.txt', .mins(5));
     $ask->type = 'text/plain';
     nexus::Url $up = expect($s->presign($ask))->ok();
     curl::Request $r = curl::Request(.put, $up->text());

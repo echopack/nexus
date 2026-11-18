@@ -142,7 +142,7 @@ internal struct Board
                 $this->nodes->remove($id);
                 $this->unlive($n);
                 $this->spawn($n, $spawned, $names);
-                Upstream $up = Upstream($id, $n->name);
+                $up = Upstream($id, $n->name);
                 foreach ($n->next as const &$d) {
                     $this->release($d, $up);
                 }
@@ -238,7 +238,7 @@ internal struct Board
         $this->forget($id);
         $this->nodes->remove($id);
         $this->unlive($n);
-        Upstream $up = Upstream($id, $n->name, $failed: true, $error: $why);
+        $up = Upstream($id, $n->name, $failed: true, $error: $why);
         foreach ($n->next as const &$d) {
             $this->release($d, $up);
         }
@@ -304,7 +304,7 @@ internal struct Board
             }
         }
         foreach ($spawned->items as $i => const &$item) {
-            Node $c = Node::of($spawned->ids[$i], $names[$i], $item);
+            Node $c = .of($spawned->ids[$i], $names[$i], $item);
             $c->expiresAt = $parent->expiresAt;
             $c->pending = $spawned->after[$i]->count();
             $c->next = $parent->next;

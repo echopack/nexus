@@ -187,7 +187,7 @@ public class Disk<V>
         }
         if ($this->store->signs()) {
             // the type the key says, as a directory disk serves it, never one stored with the bytes
-            Presign $ask = Presign(.get, $key, $expires);
+            $ask = Presign(.get, $key, $expires);
             $ask->type = Keys::type($key);
             $ask->disposition = nexus::Download::disposition($ask->type, name: $saved, inline: $inline);
             return $this->store->presign($ask);
@@ -214,7 +214,7 @@ public class Disk<V>
             $headers['Content-Type'] = $type;
         }
         if ($this->store->signs()) {
-            Presign $ask = Presign(.put, $key, $expires);
+            $ask = Presign(.put, $key, $expires);
             $ask->type = $type;
             nexus::Url $u = try $this->store->presign($ask);
             return .ok(Signed($u, 'PUT', $headers, $until));

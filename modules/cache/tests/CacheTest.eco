@@ -56,7 +56,7 @@ test the_callback_runs_on_a_miss_only
 {
     $c = calendar::ManualClock(time::timestamp::from_unix_secs(1700000000));
     $cache = cacheOn(MemoryStore(clock: $c));
-    Calls $calls = Calls();
+    $calls = Calls();
     $make = function[$calls]() : string {
         $calls->n++;
         return 'made';

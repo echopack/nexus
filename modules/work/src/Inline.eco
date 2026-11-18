@@ -59,7 +59,7 @@ public struct Inline
 
     internal static function one(nexus::Payload& $payload, const Item& $item, const Run& $run) : status<Failure>
     {
-        Flow $flow = Flow();
+        $flow = Flow();
         Run $copy = $run;
         $payload->put<Run>(mv $copy);
         $payload->put<Flow>($flow);

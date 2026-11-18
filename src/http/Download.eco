@@ -96,7 +96,7 @@ public struct Download
      */
     private const function head(const Request& $request, const RangeAsk& $ask) : Response
     {
-        Response $res = Response(200);
+        $res = Response(200);
         $this->validators($res);
         if ($this->fresh($request)) {
             $res->status = 304;

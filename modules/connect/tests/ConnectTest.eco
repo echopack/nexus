@@ -348,8 +348,8 @@ test a_provider_without_endpoints_is_discovered_once
 
 test an_attempt_is_settled_by_the_first_callback_only
 {
-    MemoryAttempts $m = MemoryAttempts();
-    Attempt $a = Attempt($id: 'a1', $provider: 'acme', $stateHash: 's1', $bindingHash: 'b1', $nonce: 'n1', $verifier: 'v1',
+    $m = MemoryAttempts();
+    $a = Attempt($id: 'a1', $provider: 'acme', $stateHash: 's1', $bindingHash: 'b1', $nonce: 'n1', $verifier: 'v1',
         $expiresAt: time::timestamp::now() + time::duration::mins(10));
     guard $m->start($a);
     Attempt $won = $a;
@@ -604,7 +604,7 @@ test an_app_that_does_not_say_its_emails_are_verified_is_never_linked_by_email
     $r = rig();
     nexus::Payload $payload = $r->app->kernel->background('accounts', 'test');
     Accounts $accounts = $payload->get<Accounts>();
-    PlainUsers $users = PlainUsers();
+    $users = PlainUsers();
     nexus::Problem $p = expect($accounts->of(person('p1', 'editor@example.com', true), $users))->fails();
     expect($p->status())->is(409 as int32);
     Link? $none = guard $payload->get<LinkStore>()->find('acme', 'p1');

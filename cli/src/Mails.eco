@@ -80,7 +80,7 @@ public function read(Program& $p, const json::Value& $d) : void
         $p->fail($d, "{$q} is a mailable without templates; {$usage}");
         return;
     };
-    MailDecl $m = MailDecl($q);
+    $m = MailDecl($q);
     foreach (decl::record(decl::value($tool)) as const &$e) {
         if ($e->key == 'subject') {
             $p->fail($d, "#[nexus::mail] takes no subject; write subject() on {$q}, where it can be translated or computed");
@@ -165,7 +165,7 @@ internal function compile(const Program& $p, const json::Value& $d, const string
     foreach ($pieces as const &$piece) {
         string $at = "{$piece->line}:{$piece->column}";
         if ($piece->kind == PieceKind::text) {
-            MailOp $t = MailOp(.text);
+            $t = MailOp(.text);
             $t->text = $piece->text;
             $ops[] = mv $t;
             continue;
@@ -180,7 +180,7 @@ internal function compile(const Program& $p, const json::Value& $d, const string
                 string $shown = types::render($v->type);
                 return .error("{$at}: {$piece->text} has type {$shown}; a hole writes strings and numbers (use if for a bool, each for an array)");
             }
-            MailOp $h = MailOp(.hole);
+            $h = MailOp(.hole);
             $h->text = $v->expr;
             $h->type = types::render($bare);
             $h->nullable = types::optional($v->type);
@@ -196,7 +196,7 @@ internal function compile(const Program& $p, const json::Value& $d, const string
                 string $shown = types::render($v->type);
                 return .error("{$at}: {$piece->text} has type {$shown}; if tests a bool, a nullable, a string or an array");
             };
-            MailOp $w = MailOp(.when);
+            $w = MailOp(.when);
             $w->text = $test;
             $ops[] = mv $w;
             $open[] = Open(.when, false, $piece->line, $piece->column, $scope->count());
@@ -232,7 +232,7 @@ internal function compile(const Program& $p, const json::Value& $d, const string
             return .error("{$at}: {$piece->text} has type {$shown}; each walks an array");
         }
         $locals++;
-        MailOp $loop = MailOp(.each);
+        $loop = MailOp(.each);
         $loop->text = $list->expr;
         // a loop local always has `_` before its number and a hole local (`$hole1`) never does, so
         // no name a template gives its loop can meet one

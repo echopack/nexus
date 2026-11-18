@@ -29,6 +29,27 @@ public enum Note
     }
 
     /**
+     * A copy with JSON of its own, like `Envelope::clone`.
+     */
+    public const function clone() : Note
+    {
+        match ($this) {
+            Note::broadcast($e) => {
+                return Note::broadcast($e->clone());
+            },
+            Note::whisper($w) => {
+                return Note::whisper($w->clone());
+            },
+            Note::presence($p) => {
+                return Note::presence(PresenceNote($p->channel, $p->member->clone(), $p->joined));
+            },
+            else => {
+                return $this;
+            },
+        }
+    }
+
+    /**
      * The note as one line of JSON.
      */
     public const function encode(const string& $from = '') : string

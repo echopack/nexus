@@ -36,7 +36,7 @@ public class Extension : nexus::Extension
     public function services(nexus::Services& $s) : status<nexus::BootError>
     {
         WorkConfig $config = $s->get<WorkConfig>();
-        Codecs $codecs = Codecs();
+        $codecs = Codecs();
         foreach (attr::of<TaskTable>("nexus::tasks") as const &$t) {
             function<void(Codecs)> $add = $t->call;
             $add($codecs);

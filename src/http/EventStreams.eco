@@ -176,7 +176,7 @@ internal class StreamSet
                 }
             },
             StreamJob::publish($e) => {
-                SharedEvent $one = SharedEvent($e);
+                $one = SharedEvent($e);
                 foreach ($this->snapshot() as $s) {
                     $this->offer($s, function[$s, $one]() : bool {
                         return $s->send($one->e);

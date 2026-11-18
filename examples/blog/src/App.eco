@@ -64,7 +64,7 @@ public class App : nexus::Extension
 
         // the admin's live numbers, a one-way stream of server-sent events; a sign in that ends
         // closes the streams opened with it
-        StatsFeed $feed = StatsFeed();
+        $feed = StatsFeed();
         $app->instance($feed);
         $app->get<nexus::auth::Endings>()->listen(function[$feed](nexus::auth::Ending $e) : void {
             $feed->ended($e);

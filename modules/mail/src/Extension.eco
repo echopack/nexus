@@ -37,7 +37,7 @@ public class Extension : nexus::Extension
         };
         Address? $from = null;
         if (!$config->from->empty()) {
-            Address $a = Address($config->from);
+            $a = Address($config->from);
             if (!$config->fromName->empty()) {
                 $a->name = $config->fromName;
             }
@@ -76,7 +76,7 @@ public class Extension : nexus::Extension
             return LogTransport($log);
         }
         if ($at->scheme == Scheme::memory) {
-            Outbox $box = Outbox();
+            $box = Outbox();
             $s->bind<Outbox>(put: $box);
             return $box;
         }

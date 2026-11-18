@@ -130,7 +130,7 @@ test live_a_broadcast_on_one_server_reaches_a_socket_on_another
 
     // a process that only publishes, as `work` or a command does, reaches the same sockets
     array<nexus::Extension> $quiet = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), nexus::realtime::redis::Extension(), LChannels()];
-    TestApp $worker = TestApp($quiet, ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => $url, 'NEXUS_REALTIME_PREFIX' => $prefix]);
+    $worker = TestApp($quiet, ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => $url, 'NEXUS_REALTIME_PREFIX' => $prefix]);
     guard $worker->kernel->services->get<nexus::realtime::Broadcaster>()->send('rooms.tea', 'said', $doc);
     expect(events($ws, 2))->yes(says: 'a publishing process reaches the server');
 
@@ -219,7 +219,7 @@ test live_the_members_of_a_server_that_stopped_beating_are_taken_out
     string $run = nexus::Kernel::id();
     string $prefix = "test:{$run}:";
     array<nexus::Extension> $exts = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), nexus::realtime::redis::Extension(), LChannels()];
-    TestApp $app = TestApp($exts, ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => $url, 'NEXUS_REALTIME_PREFIX' => $prefix, 'NEXUS_REALTIME_BEAT' => '100ms']);
+    $app = TestApp($exts, ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => $url, 'NEXUS_REALTIME_PREFIX' => $prefix, 'NEXUS_REALTIME_BEAT' => '100ms']);
     nexus::realtime::Roster $roster = $app->kernel->services->get<nexus::realtime::Roster>();
     guard $roster->join('rooms.tea', nexus::realtime::Present('deadbeef.1', json::object()));
     guard $roster->join('rooms.tea', nexus::realtime::Present('0badf00d.2', json::object()));

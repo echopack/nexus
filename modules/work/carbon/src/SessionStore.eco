@@ -363,7 +363,7 @@ internal class SessionStore : nexus::work::Store
         QueuedTaskRepository $tasks = try $this->session->repo<QueuedTaskRepository>();
         TaskEdgeRepository $edges = try $this->session->repo<TaskEdgeRepository>();
         foreach ($batch->tasks as const &$t) {
-            QueuedTask $row = QueuedTask::of($t);
+            QueuedTask $row = .of($t);
             if (!$parent->empty()) {
                 $row->parent = $parent;
             }

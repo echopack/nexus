@@ -434,7 +434,7 @@ internal class Heard
 test endings_hear_every_credential_that_ends
 {
     Rig $r = rig();
-    Heard $heard = Heard();
+    $heard = Heard();
     $r->get('/')->get<nexus::auth::Endings>()->listen(function[$heard](nexus::auth::Ending $e) : void {
         $heard->add($e);
     });
@@ -446,7 +446,7 @@ test endings_hear_every_credential_that_ends
     guard $p->get<Tokens>()->revokeAll('7');
     guard $p->get<Sessions>()->closeAll('7');
     expect($heard->all())->is(['bearer credential', 'signed credential', 'bearer subject 7', 'signed subject 7']);
-    Identity $signed = Identity($via: 'signed', $subject: '7', $credential: 'abc');
+    $signed = Identity($via: 'signed', $subject: '7', $credential: 'abc');
     expect(nexus::auth::Ending::credential('signed', 'abc')->covers($signed))->yes(says: 'the same credential');
     expect(nexus::auth::Ending::credential('bearer', 'abc')->covers($signed))->no(says: 'another guard');
     expect(nexus::auth::Ending::subject('signed', '7')->covers($signed))->yes(says: 'the same subject');
@@ -800,7 +800,7 @@ test the_built_in_guards_are_chosen
 {
     map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY];
     array<nexus::Extension> $exts = [nexus::auth::Extension('test', cost: crypto::PasswordCost(8, 1), guards: [nexus::auth::BuiltinGuard::bearer])];
-    TestApp $app = TestApp($exts, $vars);
+    $app = TestApp($exts, $vars);
     expect($app->kernel->services->get<Guards>()->guards->count())->is(1 as usize);
     expect($app->kernel->services->get<Guards>()->guards[0]->name())->is('bearer');
 }

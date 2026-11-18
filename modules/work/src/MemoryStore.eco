@@ -276,7 +276,7 @@ public class MemoryStore : Store
             $frontier = mv $next;
             $hops = $hops + 1;
         }
-        Graph $g = Graph();
+        $g = Graph();
         foreach ($held->value->tasks as const &$t) {
             if ($seen->has($t->id)) {
                 $g->tasks[] = $t;

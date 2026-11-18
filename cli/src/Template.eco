@@ -110,7 +110,7 @@ internal function tag(const string& $inner) : result<Piece, string>
         if ($words->count() != 4 || $words[2] != 'as' || !path($words[1]) || !names::identifier($words[3], underscore: true)) {
             return .error('{{ each }} reads {{ each posts as post }}');
         }
-        Piece $p = Piece(.each, $words[1]);
+        $p = Piece(.each, $words[1]);
         $p->name = $words[3];
         return .ok($p);
     }

@@ -61,7 +61,7 @@ public class Extension : nexus::Extension
             $s->alias<Roster, LocalRoster>();
             $s->bind<Broadcaster>(put: Broadcaster($relay));
         }
-        Limits $limits = Limits($config->maxChannels as usize, $config->maxSockets as usize, $config->rate, $config->maxWhisper as usize);
+        $limits = Limits($config->maxChannels as usize, $config->maxSockets as usize, $config->rate, $config->maxWhisper as usize);
         $gateway = Gateway($hub, $channels, $limits);
         $s->bind<Gateway>(put: $gateway);
         $s->bind<Sweeper>(put: Sweeper($hub, $config->recheck, $config->beat));

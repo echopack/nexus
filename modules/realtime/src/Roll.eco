@@ -8,4 +8,16 @@ public struct Roll
 {
     public Present $me;
     public array<Present> $members;
+
+    /**
+     * A copy with JSON of its own, like `Present::clone`.
+     */
+    public const function clone() : Roll
+    {
+        array<Present> $members = [];
+        foreach ($this->members as const &$p) {
+            $members[] = $p->clone();
+        }
+        return Roll($this->me->clone(), mv $members);
+    }
 }

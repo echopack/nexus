@@ -296,12 +296,19 @@ public class Spools
             match ($turn) {
                 Turn::sends($spool, $sends) => {
                     bool $ok = true;
+                    usize $done = 0;
                     foreach ($sends as const &$send) {
                         if (!$send()) {
                             $ok = false;
                             break;
                         }
+                        $done = $done + 1;
+                        // a spool shut meanwhile gets its close next, not the rest of the turn
+                        if ($done < $sends->count() && $q->closing($spool)) {
+                            break;
+                        }
                     }
+                    // the sends left out count as dropped, like the ones a shut drops
                     $q->sent($spool, $sends->count() as uint64, $ok);
                 },
                 Turn::last($run) => {
@@ -485,6 +492,15 @@ internal class SpoolQueue
         $held->value->wake($id);
         $this->through->notify_all();
         return $this->hire($held);
+    }
+
+    /**
+     * Whether spool `$id` was shut: its close waits for it.
+     */
+    public function closing(int64 $id) : bool
+    {
+        thread::locked<SpoolsState> $held = $this->state->lock();
+        return $held->value->spools->has($id) && $held->value->spools->at($id)->last != null;
     }
 
     public function forget(int64 $id) : void

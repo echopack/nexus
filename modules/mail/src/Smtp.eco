@@ -58,7 +58,7 @@ public class Smtp : Transport
         guard $this->prepare($h, $d) else ($e) {
             return .error(.other("libcurl refused an option: {$e}"));
         };
-        Once $body = Once($d->mime);
+        $body = Once($d->mime);
         $h->source(.chunks(() => $body->next(), $d->mime->size() as int64));
         guard $h->perform() else ($e) {
             return .error(Smtp::failure($e, $h->infoLong(.responseCode)));

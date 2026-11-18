@@ -239,7 +239,7 @@ public struct Console
     {
         array<string> $out = [];
         string $host = $listen;
-        Serve $s = Serve();
+        $s = Serve();
         if (!$s->listen($listen)->failed()) {
             $host = $s->host;
         }

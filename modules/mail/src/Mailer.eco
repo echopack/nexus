@@ -41,7 +41,7 @@ public class Mailer
      */
     public function compose<M : Mailable>(const M& $mail) : Message
     {
-        Message $m = Message();
+        $m = Message();
         Rendered $r = nexus::mail::render($mail);
         $m->text = $r->text;
         $m->html = $r->html;
@@ -73,7 +73,7 @@ public class Mailer
         string $id = "<{$unique}@{$from->domain()}>";
         string $date = calendar::Format::rfc2822()->render(calendar::Zoned($this->clock->now(), calendar::Zone::utc()));
         string $mime = Mime::write($m, $from, $id, $date, $files, $mark);
-        Delivery $d = Delivery($from, $m->envelope->recipients(), $id, mv $mime, $m);
+        $d = Delivery($from, $m->envelope->recipients(), $id, mv $mime, $m);
         array<string> $emails = $d->emails();
         string $to = str::join($emails, ', ');
         nexus::trace::Timed $timed = nexus::trace::Timed($this->traces->here(), .mail, 'mail send', $to);

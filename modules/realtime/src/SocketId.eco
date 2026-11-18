@@ -24,7 +24,7 @@ public struct SocketId
      */
     public static function of(nexus::Payload& $payload) : SocketId
     {
-        SocketId $skip = SocketId();
+        $skip = SocketId();
         nexus::auth::Guards? $guards = $payload->find<nexus::auth::Guards>();
         if ($guards == null) {
             return $skip;

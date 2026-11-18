@@ -192,7 +192,7 @@ test dependencies_finishing_at_once_on_two_servers_all_count
     string $lane = "live-{$stamp}";
 
     // three images, then one task that waits for all of them
-    Batch $b = Batch();
+    $b = Batch();
     array<string> $images = ["{$lane}-1", "{$lane}-2", "{$lane}-3"];
     string $sum = "{$lane}-sum";
     StoredTask $last = liveTask($sum, $lane, $now);
@@ -209,7 +209,7 @@ test dependencies_finishing_at_once_on_two_servers_all_count
     // two servers settle an image each at once: this one holds the waiting task's row in an open
     // transaction while the other settles in its own, reads, and then waits for that row
     $db->seal();
-    LiveServer $other = LiveServer();
+    $other = LiveServer();
     StoredTask $x = $claimed[0];
     StoredTask $y = $claimed[1];
     carbon::Session $mine = $db->scoped();
@@ -244,7 +244,7 @@ test an_expired_task_whose_server_stopped_fails_and_lets_go_of_its_keys
     };
     string $lane = liveLane();
     time::timestamp $now = $db->now();
-    Batch $b = Batch();
+    $b = Batch();
     StoredTask $lost = liveTask("{$lane}-lost", $lane, $now);
     $lost->expiresAt = $now + time::duration::secs(5);
     $lost->hold = .unique;
@@ -298,7 +298,7 @@ test spawned_tasks_holding_a_live_unique_key_are_skipped_and_the_parent_is_done
     $waits->hold = .unique;
     $waits->holdKey = "{$lane}-k";
     expect(livePush($db, Batch([$waits])))->yes(says: 'the task holding the key is stored');
-    Batch $b = Batch();
+    $b = Batch();
     StoredTask $parent = liveTask("{$lane}-parent", $lane, $now);
     $parent->hold = .unique;
     $parent->holdKey = "{$lane}-p";
@@ -311,7 +311,7 @@ test spawned_tasks_holding_a_live_unique_key_are_skipped_and_the_parent_is_done
     array<StoredTask> $p = liveClaim($db, $lane, $now, 10);
     expect($p)->size(1);
 
-    Batch $kids = Batch();
+    $kids = Batch();
     StoredTask $clash = liveTask("{$lane}-clash", $lane, $now);
     $clash->hold = .unique;
     $clash->holdKey = $waits->holdKey;
@@ -356,7 +356,7 @@ test a_claim_reaches_past_the_tasks_behind_a_busy_running_key
     array<StoredTask> $first = liveClaim($db, $lane, $now, 1);
     expect($first)->size(1);
     // more tasks behind the busy key than a claim of one reads, all older than the free one
-    Batch $b = Batch();
+    $b = Batch();
     int32 $i = 0;
     while ($i < 12) {
         StoredTask $t = liveTask("{$lane}-r{$i}", $lane, $now - time::duration::mins(5));
@@ -380,7 +380,7 @@ test a_sweep_deletes_more_finished_tasks_than_one_batch
     };
     string $lane = liveLane();
     time::timestamp $now = $db->now();
-    Batch $b = Batch();
+    $b = Batch();
     int32 $i = 0;
     while ($i < 2100) {
         $b->tasks[] = liveTask("{$lane}-{$i}", $lane, $now);

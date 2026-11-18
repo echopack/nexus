@@ -64,11 +64,11 @@ test timed_closes_when_it_goes_out_of_scope_and_does_nothing_without_a_trace
 {
     $t = Trace();
     {
-        Timed $m = Timed($t, .mail, 'mail', 'ada@example.com');
+        $m = Timed($t, .mail, 'mail', 'ada@example.com');
         $m->fail();
     }
     {
-        Timed $none = Timed(null, .mail, 'mail', '');
+        $none = Timed(null, .mail, 'mail', '');
     }
     array<Mark> $marks = $t->marks();
     expect($marks)->size(1);
@@ -168,7 +168,7 @@ test a_traced_loggers_span_is_marked_even_when_the_level_drops_its_close
     $mem = nexus::log::Memory();
     array<nexus::log::Sink> $sinks = [$mem];
     $t = Trace();
-    Logger $log = Logger(mv $sinks, .info)->traced($t);
+    $log = Logger(mv $sinks, .info)->traced($t);
     {
         nexus::log::Span $s = $log->with(['req' => 'r1'])->span('import', ['file' => 'a.csv'], $close: .debug);
     }

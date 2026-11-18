@@ -273,7 +273,7 @@ test an_envelope_travels_as_one_line
 {
     json::Value $doc = json::object();
     $doc['text'] = json::str('hi');
-    Envelope $e = Envelope(fresh: 'posts.5', 'comment.posted', $doc);
+    $e = Envelope(fresh: 'posts.5', 'comment.posted', $doc);
     Note $note = expect(Note::decode(Note::broadcast($e)->encode()))->some();
     match ($note) {
         Note::broadcast($back) => {
@@ -609,7 +609,7 @@ test a_slow_socket_does_not_hold_up_a_broadcast
     $r = Rig();
     TestSocket $fast = $r->app->socket('/realtime');
     $r->say($fast, 'subscribe', 'posts.5');
-    TSlow $slow = TSlow();
+    $slow = TSlow();
     $r->hub()->attach($slow, nexus::realtime::Gateway::nobody(), "127.0.0.1");
     $r->hub()->seat($slow->id(), 'posts.5', false);
     $r->hub()->join($slow, 'posts.5', null);
@@ -632,7 +632,7 @@ test a_socket_that_stops_reading_is_closed_and_the_others_keep_up
     $r = Rig();
     TestSocket $fast = $r->app->socket('/realtime');
     $r->say($fast, 'subscribe', 'posts.5');
-    TStalled $stalled = TStalled();
+    $stalled = TStalled();
     $r->hub()->attach($stalled, nexus::realtime::Gateway::nobody(), "127.0.0.1");
     $r->hub()->seat($stalled->id(), 'posts.5', false);
     $r->hub()->join($stalled, 'posts.5', null);

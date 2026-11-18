@@ -40,6 +40,17 @@ public struct Envelope
         $this->data = $data;
     }
 
+    /**
+     * A copy with JSON of its own: JSON is counted without atomics, so a value that crosses to
+     * another thread must not share it.
+     */
+    public const function clone() : Envelope
+    {
+        Envelope $e = $this;
+        $e->data = $this->data->clone();
+        return $e;
+    }
+
     public const function json() : json::Value
     {
         json::Value $doc = json::object();
@@ -73,7 +84,7 @@ public struct Envelope
             return null;
         };
         json::Value $data = $doc->get('data') ?? json::nil();
-        Envelope $e = Envelope($id, $channel, $event, $data);
+        $e = Envelope($id, $channel, $event, $data);
         $e->except = $doc->get('except')?->asStr() ?? '';
         $e->exceptVia = $doc->get('except_via')?->asStr() ?? '';
         $e->exceptCredential = $doc->get('except_cred')?->asStr() ?? '';

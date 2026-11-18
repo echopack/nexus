@@ -31,7 +31,7 @@ public struct Queues
             return Pool('', 0, Codecs(), calendar::SystemClock());
         };
         string $lane = Queues::lane<L>($s, $name);
-        Pool $p = Pool($lane, $threads, $w->codecs, $w->clock);
+        $p = Pool($lane, $threads, $w->codecs, $w->clock);
         if ($lane->empty()) {
             return $p;
         }
@@ -54,7 +54,7 @@ public struct Queues
     public static function bindDistributed<L>(nexus::Services& $s, Store $store, name: const string& $name = '') : Distributed
     {
         string $lane = Queues::lane<L>($s, $name);
-        Distributed $d = Distributed($lane, $store);
+        $d = Distributed($lane, $store);
         Work $w = guard Queues::work($s) else {
             return $d;
         };

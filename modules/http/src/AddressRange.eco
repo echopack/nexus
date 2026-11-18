@@ -219,17 +219,10 @@ public struct AddressRange
             if ($g->empty() || $g->size() > 4) {
                 return null;
             }
-            uint32 $v = 0;
-            usize $i = 0;
-            while ($i < $g->size()) {
-                int32 $n = AddressRange::nibble($g->byte($i));
-                if ($n < 0) {
-                    return null;
-                }
-                $v = ($v << 4) | ($n as uint32);
-                $i = $i + 1;
-            }
-            $out[] = $v;
+            uint64 $v = guard str::uint("0x{$g}") else {
+                return null;
+            };
+            $out[] = $v as uint32;
         }
         return mv $out;
     }
@@ -251,11 +244,4 @@ public struct AddressRange
         return str::uint($text);
     }
 
-    internal static function nibble(uint8 $c) : int32
-    {
-        if ($c >= 48 && $c <= 57) { return ($c as int32) - 48; }
-        if ($c >= 65 && $c <= 70) { return ($c as int32) - 55; }
-        if ($c >= 97 && $c <= 102) { return ($c as int32) - 87; }
-        return -1;
-    }
 }

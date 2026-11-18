@@ -8,13 +8,12 @@ public enum Problem
 {
     case badRequest(string $detail);
 
-    // no default for `$reason`: echoc 0.14.2 drops the value passed to a defaulted case argument
-
     /**
      * No credential, or one that does not hold. `$reason` is a stable snake_case code a client can
-     * act on (`session_required`, `token_invalid`), sent as the `reason` member beside the detail.
+     * act on (`session_required`, `token_invalid`), sent as the `reason` member beside the detail;
+     * left empty, the member is left out.
      */
-    case unauthorized(string $detail, string $reason);
+    case unauthorized(string $detail, string $reason = '');
     case forbidden(string $why);
     case notFound(string $what);
     case methodNotAllowed(array<Method> $allow);

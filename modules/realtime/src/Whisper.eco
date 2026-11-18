@@ -13,6 +13,17 @@ public struct Whisper
     public json::Value $data;
     public string $from;
 
+    /**
+     * A copy with JSON of its own: JSON is counted without atomics, so a value that crosses to
+     * another thread must not share it.
+     */
+    public const function clone() : Whisper
+    {
+        Whisper $w = $this;
+        $w->data = $this->data->clone();
+        return $w;
+    }
+
     public const function json() : json::Value
     {
         json::Value $doc = json::object();

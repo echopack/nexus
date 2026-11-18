@@ -119,7 +119,8 @@ public class Hub
      */
     public function join(nexus::Socket $s, const string& $channel, string? $after, Roll? $roll = null, bool $fresh = false) : void
     {
-        $this->mail->put(HubJob::join($s->id(), $channel, $after, $roll, $fresh));
+        // JSON is counted without atomics: the hub thread gets a copy the caller does not hold
+        $this->mail->put(HubJob::join($s->id(), $channel, $after, $roll?->clone(), $fresh));
     }
 
     /**
@@ -157,7 +158,8 @@ public class Hub
             },
             else => {},
         }
-        $this->mail->put(HubJob::hear($n));
+        // JSON is counted without atomics: the hub thread gets a copy the caller does not hold
+        $this->mail->put(HubJob::hear($n->clone()));
     }
 
     /**

@@ -66,7 +66,7 @@ public class Gateway : HubObserver
      */
     public function hooks(const nexus::auth::Identity& $who, const string& $peer) : nexus::SocketHooks
     {
-        Connection $conn = Connection($who, $this->limits->rate);
+        $conn = Connection($who, $this->limits->rate);
         Gateway $self = $this;
         // a copy: the closure outlives the borrowed parameter
         string $from = $peer;
@@ -185,7 +185,7 @@ public class Gateway : HubObserver
             $this->hub->join($s, $channel, $after);
             return;
         }
-        Present $me = Present($this->hub->idOf($s->id()), $info ?? json::nil());
+        $me = Present($this->hub->idOf($s->id()), $info ?? json::nil());
         Seat $seat = $this->hub->seat($s->id(), $channel, true, $me->info);
         if (!$seat->on) {
             return;
@@ -265,7 +265,7 @@ public class Gateway : HubObserver
             return;
         };
         string $me = $this->hub->idOf($s->id());
-        Whisper $w = Whisper($channel, $event, $doc->get('data') ?? json::nil(), $me);
+        $w = Whisper($channel, $event, $doc->get('data') ?? json::nil(), $me);
         nexus::Payload $payload = $k->background('realtime', "whisper {$channel}");
         $payload->door = .realtime;
         status<nexus::Problem> $allowed = $found->entry->open($payload)->whisper($payload, $conn->who, $found->topic, $w);

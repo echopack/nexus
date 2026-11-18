@@ -20,7 +20,7 @@ test an_unauthorized_problem_carries_its_reason
     Problem $p = .unauthorized('this needs a session', $reason: 'session_required');
     expect($p->reason())->is('session_required');
     expect($p->response(.prod, 'req1')->body)->is('{"type":"about:blank","title":"Unauthorized","status":401,"detail":"this needs a session","reason":"session_required","requestId":"req1"}');
-    Problem $plain = .unauthorized('who are you', $reason: '');
+    Problem $plain = .unauthorized('who are you');
     expect($plain->response(.prod, '')->body)->lacks('reason');
 }
 

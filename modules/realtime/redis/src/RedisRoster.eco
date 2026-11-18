@@ -81,7 +81,7 @@ public class RedisRoster : nexus::realtime::Roster
             return .error(.relay("{$e}"));
         };
         map<string, bool> $alive = try $this->alive($all);
-        Split $out = Split();
+        $out = Split();
         foreach ($all as $id => const &$text) {
             string $node = nexus::realtime::SocketId::node($id);
             if ($alive->at($node)) {

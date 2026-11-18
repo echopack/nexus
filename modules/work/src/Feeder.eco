@@ -228,10 +228,10 @@ internal class Feeder
             return;
         };
         time::timestamp $now = $this->work->clock->now();
-        Settle $s = Settle::of($o->status, $task->attempts, $task->tries, $now);
+        Settle $s = .of($o->status, $task->attempts, $task->tries, $now);
         $s->tell($o->log, $task->attempts, $o->ms, $now);
         $this->told($task, $s, $o->ms);
-        Batch $spawned = Batch();
+        $spawned = Batch();
         if (!$o->spawned->empty()) {
             $spawned = $this->spawned($o, $now);
         }

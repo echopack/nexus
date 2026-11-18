@@ -95,7 +95,7 @@ test an_upload_keeps_a_clean_name_and_knows_its_bytes
 
 test uploads_read_as_fields_and_rules_check_them
 {
-    Query $pairs = Query();
+    $pairs = Query();
     $pairs->add('title', 'Hi');
     array<Upload> $files = [
         Upload('cover', 'me.png', 'image/png', png()),
@@ -183,7 +183,7 @@ test a_file_input_left_empty_is_no_field
 
 test a_file_under_a_text_name_is_refused_as_the_wrong_type
 {
-    Query $pairs = Query();
+    $pairs = Query();
     $pairs->add('tags[x]', 'a');
     array<Upload> $files = [
         Upload('title', 'x', 'text/plain', 'Hi'),
@@ -209,7 +209,7 @@ test a_file_under_a_text_name_is_refused_as_the_wrong_type
 
 test nested_form_inputs_that_hold_only_files_are_read
 {
-    Query $pairs = Query();
+    $pairs = Query();
     $pairs->add('attachments[2][label]', 'third');
     array<Upload> $files = [
         Upload('attachments[1][file]', 'b.png', 'image/png', png()),

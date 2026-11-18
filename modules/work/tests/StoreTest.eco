@@ -16,7 +16,7 @@ internal function task(const string& $id, time::timestamp $at) : StoredTask
 
 internal function one(const StoredTask& $t) : Batch
 {
-    Batch $b = Batch();
+    $b = Batch();
     $b->tasks[] = $t;
     return $b;
 }
@@ -57,7 +57,7 @@ internal function find(MemoryStore $s, const string& $id) : StoredTask
 internal function chain(time::timestamp $now) : Batch
 {
     // a before b and c, d after both
-    Batch $b = Batch();
+    $b = Batch();
     $b->tasks[] = task('a', $now);
     StoredTask $tb = task('b', $now);
     $tb->pending = 1;
@@ -175,7 +175,7 @@ test a_soft_failure_lets_the_tasks_after_it_go
 {
     $s = MemoryStore();
     time::timestamp $now = .from_unix_secs(START);
-    Batch $b = Batch();
+    $b = Batch();
     StoredTask $first = task('first', $now);
     $first->allowFailure = true;
     $b->tasks[] = $first;
@@ -203,7 +203,7 @@ test every_failed_task_of_a_lane_is_sent_back_at_once
     time::timestamp $now = .from_unix_secs(START);
     StoredTask $other = task('other', $now);
     $other->lane = 'mail';
-    Batch $b = Batch();
+    $b = Batch();
     $b->tasks[] = task('a', $now);
     $b->tasks[] = task('b', $now);
     $b->tasks[] = $other;
@@ -224,7 +224,7 @@ test spawned_tasks_run_before_the_tasks_waiting_for_their_parent
 {
     $s = MemoryStore();
     time::timestamp $now = .from_unix_secs(START);
-    Batch $b = Batch();
+    $b = Batch();
     $b->tasks[] = task('parent', $now);
     StoredTask $after = task('after', $now);
     $after->pending = 1;
@@ -232,7 +232,7 @@ test spawned_tasks_run_before_the_tasks_waiting_for_their_parent
     $b->edges[] = Edge('after', 'parent');
     store($s, $b);
     array<StoredTask> $p = claim($s, $now, 10);
-    Batch $kids = Batch();
+    $kids = Batch();
     $kids->tasks[] = task('kid1', $now);
     $kids->tasks[] = task('kid2', $now);
     guard $s->done($p[0], $now, $kids);
@@ -270,7 +270,7 @@ test an_expired_task_whose_server_stopped_fails_and_lets_go
 {
     $s = MemoryStore();
     time::timestamp $now = .from_unix_secs(START);
-    Batch $b = Batch();
+    $b = Batch();
     StoredTask $lost = task('lost', $now);
     $lost->expiresAt = $now + time::duration::secs(5);
     $lost->hold = .unique;
@@ -307,7 +307,7 @@ test spawned_tasks_holding_a_live_unique_key_are_skipped
     $waits->hold = .unique;
     $waits->holdKey = 'TSay#k';
     store($s, one($waits));
-    Batch $b = Batch();
+    $b = Batch();
     StoredTask $parent = task('parent', $now);
     $parent->hold = .unique;
     $parent->holdKey = 'TSay#p';
@@ -320,7 +320,7 @@ test spawned_tasks_holding_a_live_unique_key_are_skipped
     array<StoredTask> $p = claim($s, $now, 10);
     expect(ids($p))->is('parent');
 
-    Batch $kids = Batch();
+    $kids = Batch();
     StoredTask $clash = task('clash', $now);
     $clash->hold = .unique;
     $clash->holdKey = 'TSay#k';
@@ -338,7 +338,7 @@ test spawned_tasks_holding_a_live_unique_key_are_skipped
     $own->holdKey = 'TSay#o';
     store($s, one($own));
     array<StoredTask> $o = claim($s, $now, 10);
-    Batch $heirs = Batch();
+    $heirs = Batch();
     StoredTask $heir = task('heir', $now);
     $heir->hold = .unique;
     $heir->holdKey = 'TSay#o';
@@ -346,7 +346,7 @@ test spawned_tasks_holding_a_live_unique_key_are_skipped
     expect(got($s->done($o[0], $now, $heirs)))->yes(says: 'the task\'s own key is free once it is done');
     array<StoredTask> $h = claim($s, $now, 10);
     expect(ids($h))->is('heir');
-    Batch $twins = Batch();
+    $twins = Batch();
     StoredTask $one = task('twin1', $now);
     $one->hold = .unique;
     $one->holdKey = 'TSay#t';

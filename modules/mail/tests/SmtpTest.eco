@@ -17,7 +17,7 @@ internal function smtpMailer(uint16 $port, Tls $tls = .none) : Mailer
 
 internal function smtpMessage() : Message
 {
-    Message $m = Message();
+    $m = Message();
     $m->to(Address('ann@example.com'))->bcc(Address('audit@example.com'))->subject('Hello')->text("Hi Ann\n.\nbye");
     return $m;
 }

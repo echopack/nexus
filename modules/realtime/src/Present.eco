@@ -9,6 +9,15 @@ public struct Present
     public string $id;
     public json::Value $info;
 
+    /**
+     * A copy with JSON of its own: JSON is counted without atomics, so a value that crosses to
+     * another thread must not share it.
+     */
+    public const function clone() : Present
+    {
+        return Present($this->id, $this->info->clone());
+    }
+
     public const function json() : json::Value
     {
         json::Value $doc = json::object();

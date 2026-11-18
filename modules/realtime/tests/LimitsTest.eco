@@ -112,8 +112,8 @@ test upgrades_that_race_past_the_limit_are_closed_as_they_open
     expect($g->admit($who, '10.0.0.9')->failed())->no(says: 'still nothing open');
     nexus::SocketHooks $first = $g->hooks($who, '10.0.0.9');
     nexus::SocketHooks $second = $g->hooks($who, '10.0.0.9');
-    TestSocket $a = TestSocket(nexus::Response(websocket: $first), 9001);
-    TestSocket $b = TestSocket(nexus::Response(websocket: $second), 9002);
+    $a = TestSocket(nexus::Response(websocket: $first), 9001);
+    $b = TestSocket(nexus::Response(websocket: $second), 9002);
     $first->opened($a);
     $second->opened($b);
     $r->hub()->settle();

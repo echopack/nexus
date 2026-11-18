@@ -42,7 +42,7 @@ public class Extension : nexus::Extension
             return .error(.extension('nexus-files', 'NEXUS_FILES_KEY must be at least 32 characters'));
         }
         calendar::Clock $clock = $this->clock;
-        DiskTable $table = DiskTable(Links($config->key, $route, $config->expires, $s->get<nexus::Router>(), $clock));
+        $table = DiskTable(Links($config->key, $route, $config->expires, $s->get<nexus::Router>(), $clock));
         $table->opener('file', function(string $url) : result<Store, string> {
             string $dir = guard Disks::directory($url) else {
                 return .error("'{$url}' names no directory; write file:storage/covers or file:///srv/covers");

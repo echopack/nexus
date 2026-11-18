@@ -117,6 +117,33 @@ test a_shut_spool_closes_after_the_send_under_way_and_drops_the_rest
     expect($all[1])->is('closed');
 }
 
+test a_spool_shut_during_a_turn_skips_the_rest_of_that_turn
+{
+    $log = SpLog();
+    // one writer, held on spool 2, so both sends of spool 1 go out in one turn
+    $spools = Spools(1);
+    $busy = Flag();
+    $free = Flag();
+    $spools->put(2, spBlocked($log, 'elsewhere', $busy, $free));
+    expect(spWait($busy))->yes(says: 'the only writer is busy');
+    $started = Flag();
+    $gate = Flag();
+    $spools->put(1, spBlocked($log, 'under way', $started, $gate));
+    $spools->put(1, spSend($log, 'taken but dropped'));
+    $free->raise();
+    expect(spWait($started))->yes(says: 'the writer took spool 1 with both sends');
+    $spools->shut(1, function[$log]() : void {
+        $log->add('closed');
+    });
+    $gate->raise();
+    $spools->settle();
+    array<string> $all = $log->all();
+    expect($all)->size(3);
+    expect($all[0])->is('elsewhere');
+    expect($all[1])->is('under way');
+    expect($all[2])->is('closed');
+}
+
 test a_failed_send_is_listed_once_and_forgetting_it_frees_the_id
 {
     $log = SpLog();

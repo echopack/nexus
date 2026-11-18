@@ -39,7 +39,7 @@ namespace nexus::mail;
 // what `nexus gen` writes for a `#[nexus::mail]` struct; these test types are hand-written
 public function render(const Receipt& $m) : Rendered
 {
-    Rendered $r = Rendered();
+    $r = Rendered();
     $r->text = "Hello {$m->name}, you paid {$m->total}.";
     string $name = nexus::mail::Html::escape($m->name);
     $r->html = "<p>Hello {$name}</p>";
@@ -48,7 +48,7 @@ public function render(const Receipt& $m) : Rendered
 
 public function render(const Bare& $m) : Rendered
 {
-    Rendered $r = Rendered();
+    $r = Rendered();
     $r->text = 'x';
     return $r;
 }
@@ -74,7 +74,7 @@ test compose_fills_the_message_from_the_mailable
 
 test send_hands_the_written_mail_to_the_transport
 {
-    Outbox $box = Outbox();
+    $box = Outbox();
     $mailer = outboxMailer($box);
     Message $m = $mailer->compose(Receipt('Ann', 42))->to(Address('ann@example.com', 'Ann'));
     $sent = expect($mailer->send($m))->ok();
@@ -91,7 +91,7 @@ test send_hands_the_written_mail_to_the_transport
 
 test the_envelope_sender_wins_over_the_default
 {
-    Outbox $box = Outbox();
+    $box = Outbox();
     $mailer = outboxMailer($box);
     Message $m = $mailer->compose(Receipt('Ann', 1))->to(Address('ann@example.com'))->from(Address('ceo@example.com'));
     expect($mailer->send($m))->ok();
@@ -100,7 +100,7 @@ test the_envelope_sender_wins_over_the_default
 
 test a_mail_without_sender_subject_or_recipient_is_refused
 {
-    Outbox $box = Outbox();
+    $box = Outbox();
     $noSender = outboxMailer($box, null);
     MailError $e = expect($noSender->send($noSender->compose(Receipt('Ann', 1))->to(Address('ann@example.com'))))->fails();
     expect($e->message())->has('no sender');
@@ -112,7 +112,7 @@ test a_mail_without_sender_subject_or_recipient_is_refused
 
 test a_refusal_comes_back_once
 {
-    Outbox $box = Outbox();
+    $box = Outbox();
     $box->refuse(.connect('down'));
     $mailer = outboxMailer($box);
     Message $m = $mailer->compose(Receipt('Ann', 1))->to(Address('ann@example.com'));
@@ -123,7 +123,7 @@ test a_refusal_comes_back_once
 
 test a_missing_attachment_file_is_invalid
 {
-    Outbox $box = Outbox();
+    $box = Outbox();
     $mailer = outboxMailer($box);
     Message $m = $mailer->compose(Receipt('Ann', 1))->to(Address('ann@example.com'))->attach(Attachment(file: '/nonexistent/report.pdf'));
     expect($m->attachments[1]->type)->is('application/pdf');
@@ -139,7 +139,7 @@ test html_escape_covers_the_five
 
 test a_delivery_is_marked_on_the_watched_requests_timeline
 {
-    Outbox $box = Outbox();
+    $box = Outbox();
     $box->refuse(.connect('down'));
     $traces = nexus::trace::Traces();
     $mailer = Mailer($box, Address('shop@example.com'), nexus::Logger::silent(), traces: $traces);

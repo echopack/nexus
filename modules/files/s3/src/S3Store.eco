@@ -326,7 +326,7 @@ public class S3Store : Store
         curl::Response $res = guard curl::send($r) else ($e) {
             return .error(.remote(0, "{$this->bucket->describe()} {$key}: {$e->message()}"));
         };
-        Answer $a = Answer($res->status, $res->body, $res->headers);
+        $a = Answer($res->status, $res->body, $res->headers);
         if (!$a->ok() && $a->status != $allow) {
             return .error($a->fail($key));
         }

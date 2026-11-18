@@ -61,10 +61,10 @@ test a_presence_join_does_not_land_after_the_socket_is_gone
     $r = Rig();
     TestSocket $ann = $r->bearer($r->token('7'));
     $r->say($ann, 'subscribe', 'rooms.tea');
-    TDropped $ghost = TDropped();
+    $ghost = TDropped();
     $r->hub()->attach($ghost, Gateway::nobody(), '127.0.0.1');
     Gateway $g = $r->app->kernel->services->get<Gateway>();
-    Connection $conn = Connection(Gateway::nobody(), $g->limits->rate);
+    $conn = Connection(Gateway::nobody(), $g->limits->rate);
     $g->heard($ghost, $conn, nexus::SocketMessage::text('{"op":"subscribe","channel":"rooms.tea"}'));
     $r->hub()->drop($ghost->id());
     $r->hub()->settle();
@@ -180,7 +180,7 @@ internal class Watcher : HubObserver
 test the_hub_tells_its_observers_and_lists_what_is_open
 {
     $r = Rig();
-    Watcher $w = Watcher();
+    $w = Watcher();
     $r->hub()->observe($w);
     TestSocket $a = $r->bearer($r->token('7'));
     TestSocket $b = $r->app->socket('/realtime');
@@ -207,7 +207,7 @@ test the_hub_tells_its_observers_and_lists_what_is_open
 
 test notes_travel_as_one_line
 {
-    Envelope $e = Envelope(fresh: 'posts.5', 'x', json::object());
+    $e = Envelope(fresh: 'posts.5', 'x', json::object());
     $e->except = 'abcd0123.1';
     Note $back = expect(Note::decode(Note::broadcast($e)->encode()))->some();
     match ($back) {
@@ -219,7 +219,7 @@ test notes_travel_as_one_line
             assert(false, 'a broadcast');
         },
     }
-    Whisper $w = Whisper('rooms.tea', 'typing', json::object(), 'abcd0123.1');
+    $w = Whisper('rooms.tea', 'typing', json::object(), 'abcd0123.1');
     expect(Note::decode(Note::whisper($w)->encode()))->some();
     expect(Note::decode(Note::ended(nexus::auth::Ending::credential('signed', 'abc'))->encode()))->some();
     expect(Note::decode(Note::ended(nexus::auth::Ending::subject('signed', '7'))->encode()))->some();
@@ -286,7 +286,7 @@ internal class TFlaky : nexus::Extension
     public function services(nexus::Services& $s) : status<nexus::BootError>
     {
         // in place of nexus-realtime-redis: the URL names Redis, so nothing else binds these
-        LocalRelay $relay = LocalRelay($s->get<Hub>());
+        $relay = LocalRelay($s->get<Hub>());
         $s->bind<LocalRelay>(put: $relay);
         $s->alias<Relay, LocalRelay>();
         $s->bind<TFlakyRoster>(put: $this->roster);
@@ -298,7 +298,7 @@ internal class TFlaky : nexus::Extension
 
 test a_refused_presence_subscribe_leaves_no_member_behind
 {
-    TFlakyRoster $roster = TFlakyRoster();
+    $roster = TFlakyRoster();
     array<nexus::Extension> $exts = [nexus::auth::Extension('rt'), nexus::realtime::Extension(), TChannels(), TFlaky($roster)];
     map<string, string> $vars = ['NEXUS_AUTH_KEY' => KEY, 'NEXUS_REALTIME_URL' => 'redis://127.0.0.1:1/0'];
     $app = TestApp($exts, $vars);
@@ -368,11 +368,11 @@ internal class TDropped : nexus::Socket
 test the_hub_tells_closed_once_however_a_socket_goes
 {
     $r = Rig();
-    Watcher $w = Watcher();
+    $w = Watcher();
     $r->hub()->observe($w);
 
     // a broadcast's send fails: dropped there, and its transport's close later finds nothing
-    TDropped $dropped = TDropped();
+    $dropped = TDropped();
     $r->hub()->attach($dropped, Gateway::nobody(), '127.0.0.1');
     $r->hub()->seat($dropped->id(), 'posts.5', false);
     $r->hub()->join($dropped, 'posts.5', null);
@@ -467,7 +467,7 @@ test the_beat_lists_again_a_member_the_roster_lost
 
 test the_beat_takes_out_a_member_whose_leave_failed
 {
-    TFlakyRoster $roster = TFlakyRoster();
+    $roster = TFlakyRoster();
     $app = flakyApp($roster);
     Hub $hub = $app->kernel->services->get<Hub>();
     TestSocket $ann = $app->socket('/realtime');

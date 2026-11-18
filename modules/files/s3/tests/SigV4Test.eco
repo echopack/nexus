@@ -98,7 +98,7 @@ test xml_decodes_numeric_character_references
 
 test a_disk_url_names_its_bucket_and_prefix
 {
-    S3Config $c = S3Config($accessKey: 'AK', $secretKey: 'SK', $region: 'eu-central-1');
+    $c = S3Config($accessKey: 'AK', $secretKey: 'SK', $region: 'eu-central-1');
     Bucket $aws = expect(Bucket::of('s3://media/blog/covers/', $c))->ok();
     expect($aws->describe())->is('s3://media/blog/covers');
     expect($aws->hostFor())->is('media.s3.eu-central-1.amazonaws.com');
@@ -107,7 +107,7 @@ test a_disk_url_names_its_bucket_and_prefix
     expect($aws->key('blog/covers/x.png'))->some('x.png');
     expect($aws->key('blog/other/x.png'))->none();
 
-    S3Config $minio = S3Config($accessKey: 'AK', $secretKey: 'SK', $endpoint: 'http://127.0.0.1:9000/', $pathStyle: true);
+    $minio = S3Config($accessKey: 'AK', $secretKey: 'SK', $endpoint: 'http://127.0.0.1:9000/', $pathStyle: true);
     Bucket $m = expect(Bucket::of('s3://media', $minio))->ok();
     expect($m->hostFor())->is('127.0.0.1:9000');
     expect($m->path('x.png'))->is('/media/x.png');

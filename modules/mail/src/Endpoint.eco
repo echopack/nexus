@@ -42,7 +42,7 @@ public struct Endpoint
             return .error('expected smtp://host, smtps://host, log: or memory:');
         }
         string $scheme = str::lower($u->sub(0, $sep));
-        Endpoint $e = Endpoint(.smtp);
+        $e = Endpoint(.smtp);
         $e->port = 587;
         if ($scheme == 'smtps') {
             $e->scheme = Scheme::smtps;

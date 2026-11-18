@@ -28,7 +28,7 @@ public struct Batch
      */
     public static function of(const Pipeline& $p, const array<string>& $names, Codecs $codecs, const string& $lane, time::timestamp $now, time::timestamp $at, const string& $key) : Batch
     {
-        Batch $b = Batch();
+        $b = Batch();
         foreach ($p->items as $i => const &$item) {
             Codec $codec = guard $codecs->find($names[$i]);
             function<string(const erased&)> $encode = $codec->encode;

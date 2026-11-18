@@ -23,7 +23,7 @@ public struct Seen
      */
     public static function settled(const string& $lane, const string& $name, const string& $id, const Settle& $s, int64 $attempt, float64 $ms, time::timestamp $at) : Seen
     {
-        Seen $seen = Seen($lane, $name, $id, .done, $at, $attempt, $ms);
+        $seen = Seen($lane, $name, $id, .done, $at, $attempt, $ms);
         match ($s) {
             Settle::done => {
             },

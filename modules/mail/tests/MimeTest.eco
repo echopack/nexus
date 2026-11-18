@@ -16,7 +16,7 @@ internal function written(const Message& $m) : string
 
 test a_text_mail_is_one_part
 {
-    Message $m = Message();
+    $m = Message();
     $m->to(Address('ann@example.com', 'Ann'))->subject('Hello')->text("Line one\nLine two");
     $out = written($m);
     expect($out)
@@ -33,7 +33,7 @@ test a_text_mail_is_one_part
 
 test text_and_html_are_alternatives
 {
-    Message $m = Message();
+    $m = Message();
     $m->to(Address('ann@example.com'))->subject('Hi')->text('plain')->html('<p>rich</p>');
     expect(written($m))
         ->has("Content-Type: multipart/alternative; boundary=\"=_alt_abc\"\r\n\r\n--=_alt_abc\r\n")
@@ -43,7 +43,7 @@ test text_and_html_are_alternatives
 
 test attachments_go_in_a_mixed_part_as_base64
 {
-    Message $m = Message();
+    $m = Message();
     $m->to(Address('ann@example.com'))->subject('Report')->text('see attached')->attach(Attachment('report.csv', bytes: "a,b\n1,2\n"));
     expect(written($m))
         ->has("Content-Type: multipart/mixed; boundary=\"=_mixed_abc\"\r\n\r\n--=_mixed_abc\r\nContent-Type: text/plain")
@@ -54,7 +54,7 @@ test attachments_go_in_a_mixed_part_as_base64
 
 test bcc_is_never_written_and_cc_and_reply_to_are
 {
-    Message $m = Message();
+    $m = Message();
     $m->to(Address('ann@example.com'))->cc(Address('bob@example.com'))->bcc(Address('eve@example.com'))
         ->replyTo(Address('help@example.com'))->header('X-Campaign', 'fall')->subject('Hi')->text('x');
     $out = written($m);
@@ -99,19 +99,19 @@ test base64_lines_are_76_wide
 
 test a_message_checks_itself
 {
-    Message $none = Message();
+    $none = Message();
     $none->subject('x')->text('y');
     expect($none->check())->fails();
-    Message $noSubject = Message();
+    $noSubject = Message();
     $noSubject->to(Address('ann@example.com'))->text('y');
     expect($noSubject->check())->fails();
-    Message $injected = Message();
+    $injected = Message();
     $injected->to(Address('ann@example.com'))->subject("Hi\r\nBcc: eve@example.com")->text('y');
     expect($injected->check())->fails();
-    Message $bad = Message();
+    $bad = Message();
     $bad->to(Address('not-an-address'))->subject('x')->text('y');
     expect($bad->check())->fails();
-    Message $ok = Message();
+    $ok = Message();
     $ok->to(Address('ann@example.com'))->subject('x')->text('y');
     expect($ok->check())->fine();
 }

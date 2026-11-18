@@ -709,8 +709,8 @@ internal class DQuick : nexus::EventStream
 test a_viewer_that_stops_reading_holds_up_nobody_and_is_let_go
 {
     nexus::debug::Topic $t = nexus::debug::Topic('jobs', 'Jobs', 1000);
-    DStalled $stalled = DStalled();
-    DQuick $quick = DQuick();
+    $stalled = DStalled();
+    $quick = DQuick();
     $t->follow($stalled, 0, 200);
     $t->follow($quick, 0, 200);
     int64 $n = 0;

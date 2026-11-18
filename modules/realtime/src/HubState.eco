@@ -280,14 +280,15 @@ internal struct HubData
         if ($this->backlog == 0) {
             return;
         }
+        // the hub thread drops its own envelope outside the lock, so the ring keeps a copy
         uint64 $seq = $this->next;
         $this->next = $seq + 1;
         if ($this->ring->count() < $this->backlog) {
-            $this->ring->push(Kept($e, $frame));
+            $this->ring->push(Kept($e->clone(), $frame));
         } else {
             usize $slot = $this->slot($seq);
             $this->seqOf->remove($this->ring[$slot]->e->id);
-            $this->ring[$slot] = Kept($e, $frame);
+            $this->ring[$slot] = Kept($e->clone(), $frame);
         }
         $this->seqOf[$e->id] = $seq;
     }
@@ -337,11 +338,8 @@ internal struct HubData
         array<Envelope> $out = [];
         uint64 $seq = $this->next - ($this->ring->count() as uint64);
         while ($seq < $this->next) {
-            // the data's JSON is counted without atomics, and the hub thread keeps holding it: what
-            // leaves the lock is a copy of its own
-            Envelope $e = $this->ring[$this->slot($seq)]->e;
-            $e->data = $e->data->clone();
-            $out[] = mv $e;
+            // the hub thread keeps holding the ring: what leaves the lock is a copy
+            $out[] = $this->ring[$this->slot($seq)]->e->clone();
             $seq = $seq + 1;
         }
         return $out;
@@ -425,7 +423,7 @@ internal class HubState
 
     public function attach(nexus::Socket $s, const nexus::auth::Identity& $who, const string& $peer, usize $most) : bool
     {
-        Attached $a = Attached($s, $who, $peer, Hub::keyOf($who, $peer), time::timestamp::now());
+        $a = Attached($s, $who, $peer, Hub::keyOf($who, $peer), time::timestamp::now());
         {
             // counted and added under one lock, so upgrades that race all see each other
             thread::locked<HubData> $held = $this->data->lock();
@@ -497,7 +495,7 @@ internal class HubState
             return Unseat();
         }
         Attached& $m = $held->value->members->at($id);
-        Unseat $u = Unseat();
+        $u = Unseat();
         $u->present = without($m->present, $channel);
         $u->followed = without($m->channels, $channel);
         $m->infos->remove($channel);
@@ -821,7 +819,7 @@ internal class HubState
             thread::locked<HubData> $held = $this->data->lock();
             $to = $held->value->following($channel, $skip);
         }
-        Outgoing $one = Outgoing($frame);
+        $one = Outgoing($frame);
         usize $reached = 0;
         foreach ($to as $s) {
             if ($this->offer($s, $one)) {

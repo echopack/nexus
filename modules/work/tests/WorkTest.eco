@@ -548,14 +548,14 @@ test spawned_tasks_clash_on_a_live_unique_key
     nexus::work::Item $item = nexus::work::Item::of<TSay>(TSay('a', $mode: 'unique', $key: 'u'));
     $b->add(nexus::work::Node::of('t1', 'TSay', $item), array<string>());
     array<string> $names = ['TSay'];
-    Pipeline $same = Pipeline();
+    $same = Pipeline();
     $same->add(TSay('b', $mode: 'unique', $key: 'u'));
     expect($b->clashes($same, $names))->yes(says: 'a waiting task holds the key');
     expect($b->clashes($same, $names, except: 'TSay#u'))->no(says: 'a task settling may hand its own key on');
-    Pipeline $other = Pipeline();
+    $other = Pipeline();
     $other->add(TSay('c', $mode: 'unique', $key: 'v'));
     expect($b->clashes($other, $names))->no();
-    Pipeline $twice = Pipeline();
+    $twice = Pipeline();
     $twice->add(TSay('d', $mode: 'unique', $key: 'w'));
     $twice->add(TSay('e', $mode: 'unique', $key: 'w'));
     array<string> $both = ['TSay', 'TSay'];
@@ -567,13 +567,13 @@ test spawned_tasks_need_tries_in_range
     $c = nexus::work::Codecs();
     $c->add<TSay>('TSay', (const TSay& $t) => TSayTaskCodec::encode($t), (const string& $text) => TSayTaskCodec::decode($text));
     $log = nexus::Logger(array<nexus::log::Sink>(), .trace);
-    Pipeline $many = Pipeline();
+    $many = Pipeline();
     $many->add(TSay('x', $limit: 1000000));
     expect($c->spawned($many, $log))->none();
-    Pipeline $none = Pipeline();
+    $none = Pipeline();
     $none->add(TSay('y', $limit: 0));
     expect($c->spawned($none, $log))->none();
-    Pipeline $fine = Pipeline();
+    $fine = Pipeline();
     $fine->add(TSay('z', $limit: 5));
     expect($c->spawned($fine, $log))->some();
 }

@@ -25,9 +25,9 @@ test a_mail_reaches_a_real_server
     };
     string $api = liveVar('MAIL_LIVE_API') ?? 'http://127.0.0.1:8025';
     Endpoint $at = expect(Endpoint::parse($url))->ok();
-    Mailer $mailer = Mailer(Smtp($at, .none, .secs(10)), Address('live@nexus.test', 'nexus live'), nexus::Logger::silent());
+    $mailer = Mailer(Smtp($at, .none, .secs(10)), Address('live@nexus.test', 'nexus live'), nexus::Logger::silent());
     string $mark = nexus::Kernel::id();
-    Message $m = Message();
+    $m = Message();
     $m->to(Address('reader@nexus.test', 'Zoë Reader'))->cc(Address('copy@nexus.test'))->bcc(Address('hidden@nexus.test'))
         ->subject("Grüezi {$mark}")->text("Plain body\n.\nwith a lone dot")->html('<p>Rich <b>body</b></p>')
         ->attach(Attachment('notes.txt', bytes: 'attached text'));

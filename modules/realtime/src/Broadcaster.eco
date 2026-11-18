@@ -41,7 +41,7 @@ public class Broadcaster
         if (!ChannelPattern::named($channel)) {
             return .error(.badChannel($channel));
         }
-        Envelope $e = Envelope(fresh: $channel, $event, $data);
+        $e = Envelope(fresh: $channel, $event, $data);
         $e->except = $except->id;
         $e->exceptVia = $except->via;
         $e->exceptCredential = $except->credential;

@@ -147,7 +147,7 @@ test logfmt_quotes_what_needs_it
 test no_format_lets_a_line_break_or_an_escape_through
 {
     Fields $f = ['user' => "bob\n12:00:00.000 INFO  forged", 'tab' => "a\tb", "bad key=x\n" => 'v', 'plain' => 'ok'];
-    Entry $e = Entry(at(0), .info, "login\nINFO admin logged in \u{1b}[2J", null, $f);
+    $e = Entry(at(0), .info, "login\nINFO admin logged in \u{1b}[2J", null, $f);
     string $pretty = Format::pretty->render($e, false);
     expect($pretty->contains("\n"))->no(says: 'one pretty line');
     expect($pretty->contains("\u{1b}"))->no(says: 'no escape reaches the terminal');

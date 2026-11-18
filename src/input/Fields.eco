@@ -103,7 +103,7 @@ public class Fields
             array<FormPart> $parts = guard Multipart::parse($header, $payload->request->body) else ($p) {
                 return .error($p);
             };
-            Query $pairs = Query();
+            $pairs = Query();
             array<Upload> $files = [];
             foreach ($parts as const &$part) {
                 string? $filename = $part->filename;

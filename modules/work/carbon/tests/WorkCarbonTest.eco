@@ -132,7 +132,7 @@ test a_push_stores_tasks_and_edges_in_one_transaction
 {
     $r = Rig(true);
     $r->fake->written()->written()->written();
-    Batch $b = Batch();
+    $b = Batch();
     $b->tasks[] = $r->task('a');
     StoredTask $then = $r->task('b');
     $then->pending = 1;

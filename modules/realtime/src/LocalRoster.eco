@@ -3,7 +3,9 @@ namespace nexus::realtime;
 use std::thread;
 
 /**
- * The presence channels of this process, in memory: what `local:` binds.
+ * The presence channels of this process, in memory: what `local:` binds. A member's info is JSON
+ * counted without atomics and the threads of the sockets, the hub and the sweeper all reach the
+ * roster, so what goes in and what comes out are copies of their own.
  */
 #[atomic]
 public class LocalRoster : Roster
@@ -23,11 +25,11 @@ public class LocalRoster : Roster
         array<Present>& $all = $held->value->at($channel);
         foreach ($all as &$p) {
             if ($p->id == $member->id) {
-                $p->info = $member->info;
+                $p->info = $member->info->clone();
                 return .ok;
             }
         }
-        $all->push($member);
+        $all->push($member->clone());
         return .ok;
     }
 
@@ -56,11 +58,13 @@ public class LocalRoster : Roster
 
     public function members(const string& $channel) : result<array<Present>, RealtimeError>
     {
+        array<Present> $out = [];
         thread::locked<map<string, array<Present>>> $held = $this->channels->lock();
-        if (!$held->value->has($channel)) {
-            array<Present> $none = [];
-            return .ok($none);
+        if ($held->value->has($channel)) {
+            foreach ($held->value->at($channel) as const &$p) {
+                $out[] = $p->clone();
+            }
         }
-        return .ok($held->value->at($channel)->clone());
+        return .ok($out);
     }
 }

@@ -61,7 +61,7 @@ public class Pool
             }
             $p->assign();
             foreach ($p->items as $i => const &$item) {
-                Node $n = Node::of($p->ids[$i], $names[$i], $item);
+                Node $n = .of($p->ids[$i], $names[$i], $item);
                 $n->pending = $p->after[$i]->count();
                 $n->expiresAt = $item->policy->expiresAt($now);
                 $b->value->add(mv $n, $p->waits($i));
@@ -77,7 +77,7 @@ public class Pool
      */
     internal function feed(const Item& $item, Run $run, function<void(const Outcome&)> $report) : void
     {
-        Node $n = Node::of($run->id, $run->name, $item);
+        Node $n = .of($run->id, $run->name, $item);
         $n->attempt = $run->attempt - 1;
         $n->fed = Fed(mv $run, $report);
         {
@@ -205,7 +205,7 @@ public class Pool
      */
     public function state() : PoolState
     {
-        PoolState $out = PoolState($this->lane, $this->threads, $this->alive->load());
+        $out = PoolState($this->lane, $this->threads, $this->alive->load());
         thread::locked<Board> $b = $this->board->lock();
         foreach ($b->value->running as $id => const &$yes) {
             if ($b->value->nodes->has($id)) {
@@ -241,7 +241,7 @@ public class Pool
         nexus::Payload $payload = $k->background($n->name, $n->id);
         Run $run = $n->run($this->lane);
         Fed? $fed = $n->fed;
-        Flow $flow = Flow();
+        $flow = Flow();
         Run $state = $run;
         $payload->put<Run>(mv $state);
         $payload->put<Flow>($flow);
@@ -278,7 +278,7 @@ public class Pool
     {
         nexus::Logger $log = $o->log;
         time::timestamp $now = $this->clock->now();
-        Settle $s = Settle::of($o->status, $n->attempt, $n->tries(), $now);
+        Settle $s = .of($o->status, $n->attempt, $n->tries(), $now);
         $s->tell($log, $n->attempt, $o->ms, $now);
         if ($this->watchers->any()) {
             $this->watchers->tell(Seen::settled($this->lane, $n->name, $n->id, $s, $n->attempt, $o->ms, $now));
@@ -357,7 +357,7 @@ public class Pool
         }
         time::timestamp $at = $this->clock->now();
         foreach ($gone as const &$d) {
-            Seen $seen = Seen($this->lane, $d->name, $d->id, $kind, $at);
+            $seen = Seen($this->lane, $d->name, $d->id, $kind, $at);
             $seen->why = $why;
             $this->watchers->tell($seen);
         }

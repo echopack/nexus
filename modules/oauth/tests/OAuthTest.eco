@@ -657,7 +657,7 @@ internal function holds(Rig $r, const string& $token, const string& $grant) : bo
 test an_ended_grant_is_told_and_no_longer_holds
 {
     $r = Rig();
-    THeard $heard = THeard();
+    $heard = THeard();
     $r->app->kernel->services->get<nexus::auth::Endings>()->listen(function[$heard](nexus::auth::Ending $e) : void {
         match ($e) {
             nexus::auth::Ending::credential($via, $id) => {
@@ -692,7 +692,7 @@ test an_ended_grant_is_told_and_no_longer_holds
 test signing_out_everywhere_ends_every_grant_once
 {
     $r = Rig();
-    THeard $heard = THeard();
+    $heard = THeard();
     $r->app->kernel->services->get<nexus::auth::Endings>()->listen(function[$heard](nexus::auth::Ending $e) : void {
         match ($e) {
             nexus::auth::Ending::subject($via, $subject) => {

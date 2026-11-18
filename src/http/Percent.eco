@@ -17,15 +17,8 @@ public struct Percent
         while ($i < $text->size()) {
             uint8 $c = $text->byte($i);
             if ($c == 37) {
-                if ($i + 2 >= $text->size()) {
-                    return null;
-                }
-                int32 $hi = Percent::nibble($text->byte($i + 1));
-                int32 $lo = Percent::nibble($text->byte($i + 2));
-                if ($hi < 0 || $lo < 0) {
-                    return null;
-                }
-                $out->push((($hi << 4) | $lo) as uint8);
+                uint8 $byte = guard Percent::escape($text, $i) else { return null; };
+                $out->push($byte);
                 $i = $i + 3;
                 continue;
             }
@@ -51,11 +44,11 @@ public struct Percent
         usize $i = 0;
         while ($i < $text->size()) {
             uint8 $c = $text->byte($i);
-            if ($c == 37 && $i + 2 < $text->size()) {
-                int32 $hi = Percent::nibble($text->byte($i + 1));
-                int32 $lo = Percent::nibble($text->byte($i + 2));
-                if ($hi >= 0 && $lo >= 0) {
-                    $out->push((($hi << 4) | $lo) as uint8);
+            if ($c == 37) {
+                uint8? $byte = Percent::escape($text, $i);
+                if ($byte != null) {
+                    uint8 $b = guard $byte;
+                    $out->push($b);
                     $i = $i + 3;
                     continue;
                 }
@@ -123,11 +116,22 @@ public struct Percent
         return $c == 45 || $c == 46 || $c == 95 || $c == 126;
     }
 
-    internal static function nibble(uint8 $c) : int32
+    // the byte the `%XX` escape at `$at` stands for; null when the `%` there starts no complete escape
+    internal static function escape(const string& $text, usize $at) : uint8?
     {
-        if ($c >= 48 && $c <= 57) { return ($c as int32) - 48; }
-        if ($c >= 65 && $c <= 70) { return ($c as int32) - 55; }
-        if ($c >= 97 && $c <= 102) { return ($c as int32) - 87; }
-        return -1;
+        if ($at + 2 >= $text->size()) {
+            return null;
+        }
+        uint8 $hi = guard Percent::nibble($text->byte($at + 1)) else { return null; };
+        uint8 $lo = guard Percent::nibble($text->byte($at + 2)) else { return null; };
+        return ($hi << 4) | $lo;
+    }
+
+    internal static function nibble(uint8 $c) : uint8?
+    {
+        if ($c >= 48 && $c <= 57) { return $c - 48; }
+        if ($c >= 65 && $c <= 70) { return $c - 55; }
+        if ($c >= 97 && $c <= 102) { return $c - 87; }
+        return null;
     }
 }
