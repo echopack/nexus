@@ -105,6 +105,8 @@ test a_socket_is_closed_from_the_console
     string $id = $ready[0]->get('socket_id')?->asStr() ?? '';
     ecotest::http::Api $api = $app->api()->bearer(TOKEN);
     $api->post('/__nexus/api/panels/realtime/actions/close', json: "\{\"id\":\"{$id}\"}")->ok()->json('$.message', "closed {$id}");
+    // the close runs on the socket's spool, once the send under way there is through
+    $app->settle();
     expect($ws->closedWith->load())->is(4000);
     $api->post('/__nexus/api/panels/realtime/actions/close', json: '{"id":"ffffffff.1"}')->problem(404);
 }

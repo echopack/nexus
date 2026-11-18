@@ -369,6 +369,17 @@ public class Kernel
     }
 
     /**
+     * Every extension's `settle` hook, first booted first, so work one hands on to a later one
+     * (realtime to the debug console) is through when that one waits.
+     */
+    public function settle() : void
+    {
+        foreach ($this->extensions as &$ext) {
+            $ext->settle($this);
+        }
+    }
+
+    /**
      * Every extension's `drain` hook, last started first.
      */
     public function drain() : void

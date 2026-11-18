@@ -104,6 +104,11 @@ public class Extension : nexus::Extension
         return .ok;
     }
 
+    public function settle(nexus::Kernel $kernel) : void
+    {
+        $kernel->services->get<Hub>()->settle();
+    }
+
     public function drain(nexus::Kernel $kernel) : void
     {
         $kernel->services->get<Sweeper>()->stop();

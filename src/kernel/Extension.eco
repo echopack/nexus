@@ -66,6 +66,15 @@ public interface Extension
     }
 
     /**
+     * Waits until the background work handed over so far is through: what a socket, a stream or a
+     * topic was sent from another thread. Tests read what the app sent after it, through
+     * `Kernel::settle`.
+     */
+    function settle(Kernel $kernel) : void
+    {
+    }
+
+    /**
      * Runs when serving stops, in reverse order, after the transport has let its last request
      * finish: stop what `start` started and wait for it, within its grace.
      */

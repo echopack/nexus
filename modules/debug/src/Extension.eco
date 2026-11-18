@@ -124,6 +124,14 @@ public class Extension : nexus::Extension
         return .ok;
     }
 
+    public function settle(nexus::Kernel $kernel) : void
+    {
+        Debug $debug = guard $this->debug else {
+            return;
+        };
+        $debug->settle();
+    }
+
     /**
      * The gate the app gave, else the token gate when a token is set, else the open one.
      */

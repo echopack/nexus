@@ -115,6 +115,16 @@ public class Debug
     }
 
     /**
+     * Waits until every event published to a topic so far went out to its followers.
+     */
+    public function settle() : void
+    {
+        foreach ($this->topics as $t) {
+            $t->settle();
+        }
+    }
+
+    /**
      * Ends every live stream of the console opened with a credential `$e` covers.
      */
     public function end(const nexus::auth::Ending& $e) : void

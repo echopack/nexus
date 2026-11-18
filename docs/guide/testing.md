@@ -188,6 +188,14 @@ TestSocket $page = $world->app->socket('/realtime');
 
 An answer that isn't a stream or an upgrade, such as a `401`, comes back as one that never opened, with its status and body, so you may check a refusal the same way.
 
+Frames and closes go out on background threads, so a slow client never holds up a request. Before you read what a socket or stream got, `$app->settle()` waits until everything the app handed over so far went out:
+
+```echo
+$api->post('/__nexus/api/panels/realtime/actions/close', json: "\{\"id\":\"{$id}\"}")->ok();
+$app->settle();
+expect($ws->closedWith->load())->is(4000);
+```
+
 ### Running tasks
 
 A task that a request queued sits in the real queue table. The blog's world runs one in place, as a worker would, and then checks its effect:

@@ -169,6 +169,15 @@ public class TestApp
     }
 
     /**
+     * Waits until what the app handed its background threads so far went out: the frames and
+     * closes of sockets, the events of streams. Read a socket after it.
+     */
+    public function settle() : void
+    {
+        $this->kernel->settle();
+    }
+
+    /**
      * Whether a log entry with exactly this message was written.
      */
     public function logged(const string& $message) : bool
