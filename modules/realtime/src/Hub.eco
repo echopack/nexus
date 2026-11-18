@@ -258,13 +258,12 @@ public class Hub
     }
 
     /**
-     * Waits until everything handed over before the call went out, on every socket.
+     * Waits until everything handed over before the call went out, on every socket, and what that
+     * handed over in turn: a presence join publishes `joined`, which comes back as a job of its own.
      */
     public function settle() : void
     {
-        $this->mail->settle();
-        while ($this->state->settle()) {
-            $this->mail->settle();
+        while ($this->mail->settle() || $this->state->settle()) {
         }
     }
 }

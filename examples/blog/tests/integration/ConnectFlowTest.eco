@@ -67,7 +67,7 @@ test a_claim_without_its_binding_signs_nobody_in
 {
     $world = World();
     $started = $world->api->post('/auth/connect/google', json: '{}');
-    $claim = json::object(['attempt' => $started->capture('$.attempt'), 'binding' => 'guessed']);
+    $claim = json::object(['attempt' => $started->capture('$.attempt'), 'binding' => 'guessed', 'proof' => 'guessed']);
     $world->api->post('/v1/auth/connect', json: $claim)->problem(401);
     $world->api->post('/auth/connect/apple', json: '{}')->problem(404);
 }

@@ -80,7 +80,7 @@ test a_mail_server_that_is_away_is_tried_again
     int64 $user = str::int($id) ?? 0;
     $world->outbox()->refuse(.connect('connection refused'));
     $f = expect($world->run(Blog::Tasks::SendWelcome($user: $user)))->fails();
-    expect($f->why())->has('cannot reach the mail server');
+    expect($f->why())->has('could not be sent right now');
     expect(match ($f) { nexus::work::Failure::retry($why) => true, else => false })->yes(says: 'retried, not given up');
     expect($world->outbox()->count() as int64)->is(0 as int64);
     expect($world->run(Blog::Tasks::SendWelcome($user: $user)))->fine();

@@ -52,14 +52,15 @@ public class Mailbox<T>
     }
 
     /**
-     * Waits until every item put before the call ran.
+     * Waits until every item put before the call ran; true when more were put meanwhile, such as
+     * the items' own follow-ups, which a caller that wants those too settles again for.
      */
-    public function settle() : void
+    public function settle() : bool
     {
         if ($this->thread->failed()) {
-            return;
+            return false;
         }
-        $this->queue->settle();
+        return $this->queue->settle();
     }
 }
 
@@ -127,15 +128,17 @@ internal class MailQueue<T>
     }
 
     /**
-     * Waits until every item queued before the call is done, or the mailbox closed.
+     * Waits until every item queued before the call is done, or the mailbox closed; true when more
+     * were queued meanwhile.
      */
-    public function settle() : void
+    public function settle() : bool
     {
         thread::locked<MailboxState<T>> $held = $this->state->lock();
         uint64 $target = $held->value->queued;
         while (!$held->value->closed && $held->value->finished < $target) {
             $this->finished->wait($held);
         }
+        return !$held->value->closed && $held->value->queued > $target;
     }
 
     /**
